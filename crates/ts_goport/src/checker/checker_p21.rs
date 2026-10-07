@@ -490,6 +490,18 @@ impl Checker {
         let t = self.get_reduced_apparent_type(t);
         let flags = self.ty(t).flags;
         if flags.intersects(TypeFlags::OBJECT) {
+            // PORT: not in the pinned Go (pingdotgg/ts-rust#20). See
+            // `get_resolving_members`.
+            if !self
+                .ty(t)
+                .object_flags
+                .intersects(ObjectFlags::MEMBERS_RESOLVED)
+            {
+                let symbol = self.get_declared_property_of_resolving_type(t, name);
+                if symbol.is_some() {
+                    return symbol;
+                }
+            }
             self.resolve_structured_type_members(t);
             let members = self.ty(t).as_structured_type().members;
             let mut symbol = self.symbols.get_key(members, name);
@@ -916,6 +928,11 @@ impl Checker {
                 members = self.symbols.clone_table(members);
             }
             let this_argument = type_arguments.last().copied().unwrap_or(TypeId::NIL);
+            self.resolving_members_stack.push(ResolvingMembers {
+                t,
+                declared_members,
+                members,
+            });
             for base_type in base_types {
                 let mut instantiated_base_type = base_type;
                 if this_argument.is_some() {
@@ -952,6 +969,7 @@ impl Checker {
                     .collect();
                 index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
             }
+            self.resolving_members_stack.pop();
             let call_signature_count = call_signatures.len();
             self.set_structured_type_members_ex(
                 t,
@@ -972,6 +990,48 @@ impl Checker {
             call_signature_count,
             index_infos,
         );
+    }
+
+    // While `resolve_object_type_members` adds the inherited members of a
+    // class or interface type, or a reference to one, the type arguments of
+    // its base types may refer back to the type. Inherited members never
+    // replace a declared value member (`add_inherited_members`), so a
+    // property the type declares itself is known before its base types are
+    // resolved. This lets such a circular reference see the declared
+    // properties without resolving the members of the type again (which
+    // repeats the same instantiations until the depth limit) and without
+    // storing a partial resolution on the type.
+    // PORT: not in the pinned Go (pingdotgg/ts-rust#20, microsoft/TypeScript#64605).
+    fn get_resolving_members(&self, t: TypeId) -> Option<&ResolvingMembers> {
+        self.resolving_members_stack.iter().rev().find(|r| r.t == t)
+    }
+
+    /// The property with the given name that `t` declares itself, if `t` is
+    /// a type whose members are being resolved.
+    pub fn get_declared_property_of_resolving_type<'a>(
+        &self,
+        t: TypeId,
+        name: impl Into<TableKey<'a>>,
+    ) -> SymbolId {
+        if let Some(r) = self.get_resolving_members(t) {
+            let name = name.into();
+            let symbol = self.symbols.get_key(r.declared_members, name);
+            if symbol.is_some() && self.sym(symbol).flags.intersects(SymbolFlags::VALUE) {
+                return self.symbols.get_key(r.members, name);
+            }
+        }
+        SymbolId::NIL
+    }
+
+    /// Whether `t` is a type whose members are being resolved and that
+    /// declares a property itself.
+    pub fn resolving_type_declares_properties(&self, t: TypeId) -> bool {
+        self.get_resolving_members(t).is_some_and(|r| {
+            self.symbols.iter(r.declared_members).any(|(name, symbol)| {
+                self.sym(symbol).flags.intersects(SymbolFlags::VALUE)
+                    && !is_reserved_member_name(name)
+            })
+        })
     }
 
     /// Go `instantiateList` on a shared list. When no element changes, the
@@ -1753,5 +1813,191 @@ impl Checker {
             diag::Type_0_recursively_references_itself_as_a_base_type,
             args![type_string],
         );
+    }
+}
+
+/// The declared members of a type whose base types
+/// `resolve_object_type_members` is resolving, and its members table.
+pub(crate) struct ResolvingMembers {
+    t: TypeId,
+    declared_members: SymbolTable,
+    members: SymbolTable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The code and 1-based line of each semantic diagnostic of `source`, a
+    /// strict es2020 file with no `types`. `first` runs on the checker of the
+    /// file before it reports them.
+    fn diagnostics(
+        source: &'static str,
+        first: impl FnOnce(&mut Checker, Node) + Send + 'static,
+    ) -> Vec<(i32, usize)> {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "ts_goport_resolving_members_{}_{call}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), source).unwrap();
+        std::fs::write(
+            dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "strict": true, "target": "es2020", "types": [] }, "files": ["a.ts"] }"#,
+        )
+        .unwrap();
+        let config = dir.join("tsconfig.json");
+        let program = crate::program::try_load_version(&config.to_string_lossy(), |_| {})
+            .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let scope = crate::core::enter_program(Some(program));
+        let file = program
+            .source_files()
+            .find(|file| file.info.file_name.ends_with("/a.ts"))
+            .expect("a.ts is not in the program")
+            .root;
+        let result = crate::program::with_type_checker_for_file(file, move |checker| {
+            first(checker, file);
+            crate::program::get_semantic_diagnostics_with_checker(
+                &crate::gostd::context::background(),
+                checker,
+                file,
+            )
+            .iter()
+            .map(|d| {
+                let line = 1 + source[..d.pos() as usize].matches('\n').count();
+                (d.code(), line)
+            })
+            .collect()
+        });
+        drop(scope);
+        crate::program::release_program(program);
+        result
+    }
+
+    /// pingdotgg/ts-rust#20, microsoft/TypeScript#64605. The type arguments
+    /// of a base type read a property that the derived type declares itself
+    /// (`Json["_zod"]`, `JsonInternals["input"]`, the `optin` of
+    /// `RecordInternals<Json>`) while the members of the derived type are
+    /// being resolved. tsc 7.0.2 and Go before microsoft/TypeScript#64372
+    /// report nothing. The pinned Go resolves the members again, repeats the
+    /// same instantiations and reports TS5115.
+    #[test]
+    fn base_type_arguments_read_declared_members_of_the_derived_type() {
+        // The example of microsoft/TypeScript#64605.
+        const ISSUE: &str = r#"
+interface Internals<I = unknown> { input: I }
+interface Schema { _zod: Internals }
+type RecordInput<V extends Schema> = V extends unknown ? Record<string, V["_zod"]["input"]> : never;
+interface RecordSchema<V extends Schema> extends Schema { _zod: Internals<RecordInput<V>> }
+interface UnionInternals<T extends readonly Schema[]> extends Internals<T[number]["_zod"]["input"]> {}
+interface UnionSchema<T extends readonly Schema[]> extends Schema { _zod: UnionInternals<T> }
+type JsonValue = { [k: string]: JsonValue };
+type _Json = UnionSchema<[RecordSchema<Json>]>;
+type _JsonInternals = _Json["_zod"];
+interface JsonInternals extends _JsonInternals { input: JsonValue }
+interface Json extends _Json { _zod: JsonInternals }
+"#;
+        // The shape of the Zod 4.6 `z.json()` types: the record internals
+        // declare `optin`, and the record input asks for it.
+        const ZOD: &str = r#"
+interface Internals<O = unknown, I = unknown> { output: O; input: I; optin?: "optional" | undefined }
+interface Schema<Z extends Internals = Internals> { _zod: Z }
+type OptionalIn = { _zod: { optin: "optional" } };
+type RecordInput<V extends Schema> = [V] extends [OptionalIn] ? Partial<Record<string, V["_zod"]["input"]>> : Record<string, V["_zod"]["input"]>;
+interface RecordInternals<V extends Schema> extends Internals<unknown, RecordInput<V>> { optin?: "optional" | undefined }
+interface RecordSchema<V extends Schema> extends Schema<RecordInternals<V>> { _zod: RecordInternals<V> }
+type IsOptionalIn<T extends Schema> = T extends OptionalIn ? true : false;
+interface UnionInternals<T extends readonly Schema[]> extends Internals {
+    optin: IsOptionalIn<T[number]> extends false ? "optional" | undefined : "optional";
+}
+interface UnionSchema<T extends readonly Schema[]> extends Schema<UnionInternals<T>> { _zod: UnionInternals<T> }
+type _Json = UnionSchema<[RecordSchema<Json>]>;
+interface JsonInternals extends UnionInternals<[RecordSchema<Json>]> { input: unknown }
+interface Json extends _Json { _zod: JsonInternals }
+export const r: RecordInput<Json> = { a: 1 };
+export const o: Json["_zod"]["optin"] = undefined;
+export const bad: Json["_zod"]["optin"] = "required";
+"#;
+        assert_eq!(diagnostics(ISSUE, |_, _| {}), vec![]);
+        assert_eq!(diagnostics(ZOD, |_, _| {}), vec![(2322, 18)]);
+    }
+
+    /// What microsoft/TypeScript#64372 fixed stays fixed. In its fourslash
+    /// test `noGhostErrors` (microsoft/TypeScript#62180) the type of the
+    /// `parent` getter comes first, and then there is no error and the
+    /// `output` of `Category` has its properties. A base type argument that
+    /// needs an inherited member (`keyof PersonModel` in
+    /// `keyofGenericExtendingClassDoubleLayer`) is still infinitely circular.
+    #[test]
+    fn inherited_members_are_not_read_before_the_base_types_resolve() {
+        const NO_GHOST_ERRORS: &str = r#"
+interface ZodType<T> {
+  optional: "true" | "false";
+  output: T;
+}
+interface ZodString extends ZodType<string> {
+  optional: "false";
+}
+type ZodShape = Record<string, any>;
+type Prettify<T> = { [K in keyof T]: T[K] } & {};
+type InferObjectType<Shape extends ZodShape> = Prettify<
+  {
+    [k in keyof Shape as Shape[k] extends { optional: "true" }
+      ? k
+      : never]?: Shape[k]["output"];
+  } & {
+    [k in keyof Shape as Shape[k] extends { optional: "true" }
+      ? never
+      : k]: Shape[k]["output"];
+  }
+>;
+interface ZodObject<T extends ZodShape> extends ZodType<InferObjectType<T>> {
+  optional: "false";
+}
+interface ZodOptional<T extends ZodType<any>>
+  extends ZodType<T["output"] | undefined> {
+  optional: "true";
+}
+declare function object<T extends ZodShape>(shape: T): ZodObject<T>;
+declare function string(): ZodString;
+declare function optional<T extends ZodType<any>>(schema: T): ZodOptional<T>;
+const Category = object({
+  name: string(),
+  get parent() {
+    return optional(Category);
+  },
+});
+export const output = Category.output;
+export const name: string = output.name;
+export const bad: number = output.name;
+"#;
+        const DOUBLE_LAYER: &str = r#"
+class Model<Attributes = any> {
+    public createdAt!: Date;
+}
+type ModelAttributes<T> = Omit<T, keyof Model>;
+class AutoModel<T> extends Model<ModelAttributes<T>> {}
+class PersonModel extends AutoModel<PersonModel> {
+    public age!: number;
+}
+"#;
+        let parent_first = |checker: &mut Checker, file: Node| {
+            let category = file
+                .statements()
+                .iter()
+                .find(|s| s.kind() == SyntaxKind::VariableStatement)
+                .expect("const Category");
+            let declaration = category.declaration_list().declarations().nodes().get(0);
+            let shape = declaration.initializer().arguments().get(0);
+            let parent = shape.properties().get(1);
+            let symbol = checker.get_symbol_of_declaration(parent);
+            checker.get_type_of_symbol(symbol);
+        };
+        assert_eq!(diagnostics(NO_GHOST_ERRORS, parent_first), vec![(2322, 40)]);
+        assert_eq!(diagnostics(NO_GHOST_ERRORS, |_, _| {}), vec![(2322, 40)]);
+        assert_eq!(diagnostics(DOUBLE_LAYER, |_, _| {}), vec![(5115, 7)]);
     }
 }

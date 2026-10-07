@@ -765,6 +765,18 @@ impl Checker {
     // Go: checker/checker.go:27830 isStringIndexSignatureOnlyTypeWorker
     pub fn is_string_index_signature_only_type_worker(&mut self, t: TypeId) -> bool {
         let flags = self.ty(t).flags;
+        // PORT: not in the pinned Go (pingdotgg/ts-rust#20). A type whose
+        // members are being resolved and that declares a property itself has
+        // properties.
+        if flags.intersects(TypeFlags::OBJECT)
+            && !self
+                .ty(t)
+                .object_flags
+                .intersects(ObjectFlags::MEMBERS_RESOLVED)
+            && self.resolving_type_declares_properties(t)
+        {
+            return false;
+        }
         (flags.intersects(TypeFlags::OBJECT)
             && !self.is_generic_mapped_type(t)
             && self.get_properties_of_type_count(t) == 0
