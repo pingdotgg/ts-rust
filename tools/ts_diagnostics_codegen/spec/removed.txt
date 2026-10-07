@@ -1,6 +1,0 @@
-# Messages that Go removed at the pin while unported Rust code still uses them.
-# ts_diagnostics_codegen --removed writes them to diag.rs as local statics,
-# outside CATALOG, so key_to_message does not find them (as in Go). Each
-# message line is copied from diagnostics_generated.go at the previous pin
-# (typescript-go 16c25522e). Remove a line with its last Rust user, then
-# generate again. An empty file (only comments) gives the plain Go catalog.

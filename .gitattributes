@@ -1,4 +1,0 @@
-# The lib blobs are generated (scripts/goport/lib-blobs.sh). A merge keeps our side without a conflict; write them
-# again once, after the last merge. The driver is in the repo config: git config merge.lib-blob.driver true
-crates/ts_goport/src/frontend/parser/lib_parse.bin merge=lib-blob
-crates/ts_goport/src/binder/lib_bind.bin merge=lib-blob

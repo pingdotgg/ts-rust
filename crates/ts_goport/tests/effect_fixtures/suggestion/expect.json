@@ -1,1 +1,0 @@
-{ "fails": false, "has": ["suggestion TS377016:"], "lacks": ["error TS", "warning TS"] }

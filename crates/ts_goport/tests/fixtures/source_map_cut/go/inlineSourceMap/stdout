@@ -1,6 +1,0 @@
-parserSkippedTokens16.ts(2,6): error TS1005: ';' expected.
-parserSkippedTokens16.ts(2,8): error TS1434: Unexpected keyword or identifier.
-parserSkippedTokens16.ts(3,22): error TS1127: Invalid character.
-parserSkippedTokens16.ts(4,3): error TS1109: Expression expected.
-parserSkippedTokens16.ts(7,5): error TS1138: Parameter declaration expected.
-parserSkippedTokens16.ts(9,14): error TS1109: Expression expected.

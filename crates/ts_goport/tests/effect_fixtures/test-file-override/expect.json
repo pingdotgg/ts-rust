@@ -1,1 +1,0 @@
-{ "fails": true, "has": ["src/value.ts(8,10): error TS377"], "lacks": ["src/value.test.ts", "src/value.ts(4,"] }

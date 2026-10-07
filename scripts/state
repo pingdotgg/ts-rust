@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Typechecker accountability state CLI. Run `scripts/state --help`.
-exec node "$(dirname -- "${BASH_SOURCE[0]}")/state.mjs" "$@"

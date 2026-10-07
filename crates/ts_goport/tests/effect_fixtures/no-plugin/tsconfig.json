@@ -1,4 +1,0 @@
-{
-  "compilerOptions": { "strict": true, "noEmit": true, "module": "NodeNext", "moduleResolution": "NodeNext", "target": "ESNext", "skipLibCheck": true },
-  "include": ["src"]
-}

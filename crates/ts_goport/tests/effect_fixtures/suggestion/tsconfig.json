@@ -1,7 +1,0 @@
-{
-  "compilerOptions": {
-    "strict": true, "noEmit": true, "module": "NodeNext", "moduleResolution": "NodeNext", "target": "ESNext", "skipLibCheck": true,
-    "plugins": [{ "name": "@effect/language-service", "diagnosticSeverity": {} }]
-  },
-  "include": ["src"]
-}

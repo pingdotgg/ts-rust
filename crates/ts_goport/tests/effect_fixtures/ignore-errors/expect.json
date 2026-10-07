@@ -1,1 +1,0 @@
-{ "fails": false, "has": ["src/index.ts(1,21): error TS377068:"], "lacks": [] }

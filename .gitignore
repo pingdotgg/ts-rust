@@ -1,6 +1,0 @@
-target/
-*.tsbuildinfo
-.claude
-
-__pycache__/
-/.tmp-cargo/
