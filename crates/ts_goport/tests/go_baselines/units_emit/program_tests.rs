@@ -940,6 +940,7 @@ fn test_content_mapper_directives_preserve_incremental_globals() {
                                     ..Default::default()
                                 }]))),
                                 diagnostic_directives: vec![MappedDiagnosticDirective {
+                                    diagnostic_codes: None,
                                     virtual_range: TextRange::new(0, len),
                                     original_range: TextRange::new(0, len),
                                     policy,

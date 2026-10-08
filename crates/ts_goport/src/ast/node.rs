@@ -6048,6 +6048,8 @@ crate::flags_macros::go_enum!(MappedDiagnosticDirectivePolicy, u8 {
 // Go: ast/ast.go:2609 MappedDiagnosticDirective
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MappedDiagnosticDirective {
+    /// None matches all codes; Some(empty) matches none.
+    pub diagnostic_codes: Option<Vec<i32>>,
     pub original_range: TextRange,
     pub virtual_range: TextRange,
     pub policy: MappedDiagnosticDirectivePolicy,

@@ -118,6 +118,7 @@ fn test_encode_content_mapper_source_file_metadata() {
         content_mapper: "mapper@1.0.0".to_string(),
         virtual_file_name: "/component.vue.ts".to_string(),
         diagnostic_directives: vec![MappedDiagnosticDirective {
+            diagnostic_codes: None,
             original_range: TextRange::new(4, 5),
             virtual_range: TextRange::new(4, 11),
             policy: MappedDiagnosticDirectivePolicy::EXPECT,
@@ -164,6 +165,37 @@ fn test_encode_content_mapper_source_file_metadata() {
             0xcd, 10, 18, // unused diagnostic code 2578
         ]
     );
+}
+
+#[test]
+fn test_binary_ast_rejects_code_selective_directives() {
+    let file = Rc::new(parser::parse_source_file(
+        &SourceFileParseOptions {
+            file_name: "/selective.vue".into(),
+            ..Default::default()
+        },
+        "const x = 1;",
+        ScriptKind::TS,
+    ));
+    program::note_parsed_source_file(&file);
+    for codes in [vec![], vec![2339, 2551]] {
+        file.set_content_mapper_info(ContentMapperSourceFileInfo {
+            diagnostic_directives: vec![MappedDiagnosticDirective {
+                diagnostic_codes: Some(codes),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let error = match encode_source_file(file.root) {
+            Err(error) => error,
+            Ok(_) => panic!("protocol 9 must not silently discard code selectors"),
+        };
+        assert!(
+            error
+                .error()
+                .contains("cannot encode diagnostic code selectors")
+        );
+    }
 }
 
 // Go: api/encoder/encoder_test.go:86 encodedString

@@ -789,6 +789,18 @@ fn encode_tree(
     source_file: Node,
     given: Option<&Rc<ParsedSourceFile>>,
 ) -> Result<(Vec<u8>, Rc<NodeIndexTable>), GoError> {
+    // Protocol 9 has no code-selector representation. Refuse export rather than
+    // silently turning a selective directive into a broad one for API clients.
+    if root_node.kind() == SyntaxKind::SourceFile
+        && source_file_diagnostic_directives(root_node)
+            .iter()
+            .any(|directive| directive.diagnostic_codes.is_some())
+    {
+        return Err(errors::errorf(
+            "binary AST protocol 9 cannot encode diagnostic code selectors".to_string(),
+            Vec::new(),
+        ));
+    }
     let parsed = given
         .cloned()
         .or_else(|| parsed_source_file_of(source_file));

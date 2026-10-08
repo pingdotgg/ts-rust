@@ -352,6 +352,7 @@ fn diagnostic_directives(content: &str, mappings: &SpanMap) -> Option<Diagnostic
                     virtual_end: virtual_spans[0].span.end(),
                     policy,
                     unused_expect_directive_index: None,
+                    diagnostic_codes: None,
                 };
                 if unused_diagnostic_index >= 0 {
                     directive.unused_expect_directive_index = Some(unused_diagnostic_index);

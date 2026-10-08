@@ -4556,7 +4556,12 @@ fn apply_content_mapper_diagnostic_directives(
             return false;
         }
         for (i, directive) in directives.iter().enumerate() {
-            if diag.pos >= directive.virtual_range.pos() && diag.pos < directive.virtual_range.end()
+            if diag.pos >= directive.virtual_range.pos()
+                && diag.pos < directive.virtual_range.end()
+                && directive
+                    .diagnostic_codes
+                    .as_ref()
+                    .is_none_or(|codes| codes.contains(&diag.code))
             {
                 used[i] = true;
                 return true;
@@ -5395,6 +5400,80 @@ mod tests {
         let text = |list: &[Diagnostic]| list.iter().map(|d| format!("{d:?}")).collect::<Vec<_>>();
         assert_eq!(text(&got), text(&expected));
         assert!(sort_and_deduplicate_diagnostics(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn mapped_directives_filter_codes_and_account_for_expectations() {
+        let file = crate::frontend::parser::parse_source_file(
+            &crate::frontend::parser::SourceFileParseOptions {
+                file_name: "/code-selectors.ts".into(),
+                ..Default::default()
+            },
+            "const x = 1;",
+            crate::flags::ScriptKind::TS,
+        );
+        let diagnostic = |code, pos| {
+            crate::ast::new_diagnostic_from_text(
+                file.root,
+                TextRange::new(pos, pos + 1),
+                code,
+                crate::diagnostics::Category::Error,
+                "test",
+                vec![],
+                vec![],
+                false,
+                false,
+            )
+        };
+        for policy in [
+            crate::ast::MappedDiagnosticDirectivePolicy::IGNORE,
+            crate::ast::MappedDiagnosticDirectivePolicy::EXPECT,
+        ] {
+            for (codes, expected, unused) in [
+                (None, vec![2339], false),
+                (
+                    Some(vec![2339, 2551, 2339]),
+                    vec![2353, 2561, 2322, 2339],
+                    false,
+                ),
+                (Some(vec![2353, 2561]), vec![2339, 2551, 2322, 2339], false),
+                (Some(vec![]), vec![2339, 2551, 2353, 2561, 2322, 2339], true),
+                (
+                    Some(vec![9999]),
+                    vec![2339, 2551, 2353, 2561, 2322, 2339],
+                    true,
+                ),
+            ] {
+                file.set_content_mapper_info(crate::ast::ContentMapperSourceFileInfo {
+                    diagnostic_directives: vec![crate::ast::MappedDiagnosticDirective {
+                        virtual_range: TextRange::new(0, 5),
+                        original_range: TextRange::new(0, 1),
+                        policy,
+                        diagnostic_codes: codes,
+                        unused_code: 2578,
+                        unused_message_text: "Unused".into(),
+                        source: "vue".into(),
+                    }],
+                    ..Default::default()
+                });
+                let mut want = expected;
+                if unused && policy == crate::ast::MappedDiagnosticDirectivePolicy::EXPECT {
+                    want.push(2578);
+                }
+                for _ in 0..2 {
+                    let diags = [2339, 2551, 2353, 2561, 2322]
+                        .into_iter()
+                        .map(|code| diagnostic(code, 0))
+                        .chain(std::iter::once(diagnostic(2339, 5)))
+                        .collect();
+                    let result = apply_content_mapper_diagnostic_directives(file.root, diags);
+                    assert_eq!(
+                        result.iter().map(|diag| diag.code).collect::<Vec<_>>(),
+                        want
+                    );
+                }
+            }
+        }
     }
 
     // Options that differ only in the `paths` order are different values:

@@ -596,7 +596,9 @@ impl UnmarshalerFrom for DiagnosticDirectives {
 
 // Go: contentmapper/hostimpl.go:146 MappedDiagnosticDirective
 // MappedDiagnosticDirective is encoded as
-// [originalStart, originalLength, virtualStart, virtualEnd, policy, unusedExpectDirectiveIndex?].
+// [originalStart, originalLength, virtualStart, virtualEnd, policy, unusedExpectDirectiveIndex?, diagnosticCodes?].
+// Code-selective tuples always have seven elements, using null for an omitted index.
+// Legacy receivers reject seven-element tuples instead of silently suppressing all codes.
 // An omitted index selects the only unused-expect diagnostic and is invalid when there is not exactly one.
 // PORT: Go `*int` is `Option<i32>` (nil is `None`).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -607,6 +609,8 @@ pub struct MappedDiagnosticDirective {
     pub virtual_end: i32,
     pub policy: DiagnosticDirectivePolicy,
     pub unused_expect_directive_index: Option<i32>,
+    /// None matches all codes; Some(empty) matches none.
+    pub diagnostic_codes: Option<Vec<i32>>,
 }
 
 // Go: contentmapper/hostimpl.go:160 MappedDiagnosticDirective.MarshalJSONTo
@@ -622,7 +626,19 @@ impl MarshalerTo for MappedDiagnosticDirective {
         if let Some(index) = self.unused_expect_directive_index {
             tuple.push(index);
         }
-        tuple.marshal_json_to(enc)
+        if let Some(codes) = &self.diagnostic_codes {
+            tuple.marshal_json_to(enc)?;
+            enc.pop(); // Replace the closing bracket with the optional extension.
+            if self.unused_expect_directive_index.is_none() {
+                enc.push_str(",null");
+            }
+            enc.push(',');
+            codes.marshal_json_to(enc)?;
+            enc.push(']');
+            Ok(())
+        } else {
+            tuple.marshal_json_to(enc)
+        }
     }
 }
 
@@ -636,10 +652,10 @@ impl UnmarshalerFrom for MappedDiagnosticDirective {
     ) -> std::result::Result<(), JsonError> {
         let mut tuple: Vec<JsonValue> = Vec::new();
         json_unmarshal_decode(dec, &mut tuple)?;
-        if tuple.len() != 5 && tuple.len() != 6 {
+        if !(5..=7).contains(&tuple.len()) {
             return Err(JsonError {
                 message: format!(
-                    "diagnostic directive tuple must contain 5 or 6 elements, got {}",
+                    "diagnostic directive tuple must contain 5, 6 or 7 elements, got {}",
                     tuple.len()
                 ),
             });
@@ -656,11 +672,32 @@ impl UnmarshalerFrom for MappedDiagnosticDirective {
             .map_err(|e| element_error(2, e))?;
         json_unmarshal(&tuple[3].0, &mut self.virtual_end, &[]).map_err(|e| element_error(3, e))?;
         json_unmarshal(&tuple[4].0, &mut self.policy, &[]).map_err(|e| element_error(4, e))?;
-        if tuple.len() == 6 {
+        if tuple.len() >= 6 && !(tuple.len() == 7 && json_value_kind(&tuple[5]) == b'n') {
             let mut index: i32 = 0;
             let result = json_unmarshal(&tuple[5].0, &mut index, &[]);
             self.unused_expect_directive_index = Some(index);
             result.map_err(|e| element_error(5, e))?;
+        }
+        if tuple.len() == 7 {
+            if json_value_kind(&tuple[6]) != b'[' {
+                return Err(JsonError {
+                    message: "diagnostic directive tuple element 6 must be a code array".into(),
+                });
+            }
+            let mut values = Vec::<JsonValue>::new();
+            json_unmarshal(&tuple[6].0, &mut values, &[]).map_err(|e| element_error(6, e))?;
+            let mut codes = Vec::with_capacity(values.len());
+            for value in values {
+                if json_value_kind(&value) != b'0' {
+                    return Err(JsonError {
+                        message: "diagnostic directive code must be an integer".into(),
+                    });
+                }
+                let mut code = 0i32;
+                json_unmarshal(&value.0, &mut code, &[]).map_err(|e| element_error(6, e))?;
+                codes.push(code);
+            }
+            self.diagnostic_codes = Some(codes);
         }
         Ok(())
     }
@@ -2745,6 +2782,7 @@ fn normalize_diagnostic_directives(
         };
         let mut normalized = ast::MappedDiagnosticDirective {
             source: diagnostic_source.to_string(),
+            diagnostic_codes: directive.diagnostic_codes.clone(),
             ..Default::default()
         };
         match directive.policy {
@@ -3274,6 +3312,7 @@ mod tests {
                                     virtual_end: text_length,
                                     policy: DiagnosticDirectivePolicy::IGNORE,
                                     unused_expect_directive_index: None,
+                                    diagnostic_codes: None,
                                 }],
                                 Vec::new(),
                             ),
@@ -3840,6 +3879,7 @@ mod tests {
                     virtual_end: 14,
                     policy: DiagnosticDirectivePolicy::EXPECT,
                     unused_expect_directive_index: None,
+                    diagnostic_codes: None,
                 }],
                 vec![UnusedExpectDirectiveDiagnostic {
                     code: 2578,
@@ -4029,6 +4069,7 @@ mod tests {
                     original_length: 9,
                     policy: DiagnosticDirectivePolicy::IGNORE,
                     unused_expect_directive_index: None,
+                    diagnostic_codes: None,
                 },
                 "[0,9,8,14,0]",
             ),
@@ -4041,6 +4082,7 @@ mod tests {
                     original_length: 9,
                     policy: DiagnosticDirectivePolicy::EXPECT,
                     unused_expect_directive_index: None,
+                    diagnostic_codes: None,
                 },
                 "[0,9,8,14,1]",
             ),
@@ -4081,6 +4123,7 @@ mod tests {
                 virtual_end: 9,
                 policy: DiagnosticDirectivePolicy::EXPECT,
                 unused_expect_directive_index: Some(1),
+                diagnostic_codes: None,
             }],
         };
         let data = json_marshal(&diagnostic_directives, &[]).expect("marshal");
@@ -4091,6 +4134,73 @@ mod tests {
         let mut decoded = DiagnosticDirectives::default();
         json_unmarshal(data.as_bytes(), &mut decoded, &[]).expect("unmarshal");
         assert_eq!(decoded, diagnostic_directives);
+    }
+
+    #[test]
+    fn test_code_selective_directive_json_and_normalization() {
+        for (index, codes) in [
+            (None, vec![2339, 2551]),
+            (Some(0), vec![2353, 2561, 2353]),
+            (None, vec![]),
+        ] {
+            let directive = MappedDiagnosticDirective {
+                original_start: 2,
+                original_length: 1,
+                virtual_start: 2,
+                virtual_end: 3,
+                policy: DiagnosticDirectivePolicy::EXPECT,
+                unused_expect_directive_index: index,
+                diagnostic_codes: Some(codes.clone()),
+            };
+            let data = json_marshal(&directive, &[]).expect("marshal");
+            let mut tuple = Vec::<JsonValue>::new();
+            json_unmarshal(data.as_bytes(), &mut tuple, &[]).expect("tuple");
+            assert_eq!(tuple.len(), 7, "legacy receivers reject this tuple length");
+            let mut decoded = MappedDiagnosticDirective::default();
+            json_unmarshal(data.as_bytes(), &mut decoded, &[]).expect("decode");
+            assert_eq!(decoded, directive);
+            let positions =
+                new_position_normalizer("😀x", &PositionEncoding::UTF16).expect("positions");
+            let mut directives = DiagnosticDirectives {
+                directives: vec![decoded.clone()],
+                unused_expect_directive_diagnostics: vec![UnusedExpectDirectiveDiagnostic {
+                    code: 2578,
+                    message_text: "Unused".into(),
+                }],
+            };
+            let normalized =
+                normalize_diagnostic_directives(Some(&directives), &positions, &positions, "vue")
+                    .expect("normalize");
+            assert_eq!(normalized[0].diagnostic_codes, Some(codes));
+            assert_eq!(normalized[0].virtual_range, TextRange::new(4, 5));
+            assert_eq!(normalized[0].original_range, TextRange::new(4, 5));
+            decoded.diagnostic_codes = Some(vec![9999]);
+            directives.directives.push(decoded);
+            let err =
+                normalize_diagnostic_directives(Some(&directives), &positions, &positions, "vue")
+                    .expect_err("disjoint codes must not bypass overlap validation");
+            assert_eq!(
+                errors::as_type::<DiagnosticDirectiveError>(&err)
+                    .expect("directive error")
+                    .kind,
+                DiagnosticDirectiveErrorKind::OVERLAP,
+            );
+        }
+        for data in [
+            "[0,0,0,0,0,null,null]",
+            "[0,0,0,0,0,null,[null]]",
+            "[0,0,0,0,0,null,[true]]",
+            "[0,0,0,0,0,null,[1.5]]",
+            "[0,0,0,0,0,null,[2147483648]]",
+            "[0,0,0,0,0,null,[\"2339\"]]",
+            "[0,0,0,0,0,null,[],0]",
+        ] {
+            let mut directive = MappedDiagnosticDirective::default();
+            assert!(
+                json_unmarshal(data.as_bytes(), &mut directive, &[]).is_err(),
+                "{data}"
+            );
+        }
     }
 
     // Go: host_test.go:646 TestRunnerTransformSupplementalOutputs
