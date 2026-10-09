@@ -1,5 +1,5 @@
 //! Port of Go `internal/api/session_createsourcefile_test.go` (ts#64216,
-//! ts#64434, ts#64518, ts#64571).
+//! ts#64434, ts#64518, ts#64571, ts#64544).
 //!
 //! PORT: the tests are in `project_lsp` because they use `projecttestutil`
 //! and `child_test!`. Each Go subtest is one `#[test]`, so each one sets up
@@ -408,6 +408,26 @@ child_test! {
                 },
             ),
             r#"could not read file "/src/missing.ts""#,
+        );
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createsourcefile_test.go:278 TestCreateSourceFile/empty file name (ts#64544)
+child_test! {
+    fn empty_file_name() {
+        let (project_session, session) = setup();
+        error_contains(
+            session.handle_create_source_file(&bg(), &CreateSourceFileParams::default()),
+            "fileName must not be empty",
+        );
+        error_contains(
+            session.handle_create_source_file_from_file(
+                &bg(),
+                &CreateSourceFileFromFileParams::default(),
+            ),
+            "fileName must not be empty",
         );
         session.close();
         project_session.close();

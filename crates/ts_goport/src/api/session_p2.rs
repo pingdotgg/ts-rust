@@ -2898,11 +2898,19 @@ impl Session {
                     vec![ERR_CLIENT_ERROR.clone()],
                 ));
             }
+            // ts#64544 (Go N' api/session.go:5511): the URI of the program's
+            // file name.
+            let source_file = program
+                .get_source_file(&params.file.to_file_name())
+                .map_or(Node::NIL, |f| f.root);
+            if source_file.is_nil() {
+                return Ok(None);
+            }
             // ts#64163
             let prepared_snapshot = self.snapshot_host.clone_snapshot_with_auto_imports(
                 ctx,
                 &sd.snapshot,
-                &params.file.to_uri(&self.get_current_directory()),
+                &lsconv::file_name_to_document_uri(source_file_file_name(source_file)),
                 None,
             );
             if let Some(project_session) = &self.project_session {

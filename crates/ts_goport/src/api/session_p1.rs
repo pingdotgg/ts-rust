@@ -3439,8 +3439,9 @@ impl Session {
         _ctx: &Context,
         params: &CreateSourceFileParams,
     ) -> Result<Option<Box<dyn AnyValue>>, GoError> {
-        let lease =
-            self.create_source_file(&params.file_name, &params.source_text, &params.options)?;
+        // ts#64544
+        let file_name = self.resolve_create_source_file_name(&params.file_name)?;
+        let lease = self.create_source_file(&file_name, &params.source_text, &params.options)?;
         self.encode_leased_source_file(lease)
     }
 
@@ -3450,8 +3451,8 @@ impl Session {
         _ctx: &Context,
         params: &CreateSourceFileFromFileParams,
     ) -> Result<Option<Box<dyn AnyValue>>, GoError> {
-        let file_name =
-            tspath::get_normalized_absolute_path(&params.file_name, &self.get_current_directory());
+        // ts#64544
+        let file_name = self.resolve_create_source_file_name(&params.file_name)?;
         let (source_text, ok) = self.snapshot_host.fs().read_file(&file_name);
         if !ok {
             return Err(errors::errorf(
@@ -3465,6 +3466,20 @@ impl Session {
         }
         let lease = self.create_source_file(&file_name, &source_text, &params.options)?;
         self.encode_leased_source_file(lease)
+    }
+
+    // Go: api/session.go:2104 resolveCreateSourceFileName (ts#64544)
+    pub fn resolve_create_source_file_name(&self, file_name: &str) -> Result<String, GoError> {
+        if file_name.is_empty() {
+            return Err(errors::errorf(
+                format!("{}: fileName must not be empty", *ERR_CLIENT_ERROR),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ));
+        }
+        Ok(tspath::get_normalized_absolute_path(
+            file_name,
+            &self.get_current_directory(),
+        ))
     }
 
     // Go: api/session.go createSourceFile (ts#64216, ts#64434)
@@ -5157,10 +5172,12 @@ impl Session {
             )
         {
             // ts#64163
+            // ts#64544: the URI of the program's file name (Go N'
+            // api/session.go:3243).
             let prepared_snapshot = self.snapshot_host.clone_snapshot_with_auto_imports(
                 ctx,
                 &working_snapshot,
-                &params.file.to_uri(&self.get_current_directory()),
+                &lsconv::file_name_to_document_uri(source_file_file_name(source_file)),
                 None,
             );
             if let Some(project_session) = &self.project_session {
