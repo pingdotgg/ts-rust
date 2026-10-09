@@ -12,7 +12,7 @@
 //! thread (Go `handlers.Go`), and the server timing requests get the answer
 //! of a connection that collects no timing.
 
-use crate::core::{go_recover, go_wait_group_goroutine};
+use crate::core::{go_after_recover, go_recover, go_wait_group_goroutine};
 use crate::frontend::json_ext::{AnyValue, JsonValue};
 use crate::gostd::{Context, GoError, context, errors};
 use crate::ipc::{self, ERR_CONN_CLOSED, Message};
@@ -252,9 +252,11 @@ impl MuxConn {
         let r = ipc::recovered_value(payload.as_ref());
         let stack = std::backtrace::Backtrace::force_capture().to_string();
         let err = errors::new(format!("panic: {r}\n{stack}"));
-        let _write = lock(&self.write);
-        (self.new_protocol)()
-            .write_error(
+        // The panic answer runs in Go's deferred recover: a panic in it
+        // prints the recovered panic first.
+        go_after_recover(payload.as_ref(), || {
+            let _write = lock(&self.write);
+            (self.new_protocol)().write_error(
                 id,
                 &jsonrpc::ResponseError {
                     code: jsonrpc::CODE_INTERNAL_ERROR,
@@ -262,15 +264,16 @@ impl MuxConn {
                     data: None,
                 },
             )
-            .map_err(|write_err| {
-                errors::errorf(
-                    format!(
-                        "ipc: failed to write panic error response: {} (original panic: {r})",
-                        write_err.error()
-                    ),
-                    vec![write_err],
-                )
-            })
+        })
+        .map_err(|write_err| {
+            errors::errorf(
+                format!(
+                    "ipc: failed to write panic error response: {} (original panic: {r})",
+                    write_err.error()
+                ),
+                vec![write_err],
+            )
+        })
     }
 
     /// The payload of a panic of the read loop, once. The loading thread's
@@ -972,9 +975,14 @@ mod tests {
     // Go recovers a panic of the handler, but a panic in the write of that
     // panic answer (ipc/conn_async.go:207-221) is not recovered. It ends
     // the process: `WaitGroup.Go` (go1.27.1 sync/waitgroup.go:236) panics
-    // again with it, and the runtime exits 2. A Go panic ends the port the
-    // same way; any other panic is a port gap and exits `EXIT_UNPORTED`
-    // (`lsp::server::go_crash`). Each case runs in a child process.
+    // again with it, and the runtime exits 2. Its stderr starts with the
+    // recovered handler panic (followups39, Go `go test -overlay` of this
+    // case):
+    //   panic: handler panic [recovered]
+    //   \tpanic: write panic [recovered, repanicked]
+    // A Go panic ends the port the same way; any other panic is a port gap
+    // and exits `EXIT_UNPORTED` (`lsp::server::go_crash`). Each case runs in
+    // a child process.
     #[test]
     fn a_panic_in_the_panic_answer_ends_the_process() {
         if let Ok(kind) = std::env::var(CRASH_CHILD_ENV) {
@@ -1011,7 +1019,11 @@ mod tests {
             std::env::current_exe().expect("test binary")
         };
         for (kind, code, text) in [
-            ("go", 2, "panic: write panic [recovered, repanicked]"),
+            (
+                "go",
+                2,
+                "\npanic: handler panic [recovered]\n\tpanic: write panic [recovered, repanicked]\n",
+            ),
             ("rust", crate::execute::tsc::EXIT_UNPORTED, "write panic"),
         ] {
             let output = std::process::Command::new(&exe)
