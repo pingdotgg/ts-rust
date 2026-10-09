@@ -10,6 +10,7 @@ use crate::locale;
 use crate::lsp::lsproto;
 use crate::scanner_util::{go_byte_offset, port_byte_offset};
 use crate::spanmap::{self, Feature, Fidelity, SpanMap};
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::LazyLock;
 
@@ -769,16 +770,7 @@ pub fn file_name_to_document_uri(file_name: &str) -> lsproto::DocumentUri {
         return lsproto::DocumentUri(file_name.to_string());
     }
     if tspath::is_dynamic_file_name(file_name) {
-        let Some((scheme, rest)) = file_name[2..].split_once('/') else {
-            crate::core::go_panic(format!("invalid file name: {file_name}"));
-        };
-        let Some((authority, path)) = rest.split_once('/') else {
-            crate::core::go_panic(format!("invalid file name: {file_name}"));
-        };
-        if authority == "ts-nul-authority" {
-            return lsproto::DocumentUri(format!("{scheme}:{path}"));
-        }
-        return lsproto::DocumentUri(format!("{scheme}://{authority}/{path}"));
+        return dynamic_file_name_to_document_uri(file_name);
     }
 
     let (mut volume, file_name, _) = tspath::split_volume_path(file_name);
@@ -794,6 +786,49 @@ pub fn file_name_to_document_uri(file_name: &str) -> lsproto::DocumentUri {
         .collect();
 
     lsproto::DocumentUri(format!("file://{volume}{}", parts.join("/")))
+}
+
+// Go: lsp/lsproto/lsp.go:85 DynamicFileNameToDocumentUri (ts#64544)
+// PORT: Go has it in lsproto. The server lane owns `lsp/lsproto/lsp.rs`, so
+// the ls lane keeps this copy until lsproto has it. It decodes both the
+// encoded names (`^/~ts-uri~/...`) and the literal names that
+// `DocumentUri::file_name` gives before its ts#64544 part.
+fn dynamic_file_name_to_document_uri(file_name: &str) -> lsproto::DocumentUri {
+    // Go: lsp/lsproto/lsp.go:97 dynamicFileNameToDocumentUri, strict = false
+    let encoded = tspath::is_encoded_dynamic_file_name(file_name);
+    let start = if encoded {
+        tspath::DYNAMIC_URI_FILE_NAME_PREFIX.len()
+    } else {
+        2
+    };
+    let invalid = || -> ! { crate::core::go_panic(format!("invalid file name: {file_name}")) };
+    let Some((scheme, rest)) = file_name[start..].split_once('/') else {
+        invalid();
+    };
+    let Some((authority, uri_path)) = rest.split_once('/') else {
+        invalid();
+    };
+    let has_authority = authority != "ts-nul-authority";
+    let authority = if encoded {
+        Cow::Owned(tspath::decode_dynamic_uri_path_segment(authority))
+    } else {
+        Cow::Borrowed(authority)
+    };
+    if encoded
+        && has_authority
+        && let Some(suffix) = tspath::decode_dynamic_uri_no_path(uri_path)
+    {
+        return lsproto::DocumentUri(format!("{scheme}://{authority}{suffix}"));
+    }
+    let uri_path = if encoded {
+        Cow::Owned(tspath::decode_dynamic_uri_path(uri_path))
+    } else {
+        Cow::Borrowed(uri_path)
+    };
+    if !has_authority {
+        return lsproto::DocumentUri(format!("{scheme}:{uri_path}"));
+    }
+    lsproto::DocumentUri(format!("{scheme}://{authority}/{uri_path}"))
 }
 
 /// Go `utf16.RuneLen(r)`.
@@ -1278,6 +1313,53 @@ mod tests {
     use crate::frontend::parser::{SourceFileParseOptions, parse_source_file};
     use crate::spanmap::{Kind, Segment};
     use std::sync::Arc;
+
+    // Go: ls/lsconv/converters_test.go:97 TestNonFileDocumentURIRoundTripsThroughNormalizedFileName (ts#64544)
+    // PORT: only the FileNameToDocumentURI half. The DocumentUri.FileName
+    // half is lsproto (server lane); the encoded names below are the ones Go
+    // N' gives for these URIs (converters_test.go:100-116, :46-50).
+    #[test]
+    fn test_file_name_to_document_uri_decodes_dynamic_names() {
+        let cases = [
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~2e2e~/~ts-uri~/~ts-uri-escape~636166c3a95c66696c65~.ts",
+                "custom:folder/../~ts-uri~/caf\u{e9}\\file.ts",
+            ),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/~ts-uri-escape~7e74732d7572692d6573636170657e6469722e6a73~/~ts-uri-escape~66696c65003f783d31~.ts",
+                "custom:~ts-uri-escape~dir.js/file.ts?x=1",
+            ),
+            (
+                "^/~ts-uri~/untitled/ts-nul-authority/Untitled-1",
+                "untitled:Untitled-1",
+            ),
+            (
+                "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~556e7469746c65642d310023667261676d656e74~",
+                "untitled:Untitled-1#fragment",
+            ),
+            (
+                "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~633a~/Users/jrieken/Code/abc.txt",
+                "untitled:c:/Users/jrieken/Code/abc.txt",
+            ),
+            (
+                "^/~ts-uri~/untitled/wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts",
+                "untitled://wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts",
+            ),
+            // Go: converters_test.go:191 literalDynamicFileName (not encoded: no decoding)
+            (
+                "^/custom/ts-nul-authority/~ts-uri-escape~666f6f~.ts",
+                "custom:~ts-uri-escape~666f6f~.ts",
+            ),
+            // Go: converters_test.go:200 invalidUTF8FileName
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/~ts-uri-escape~ff~",
+                "custom:~ts-uri-escape~ff~",
+            ),
+        ];
+        for (file_name, uri) in cases {
+            assert_eq!(file_name_to_document_uri(file_name).0, uri, "{file_name}");
+        }
+    }
 
     // Go: ls/lsconv/converters_test.go:121 TestConvertersSourceFileProjectionExpansion
     // PORT: Go links the two `*ast.SourceFile` values by pointer; here the

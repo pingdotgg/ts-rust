@@ -444,10 +444,8 @@ pub fn would_rename_in_other_node_modules(
         return None;
     }
 
-    let original_package = module::parse_node_module_from_path(
-        source_file_file_name(original_file),
-        false, /*isFolder*/
-    );
+    let original_package =
+        module::node_module_package_root_for_file(source_file_file_name(original_file));
     if original_package.is_empty() {
         // Original source file is not in node_modules.
         for &declaration in &declarations {
@@ -462,10 +460,9 @@ pub fn would_rename_in_other_node_modules(
 
     // Original source file is in node_modules.
     for &declaration in &declarations {
-        let decl_package = module::parse_node_module_from_path(
-            source_file_file_name(get_source_file_of_node(declaration)),
-            false, /*isFolder*/
-        );
+        let decl_package = module::node_module_package_root_for_file(source_file_file_name(
+            get_source_file_of_node(declaration),
+        ));
         if !decl_package.is_empty() && decl_package != original_package {
             return Some(
                 diag::You_cannot_rename_elements_that_are_defined_in_another_node_modules_folder,

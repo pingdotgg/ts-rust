@@ -232,7 +232,7 @@ fn test_document_uri_to_file_name() {
     t.finish();
 }
 
-// Go: ls/lsconv/converters_test.go:55 TestFileNameToDocumentURI
+// Go: ls/lsconv/converters_test.go:61 TestFileNameToDocumentURI
 #[test]
 fn test_file_name_to_document_uri() {
     #[rustfmt::skip]
@@ -249,13 +249,15 @@ fn test_file_name_to_document_uri() {
         ("c:/test %/path", "file:///c%3A/test%20%25/path"),
         ("/", "file:///"),
         ("/_:/path", "file:///_%3A/path"),
-        ("/users/me/c#-projects/", "file:///users/me/c%23-projects/"),
+        // PORT: Go N' passes RootedFilePathFromAbsolute("/users/me/c#-projects/"),
+        // which drops the trailing separator (ts#64159).
+        ("/users/me/c#-projects", "file:///users/me/c%23-projects"),
         ("//localhost/c$/GitDevelopment/express", "file://localhost/c%24/GitDevelopment/express"),
         ("c:/test with %25/c#code", "file:///c%3A/test%20with%20%2525/c%23code"),
 
         ("^/untitled/ts-nul-authority/Untitled-1", "untitled:Untitled-1"),
         ("^/untitled/ts-nul-authority/c:/Users/jrieken/Code/abc.txt", "untitled:c:/Users/jrieken/Code/abc.txt"),
-        ("^/untitled/ts-nul-authority///wsl%2Bubuntu/home/jabaile/work/TypeScript-go/newfile.ts", "untitled://wsl%2Bubuntu/home/jabaile/work/TypeScript-go/newfile.ts"),
+        ("^/untitled/wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts", "untitled://wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts"),
     ];
     let mut t = Subtests::new("TestFileNameToDocumentURI");
     for &(file_name, uri) in tests {
