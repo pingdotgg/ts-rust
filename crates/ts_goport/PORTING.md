@@ -1436,6 +1436,12 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   boundaries. Without an API session, the results of LSP requests are
   Go's and only order and timing differ. With an API session, the limits
   below also change which messages are answered and when.
+- The end of a run: when SIGINT, SIGTERM, the parent watchdog or the end
+  of stdin ends the context while the dispatch thread runs work that Go
+  runs on a goroutine (the async part of a request, an API session), a
+  watcher thread ends the process with Go's result, as Go's `Run` returns
+  without that work (`lsp/run_end.rs`). PORT: with `--pprofDir` the run
+  waits for that work, so the profiles are written.
 - API sessions of the LSP server (`custom/initializeAPISession`) are
   served on the dispatch thread too (`lsp/server.rs` `ApiConnProtocol`).
   LSP messages and API requests do not run at the same time. These
@@ -1456,6 +1462,13 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   - `--api --async` and the API sessions run requests one at a time
     (`ipc/conn_async.rs`). A pipelined request sees the result of the one
     before it. Go runs them at the same time.
+  - The async connection reads its next message only after the running
+    request. So the end of the input during a request does not cancel the
+    request's context: Go's read loop sees the end at once and cancels it
+    (`ipc/conn_async.go:68`), so a long check answers early with what it
+    has. The port answers in full and then ends, with Go's exit code. A
+    SIGINT or SIGTERM while a request waits for a client callback ends
+    that call in Go at once; the port ends it after the next message.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of

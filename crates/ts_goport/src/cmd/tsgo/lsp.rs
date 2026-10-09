@@ -112,6 +112,29 @@ pub fn run_lsp(args: &[String]) -> i32 {
         set_parent_process_id: new_parent_process_watchdog(&ctx, &stop, client_process_id.get()),
     });
 
+    // PORT: when the context is done while the dispatch thread runs work
+    // that Go runs on other goroutines (the async part of a request), Go's
+    // `s.Run` returns and `main` exits while that work runs
+    // (lsp/run_end.rs). The early end does what the lines below and the
+    // bins do after `run_lsp` returns. With a profile session the run waits
+    // for that work instead, so the session writes its profiles when it
+    // drops here.
+    if _profile_session.is_none() {
+        let stop = stop.clone();
+        s.set_early_end(Box::new(move |result| {
+            // Go: defer stop()
+            stop();
+            let code = match result {
+                Err(err) => {
+                    let _ = writeln!(stdio::Stderr, "{}", err.error());
+                    1
+                }
+                Ok(()) => 0,
+            };
+            exit_after_run(code)
+        }));
+    }
+
     let result = s.run(&ctx);
     // Go: defer stop()
     stop();
@@ -120,6 +143,22 @@ pub fn run_lsp(args: &[String]) -> i32 {
         return 1;
     }
     0
+}
+
+/// PORT: the end of the process after a run that the LSP server ended
+/// early (`run_lsp`), as `bin/tsgo.rs` and `bin/goport.rs` end it after
+/// `run_lsp` returns: the unported report and `EXIT_UNPORTED` when the run
+/// reached unported code, else `code` (Go `os.Exit(code)`).
+fn exit_after_run(code: i32) -> ! {
+    let unported = crate::core::unported_report();
+    let mut stderr = stdio::Stderr;
+    for (name, count) in &unported {
+        let _ = writeln!(stderr, "unported: {name} {count}");
+    }
+    if !unported.is_empty() {
+        std::process::exit(crate::execute::tsc::EXIT_UNPORTED);
+    }
+    std::process::exit(code)
 }
 
 // Go: cmd/tsc/lsp.go:79 newParentProcessWatchdog
