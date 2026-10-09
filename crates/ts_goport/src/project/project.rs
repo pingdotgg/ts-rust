@@ -730,10 +730,6 @@ impl Project {
             .clone()
             .unwrap_or_else(|| crate::core::go_nil_dereference());
 
-        // Define a fresh CreateCheckerPool closure for this call. Each invocation of
-        // CreateProgram must use its own closure so that concurrent goroutines cloning
-        // the same project never share a captured variable through a stale closure
-        // stored in the old program's options.
         // PORT: Go reads `p.host.sessionOptions.CheckerPoolOptions` when the
         // closure runs; the session options never change, so the value is
         // copied here. Go passes the method value `p.log`, whose body is
