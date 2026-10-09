@@ -1510,7 +1510,10 @@ child_test! {
             .filter(|export| export.module_file_name == format!("{pkg}/index.ts"))
             .collect();
         assert_eq!(from_index.len(), 1, "{exports:?}");
-        assert_eq!(from_index[0].target.module_id.0, format!("{pkg}/other.ts"));
+        assert_eq!(
+            from_index[0].target.module_id.as_string(),
+            format!("{pkg}/other.ts")
+        );
         assert_eq!(from_index[0].target.export_name, "y");
     }
 }

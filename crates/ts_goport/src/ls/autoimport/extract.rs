@@ -107,7 +107,10 @@ impl CheckerLease {
 
 // Go: ls/autoimport/extract.go:60 newSymbolExtractor
 // PORT: Go nil funcs are `None`. Go `&binder.NameResolver{CompilerOptions:
-// core.EmptyCompilerOptions}` leaves every callback nil.
+// core.EmptyCompilerOptions}` leaves every callback nil. ts#64159 (behavior
+// only) takes a `caseSensitivity` for `toPath`; Go N' `getModuleID` needs only
+// `realpath` (extract.go:82), and every Rust caller with a `realpath` passes
+// `to_path` too.
 pub fn new_symbol_extractor<'c>(
     package_name: &str,
     checker: &'c mut Checker,
@@ -165,9 +168,9 @@ impl SymbolExtractor<'_> {
     pub fn get_module_id(&self, file: Node) -> ModuleID {
         if let (Some(realpath), Some(to_path)) = (&self.realpath, &self.to_path) {
             let realpath = realpath(source_file_file_name(file));
-            return ModuleID(to_path(&realpath).0);
+            return file_module_id(to_path(&realpath));
         }
-        ModuleID(source_file_info(file).path.clone())
+        file_module_id(tspath::Path(source_file_info(file).path.clone()))
     }
 
     // Go: ls/autoimport/extract.go:91 getModuleIDForSymbol
@@ -212,7 +215,7 @@ impl ExportExtractor<'_> {
                 if is_module_with_string_literal_name(statement)
                     && is_non_pattern_ambient_module_declaration(file, statement)
                 {
-                    let module_id = ModuleID(statement.name().text().to_string());
+                    let module_id = ambient_module_id(statement.name().text());
                     self.extract_from_module_declaration(
                         statement,
                         file,
@@ -274,8 +277,9 @@ impl ExportExtractor<'_> {
         }
         for decl in module_augmentations {
             let name = decl.name().text().to_string();
-            let mut module_id = ModuleID(name.clone());
+            let mut module_id = ambient_module_id(&name);
             let mut module_file_name = String::new();
+            let mut unresolved_module_specifier = String::new();
             if tspath::is_external_module_name_relative(&name) {
                 let (resolved, _, _) = self.module_resolver.resolve_module_name(
                     &name,
@@ -289,16 +293,21 @@ impl ExportExtractor<'_> {
                     .unwrap_or_else(|| crate::core::go_nil_dereference());
                 if resolved.is_resolved() {
                     module_file_name = resolved.resolved_file_name.clone();
-                    module_id = ModuleID(to_path(&module_file_name).0);
+                    module_id = file_module_id(to_path(&module_file_name));
                 } else {
-                    // :shrug:
+                    // PORT: Go N' `file.FileName().Directory().ResolveFile(name)`
+                    // (ts#64159) gives the same name for a module name without a
+                    // trailing separator.
                     module_file_name = tspath::resolve_path(
                         &tspath::get_directory_path(source_file_file_name(file)),
                         &[name.as_str()],
                     );
-                    module_id = ModuleID(to_path(&module_file_name).0);
+                    module_id = file_module_id(to_path(&module_file_name));
+                    // ts#64159: extract.go:166
+                    unresolved_module_specifier = name.clone();
                 }
             }
+            let export_start = exports.len();
             self.extract_from_module_declaration(
                 decl,
                 file,
@@ -306,6 +315,12 @@ impl ExportExtractor<'_> {
                 &module_file_name,
                 &mut exports,
             );
+            // ts#64159: extract.go:169-173
+            // PORT: the new exports are not shared yet, so `make_mut` does not copy.
+            for export in &mut exports[export_start..] {
+                Rc::make_mut(export).unresolved_module_specifier =
+                    unresolved_module_specifier.clone();
+            }
         }
         exports
     }
@@ -577,8 +592,9 @@ impl SymbolExtractor<'_> {
                     checker_lease.try_type_checker(&mut *self.checker),
                     target_symbol,
                 );
-                let mut target_module_id =
-                    ModuleID(source_file_info(get_source_file_of_node(decl)).path.clone());
+                let mut target_module_id = file_module_id(tspath::Path(
+                    source_file_info(get_source_file_of_node(decl)).path.clone(),
+                ));
                 if parent.is_some() && self.checker.sym(parent).is_external_module() {
                     let (id, ok) = self.get_module_id_for_symbol(parent);
                     if ok {
@@ -827,5 +843,5 @@ pub fn file_name_for_default_export_name(
     if !module_file_name.is_empty() {
         return module_file_name.to_string();
     }
-    module_id.0.clone()
+    module_id.as_string().to_string()
 }

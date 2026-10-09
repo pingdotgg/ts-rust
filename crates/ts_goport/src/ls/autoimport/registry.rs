@@ -507,8 +507,11 @@ impl dirty::Cloneable for Rc<RefCell<Directory>> {
     }
 }
 
-// Go: ls/autoimport/registry.go:328 Registry
+// Go: ls/autoimport/registry.go:327 Registry
 // PORT: Go `func(fileName string) tspath.Path` is `Rc<dyn Fn(&str) -> tspath::Path>`.
+// ts#64159 (behavior only) replaces `toPath` with `caseSensitivity`
+// (registry.go:328) and `caseSensitivity.PathKey(...)`; `to_path` gives the
+// same key for the rooted names the registry reads.
 // Go `*collections.SyncMap[tspath.Path, string]` specifier caches are
 // `Rc<RefCell<FxHashMap<tspath::Path, String>>>` (shared between registries).
 pub struct Registry {
@@ -773,7 +776,12 @@ pub fn should_stop_build(ctx: &Context) -> bool {
 
 // Go: ls/autoimport/registry.go:500 RegistryCloneHost
 // PORT: Go embeds `module.ResolutionHost` and repeats its `FS()`; both come
-// from the supertrait (`fs`, `get_current_directory`). Go
+// from the supertrait (`fs`, `get_current_directory`). ts#64159 drops the
+// embedded host: `Registry.Clone` takes the current directory
+// (registry.go:392, project/snapshot.go:669 `store.options.CurrentDirectory`)
+// and the builder resolves through `resolutionHost{fs, currentDirectory}`.
+// The project host's `get_current_directory` is that same directory
+// (project/autoimport.rs), so the port keeps the supertrait. Go
 // `*compiler.Program` is `Rc<compiler::NewProgram>` (nil is `None`), Go
 // `*packagejson.InfoCacheEntry` is `Option<Rc<..>>`, and Go `*ast.SourceFile`
 // is `Node` (`Node::NIL` for nil). The project area implements it
@@ -880,28 +888,30 @@ impl RegistryBuilder {
             if tspath::is_dynamic_file_name(file_name) {
                 return;
             }
-            let mut dir = file_name.to_string();
-            let mut dir_path = path.clone();
+            // ts#64159: registry.go:562-575 walks the file's directory and its
+            // parents, the key and the name side by side.
+            let mut dir = tspath::get_directory_path(file_name);
+            let mut dir_path = path.get_directory_path();
             loop {
-                dir = tspath::get_directory_path(&dir);
-                let last_dir_path = dir_path.clone();
-                dir_path = dir_path.get_directory_path();
-                if dir_path == last_dir_path {
-                    break;
-                }
                 if needed_directories.contains_key(&dir_path) {
                     break;
                 }
                 needed_directories.insert(dir_path.clone(), dir.clone());
+                let parent_path = dir_path.get_directory_path();
+                let parent_dir = tspath::get_directory_path(&dir);
+                if parent_path == dir_path || parent_dir == dir {
+                    break;
+                }
+                dir_path = parent_path;
+                dir = parent_dir;
             }
         };
         for (path, file_name) in &change.open_files {
             if let (Some(project_id), _) = self.host.get_default_project(path) {
                 needed_projects.insert(project_id, ());
             }
-            if tspath::is_dynamic_file_name(file_name) {
-                continue;
-            }
+            // ts#64159: a dynamic open file gets a specifier cache too
+            // (registry.go:578-587); `add_needed_directories` skips it.
             add_needed_directories(&mut needed_directories, path, file_name);
 
             if !self.specifier_cache.has(path) {
@@ -1154,9 +1164,13 @@ impl RegistryBuilder {
                     // For node_modules, mark the bucket dirty if anything changes in the directory.
                     // The path could be either a symlink path (containing /node_modules/) or a realpath
                     // (for symlinked project references). Both are recorded in Paths for granular updates.
-                    if let Some(node_modules_index) = path.find("/node_modules/") {
-                        let dir_path =
-                            tspath::Path(path.as_str()[..node_modules_index].to_string());
+                    // ts#64159: registry.go:749 `SplitAtCanonicalComponent`: a
+                    // "node_modules" component, also the last one (a deleted
+                    // node_modules directory), below the root.
+                    if let Some(dir_path) =
+                        split_before_canonical_component(&path.0, "node_modules")
+                    {
+                        let dir_path = tspath::Path(dir_path.to_string());
                         if clean_node_modules_buckets.contains(&dir_path) {
                             let entry = self
                                 .node_modules
@@ -1651,13 +1665,15 @@ impl RegistryBuilder {
             }
             if should_rebuild {
                 let entry = project.clone();
+                // ts#64159 (R1): registry.go:1050 resolves from the program's
+                // base directory.
                 let mut br = new_bucket_build_result(
                     Box::new(move |bucket: Rc<RegistryBucket>| entry.replace(bucket)),
                     (self.base.to_path)(
                         &program
                             .as_deref()
                             .unwrap_or_else(|| crate::core::go_nil_dereference())
-                            .get_current_directory(),
+                            .base_directory(),
                     ),
                 );
                 // Go: wg.Go(func() {...})
@@ -1812,6 +1828,35 @@ impl RegistryBuilder {
     }
 }
 
+// Go: tspath/pathkey.go:122 PathKey.SplitAtCanonicalComponent (ts#64159)
+/// The key before the first `component` below the root that is followed by a
+/// separator or the end, or `None`. Go also returns the key through it; the
+/// registry reads only this part.
+// PORT: a private copy until tspath has the ts#64159 typed path helpers.
+fn split_before_canonical_component<'a>(path: &'a str, component: &str) -> Option<&'a str> {
+    if component.is_empty()
+        || component.contains(['/', '\\'])
+        || component == "."
+        || component == ".."
+    {
+        crate::core::go_panic("invalid canonical path component".to_string());
+    }
+    let needle = format!("/{component}");
+    let root_length = tspath::get_root_length(path);
+    if root_length == 0 {
+        return None;
+    }
+    let mut offset = root_length - 1;
+    loop {
+        let index = path[offset..].find(&needle)? + offset;
+        let end = index + needle.len();
+        if end == path.len() || path.as_bytes()[end] == b'/' {
+            return Some(&path[..index.max(root_length)]);
+        }
+        offset = end;
+    }
+}
+
 // Go: ls/autoimport/registry.go:1137 hasNewNonNodeModulesFiles
 // PORT: Go `program` can be nil; it is read only for a
 // `newProgramStructureDifferentFileNames` bucket, where nil panics as in Go.
@@ -1884,6 +1929,9 @@ pub fn has_symlink_to_node_modules(
     let directories_by_realpath = symlink_cache.directories_by_realpath();
     let mut found = false;
     file_path.for_each_ancestor_directory(|dir_path: tspath::Path| -> ((), bool) {
+        // PORT: Go N' (ts#64159, registry.go:1199) keys the directory links
+        // without a trailing separator; the Rust `KnownSymlinks` still keys
+        // them with one (modulespecifiers/symlinks.rs `set_directory`).
         let Some(symlink_paths) =
             directories_by_realpath.get(&dir_path.ensure_trailing_directory_separator())
         else {
@@ -1983,7 +2031,8 @@ impl RegistryBuilder {
             .get_program_for_project(project_id)
             .unwrap_or_else(|| crate::core::go_nil_dereference());
         let program = &*program;
-        let project_root_path = (self.base.to_path)(&program.get_current_directory());
+        // ts#64159 (R1): registry.go:1261, the program's base directory.
+        let project_root_path = (self.base.to_path)(&program.base_directory());
         let symlink_cache = program.get_symlink_cache();
         let (get_checker, close_pool, checker_count) = create_checker_pool(program);
         // PORT: Go map order is random; insertion (program file) order here.
@@ -2253,6 +2302,11 @@ impl RegistryBuilder {
                     .fs()
                     .realpath(&types_package_json.package_directory);
             }
+            // PORT: Go N' (ts#64159, registry.go:1428) compares path keys
+            // (`PathKey.ContainsPath`) of the builder's current directory and
+            // the realpath. Both are rooted and normalized, so the N
+            // `tspath.ContainsPath` gives the same answer; the host's current
+            // directory is the builder's (see `RegistryCloneHost`).
             let is_local = !realpath.is_empty()
                 && !realpath.contains("/node_modules/")
                 && tspath::contains_path(

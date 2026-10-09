@@ -1690,10 +1690,12 @@ impl View {
                 is_fix_possibly_re_exporting_importing_file(
                     a,
                     source_file_file_name(self.importing_file),
+                    self.program.use_case_sensitive_file_names(),
                 ),
                 is_fix_possibly_re_exporting_importing_file(
                     b,
                     source_file_file_name(self.importing_file),
+                    self.program.use_case_sensitive_file_names(),
                 ),
             );
             if comparison != 0 {
@@ -1768,22 +1770,34 @@ impl View {
     }
 }
 
-// Go: ls/autoimport/fix.go:1094 isFixPossiblyReExportingImportingFile
+// Go: ls/autoimport/fix.go:1097 isFixPossiblyReExportingImportingFile
 // This is a simple heuristic to try to avoid creating an import cycle with a barrel re-export.
 // E.g., do not `import { Foo } from ".."` when you could `import { Foo } from "../Foo"`.
 // This can produce false positives or negatives if re-exports cross into sibling directories
 // (e.g. `export * from "../whatever"`) or are not named "index". Technically this should do
-// a tspath.Path comparison, but it's not worth it to run a heuristic in such a hot path.
-fn is_fix_possibly_re_exporting_importing_file(fix: &Fix, importing_file_name: &str) -> bool {
+// a tspath.PathKey comparison, but it's not worth it to run a heuristic in such a hot path.
+// PORT: Go `tspath.CaseSensitivity` is the bool.
+fn is_fix_possibly_re_exporting_importing_file(
+    fix: &Fix,
+    importing_file_name: &str,
+    use_case_sensitive_file_names: bool,
+) -> bool {
     if fix.is_re_export && is_index_file_name(&fix.module_file_name) {
-        let re_export_dir = tspath::get_directory_path(&fix.module_file_name);
-        return importing_file_name
-            .starts_with(tspath::ensure_trailing_directory_separator(&re_export_dir).as_str());
+        // ts#64159: Go `CaseSensitivity.StartsWithDirectory` (rooted_path.go:558):
+        // the roots compare without case, the rest by the file system's case.
+        return tspath::relative_path_within_directory(
+            &tspath::get_directory_path(&fix.module_file_name),
+            importing_file_name,
+            use_case_sensitive_file_names,
+        )
+        .is_some_and(|relative| !relative.is_empty());
     }
     false
 }
 
-// Go: ls/autoimport/fix.go:1102 isIndexFileName
+// Go: ls/autoimport/fix.go:1104 isIndexFileName
+// PORT: Go N' reads `fileName.BaseName()` (ts#64159); a rooted name always
+// has a separator, so the text after the last one is the same.
 fn is_index_file_name(file_name: &str) -> bool {
     let Some(last_slash) = file_name.rfind('/') else {
         return false;

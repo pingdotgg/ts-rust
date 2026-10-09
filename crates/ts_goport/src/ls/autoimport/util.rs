@@ -36,17 +36,13 @@ pub fn try_get_module_id_and_file_name_of_module_symbol(
     }
     if decl.kind() == SyntaxKind::SourceFile {
         return (
-            ModuleID(source_file_info(decl).path.clone()),
+            file_module_id(tspath::Path(source_file_info(decl).path.clone())),
             source_file_file_name(decl).to_string(),
             true,
         );
     }
     if is_module_with_string_literal_name(decl) {
-        return (
-            ModuleID(decl.name().text().to_string()),
-            String::new(),
-            true,
-        );
+        return (ambient_module_id(decl.name().text()), String::new(), true);
     }
     (ModuleID::default(), String::new(), false)
 }
@@ -66,12 +62,12 @@ pub fn get_module_id_and_file_name_of_module_symbol(
     }
     if decl.kind() == SyntaxKind::SourceFile {
         return (
-            ModuleID(source_file_info(decl).path.clone()),
+            file_module_id(tspath::Path(source_file_info(decl).path.clone())),
             source_file_file_name(decl).to_string(),
         );
     }
     if is_module_with_string_literal_name(decl) {
-        return (ModuleID(decl.name().text().to_string()), String::new());
+        return (ambient_module_id(decl.name().text()), String::new());
     }
     crate::core::go_panic("could not determine module ID of module symbol".to_string());
 }
@@ -403,16 +399,27 @@ pub fn add_package_json_dependencies(
 // finds the symlink boundary (the package root where the symlink lives), and caches that prefix mapping.
 // All subsequent files under the same symlinked package directory use prefix substitution with no syscalls.
 // PORT: Go `func(string) string` values are `Rc<dyn Fn(&str) -> String>`.
+// ts#64159 behavior only: Go `tspath.RootedFilePath` and
+// `tspath.RootedDirectoryPath` are `String`.
 pub fn get_package_realpath_funcs(
     fs: Rc<dyn vfs::Fs>,
     package_dir: &str,
 ) -> (Rc<dyn Fn(&str) -> String>, Rc<dyn Fn(&str) -> String>) {
     let real_package_dir = fs.realpath(package_dir);
     let is_symlinked = real_package_dir != package_dir;
-    // Go: replacePrefix (ts#64544, at 59f5b0233 util.go:256)
-    fn replace_prefix(file_name: &str, prefix: &str, replacement: &str) -> String {
-        let relative = file_name.strip_prefix(prefix).unwrap_or(file_name);
-        tspath::combine_paths(replacement, &[relative.trim_start_matches(['/', '\\'])])
+    // Go `fileName.RelativeTo(directory)` (rooted_path.go:422, case sensitive
+    // below the root) and `RootedDirectoryPath.ResolveRelativeFile`
+    // (rooted_path.go:746). ts#64159 replaces ts#64544's replacePrefix
+    // (at 59f5b0233 util.go:256) with them.
+    fn relative_to(file_name: &str, directory: &str) -> Option<String> {
+        tspath::relative_path_within_directory(directory, file_name, true)
+            .map(|relative| relative.into_owned())
+    }
+    fn resolve_relative_file(directory: &str, relative: &str) -> String {
+        if relative.is_empty() {
+            return directory.to_string();
+        }
+        tspath::combine_paths(directory, &[relative])
     }
     // Cache of package-directory-level symlink→realpath prefix mappings for
     // external packages encountered via re-exports. Keyed by the node_modules
@@ -430,10 +437,8 @@ pub fn get_package_realpath_funcs(
             if is_symlinked {
                 // ts#64544: only at a component boundary, so a sibling "pkg2"
                 // of "pkg" is not inside the package.
-                if let Some(relative) = file_name.strip_prefix(package_dir.as_str())
-                    && (relative.is_empty() || relative.starts_with(['/', '\\']))
-                {
-                    return replace_prefix(file_name, &package_dir, &real_package_dir);
+                if let Some(relative) = relative_to(file_name, &package_dir) {
+                    return resolve_relative_file(&real_package_dir, &relative);
                 }
             }
             // Files outside the package (e.g. re-exports into symlinked deps):
@@ -454,7 +459,8 @@ pub fn get_package_realpath_funcs(
                 if real_dir == file_package_dir {
                     return file_name.to_string();
                 }
-                return replace_prefix(file_name, &file_package_dir, &real_dir);
+                let relative = relative_to(file_name, &file_package_dir).unwrap_or_default();
+                return resolve_relative_file(&real_dir, &relative);
             }
             let real_dir = fs.realpath(&file_package_dir);
             dir_cache
@@ -463,7 +469,8 @@ pub fn get_package_realpath_funcs(
             if real_dir == file_package_dir {
                 return file_name.to_string();
             }
-            replace_prefix(file_name, &file_package_dir, &real_dir)
+            let relative = relative_to(file_name, &file_package_dir).unwrap_or_default();
+            resolve_relative_file(&real_dir, &relative)
         })
     };
     if !is_symlinked {
@@ -479,8 +486,9 @@ pub fn get_package_realpath_funcs(
     let to_symlink: Rc<dyn Fn(&str) -> String> = {
         let package_dir = package_dir.to_string();
         Rc::new(move |file_name: &str| -> String {
-            if file_name.starts_with(real_package_dir.as_str()) {
-                return replace_prefix(file_name, &real_package_dir, &package_dir);
+            // ts#64159: only at a component boundary, as in `to_realpath`.
+            if let Some(relative) = relative_to(file_name, &real_package_dir) {
+                return resolve_relative_file(&package_dir, &relative);
             }
             file_name.to_string()
         })
@@ -508,10 +516,12 @@ impl module::ResolutionHost for ResolutionHost {
     }
 }
 
-// Go: ls/autoimport/util.go:317 getModuleResolver
+// Go: ls/autoimport/util.go:327 getModuleResolver
 // PORT: Go `core.EmptyCompilerOptions` is shared; the resolver takes an `Rc`,
 // so it gets a new default `CompilerOptions`. Go `*module.DefaultResolver` is
-// `Rc<module::DefaultResolver>`.
+// `Rc<module::DefaultResolver>`. ts#64159 passes the builder's current
+// directory; the host's `get_current_directory` is that directory (see
+// `RegistryCloneHost`).
 pub fn get_module_resolver(
     host: &Rc<dyn RegistryCloneHost>,
     realpath: Rc<dyn Fn(&str) -> String>,
