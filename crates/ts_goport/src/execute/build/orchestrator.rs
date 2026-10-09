@@ -1056,6 +1056,9 @@ impl Orchestrator {
         for path in &paths {
             self.get_task(path).borrow_mut().drop_status_prefetch();
         }
+        // No kept watch parse of a written file outlives this build (see
+        // `BuildHost::drop_written_watch_sources`).
+        self.host.drop_written_watch_sources();
         self.host.written.clear();
     }
 
