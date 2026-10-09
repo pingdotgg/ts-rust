@@ -165,13 +165,13 @@ impl ParsedSourceFile {
             .unwrap_or_else(|| xxhash_rust::xxh3::xxh3_128(self.text.as_bytes()))
     }
 
-    // Go: ast/ast.go:2701 FileName
+    // Go: ast/ast.go:2703 FileName
     #[must_use]
     pub fn file_name(&self) -> &str {
         &self.parse_options.file_name
     }
 
-    // Go: ast/ast.go:2705 Path
+    // Go: ast/ast.go:2705 Path (at 673a5f17d713; ts#64159 renames it PathKey, ast/ast.go:2707)
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.parse_options.path

@@ -7,16 +7,17 @@
 //! `new_diagnostic_for_node`, finish it, then call `self.add_diagnostic` (the
 //! same two steps Go `error` does).
 //!
-//! PORT: Go `tspath`, `module.GetResolutionDiagnostic` and a few `core`
-//! helpers have no port in this crate. Private copies that follow the Go code
-//! exactly live in the `tspath_p17`, `module_p17` and `core_p17` modules at
-//! the end of this file.
+//! PORT: Go `module.GetResolutionDiagnostic` and a few `core` helpers have
+//! no port in this crate. Private copies that follow the Go code exactly live
+//! in the `module_p17` and `core_p17` modules at the end of this file. The
+//! `tspath_p17` module there names the tspath functions this unit uses.
 //!
 //! PORT: Go `c.program.X(...)` methods are free functions with the Go snake
 //! names (see `PORTING.md`, Program section). `*module.ResolvedModule` is
 //! `Option<&ResolvedModule>`.
 
 use crate::diagnostics::Message;
+use crate::frontend::tspath;
 use crate::prelude::*;
 
 // PORT: Go compares `*diagnostics.Message` pointers. A nil message is `None`.
@@ -601,7 +602,7 @@ impl Checker {
                             // Fallback: do a best-effort extraction using strings.Contains.
                             // This handles cases where a wildcard pattern matches a TS extension that's
                             // not at the end of the module specifier, e.g., "#/foo.ts.omg" through "#/*.omg": "./src/*"
-                            for ext in tspath_p17::SUPPORTED_TS_EXTENSIONS_FLAT {
+                            for &ext in tspath_p17::SUPPORTED_TS_EXTENSIONS_FLAT {
                                 if module_reference.contains(ext) {
                                     ts_extension = ext;
                                     break;
@@ -633,17 +634,16 @@ impl Checker {
                         self.compiler_options,
                     );
                     if !rm.resolved_using_ts_extension && should_rewrite {
-                        let current_directory = get_current_directory().to_string();
-                        let relative_to_source_file = tspath_p17::get_relative_path_from_file(
-                            &tspath_p17::get_normalized_absolute_path(
-                                source_file_file_name(importing_source_file),
-                                &current_directory,
-                            ),
+                        // ts#64159 (checker.go:15583): the path relative to the importing
+                        // file, or the resolved name when the two have different roots.
+                        let relative_to_source_file = tspath_p17::relative_path_from_file(
+                            source_file_file_name(importing_source_file),
                             &rm.resolved_file_name,
-                            &tspath_p17::ComparePathsOptions {
-                                use_case_sensitive_file_names: use_case_sensitive_file_names(),
-                                current_directory: current_directory.clone(),
-                            },
+                            use_case_sensitive_file_names(),
+                        )
+                        .map_or_else(
+                            || rm.resolved_file_name.clone(),
+                            |relative_path| tspath::ensure_path_is_non_module_name(&relative_path),
                         );
                         self.error(
                             error_node,
@@ -664,15 +664,13 @@ impl Checker {
                             let own_root_dir = common_source_directory().to_string();
                             let other_root_dir = redirect.common_source_directory().to_string();
 
-                            let compare_options = tspath_p17::ComparePathsOptions {
-                                use_case_sensitive_file_names: use_case_sensitive_file_names(),
-                                current_directory: get_current_directory().to_string(),
-                            };
+                            let case_sensitive = use_case_sensitive_file_names();
 
-                            let root_dir_path = tspath_p17::get_relative_path_from_directory(
+                            // ts#64159 (checker.go:15609): `None` is Go `rootsCompatible == false`.
+                            let root_dir_path = tspath_p17::relative_path_from_directory(
                                 &own_root_dir,
                                 &other_root_dir,
-                                &compare_options,
+                                case_sensitive,
                             );
 
                             // Get outDir paths, defaulting to root directories if not specified
@@ -684,13 +682,17 @@ impl Checker {
                             if other_out_dir.is_empty() {
                                 other_out_dir = other_root_dir.clone();
                             }
-                            let out_dir_path = tspath_p17::get_relative_path_from_directory(
+                            let out_dir_path = tspath_p17::relative_path_from_directory(
                                 &own_out_dir,
                                 &other_out_dir,
-                                &compare_options,
+                                case_sensitive,
                             );
 
-                            if root_dir_path != out_dir_path {
+                            // ts#64159 (checker.go:15628): other roots (R4) are a mismatch.
+                            if root_dir_path.is_none()
+                                || out_dir_path.is_none()
+                                || root_dir_path != out_dir_path
+                            {
                                 self.error(
                                     error_node,
                                     diag::This_import_path_is_unsafe_to_rewrite_because_it_resolves_to_another_project_and_the_relative_path_between_the_projects_output_files_is_not_the_same_as_the_relative_path_between_its_input_files,
@@ -854,11 +856,16 @@ impl Checker {
             // See if this was possibly a projectReference redirect
             if is_resolved_p17(resolved_module) {
                 let rm = resolved_module.unwrap();
-                let redirect = get_project_reference_from_source(&tspath_p17::to_path(
-                    &rm.resolved_file_name,
-                    &get_current_directory().to_string(),
-                    use_case_sensitive_file_names(),
-                ));
+                // ts#64159 (checker.go:15713): Go reads `ResolvedModule.ResolvedPath`, the
+                // path key of the rooted resolved name; `to_path` gives the same key.
+                let redirect = get_project_reference_from_source(
+                    tspath::to_path(
+                        &rm.resolved_file_name,
+                        get_current_directory(),
+                        use_case_sensitive_file_names(),
+                    )
+                    .as_str(),
+                );
                 if let Some(redirect) = redirect.filter(|r| !r.output_dts.is_empty()) {
                     self.error(
                         error_node,
@@ -896,13 +903,18 @@ impl Checker {
                     && resolution_is_node16_or_next
                     && is_extensionless_relative_path_import
                 {
-                    let absolute_ref = tspath_p17::get_normalized_absolute_path(
-                        module_reference,
-                        &tspath_p17::get_directory_path(source_file_file_name(
-                            importing_source_file,
-                        )),
-                    );
-                    let suggested_ext = self.get_suggested_import_extension(&absolute_ref);
+                    // ts#64159 (checker.go:15735): a reference that ends with a separator
+                    // names a directory, so no file extension is suggested.
+                    let mut suggested_ext = "";
+                    if !tspath::has_trailing_directory_separator(module_reference) {
+                        let absolute_ref = tspath::get_normalized_absolute_path(
+                            module_reference,
+                            &tspath::get_directory_path(source_file_file_name(
+                                importing_source_file,
+                            )),
+                        );
+                        suggested_ext = self.get_suggested_import_extension(&absolute_ref);
+                    }
                     if !suggested_ext.is_empty() {
                         self.error(
                             error_node,
@@ -1811,723 +1823,27 @@ fn maps_clone_p17(symbols: &mut SymbolArena, table: SymbolTable) -> SymbolTable 
     symbols.clone_table(table)
 }
 
-/// Private copies of Go `tspath` functions used by this unit. tspath has no
-/// Go-shaped port in this crate, so these follow the Go code exactly.
+/// Go `tspath` names that this unit and `declarations` use.
+// PORT: these were private copies of Go tspath. ts#64544 and ts#64159 changed
+// the root rules (dynamic file names, file URLs without case), so the path
+// functions now come from the tspath port. Only the base name helpers stay
+// here: they return slices of the name (PERF).
 pub(crate) mod tspath_p17 {
-    // Go: tspath/extension.go constants
-    pub const EXTENSION_TS: &str = ".ts";
-    pub const EXTENSION_TSX: &str = ".tsx";
-    pub const EXTENSION_DTS: &str = ".d.ts";
-    pub const EXTENSION_JS: &str = ".js";
-    pub const EXTENSION_JSX: &str = ".jsx";
-    pub const EXTENSION_JSON: &str = ".json";
-    pub const EXTENSION_MJS: &str = ".mjs";
-    pub const EXTENSION_MTS: &str = ".mts";
-    pub const EXTENSION_DMTS: &str = ".d.mts";
-    pub const EXTENSION_CJS: &str = ".cjs";
-    pub const EXTENSION_CTS: &str = ".cts";
-    pub const EXTENSION_DCTS: &str = ".d.cts";
+    use crate::frontend::tspath::{
+        ComparePathsOptions, SUPPORTED_DECLARATION_EXTENSIONS, get_directory_path,
+        get_encoded_root_length, get_path_components_relative_to, get_path_from_path_components,
+        get_root_length, is_encoded_dynamic_file_name, normalize_slashes,
+        remove_trailing_directory_separator,
+    };
+    pub use crate::frontend::tspath::{
+        EXTENSION_CJS, EXTENSION_CTS, EXTENSION_DCTS, EXTENSION_DMTS, EXTENSION_DTS, EXTENSION_JS,
+        EXTENSION_JSON, EXTENSION_JSX, EXTENSION_MJS, EXTENSION_MTS, EXTENSION_TS, EXTENSION_TSX,
+        SUPPORTED_TS_EXTENSIONS_FLAT, extension_is_ts, file_extension_is,
+        get_any_extension_from_path, has_ts_file_extension, is_external_module_name_relative,
+        path_is_relative, remove_extension, try_extract_ts_extension, try_get_extension_from_path,
+    };
 
-    const SUPPORTED_DECLARATION_EXTENSIONS: [&str; 3] =
-        [EXTENSION_DTS, EXTENSION_DCTS, EXTENSION_DMTS];
-    const SUPPORTED_TS_EXTENSIONS_FOR_EXTRACT_EXTENSION: [&str; 7] = [
-        EXTENSION_DTS,
-        EXTENSION_DCTS,
-        EXTENSION_DMTS,
-        EXTENSION_TS,
-        EXTENSION_TSX,
-        EXTENSION_MTS,
-        EXTENSION_CTS,
-    ];
-    pub const SUPPORTED_TS_EXTENSIONS_FLAT: [&str; 7] = [
-        EXTENSION_TS,
-        EXTENSION_TSX,
-        EXTENSION_DTS,
-        EXTENSION_CTS,
-        EXTENSION_DCTS,
-        EXTENSION_MTS,
-        EXTENSION_DMTS,
-    ];
-    const EXTENSIONS_TO_REMOVE: [&str; 12] = [
-        EXTENSION_DTS,
-        EXTENSION_DMTS,
-        EXTENSION_DCTS,
-        EXTENSION_MJS,
-        EXTENSION_MTS,
-        EXTENSION_CJS,
-        EXTENSION_CTS,
-        EXTENSION_TS,
-        EXTENSION_JS,
-        EXTENSION_TSX,
-        EXTENSION_JSX,
-        EXTENSION_JSON,
-    ];
-
-    // Go: tspath/path.go:988 ComparePathsOptions
-    pub struct ComparePathsOptions {
-        pub use_case_sensitive_file_names: bool,
-        pub current_directory: String,
-    }
-
-    // Go: tspath/path.go:997 ComparePathsOptions.getEqualityComparer
-    // PORT: `stringutil.GetStringEqualityComparer(!o.UseCaseSensitiveFileNames)`.
-    fn equal_with_options(options: &ComparePathsOptions, a: &str, b: &str) -> bool {
-        if !options.use_case_sensitive_file_names {
-            equate_string_case_insensitive(a, b)
-        } else {
-            a == b
-        }
-    }
-
-    // Go: stringutil/compare.go:9 EquateStringCaseInsensitive
-    // PORT: Go `strings.EqualFold` uses Unicode simple case folding. This
-    // compares each rune by its simple lowercase and uppercase forms, which
-    // gives the same result for every rune with a one-to-one case mapping.
-    fn equate_string_case_insensitive(a: &str, b: &str) -> bool {
-        let mut ai = a.chars();
-        let mut bi = b.chars();
-        loop {
-            match (ai.next(), bi.next()) {
-                (None, None) => return true,
-                (Some(x), Some(y)) => {
-                    if x == y {
-                        continue;
-                    }
-                    let fold = |c: char| {
-                        let mut l = c.to_lowercase();
-                        match (l.next(), l.next()) {
-                            (Some(single), None) => single,
-                            _ => c,
-                        }
-                    };
-                    let upper = |c: char| {
-                        let mut u = c.to_uppercase();
-                        match (u.next(), u.next()) {
-                            (Some(single), None) => single,
-                            _ => c,
-                        }
-                    };
-                    if fold(x) != fold(y) && upper(x) != upper(y) {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-        }
-    }
-
-    // Go: tspath/path.go:27 isAnyDirectorySeparator
-    fn is_any_directory_separator(ch: u8) -> bool {
-        ch == b'/' || ch == b'\\'
-    }
-
-    // Go: tspath/path.go:38 IsRootedDiskPath
-    pub fn is_rooted_disk_path(path: &str) -> bool {
-        get_encoded_root_length(path) > 0
-    }
-
-    // Go: tspath/path.go:67 PathIsAbsolute
-    fn path_is_absolute(path: &str) -> bool {
-        get_encoded_root_length(path) != 0
-    }
-
-    // Go: tspath/path.go:71 HasTrailingDirectorySeparator
-    fn has_trailing_directory_separator(path: &str) -> bool {
-        !path.is_empty() && is_any_directory_separator(path.as_bytes()[path.len() - 1])
-    }
-
-    // Go: tspath/path.go:91 CombinePaths
-    // PORT: Go builds into one `strings.Builder` and slices from `start`; the
-    // result string is the same as building the current result directly.
-    fn combine_paths(first_path: &str, paths: &[&str]) -> String {
-        let mut result = normalize_slashes(first_path);
-        for trailing_path in paths {
-            if trailing_path.is_empty() {
-                continue;
-            }
-            let trailing_path = normalize_slashes(trailing_path);
-            if result.is_empty() || get_root_length(&trailing_path) != 0 {
-                // `trailingPath` is absolute.
-                result = trailing_path;
-            } else {
-                if !has_trailing_directory_separator(&result) {
-                    result.push('/');
-                }
-                result.push_str(&trailing_path);
-            }
-        }
-        result
-    }
-
-    // Go: tspath/path.go:134 GetPathComponents
-    fn get_path_components(path: &str, current_directory: &str) -> Vec<String> {
-        let path = combine_paths(current_directory, &[path]);
-        let root_length = get_root_length(&path);
-        path_components(&path, root_length)
-    }
-
-    // Go: tspath/path.go:139 pathComponents
-    fn path_components(path: &str, root_length: usize) -> Vec<String> {
-        let root = &path[..root_length];
-        let mut rest: Vec<String> = path[root_length..].split('/').map(str::to_string).collect();
-        if rest.last().is_some_and(String::is_empty) {
-            rest.pop();
-        }
-        let mut result = vec![root.to_string()];
-        result.extend(rest);
-        result
-    }
-
-    // Go: tspath/path.go:148 IsVolumeCharacter
-    fn is_volume_character(ch: u8) -> bool {
-        ch.is_ascii_lowercase() || ch.is_ascii_uppercase()
-    }
-
-    // Go: tspath/path.go:152 getFileUrlVolumeSeparatorEnd
-    fn get_file_url_volume_separator_end(url: &[u8], start: usize) -> i32 {
-        if url.len() <= start {
-            return -1;
-        }
-        let ch0 = url[start];
-        if ch0 == b':' {
-            return (start + 1) as i32;
-        }
-        if ch0 == b'%' && url.len() > start + 2 && url[start + 1] == b'3' {
-            let ch2 = url[start + 2];
-            if ch2 == b'a' || ch2 == b'A' {
-                return (start + 3) as i32;
-            }
-        }
-        -1
-    }
-
-    // Go: tspath/path.go:169 GetEncodedRootLength
-    fn get_encoded_root_length(path: &str) -> i32 {
-        let b = path.as_bytes();
-        let ln = b.len();
-        if ln == 0 {
-            return 0;
-        }
-        let ch0 = b[0];
-
-        // POSIX or UNC
-        if ch0 == b'/' || ch0 == b'\\' {
-            if ln == 1 || b[1] != ch0 {
-                return 1; // POSIX: "/" (or non-normalized "\")
-            }
-            let offset = 2;
-            return match b[offset..].iter().position(|&c| c == ch0) {
-                None => ln as i32,                    // UNC: "//server" or "\\server"
-                Some(p1) => (p1 + offset + 1) as i32, // UNC: "//server/" or "\\server\"
-            };
-        }
-
-        // DOS
-        if is_volume_character(ch0) && ln > 1 && b[1] == b':' {
-            if ln == 2 {
-                return 2; // DOS: "c:" (but not "c:d")
-            }
-            let ch2 = b[2];
-            if ch2 == b'/' || ch2 == b'\\' {
-                return 3; // DOS: "c:/" or "c:\"
-            }
-        }
-
-        // Untitled paths (e.g., "^/untitled/ts-nul-authority/Untitled-1")
-        if ch0 == b'^' && ln > 1 && b[1] == b'/' {
-            return 2; // Untitled: "^/"
-        }
-
-        // URL
-        const URL_SCHEME_SEPARATOR: &str = "://";
-        if let Some(scheme_end) = path.find(URL_SCHEME_SEPARATOR) {
-            let authority_start = scheme_end + URL_SCHEME_SEPARATOR.len();
-            if let Some(authority_length) = path[authority_start..].find('/') {
-                // URL: "file:///", "file://server/", "file://server/path"
-                let authority_end = authority_start + authority_length;
-
-                // For local "file" URLs, include the leading DOS volume (if present).
-                let scheme = &path[..scheme_end];
-                let authority = &path[authority_start..authority_end];
-                if scheme == "file"
-                    && (authority.is_empty() || authority == "localhost")
-                    && (ln > authority_end + 2)
-                    && is_volume_character(b[authority_end + 1])
-                {
-                    let volume_separator_end =
-                        get_file_url_volume_separator_end(b, authority_end + 2);
-                    if volume_separator_end != -1 {
-                        if volume_separator_end as usize == ln {
-                            return !volume_separator_end;
-                        }
-                        if b[volume_separator_end as usize] == b'/' {
-                            return !(volume_separator_end + 1);
-                        }
-                    }
-                }
-                return !((authority_end + 1) as i32); // URL: "file://server/", "http://server/"
-            }
-            return !(ln as i32); // URL: "file://server", "http://server"
-        }
-
-        // relative
-        0
-    }
-
-    // Go: tspath/path.go:243 GetRootLength
-    fn get_root_length(path: &str) -> usize {
-        let root_length = get_encoded_root_length(path);
-        if root_length < 0 {
-            return (!root_length) as usize;
-        }
-        root_length as usize
-    }
-
-    // Go: tspath/path.go:251 GetDirectoryPath
-    pub fn get_directory_path(path: &str) -> String {
-        let path = normalize_slashes(path);
-
-        // If the path provided is itself a root, then return it.
-        let root_length = get_root_length(&path);
-        if root_length == path.len() {
-            return path;
-        }
-
-        // return the leading portion of the path up to the last (non-terminal) directory separator
-        // but not including any trailing directory separator.
-        let path = remove_trailing_directory_separator(&path);
-        let last = path.rfind('/').map_or(-1, |i| i as isize);
-        path[..(root_length as isize).max(last) as usize].to_string()
-    }
-
-    // Go: tspath/path.go:270 GetPathFromPathComponents
-    pub fn get_path_from_path_components(path_components: &[String]) -> String {
-        if path_components.is_empty() {
-            return String::new();
-        }
-
-        let mut root = path_components[0].clone();
-        if !root.is_empty() {
-            root = ensure_trailing_directory_separator(&root);
-        }
-
-        root + &path_components[1..].join("/")
-    }
-
-    // Go: tspath/path.go:283 NormalizeSlashes
-    pub fn normalize_slashes(path: &str) -> String {
-        path.replace('\\', "/")
-    }
-
-    // Go: tspath/path.go:287 reducePathComponents
-    fn reduce_path_components(components: Vec<String>) -> Vec<String> {
-        if components.is_empty() {
-            return Vec::new();
-        }
-        let mut reduced = vec![components[0].clone()];
-        for component in components.into_iter().skip(1) {
-            if component.is_empty() {
-                continue;
-            }
-            if component == "." {
-                continue;
-            }
-            if component == ".." {
-                if reduced.len() > 1 {
-                    if reduced[reduced.len() - 1] != ".." {
-                        reduced.pop();
-                        continue;
-                    }
-                } else if !reduced[0].is_empty() {
-                    continue;
-                }
-            }
-            reduced.push(component);
-        }
-        reduced
-    }
-
-    // Go: tspath/path.go:394 GetNormalizedAbsolutePath
-    pub fn get_normalized_absolute_path(file_name: &str, current_directory: &str) -> String {
-        let mut root_length = get_root_length(file_name);
-        let file_name = if root_length == 0 && !current_directory.is_empty() {
-            combine_paths(current_directory, &[file_name])
-        } else {
-            // CombinePaths normalizes slashes, so not necessary in other branch
-            normalize_slashes(file_name)
-        };
-        root_length = get_root_length(&file_name);
-
-        if let Some(simple_normalized) = simple_normalize_path(&file_name) {
-            let length = simple_normalized.len();
-            if length > root_length {
-                return remove_trailing_directory_separator(&simple_normalized).to_string();
-            }
-            if length == root_length && root_length != 0 {
-                return ensure_trailing_directory_separator(&simple_normalized);
-            }
-            return simple_normalized;
-        }
-
-        let fb = file_name.as_bytes();
-        let length = fb.len();
-        let root = &file_name[..root_length];
-        // `normalized` is only initialized once `fileName` is determined to be non-normalized.
-        // `changed` is set at the same time.
-        let mut changed = false;
-        let mut normalized = String::new();
-        let mut segment_start;
-        let mut index = root_length;
-        let mut normalized_up_to = index;
-        let mut seen_non_dot_dot_segment = root_length != 0;
-        while index < length {
-            // At beginning of segment
-            segment_start = index;
-            let mut ch = fb[index];
-            while ch == b'/' {
-                index += 1;
-                if index < length {
-                    ch = fb[index];
-                } else {
-                    break;
-                }
-            }
-            if index > segment_start {
-                // Seen superfluous separator
-                if !changed {
-                    normalized = file_name[..root_length.max(segment_start - 1)].to_string();
-                    changed = true;
-                }
-                if index == length {
-                    break;
-                }
-                segment_start = index;
-            }
-            // Past any superfluous separators
-            let segment_end = match file_name[index + 1..].find('/') {
-                None => length,
-                Some(i) => i + index + 1,
-            };
-            let segment_length = segment_end - segment_start;
-            if segment_length == 1 && fb[index] == b'.' {
-                // "." segment (skip)
-                if !changed {
-                    normalized = file_name[..normalized_up_to].to_string();
-                    changed = true;
-                }
-            } else if segment_length == 2 && fb[index] == b'.' && fb[index + 1] == b'.' {
-                // ".." segment
-                if !seen_non_dot_dot_segment {
-                    if changed {
-                        if normalized.len() == root_length {
-                            normalized.push_str("..");
-                        } else {
-                            normalized.push_str("/..");
-                        }
-                    } else {
-                        normalized_up_to = index + 2;
-                    }
-                } else if !changed {
-                    if normalized_up_to as isize - 1 >= 0 {
-                        let last = file_name[..normalized_up_to - 1]
-                            .rfind('/')
-                            .map_or(-1, |i| i as isize);
-                        normalized =
-                            file_name[..(root_length as isize).max(last) as usize].to_string();
-                    } else {
-                        normalized = file_name[..normalized_up_to].to_string();
-                    }
-                    changed = true;
-                    seen_non_dot_dot_segment = (normalized.len() != root_length
-                        || root_length != 0)
-                        && normalized != ".."
-                        && !normalized.ends_with("/..");
-                } else {
-                    match normalized.rfind('/') {
-                        Some(last_slash) => {
-                            normalized = normalized[..root_length.max(last_slash)].to_string();
-                        }
-                        None => {
-                            normalized = root.to_string();
-                        }
-                    }
-                    seen_non_dot_dot_segment = (normalized.len() != root_length
-                        || root_length != 0)
-                        && normalized != ".."
-                        && !normalized.ends_with("/..");
-                }
-            } else if changed {
-                if normalized.len() != root_length {
-                    normalized.push('/');
-                }
-                seen_non_dot_dot_segment = true;
-                normalized.push_str(&file_name[segment_start..segment_end]);
-            } else {
-                seen_non_dot_dot_segment = true;
-                normalized_up_to = segment_end;
-            }
-            index = segment_end + 1;
-        }
-        if changed {
-            return normalized;
-        }
-        if length > root_length {
-            return remove_trailing_directory_separators(&file_name).to_string();
-        }
-        if length == root_length {
-            return ensure_trailing_directory_separator(&file_name);
-        }
-        file_name
-    }
-
-    // Go: tspath/path.go:515 simpleNormalizePath
-    // PORT: Go returns `(string, bool)`; `None` is `("", false)`.
-    fn simple_normalize_path(path: &str) -> Option<String> {
-        // Most paths don't require normalization
-        if !has_relative_path_segment(path) {
-            return Some(path.to_string());
-        }
-        // Some paths only require cleanup of `/./` or leading `./`
-        let simplified = path.replace("/./", "/");
-        let trimmed = simplified.strip_prefix("./").unwrap_or(&simplified);
-        if trimmed != path
-            && !has_relative_path_segment(trimmed)
-            && !(trimmed != simplified && trimmed.starts_with('/'))
-        {
-            // If we trimmed a leading "./" and the path now starts with "/", we changed the meaning
-            return Some(trimmed.to_string());
-        }
-        None
-    }
-
-    // Go: tspath/path.go:532 hasRelativePathSegment
-    // hasRelativePathSegment reports whether p contains ".", "..", "./", "../", "/.", "/..", "//", "/./", or "/../".
-    fn has_relative_path_segment(p: &str) -> bool {
-        let b = p.as_bytes();
-        let n = b.len();
-        if n == 0 {
-            return false;
-        }
-
-        if p == "." || p == ".." {
-            return true;
-        }
-
-        // Leading "./" OR "../"
-        if b[0] == b'.' {
-            if n >= 2 && b[1] == b'/' {
-                return true;
-            }
-            // Leading "../"
-            if n >= 3 && b[1] == b'.' && b[2] == b'/' {
-                return true;
-            }
-        }
-        // Trailing "/." OR "/.."
-        if b[n - 1] == b'.' {
-            if n >= 2 && b[n - 2] == b'/' {
-                return true;
-            }
-            if n >= 3 && b[n - 2] == b'.' && b[n - 3] == b'/' {
-                return true;
-            }
-        }
-
-        // Now look for any `//` or `/./` or `/../`
-
-        let mut prev_slash = false;
-        let mut seg_len = 0; // length of current segment since last slash
-        let mut dot_count: i32 = 0; // consecutive dots at start of the current segment; -1 => not only dots
-
-        for &c in b {
-            if c == b'/' {
-                // "//"
-                if prev_slash {
-                    return true;
-                }
-                // "/./" or "/../"
-                if (seg_len == 1 && dot_count == 1) || (seg_len == 2 && dot_count == 2) {
-                    return true;
-                }
-                prev_slash = true;
-                seg_len = 0;
-                dot_count = 0;
-                continue;
-            }
-
-            if c == b'.' {
-                if dot_count >= 0 {
-                    dot_count += 1;
-                }
-            } else {
-                dot_count = -1;
-            }
-            seg_len += 1;
-            prev_slash = false;
-        }
-
-        // Trailing "/." or "/.."
-        (seg_len == 1 && dot_count == 1) || (seg_len == 2 && dot_count == 2)
-    }
-
-    // Go: tspath/path.go:600 NormalizePath
-    fn normalize_path(path: &str) -> String {
-        let path = normalize_slashes(path);
-        if let Some(normalized) = simple_normalize_path(&path) {
-            return normalized;
-        }
-        let mut normalized = get_normalized_absolute_path(&path, "");
-        if !normalized.is_empty() && has_trailing_directory_separator(&path) {
-            normalized = ensure_trailing_directory_separator(&normalized);
-        }
-        normalized
-    }
-
-    // Go: tspath/path.go:612 GetCanonicalFileName
-    fn get_canonical_file_name(file_name: &str, use_case_sensitive_file_names: bool) -> String {
-        if use_case_sensitive_file_names {
-            return file_name.to_string();
-        }
-        to_file_name_lower_case(file_name)
-    }
-
-    // Go: tspath/path.go:674 ToFileNameLowerCase
-    // PORT: Go `unicode.ToLower` maps one rune to one rune. Rust
-    // `char::to_lowercase` can yield several; a multi-rune result keeps the
-    // original rune, which matches Go for those runes. Go `strings.Map`
-    // writes each byte that is not valid UTF-8 as U+FFFD (`go_map_runes`).
-    fn to_file_name_lower_case(file_name: &str) -> String {
-        const I_WITH_DOT: char = '\u{0130}';
-
-        if file_name.is_ascii() {
-            return file_name.to_ascii_lowercase();
-        }
-
-        crate::scanner_util::go_map_runes(file_name, |r| {
-            if r == I_WITH_DOT {
-                return r;
-            }
-            let mut l = r.to_lowercase();
-            match (l.next(), l.next()) {
-                (Some(single), None) => single,
-                _ => r,
-            }
-        })
-    }
-
-    // Go: tspath/path.go:723 ToPath
-    // PORT: Go `tspath.Path` is a string type; this returns the string.
-    pub fn to_path(
-        file_name: &str,
-        base_path: &str,
-        use_case_sensitive_file_names: bool,
-    ) -> String {
-        let non_canonicalized_path = if is_rooted_disk_path(file_name) {
-            normalize_path(file_name)
-        } else {
-            get_normalized_absolute_path(file_name, base_path)
-        };
-        get_canonical_file_name(&non_canonicalized_path, use_case_sensitive_file_names)
-    }
-
-    // Go: tspath/path.go:733 RemoveTrailingDirectorySeparator
-    fn remove_trailing_directory_separator(path: &str) -> &str {
-        if has_trailing_directory_separator(path) {
-            return &path[..path.len() - 1];
-        }
-        path
-    }
-
-    // Go: tspath/path.go:744 RemoveTrailingDirectorySeparators
-    fn remove_trailing_directory_separators(path: &str) -> &str {
-        let mut path = path;
-        while has_trailing_directory_separator(path) {
-            path = remove_trailing_directory_separator(path);
-        }
-        path
-    }
-
-    // Go: tspath/path.go:751 EnsureTrailingDirectorySeparator
-    fn ensure_trailing_directory_separator(path: &str) -> String {
-        if !has_trailing_directory_separator(path) {
-            return format!("{path}/");
-        }
-        path.to_string()
-    }
-
-    // Go: tspath/path.go:765 GetPathComponentsRelativeTo
-    pub fn get_path_components_relative_to(
-        from: &str,
-        to: &str,
-        options: &ComparePathsOptions,
-    ) -> Vec<String> {
-        let from_components =
-            reduce_path_components(get_path_components(from, &options.current_directory));
-        let to_components =
-            reduce_path_components(get_path_components(to, &options.current_directory));
-
-        let mut start = 0;
-        let max_common_components = from_components.len().min(to_components.len());
-        while start < max_common_components {
-            let from_component = &from_components[start];
-            let to_component = &to_components[start];
-            if start == 0 {
-                if !equate_string_case_insensitive(from_component, to_component) {
-                    break;
-                }
-            } else if !equal_with_options(options, from_component, to_component) {
-                break;
-            }
-            start += 1;
-        }
-
-        if start == 0 {
-            return to_components;
-        }
-
-        let num_dot_dot_slashes = from_components.len() - start;
-        let mut result = Vec::with_capacity(1 + num_dot_dot_slashes + to_components.len() - start);
-
-        result.push(String::new());
-        // Add all the relative components until we hit a common directory.
-        for _ in 0..num_dot_dot_slashes {
-            result.push("..".to_string());
-        }
-        // Now add all the remaining components of the "to" path.
-        for component in &to_components[start..] {
-            result.push(component.clone());
-        }
-
-        result
-    }
-
-    // Go: tspath/path.go:809 GetRelativePathFromDirectory
-    pub fn get_relative_path_from_directory(
-        from_directory: &str,
-        to: &str,
-        options: &ComparePathsOptions,
-    ) -> String {
-        if (get_root_length(from_directory) > 0) != (get_root_length(to) > 0) {
-            panic!("paths must either both be absolute or both be relative");
-        }
-        let path_components = get_path_components_relative_to(from_directory, to, options);
-        get_path_from_path_components(&path_components)
-    }
-
-    // Go: tspath/path.go:817 GetRelativePathFromFile
-    pub fn get_relative_path_from_file(
-        from: &str,
-        to: &str,
-        options: &ComparePathsOptions,
-    ) -> String {
-        ensure_path_is_non_module_name(&get_relative_path_from_directory(
-            &get_directory_path(from),
-            to,
-            options,
-        ))
-    }
-
-    // Go: tspath/path.go:876 GetBaseFileName
+    // Go: tspath/path.go:883 GetBaseFileName
     // PERF: returns a slice of `path`. NormalizeSlashes swaps one byte for
     // one byte, and the base name has no separator, so the same byte range
     // of `path` holds the same text. Only a path with a backslash builds the
@@ -2556,161 +1872,17 @@ pub(crate) mod tspath_p17 {
         get_root_length(path).max(after_last)..path.len()
     }
 
-    // Go: tspath/path.go:902 GetAnyExtensionFromPath
-    pub fn get_any_extension_from_path(
-        path: &str,
-        extensions: &[&str],
-        ignore_case: bool,
-    ) -> String {
-        // Retrieves any string from the final "." onwards from a base file name.
-        // Unlike extensionFromPath, which throws an exception on unrecognized extensions.
-        if !extensions.is_empty() {
-            return get_any_extension_from_path_worker(
-                remove_trailing_directory_separator(path),
-                extensions,
-                ignore_case,
-            );
-        }
-
-        let base_file_name = get_base_file_name(path);
-        match base_file_name.rfind('.') {
-            Some(extension_index) => base_file_name[extension_index..].to_string(),
-            None => String::new(),
-        }
-    }
-
-    // Go: tspath/path.go:931 getAnyExtensionFromPathWorker
-    // PORT: the Go equality comparer is `stringutil.GetStringEqualityComparer(ignoreCase)`.
-    fn get_any_extension_from_path_worker(
-        path: &str,
-        extensions: &[&str],
-        ignore_case: bool,
-    ) -> String {
-        for extension in extensions {
-            let result = try_get_extension_from_path_with(path, extension, ignore_case);
-            if !result.is_empty() {
-                return result;
-            }
-        }
-        String::new()
-    }
-
-    // Go: tspath/path.go:941 tryGetExtensionFromPath
-    fn try_get_extension_from_path_with(path: &str, extension: &str, ignore_case: bool) -> String {
-        let extension = if !extension.starts_with('.') {
-            format!(".{extension}")
-        } else {
-            extension.to_string()
-        };
-        if path.len() >= extension.len() && path.as_bytes()[path.len() - extension.len()] == b'.' {
-            let path_extension = &path[path.len() - extension.len()..];
-            let equal = if ignore_case {
-                equate_string_case_insensitive(path_extension, &extension)
-            } else {
-                path_extension == extension
-            };
-            if equal {
-                return path_extension.to_string();
-            }
-        }
-        String::new()
-    }
-
-    // Go: tspath/path.go:954 PathIsRelative
-    pub fn path_is_relative(path: &str) -> bool {
-        // True if path is ".", "..", or starts with "./", "../", ".\\", or "..\\".
-        if path == "." || path == ".." {
-            return true;
-        }
-        let b = path.as_bytes();
-        if b.len() >= 2 && b[0] == b'.' && (b[1] == b'/' || b[1] == b'\\') {
-            return true;
-        }
-        if b.len() >= 3 && b[0] == b'.' && b[1] == b'.' && (b[2] == b'/' || b[2] == b'\\') {
-            return true;
-        }
-        false
-    }
-
-    // Go: tspath/path.go:974 EnsurePathIsNonModuleName
-    fn ensure_path_is_non_module_name(path: &str) -> String {
-        if !path_is_absolute(path) && !path_is_relative(path) {
-            return format!("./{path}");
-        }
-        path.to_string()
-    }
-
-    // Go: tspath/path.go:981 IsExternalModuleNameRelative
-    pub fn is_external_module_name_relative(module_name: &str) -> bool {
-        // TypeScript 1.0 spec (April 2014): 11.2.1
-        // An external module name is "relative" if the first term is "." or "..".
-        // Update: We also consider a path like `C:\foo.ts` "relative" because we do not search for it in `node_modules` or treat it as an ambient module.
-        path_is_relative(module_name) || is_rooted_disk_path(module_name)
-    }
-
-    // Go: tspath/path.go:1095 FileExtensionIs
-    pub fn file_extension_is(path: &str, extension: &str) -> bool {
-        path.len() > extension.len() && path.ends_with(extension)
-    }
-
-    // Go: tspath/path.go:1139 HasExtension
+    // Go: tspath/path.go:1180 HasExtension
     pub fn has_extension(file_name: &str) -> bool {
         get_base_file_name(file_name).contains('.')
     }
 
-    // Go: tspath/extension.go:39 ExtensionIsTs
-    pub fn extension_is_ts(ext: &str) -> bool {
-        ext == EXTENSION_TS
-            || ext == EXTENSION_TSX
-            || ext == EXTENSION_DTS
-            || ext == EXTENSION_MTS
-            || ext == EXTENSION_DMTS
-            || ext == EXTENSION_CTS
-            || ext == EXTENSION_DCTS
-            || ext.len() >= 7 && &ext[..3] == ".d." && &ext[ext.len() - 3..] == ".ts"
-    }
-
-    // Go: tspath/extension.go TryGetExtensionFromPath
-    pub fn try_get_extension_from_path(p: &str) -> &'static str {
-        for ext in EXTENSIONS_TO_REMOVE {
-            if file_extension_is(p, ext) {
-                return ext;
-            }
-        }
-        ""
-    }
-
-    // Go: tspath/extension.go RemoveExtension
-    pub fn remove_extension<'a>(path: &'a str, extension: &str) -> &'a str {
-        &path[..path.len() - extension.len()]
-    }
-
-    // Go: tspath/extension.go FileExtensionIsOneOf
-    fn file_extension_is_one_of(path: &str, extensions: &[&str]) -> bool {
-        extensions.iter().any(|ext| file_extension_is(path, ext))
-    }
-
-    // Go: tspath/extension.go TryExtractTSExtension
-    pub fn try_extract_ts_extension(file_name: &str) -> &'static str {
-        for ext in SUPPORTED_TS_EXTENSIONS_FOR_EXTRACT_EXTENSION {
-            if file_extension_is(file_name, ext) {
-                return ext;
-            }
-        }
-        ""
-    }
-
-    // Go: tspath/extension.go HasTSFileExtension
-    pub fn has_ts_file_extension(path: &str) -> bool {
-        file_extension_is_one_of(path, &SUPPORTED_TS_EXTENSIONS_FLAT)
-    }
-
-    // Go: tspath/extension.go IsDeclarationFileName
+    // Go: tspath/extension.go:113 IsDeclarationFileName
     pub fn is_declaration_file_name(file_name: &str) -> bool {
         !get_declaration_file_extension(file_name).is_empty()
     }
 
-    // Go: tspath/extension.go GetDeclarationFileExtension
+    // Go: tspath/extension.go:121 GetDeclarationFileExtension
     // PERF: returns a slice of `file_name` or a constant, not a copy.
     fn get_declaration_file_extension(file_name: &str) -> &str {
         let base = get_base_file_name(file_name);
@@ -2725,6 +1897,70 @@ pub(crate) mod tspath_p17 {
             }
         }
         ""
+    }
+
+    // Go: tspath/relative_path.go:82 CaseSensitivity.RelativePathFromPath (ts#64159)
+    // RelativePathFromPath returns the normalized path from directory to path.
+    // It returns false when the paths have different roots.
+    // PORT: Go `(RelativePath, bool)` is `Option<String>`; the case
+    // sensitivity is the bool. Go RelativePathFromDirectory (:76) is the same
+    // function for a file, so it is not a second function here.
+    pub fn relative_path_from_directory(
+        directory: &str,
+        path: &str,
+        use_case_sensitive_file_names: bool,
+    ) -> Option<String> {
+        let relative =
+            relative_path_from_normalized_paths(directory, path, use_case_sensitive_file_names);
+        if get_encoded_root_length(&relative) != 0 {
+            return None;
+        }
+        Some(relative)
+    }
+
+    // Go: tspath/relative_path.go:94 CaseSensitivity.RelativePathFromFileToPath (ts#64159)
+    // PORT: Go RelativePathFromFile (:90) only turns its `to` into a path, so
+    // it is this function. `from.Directory()` is `get_directory_path` for a
+    // normalized rooted name.
+    pub fn relative_path_from_file(
+        from: &str,
+        to: &str,
+        use_case_sensitive_file_names: bool,
+    ) -> Option<String> {
+        relative_path_from_directory(&get_directory_path(from), to, use_case_sensitive_file_names)
+    }
+
+    // Go: tspath/rooted_path.go:607 relativePathFromNormalizedPaths (ts#64159)
+    // PORT: Go builds the components of both normalized paths and compares
+    // them. `get_path_components_relative_to` does the same (its reduce step
+    // changes nothing on a normalized path). An encoded dynamic name compares
+    // its root (without the trailing separator) with case and then the rest
+    // with case. Go trims the roots only for that compare: when they are
+    // equal, the result starts after the root, so the trim never shows.
+    fn relative_path_from_normalized_paths(
+        from: &str,
+        to: &str,
+        use_case_sensitive_file_names: bool,
+    ) -> String {
+        let mut use_case_sensitive_file_names = use_case_sensitive_file_names;
+        if is_encoded_dynamic_file_name(from) || is_encoded_dynamic_file_name(to) {
+            let from_root = &from[..get_root_length(from)];
+            let to_root = &to[..get_root_length(to)];
+            if from_root.strip_suffix('/').unwrap_or(from_root)
+                != to_root.strip_suffix('/').unwrap_or(to_root)
+            {
+                return to.to_string();
+            }
+            use_case_sensitive_file_names = true;
+        }
+        get_path_from_path_components(&get_path_components_relative_to(
+            from,
+            to,
+            &ComparePathsOptions {
+                use_case_sensitive_file_names,
+                current_directory: String::new(),
+            },
+        ))
     }
 }
 
@@ -2942,6 +2178,69 @@ mod module_p17 {
         } else {
             need_allow_arbitrary_extensions()
         }
+    }
+}
+
+// The Go tests of the typed paths that the `tspath_p17` relative path
+// helpers port (ts#64159). Only their asserts on these helpers are here.
+#[cfg(test)]
+mod relative_path_tests {
+    use super::tspath_p17::{relative_path_from_directory, relative_path_from_file};
+
+    // Go: tspath/typed_paths_test.go:459 TestTryRelativePathBetweenFilePaths
+    #[test]
+    fn test_try_relative_path_between_file_paths() {
+        assert_eq!(
+            relative_path_from_directory("/project/src", "/project/lib/file.ts", true).as_deref(),
+            Some("../lib/file.ts")
+        );
+        assert_eq!(
+            relative_path_from_directory("c:/project/src", "d:/project/lib/file.ts", true),
+            None
+        );
+    }
+
+    // Go: tspath/typed_paths_test.go:524 TestRelativePathsFromTypedPaths (the
+    // RelativePathFromDirectory and RelativePathFromFile asserts)
+    #[test]
+    fn test_relative_paths_from_typed_paths() {
+        assert_eq!(
+            relative_path_from_directory("/project/src", "/project/lib/util.ts", true).as_deref(),
+            Some("../lib/util.ts")
+        );
+        assert_eq!(
+            relative_path_from_file("/project/src/index.ts", "/project/lib/util.ts", true)
+                .as_deref(),
+            Some("../lib/util.ts")
+        );
+        assert_eq!(
+            relative_path_from_directory("/PROJECT/src", "/project/lib/util.ts", false).as_deref(),
+            Some("../lib/util.ts")
+        );
+    }
+
+    // Go: tspath/typed_paths_test.go:72 TestEncodedDynamicPathsPreserveOpaqueIdentity (the
+    // RelativePathFromPath assert at :87):
+    // the root of an encoded dynamic name compares with case.
+    #[test]
+    fn test_dynamic_root_relative_path_compares_with_case() {
+        assert_eq!(
+            relative_path_from_directory(
+                "^/~ts-uri~/custom/Authority/src",
+                "^/~ts-uri~/custom/authority/lib/x.ts",
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            relative_path_from_directory(
+                "^/~ts-uri~/custom/authority/src",
+                "^/~ts-uri~/custom/authority/Lib/x.ts",
+                false,
+            )
+            .as_deref(),
+            Some("../Lib/x.ts")
+        );
     }
 }
 

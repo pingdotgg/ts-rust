@@ -22,8 +22,8 @@ use super::util::{
     needs_scope_marker,
 };
 use crate::ast::visitor::syntax_list_children;
-use crate::checker::checker_p17::tspath_p17;
 use crate::checker::nodebuilder_types::{InternalNodeBuilderFlags, NodeBuilderFlags};
+use crate::frontend::tspath;
 use crate::prelude::*;
 use crate::printer::{
     CommentRange, EmitContext, EmitResolver, SymbolAccessibilityResult, new_emit_context,
@@ -428,7 +428,7 @@ impl DeclarationTransformer {
         combined_statements
     }
 
-    // Go: transformers/declarations/transform.go:341 DeclarationTransformer.transformSourceFile
+    // Go: transformers/declarations/transform.go:339 DeclarationTransformer.transformSourceFile
     fn transform_source_file(&mut self, node: Node) -> Node {
         self.cjs_export_assignment = Node::NIL;
         self.cjs_export_assignment_name = Node::NIL;
@@ -510,9 +510,8 @@ impl DeclarationTransformer {
                 combined_statements = with_marker;
             }
         }
-        let output_file_path = tspath_p17::get_directory_path(&tspath_p17::normalize_slashes(
-            &self.declaration_file_path,
-        ));
+        // ts#64159 (transform.go:375): Go `tx.declarationFilePath.Directory()`.
+        let output_file_path = tspath::get_directory_path(&self.declaration_file_path);
         let result = self.emit_context.factory().update_source_file(
             node,
             combined_statements,
@@ -618,7 +617,7 @@ impl DeclarationTransformer {
         self.emit_context.factory().new_node_list(&results)
     }
 
-    // Go: transformers/declarations/transform.go:464 DeclarationTransformer.getReferencedFiles
+    // Go: transformers/declarations/transform.go:461 DeclarationTransformer.getReferencedFiles
     fn get_referenced_files(&self, output_file_path: &str) -> Vec<FileReference> {
         let mut results = Vec::new();
         // Handle path rewrites for triple slash ref comments
@@ -655,13 +654,15 @@ impl DeclarationTransformer {
                 continue;
             }
 
-            let file_name = get_relative_path_to_directory_or_url(
+            // ts#64159 (transform.go:496): both paths are rooted, so Go passes no
+            // current directory.
+            let file_name = tspath::get_relative_path_to_directory_or_url(
                 output_file_path,
                 &decl_file_name,
-                false, // TODO: Probably unsafe to assume this isn't a URL, but that's what strada does
-                &tspath_p17::ComparePathsOptions {
-                    current_directory: self.host.get_current_directory(),
+                false,
+                &tspath::ComparePathsOptions {
                     use_case_sensitive_file_names: self.host.use_case_sensitive_file_names(),
+                    current_directory: String::new(),
                 },
             );
 
@@ -1023,34 +1024,6 @@ fn retained_references(refs: &[FileReference]) -> Vec<FileReference> {
         });
     }
     result
-}
-
-// Go: tspath/path.go:829 GetRelativePathToDirectoryOrUrl
-// PORT: tspath has no Go-shaped port outside the private checker copy, so
-// this uses `tspath_p17` from checker_p17.rs.
-fn get_relative_path_to_directory_or_url(
-    directory_path_or_url: &str,
-    relative_or_absolute_path: &str,
-    is_absolute_path_an_url: bool,
-    options: &tspath_p17::ComparePathsOptions,
-) -> String {
-    let mut path_components = tspath_p17::get_path_components_relative_to(
-        directory_path_or_url,
-        relative_or_absolute_path,
-        options,
-    );
-
-    let first_component = path_components[0].clone();
-    if is_absolute_path_an_url && tspath_p17::is_rooted_disk_path(&first_component) {
-        let prefix = if first_component.as_bytes()[0] == b'/' {
-            "file://"
-        } else {
-            "file:///"
-        };
-        path_components[0] = format!("{prefix}{first_component}");
-    }
-
-    tspath_p17::get_path_from_path_components(&path_components)
 }
 
 // Go: scanner/scanner.go:2799 GetLeadingCommentRanges

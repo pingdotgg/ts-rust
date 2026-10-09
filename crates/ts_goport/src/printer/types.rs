@@ -394,6 +394,10 @@ pub trait EmitResolver {
 // PORT: Go `GetProjectReferenceFromSource(path tspath.Path)
 // *tsoptions.SourceOutputAndProjectReference` is left out: tsoptions project
 // references are not ported in this crate.
+// PORT: ts#64159 types the paths, replaces `UseCaseSensitiveFileNames` with
+// `CaseSensitivity()` and removes `GetCurrentDirectory`. The port keeps the
+// bool and the method until the emit host lanes change this trait; no emit
+// code reads the current directory.
 // Go: printer/emithost.go:11 EmitHost
 pub trait EmitHost {
     fn options(&self) -> &CompilerOptions;

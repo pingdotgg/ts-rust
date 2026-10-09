@@ -10,9 +10,10 @@ use crate::sourcemap::decoder::{MISSING_SOURCE, decode_mappings};
 use crate::sourcemap::generator::{NameIndex, RawSourceMap, SourceIndex};
 use crate::sourcemap::lineinfo::ECMALineInfo;
 
-// Go: sourcemap/source_mapper.go:16 Host
+// Go: sourcemap/source_mapper.go:17 Host
 // PORT: Go `*ECMALineInfo` results are `Option<Rc<ECMALineInfo>>` (nil is
-// `None`), as in `ls::Host`.
+// `None`), as in `ls::Host`. ts#64159 replaces `UseCaseSensitiveFileNames`
+// with `CaseSensitivity()`; the port keeps the bool.
 pub trait Host {
     fn use_case_sensitive_file_names(&self) -> bool;
     fn get_ecma_line_info(&self, file_name: &str) -> Option<Rc<ECMALineInfo>>;
@@ -51,8 +52,9 @@ fn compare_source_positions(left: &SourceMappedPosition, right: &SourceMappedPos
 
 // Go: sourcemap/source_mapper.go:46 DocumentPositionMapper
 // Maps source positions to generated positions and vice versa.
-// PORT: ts#64544 state. #64159 types the paths (`RootedFilePath`,
-// `PathKey`, `CaseSensitivity`); that part waits for bump D wave 2b.
+// PORT: ts#64159 types the paths (`RootedFilePath`, `PathKey`,
+// `CaseSensitivity`). The port keeps strings and the bool; the keys of
+// `source_mappings_by_path` are Go path keys (`path_key`).
 #[derive(Clone, Debug, Default)]
 pub struct DocumentPositionMapper {
     use_case_sensitive_file_names: bool,
@@ -66,15 +68,15 @@ pub struct DocumentPositionMapper {
 }
 
 // Go: sourcemap/source_mapper.go:56 createDocumentPositionMapper
-// PORT: ts#64544 state (see `DocumentPositionMapper`). Go `sourceRootField
-// *string` is `Option<&str>` (nil is `None`).
+// PORT: Go `sourceRootField *string` is `Option<&str>` (nil is `None`). Go
+// returns nil (`None`) when the map's `file` does not resolve (ts#64159).
 fn create_document_position_mapper(
     host: &dyn Host,
     source_map: &RawSourceMap,
     source_root_field: Option<&str>,
     null_sources: &[bool],
     map_path: &str,
-) -> Rc<DocumentPositionMapper> {
+) -> Option<Rc<DocumentPositionMapper>> {
     let map_directory = tspath::get_directory_path(map_path);
     let mut source_url_prefix = String::new();
     // ECMA-426 prefixes an explicit empty sourceRoot with "/", but TypeScript and
@@ -86,7 +88,7 @@ fn create_document_position_mapper(
         }
     }
     let generated_absolute_file_path =
-        tspath::get_normalized_absolute_path(&source_map.file, &map_directory);
+        try_resolve_source_map_path(&source_map.file, &map_directory)?;
     // Go `copy(unmappedSources, nullSources)`: at most `len(sources)` entries.
     let mut unmapped_sources = vec![false; source_map.sources.len()];
     let copied = unmapped_sources.len().min(null_sources.len());
@@ -100,7 +102,14 @@ fn create_document_position_mapper(
         let resolved = if source_with_prefix.is_empty() {
             map_path.to_string()
         } else {
-            tspath::get_normalized_absolute_path(&source_with_prefix, &map_directory)
+            // ts#64159: a source that does not resolve is unmapped.
+            match try_resolve_source_map_path(&source_with_prefix, &map_directory) {
+                Some(resolved) => resolved,
+                None => {
+                    unmapped_sources[i] = true;
+                    continue;
+                }
+            }
         };
         source_file_absolute_paths[i] = resolved;
     }
@@ -113,7 +122,7 @@ fn create_document_position_mapper(
         if unmapped_sources[i] {
             continue;
         }
-        let key = tspath::get_canonical_file_name(source, use_case_sensitive_file_names);
+        let key = path_key(source, use_case_sensitive_file_names);
         source_to_source_index_map
             .entry(key)
             .or_default()
@@ -233,17 +242,69 @@ fn create_document_position_mapper(
             && a.source_position == b.source_position
     });
 
-    Rc::new(DocumentPositionMapper {
+    Some(Rc::new(DocumentPositionMapper {
         use_case_sensitive_file_names,
         source_file_absolute_paths,
         source_mappings_by_path,
         generated_absolute_file_path,
         generated_mappings,
         source_mappings,
-    })
+    }))
 }
 
-// Go: sourcemap/source_mapper.go:164 DocumentPosition
+// Go: sourcemap/source_mapper.go:209 tryResolveSourceMapPath (ts#64159)
+// PORT: Go `(RootedFilePath, bool)` is `Option<String>`. `directory` is a
+// rooted directory name.
+fn try_resolve_source_map_path(path: &str, directory: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+    if tspath::path_is_absolute(path) {
+        return try_rooted_path_from_absolute(path);
+    }
+    try_rooted_path_from_absolute(&tspath::combine_paths(directory, &[path]))
+}
+
+// Go: tspath/rooted_path.go:58 TryRootedPathFromAbsolute (ts#64159)
+// PORT: Go TryRootedFilePathFromAbsolute (:134) only gives the result file
+// intent, so it is this function. The tspath owner can move it to tspath.
+fn try_rooted_path_from_absolute(path: &str) -> Option<String> {
+    if has_rooted_url_suffix(path) || !tspath::path_is_absolute(path) {
+        return None;
+    }
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    let mut normalized = tspath::get_normalized_absolute_path(path, "");
+    if tspath::get_root_length(&normalized) == normalized.len()
+        && !tspath::has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    Some(normalized)
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+// A URL root with a query or a fragment after its scheme.
+fn has_rooted_url_suffix(path: &str) -> bool {
+    // Go: tspath/rooted_path.go:114 hasURLRoot
+    let has_url_root = tspath::get_encoded_root_length(path) < 0 && path.contains("://");
+    if !has_url_root {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, rest)| rest);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/pathkey.go:43 CaseSensitivity.PathKey (ts#64159)
+// The key of a rooted, normalized path: an encoded dynamic name keeps its
+// case, other names follow the case sensitivity.
+fn path_key(path: &str, use_case_sensitive_file_names: bool) -> String {
+    if tspath::is_encoded_dynamic_file_name(path) {
+        return tspath::canonical_dynamic_uri_path(path).into_owned();
+    }
+    tspath::get_canonical_file_name(path, use_case_sensitive_file_names)
+}
+
+// Go: sourcemap/source_mapper.go:219 DocumentPosition
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DocumentPosition {
     pub file_name: String,
@@ -251,7 +312,7 @@ pub struct DocumentPosition {
 }
 
 impl DocumentPositionMapper {
-    // Go: sourcemap/source_mapper.go:169 GetSourcePosition
+    // Go: sourcemap/source_mapper.go:224 GetSourcePosition
     // PORT: Go allows a nil receiver; `d` is `None` for it (the lsproto
     // `X::resolve(v: Option<&X>)` form). Go returns `*DocumentPosition`.
     #[must_use]
@@ -296,10 +357,7 @@ impl DocumentPositionMapper {
         let d = d?;
         let source_mappings = d
             .source_mappings_by_path
-            .get(&tspath::get_canonical_file_name(
-                &loc.file_name,
-                d.use_case_sensitive_file_names,
-            ))?;
+            .get(&path_key(&loc.file_name, d.use_case_sensitive_file_names))?;
         if source_mappings.is_empty() {
             return None;
         }
@@ -323,7 +381,7 @@ impl DocumentPositionMapper {
     }
 }
 
-// Go: sourcemap/source_mapper.go:229 GetDocumentPositionMapper
+// Go: sourcemap/source_mapper.go:279 GetDocumentPositionMapper
 // PORT: Go returns `*DocumentPositionMapper`; nil is `None`, and the mapper is
 // shared (`LanguageService.documentPositionMappers`) as `Rc`.
 pub fn get_document_position_mapper(
@@ -357,11 +415,13 @@ pub fn get_document_position_mapper(
         possible_map_locations.push(map_file_name.clone());
     }
     possible_map_locations.push(format!("{generated_file_name}.map"));
+    let generated_directory = tspath::get_directory_path(generated_file_name);
     for location in &possible_map_locations {
-        let map_file_name = tspath::get_normalized_absolute_path(
-            location,
-            &tspath::get_directory_path(generated_file_name),
-        );
+        // ts#64159: a location that does not resolve is skipped.
+        let Some(map_file_name) = try_resolve_source_map_path(location, &generated_directory)
+        else {
+            continue;
+        };
         let (map_file_contents, ok) = host.read_file(&map_file_name);
         if ok {
             return convert_document_to_source_mapper(host, &map_file_contents, &map_file_name);
@@ -397,13 +457,13 @@ fn convert_document_to_source_mapper(
         return None;
     }
 
-    Some(create_document_position_mapper(
+    create_document_position_mapper(
         host,
         source_map,
         parsed.source_root.as_deref(),
         &parsed.null_sources,
         map_file_name,
-    ))
+    )
 }
 
 // Go: sourcemap/source_mapper.go:325 parsedRawSourceMap
@@ -510,7 +570,7 @@ fn try_parse_raw_source_map(contents: &str) -> Option<ParsedRawSourceMap> {
     })
 }
 
-// Go: sourcemap/source_mapper.go:284 tryGetSourceMappingURL
+// Go: sourcemap/source_mapper.go:373 tryGetSourceMappingURL
 // PORT: util.rs has the exported Go `TryGetSourceMappingURL` with the same
 // snake name; it is called by path.
 fn try_get_source_mapping_url(host: &dyn Host, file_name: &str) -> String {
@@ -1028,6 +1088,67 @@ mod tests {
         assert_eq!(
             source_position(&mapper, pos("/project/out/out.d.ts", 0)),
             None
+        );
+    }
+
+    // Go: sourcemap/source_mapper_test.go:262 TestSourceMapperIgnoresSourceURLSuffix
+    #[test]
+    fn test_source_mapper_ignores_source_url_suffix() {
+        let host = SourceMapperTestHost::new(&[("/project/out/out.d.ts", "generated")]);
+        let mapper = convert_document_to_source_mapper(
+            &host,
+            r#"{"version":3,"file":"out.d.ts","sources":["https://example.com/source.ts?version=1"],"names":[],"mappings":"AAAA"}"#,
+            "/project/out/out.d.ts.map",
+        )
+        .expect("mapper");
+        assert_eq!(
+            source_position(&mapper, pos("/project/out/out.d.ts", 0)),
+            None
+        );
+    }
+
+    // Go: sourcemap/source_mapper_test.go:280 TestSourceMapperIgnoresExternalMapURLSuffix
+    #[test]
+    fn test_source_mapper_ignores_external_map_url_suffix() {
+        const GENERATED_FILE: &str = "/project/out/out.d.ts";
+        let host = SourceMapperTestHost::new(&[(
+            GENERATED_FILE,
+            "declare const value: number;\n//# sourceMappingURL=https://example.com/out.d.ts.map?version=1",
+        )]);
+        assert!(get_document_position_mapper(&host, GENERATED_FILE).is_none());
+    }
+
+    // No Go test: ts#64159 tryResolveSourceMapPath (source_mapper.go:209). A
+    // map whose `file` is a URL with a query has no mapper, and a source
+    // with one is unmapped while the other sources stay mapped. Before the
+    // port, both names were used as written.
+    #[test]
+    fn test_source_mapper_skips_url_names_with_a_query() {
+        let host = SourceMapperTestHost::new(&[
+            ("/project/out/out.d.ts", "generated"),
+            ("/project/src/real.ts", "source"),
+        ]);
+        assert!(
+            convert_document_to_source_mapper(
+                &host,
+                r#"{"version":3,"file":"https://example.com/out.d.ts?v=1","sources":["../src/real.ts"],"names":[],"mappings":"AAAA"}"#,
+                "/project/out/out.d.ts.map",
+            )
+            .is_none()
+        );
+        let mapper = convert_document_to_source_mapper(
+            &host,
+            r#"{"version":3,"file":"out.d.ts","sources":["https://example.com/a.ts#x","../src/real.ts"],"names":[],"mappings":"AAAA,ACAA"}"#,
+            "/project/out/out.d.ts.map",
+        )
+        .expect("mapper");
+        assert_eq!(
+            mapper.source_file_absolute_paths,
+            ["", "/project/src/real.ts"]
+        );
+        assert_eq!(
+            generated_position(&mapper, pos("/project/src/real.ts", 0)),
+            Some(pos("/project/out/out.d.ts", 0))
         );
     }
 }
