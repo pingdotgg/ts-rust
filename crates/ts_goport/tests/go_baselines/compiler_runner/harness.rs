@@ -725,6 +725,7 @@ fn compile_files_with_host(
             &pre_program,
             &pre_config,
             harness_options,
+            true, /*suggestionsFirst*/
         ))
     };
 
@@ -742,6 +743,7 @@ fn compile_files_with_host(
         &post_program,
         &config,
         harness_options,
+        false, /*suggestionsFirst*/
     ));
 
     let errors = if post_errors.len() != pre_errors.len() {
@@ -786,14 +788,21 @@ fn compile_files_with_host(
 }
 
 /// The diagnostics that Go `compileFilesWithHost` collects from one program,
-/// in its order. The program is current.
+/// in its order. The program is current. `suggestions_first` is the
+/// `preProgram` order (ts#64479, harnessutil.go:643): the suggestions are
+/// read before declaration emit can add any, so a suggestion that the emit
+/// resolver adds shows as a pre/post count mismatch. `postProgram` reads the
+/// declaration diagnostics first (:659).
 // PORT: Go writes these lines out twice, for `preProgram` and `postProgram`.
 // Go reads `program.Options()`; `config` holds the same options.
 fn get_program_like_diagnostics(
     program: &ProgramLike,
     config: &ParsedCommandLine,
     harness_options: &HarnessOptions,
+    suggestions_first: bool,
 ) -> Vec<Diagnostic> {
+    let emit_declarations = config.compiler_options().get_emit_declarations();
+    let capture_suggestions = harness_options.capture_suggestions;
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     match program {
         ProgramLike::Program(_) => {
@@ -802,12 +811,12 @@ fn get_program_like_diagnostics(
             diagnostics.extend(tsprogram::get_syntactic_diagnostics(Node::NIL));
             diagnostics.extend(tsprogram::get_semantic_diagnostics(Node::NIL));
             diagnostics.extend(tsprogram::get_global_diagnostics());
-            if config.compiler_options().get_emit_declarations() {
-                diagnostics.extend(tsprogram::get_declaration_diagnostics(Node::NIL));
-            }
-            if harness_options.capture_suggestions {
-                diagnostics.extend(tsprogram::get_suggestion_diagnostics(Node::NIL));
-            }
+            extend_declaration_and_suggestion_diagnostics(
+                &mut diagnostics,
+                suggestions_first,
+                emit_declarations.then_some(|| tsprogram::get_declaration_diagnostics(Node::NIL)),
+                capture_suggestions.then_some(|| tsprogram::get_suggestion_diagnostics(Node::NIL)),
+            );
         }
         ProgramLike::Incremental(program) => {
             diagnostics.extend(program.get_config_file_parsing_diagnostics());
@@ -815,15 +824,33 @@ fn get_program_like_diagnostics(
             diagnostics.extend(program.get_syntactic_diagnostics(Node::NIL));
             diagnostics.extend(program.get_semantic_diagnostics(Node::NIL));
             diagnostics.extend(program.get_global_diagnostics());
-            if config.compiler_options().get_emit_declarations() {
-                diagnostics.extend(program.get_declaration_diagnostics(Node::NIL));
-            }
-            if harness_options.capture_suggestions {
-                diagnostics.extend(program.get_suggestion_diagnostics(Node::NIL));
-            }
+            extend_declaration_and_suggestion_diagnostics(
+                &mut diagnostics,
+                suggestions_first,
+                emit_declarations.then_some(|| program.get_declaration_diagnostics(Node::NIL)),
+                capture_suggestions.then_some(|| program.get_suggestion_diagnostics(Node::NIL)),
+            );
         }
     }
     diagnostics
+}
+
+/// Reads the declaration and the suggestion diagnostics of
+/// `get_program_like_diagnostics` in the order that `suggestions_first`
+/// gives. The read order matters: declaration emit can add diagnostics.
+fn extend_declaration_and_suggestion_diagnostics(
+    diagnostics: &mut Vec<Diagnostic>,
+    suggestions_first: bool,
+    declarations: Option<impl FnOnce() -> Vec<Diagnostic>>,
+    suggestions: Option<impl FnOnce() -> Vec<Diagnostic>>,
+) {
+    if suggestions_first {
+        diagnostics.extend(suggestions.into_iter().flat_map(|read| read()));
+        diagnostics.extend(declarations.into_iter().flat_map(|read| read()));
+    } else {
+        diagnostics.extend(declarations.into_iter().flat_map(|read| read()));
+        diagnostics.extend(suggestions.into_iter().flat_map(|read| read()));
+    }
 }
 
 // Go: diagnostics/diagnostics.go:152 NewAdHocMessage, used as
