@@ -13,7 +13,7 @@ use ts_goport::frontend::parser::{SourceFileParseOptions, parse_source_file};
 use ts_goport::frontend::tspath;
 use ts_goport::project;
 
-// Go: api/proto_test.go:18 TestDocumentIdentifierUnmarshalJSON
+// Go: api/proto_test.go:30 TestDocumentIdentifierUnmarshalJSON (ts#64159 cases)
 #[test]
 fn test_document_identifier_unmarshal_json() {
     struct Test {
@@ -45,12 +45,50 @@ fn test_document_identifier_unmarshal_json() {
             uri: "file:///foo.ts",
             err: "",
         },
+        // ts#64159
+        Test {
+            name: "uri object with nested unknown field",
+            input: r#"{"extra":{"nested":true},"uri":"file:///foo.ts"}"#,
+            file_name: "",
+            uri: "file:///foo.ts",
+            err: "",
+        },
+        // ts#64159: was no error.
         Test {
             name: "empty object",
             input: "{}",
             file_name: "",
             uri: "",
-            err: "",
+            err: "object must contain uri",
+        },
+        // ts#64159
+        Test {
+            name: "empty file name",
+            input: r#""""#,
+            file_name: "",
+            uri: "",
+            err: "file name must not be empty",
+        },
+        Test {
+            name: "empty uri",
+            input: r#"{"uri":""}"#,
+            file_name: "",
+            uri: "",
+            err: "uri must be a non-empty string",
+        },
+        Test {
+            name: "non-string uri",
+            input: r#"{"uri":42}"#,
+            file_name: "",
+            uri: "",
+            err: "uri must be a non-empty string",
+        },
+        Test {
+            name: "duplicate uri",
+            input: r#"{"uri":"file:///foo.ts","uri":"file:///bar.ts"}"#,
+            file_name: "",
+            uri: "",
+            err: r#"duplicate object member name "uri""#,
         },
         Test {
             name: "invalid type",

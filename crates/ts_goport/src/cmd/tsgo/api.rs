@@ -108,10 +108,16 @@ pub fn run_api(args: &[String]) -> i32 {
     // `ExitStatusInvalidProject_OutputsSkipped` when the current directory
     // cannot be read; `new_os_system` prints the same text and returns that
     // status, which is returned here as the exit code.
-    let content_mapper_spawner: Rc<dyn contentmapper::Spawner> = match tsc::new_os_system() {
-        Ok(sys) => Rc::new(OsSystemSpawner(sys)),
-        Err(status) => return status.code(),
-    };
+    // ts#64159: the system's current directory roots `--cwd` (Go N'
+    // cmd/tsc/api.go:62).
+    let (content_mapper_spawner, system_cwd): (Rc<dyn contentmapper::Spawner>, String) =
+        match tsc::new_os_system() {
+            Ok(sys) => {
+                let cwd = tsc::System::get_current_directory(&sys);
+                (Rc::new(OsSystemSpawner(sys)), cwd)
+            }
+            Err(status) => return status.code(),
+        };
 
     // PORT: Go `In io.ReadCloser`, `Out io.WriteCloser` and `Err io.Writer`
     // are nil-able interfaces (`None`).
@@ -119,7 +125,8 @@ pub fn run_api(args: &[String]) -> i32 {
         in_: None,
         out: None,
         err: Some(Box::new(stdio::Stderr)),
-        cwd: flags.cwd,
+        // Go: tspath.ToRootedDirectoryPath(flags.cwd, system.cwd)
+        cwd: crate::frontend::tspath::get_normalized_absolute_path(&flags.cwd, &system_cwd),
         default_library_path,
         pipe_path: String::new(),
         callbacks: callbacks_list,

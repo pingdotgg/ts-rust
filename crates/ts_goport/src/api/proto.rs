@@ -588,19 +588,48 @@ impl Method {
 }
 
 // InitializeResponse is returned by the initialize method.
-// Go: proto.go:265 InitializeResponse
+// Go: proto.go:273 InitializeResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InitializeResponse {
-    // UseCaseSensitiveFileNames indicates whether the host file system is case-sensitive.
-    pub use_case_sensitive_file_names: bool,
+    // CaseSensitivity determines how the host file system compares paths.
+    // ts#64159: replaces UseCaseSensitiveFileNames. PORT: Go
+    // `tspath.CaseSensitivity` (a uint8: 0 insensitive, 1 sensitive,
+    // tspath/path.go:1006) is `CaseSensitivity`.
+    pub case_sensitivity: CaseSensitivity,
     // CurrentDirectory is the server's current working directory.
     pub current_directory: String,
 }
 
 proto_json!(marshal InitializeResponse {
-    use_case_sensitive_file_names: "useCaseSensitiveFileNames" plain,
+    case_sensitivity: "caseSensitivity" plain,
     current_directory: "currentDirectory" plain,
 });
+
+// Go: tspath/path.go:1003 CaseSensitivity (ts#64159)
+// PORT: the port keeps a bool for case sensitivity (bump D plan section 3,
+// behavior only); the API answers Go's number.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaseSensitivity(pub u8);
+
+impl CaseSensitivity {
+    pub const INSENSITIVE: CaseSensitivity = CaseSensitivity(0);
+    pub const SENSITIVE: CaseSensitivity = CaseSensitivity(1);
+
+    pub fn from_use_case_sensitive_file_names(case_sensitive: bool) -> CaseSensitivity {
+        if case_sensitive {
+            CaseSensitivity::SENSITIVE
+        } else {
+            CaseSensitivity::INSENSITIVE
+        }
+    }
+}
+
+impl MarshalerTo for CaseSensitivity {
+    fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
+        enc.push_str(&self.0.to_string());
+        Ok(())
+    }
+}
 
 // DocumentIdentifier identifies a document by either a file name (plain string) or a URI object.
 // On the wire it is string | { uri: string }.
@@ -627,27 +656,62 @@ proto_json!(marshal DocumentIdentifier {
 });
 
 // Go: proto.go:187 UnmarshalJSONFrom
+// Go: proto.go:299 (*DocumentIdentifier).UnmarshalJSONFrom
+// ts#64159: an empty file name, an object with no uri and a uri that is
+// not a non-empty string are errors; other members are skipped whole.
 impl UnmarshalerFrom for DocumentIdentifier {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
+        let error = |text: String| {
+            Err(wrap_method_error::<Self>(SemanticError::method(
+                ErrorPos::After,
+                text,
+            )))
+        };
+        *self = DocumentIdentifier::default();
         // Try reading as a plain string first
         let tok = dec.read_token()?;
         match tok.kind() {
             b'"' => {
+                if token_string(&tok).is_empty() {
+                    return error("DocumentIdentifier: file name must not be empty".to_string());
+                }
                 self.file_name = token_string(&tok);
                 Ok(())
             }
             b'{' => {
-                // Read the object fields
+                let mut found_uri = false;
                 while dec.peek_kind() != b'}' {
                     let key = dec.read_token()?;
-                    let is_uri = token_string(&key) == "uri";
-                    let val = dec.read_token()?;
-                    if is_uri {
+                    if key.kind() != b'"' {
+                        return error(format!(
+                            "DocumentIdentifier: expected object field name, got {}",
+                            kind_string(key.kind())
+                        ));
+                    }
+                    if token_string(&key) == "uri" {
+                        if found_uri {
+                            return error(format!(
+                                "DocumentIdentifier: duplicate field {}",
+                                crate::gostd::strconv::quote(&token_string(&key))
+                            ));
+                        }
+                        let val = dec.read_token()?;
+                        if val.kind() != b'"' || token_string(&val).is_empty() {
+                            return error(
+                                "DocumentIdentifier: uri must be a non-empty string".to_string(),
+                            );
+                        }
                         self.uri = lsproto::DocumentUri(token_string(&val));
+                        found_uri = true;
+                    } else {
+                        dec.skip_value()?;
                     }
                 }
                 // Consume the closing brace
                 dec.read_token()?;
+                if !found_uri {
+                    return error("DocumentIdentifier: object must contain uri".to_string());
+                }
                 Ok(())
             }
             // Go wraps the error of the method with the type (one token
@@ -699,15 +763,18 @@ fn kind_string(k: u8) -> String {
 }
 
 impl DocumentIdentifier {
-    // Go: proto.go:327 ToFileName
-    pub fn to_file_name(&self) -> String {
+    // Go: proto.go:353 ToFileName
+    // ts#64159: a file name is rooted against `cwd` (Go
+    // `tspath.ToRootedFilePath`). The Go N function ToAbsoluteFileName
+    // (proto.go:344 at 673a5f17d713) is removed by ts#64159: this is it.
+    pub fn to_file_name(&self, cwd: &str) -> String {
         if !self.uri.0.is_empty() {
             return self.uri.file_name();
         }
-        self.file_name.clone()
+        tspath::get_normalized_absolute_path(&self.file_name, cwd)
     }
 
-    // Go: proto.go:337 ToURI
+    // Go: proto.go:363 ToURI
     // ToURI returns the document URI for this identifier. An explicitly provided URI
     // is returned as-is; a file name is first normalized to an absolute path against
     // cwd before being converted to a URI.
@@ -715,18 +782,7 @@ impl DocumentIdentifier {
         if !self.uri.0.is_empty() {
             return self.uri.clone();
         }
-        lsconv::file_name_to_document_uri(&tspath::get_normalized_absolute_path(
-            &self.file_name,
-            cwd,
-        ))
-    }
-
-    // Go: proto.go:344 ToAbsoluteFileName
-    pub fn to_absolute_file_name(&self, cwd: &str) -> String {
-        if !self.uri.0.is_empty() {
-            return self.uri.file_name();
-        }
-        tspath::get_normalized_absolute_path(&self.file_name, cwd)
+        lsconv::file_name_to_document_uri(&self.to_file_name(cwd))
     }
 
     // Go: proto.go:351 String
@@ -3101,11 +3157,13 @@ proto_json!(both GetDefaultProjectForFileParams {
     file: "file" plain,
 });
 
-// Go: proto.go:971 ProjectResponse
+// Go: proto.go:1032 ProjectResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectResponse {
     pub id: project::ID,
-    pub config_file_name: String,
+    // ts#64159: Go `*tspath.RootedFilePath` with omitempty; only a
+    // configured project has it.
+    pub config_file_name: Option<String>,
     // ts#63935
     pub current_directory: String,
     // ts#64204
@@ -3122,7 +3180,7 @@ impl MarshalerTo for ProjectResponse {
         write_object_start(enc);
         let mut first = true;
         marshal_field(enc, &mut first, "id", &self.id)?;
-        marshal_field(enc, &mut first, "configFileName", &self.config_file_name)?;
+        marshal_field_omitempty(enc, &mut first, "configFileName", &self.config_file_name)?;
         marshal_field(enc, &mut first, "currentDirectory", &self.current_directory)?;
         marshal_field(enc, &mut first, "dirty", &self.dirty)?;
         marshal_field(
@@ -3189,9 +3247,10 @@ pub fn new_project_response(p: &project::Project) -> ProjectResponse {
         panic!("NewProjectResponse called with unloaded project");
     };
     // ts#64204: the config file name of a configured project only.
-    let mut config_file_name = String::new();
+    // ts#64159: nil (omitted) for other projects.
+    let mut config_file_name = None;
     if p.kind == project::Kind::CONFIGURED {
-        config_file_name = p.config_file_name();
+        config_file_name = Some(p.config_file_name());
     }
     ProjectResponse {
         id: p.id(),

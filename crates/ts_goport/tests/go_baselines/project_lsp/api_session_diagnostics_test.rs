@@ -86,7 +86,7 @@ impl Api {
             created
                 .projects
                 .iter()
-                .find(|p| p.config_file_name == config)
+                .find(|p| p.config_file_name.as_deref() == Some(config))
                 .unwrap_or_else(|| panic!("no project {config}"))
                 .id
                 .clone()

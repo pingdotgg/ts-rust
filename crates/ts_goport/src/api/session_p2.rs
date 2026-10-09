@@ -2242,6 +2242,17 @@ impl SnapshotData {
                 ));
             }
         };
+        // ts#64159
+        if !try_path_key_from_canonical(&s[second_dot + 1..]) {
+            return Err(errors::errorf(
+                format!(
+                    "{}: invalid node handle {}",
+                    *ERR_CLIENT_ERROR,
+                    gostd::strconv::quote(s)
+                ),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ));
+        }
         let path = tspath::Path(s[second_dot + 1..].to_string());
 
         let source_file = program
@@ -2444,7 +2455,7 @@ impl Session {
                 let Some(project) = project else {
                     panic!(
                         "no project found for opened file {}",
-                        file.to_absolute_file_name(&self.get_current_directory())
+                        file.to_file_name(&self.get_current_directory())
                     );
                 };
                 results.push(OpenedFileOperationResult {
@@ -2532,7 +2543,8 @@ pub fn format_session_id(id: u64) -> String {
 }
 
 impl Session {
-    // Go: api/session.go:4745 toPath
+    // Go: api/session.go:4745 toPath (at 673a5f17d713; ts#64159 renames it
+    // pathKey, api/session.go:5231, which gives this key for rooted names)
     // toPath converts a file name to a normalized path.
     pub fn to_path(&self, file_name: &str) -> tspath::Path {
         tspath::to_path(
@@ -2737,7 +2749,7 @@ impl Session {
             return Ok(Node::NIL);
         };
         let source_file = program
-            .get_source_file(&file.to_file_name())
+            .get_source_file(&file.to_file_name(&program_base_directory(&program)))
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -2769,7 +2781,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -2855,7 +2871,7 @@ impl Session {
                    program: &Rc<compiler::NewProgram>|
          -> Result<(Option<ls::CompletionList>, Node), GoError> {
             let source_file = program
-                .get_source_file(&params.file.to_file_name())
+                .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
                 .map_or(Node::NIL, |f| f.root);
             if source_file.is_nil() {
                 return Ok((None, source_file));
@@ -2965,7 +2981,7 @@ impl Session {
             // ts#64544 (Go N' api/session.go:5511): the URI of the program's
             // file name.
             let source_file = program
-                .get_source_file(&params.file.to_file_name())
+                .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
                 .map_or(Node::NIL, |f| f.root);
             if source_file.is_nil() {
                 return Ok(None);
@@ -3487,4 +3503,60 @@ impl Drop for LeaseGuard {
             project::drop_released_lease(lease);
         }
     }
+}
+
+// Go: tspath/pathkey.go:31 TryPathKeyFromCanonical (ts#64159)
+// Whether `path` is a canonical path key: empty, or a rooted normalized
+// path.
+// PORT: the port keeps string paths (bump D plan section 3, behavior only),
+// and the typed path helpers are not in the Rust tspath, which the
+// program lane owns. The API checks the paths that it reads from a client
+// with these copies.
+pub fn try_path_key_from_canonical(path: &str) -> bool {
+    path.is_empty() || try_rooted_path_from_normalized(path)
+}
+
+// Go: tspath/rooted_path.go:86 TryRootedPathFromNormalized (ts#64159)
+// Whether `path` is rooted and normalized: no URL query or fragment, no
+// backslash, no relative or empty segment, and a trailing separator only
+// on a bare root.
+pub fn try_rooted_path_from_normalized(path: &str) -> bool {
+    if has_rooted_url_suffix(path) {
+        return false;
+    }
+    let mut root_length = tspath::get_encoded_root_length(path);
+    if root_length < 0 {
+        root_length = !root_length;
+    }
+    let root_length = root_length as usize;
+    let bytes = path.as_bytes();
+    !(path.is_empty()
+        || root_length == 0
+        || path.contains('\\')
+        || root_length < bytes.len() && bytes[root_length] == b'/'
+        || has_relative_path_segment(&path[root_length..])
+        || bytes.len() == root_length && !tspath::has_trailing_directory_separator(path)
+        || bytes.len() > root_length && tspath::has_trailing_directory_separator(path))
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    // Go: tspath/rooted_path.go:114 hasURLRoot
+    let has_url_root = tspath::get_encoded_root_length(path) < 0 && path.contains("://");
+    if !has_url_root {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, rest)| rest);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/path.go:554 hasRelativePathSegment
+// Whether a segment of `p` is "." or "..", or empty between two slashes.
+// PORT: a copy of the private Rust `tspath::has_relative_path_segment`.
+fn has_relative_path_segment(p: &str) -> bool {
+    let segments: Vec<&str> = p.split('/').collect();
+    let last = segments.len() - 1;
+    segments.iter().enumerate().any(|(i, segment)| {
+        *segment == "." || *segment == ".." || segment.is_empty() && i != 0 && i != last
+    })
 }

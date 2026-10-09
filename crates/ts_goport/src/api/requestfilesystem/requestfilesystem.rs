@@ -412,6 +412,8 @@ impl RequestFileSystemImpl {
     }
 
     // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.toPath
+    // (at 673a5f17d713; removed by ts#64159: Go N' keys paths with
+    // `CaseSensitivity.PathKey`, which gives this key for rooted names)
     pub fn to_path(&self, path: &str) -> tspath::Path {
         tspath::to_path(path, &self.current_directory, self.use_case_sensitive_names)
     }
@@ -757,6 +759,8 @@ pub fn merge_entries(
 // Go: vfs.FS methods of requestFileSystem.
 impl vfs::Fs for RequestFileSystemImpl {
     // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.UseCaseSensitiveFileNames
+    // (at 673a5f17d713; ts#64159 renames it CaseSensitivity,
+    // requestfilesystem.go:416; the port keeps the bool)
     fn use_case_sensitive_file_names(&self) -> bool {
         self.use_case_sensitive_names
     }

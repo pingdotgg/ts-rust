@@ -715,6 +715,25 @@ pub fn resolve_symbol_reference_for_checker(
     }
 }
 
+// Go: compiler/program.go:150 (*Program).BaseDirectory (ts#64159)
+// The directory that a request's relative file name is rooted against
+// (Go `DocumentIdentifier.ToFileName(program.BaseDirectory())`).
+// PORT: the Rust program has no BaseDirectory yet (program-core lane). Go
+// returns `ParsedCommandLine.BaseDirectory()`: the config file's
+// directory, else the current directory. The Rust command line keeps it
+// in `compare_paths_options.current_directory` (bump D config summary-2,
+// rule R1); an empty one is the program's current directory.
+pub fn program_base_directory(program: &compiler::NewProgram) -> String {
+    let base_directory = &program
+        .command_line()
+        .compare_paths_options
+        .current_directory;
+    if base_directory.is_empty() {
+        return program.get_current_directory();
+    }
+    base_directory.clone()
+}
+
 // Go: api/session.go:206 symbolOwnerFile (ts#64518)
 // symbolOwnerFile returns the source file that owns a symbol's client identity, or nil when the
 // symbol is owned by its snapshot. Content-mapped outputs live in a cache that cannot yet be
@@ -1420,7 +1439,7 @@ impl CheckerSetup {
         if let (Some(file), Some(position)) = (file, position) {
             let source_file = self
                 .program
-                .get_source_file(&file.to_file_name())
+                .get_source_file(&file.to_file_name(&program_base_directory(&self.program)))
                 .map_or(Node::NIL, |f| f.root);
             if source_file.is_nil() {
                 return Err(errors::errorf(
@@ -1493,7 +1512,9 @@ impl Session {
         self.snapshot_host.default_library_path()
     }
 
-    // Go: api/session.go useCaseSensitiveFileNames (ts#64163)
+    // Go: api/session.go useCaseSensitiveFileNames (ts#64163; at
+    // 673a5f17d713. ts#64159 renames it caseSensitivity, api/session.go:691;
+    // the port keeps the bool, and `CaseSensitivity` is the API answer)
     pub fn use_case_sensitive_file_names(&self) -> bool {
         self.snapshot_host.fs().use_case_sensitive_file_names()
     }
@@ -2401,7 +2422,10 @@ impl Session {
                 vec![ERR_CLIENT_ERROR.clone()],
             ));
         };
-        if let Err(err) = self.cpu_profiler.start_cpu_profile(&params.dir) {
+        // ts#64159 (Go N' api/session.go:1376)
+        let profile_directory =
+            tspath::get_normalized_absolute_path(&params.dir, &self.get_current_directory());
+        if let Err(err) = self.cpu_profiler.start_cpu_profile(&profile_directory) {
             return Err(errors::errorf(
                 format!(
                     "{}: failed to start CPU profile: {}",
@@ -2416,7 +2440,13 @@ impl Session {
     // Go: api/session.go:1193 handleStopCPUProfile
     pub fn handle_stop_cpu_profile(&self, _ctx: &Context) -> Result<ProfileResult, GoError> {
         match self.cpu_profiler.stop_cpu_profile() {
-            Ok(file_path) => Ok(ProfileResult { file: file_path }),
+            // ts#64159 (Go N' api/session.go:1388)
+            Ok(file_path) => Ok(ProfileResult {
+                file: tspath::get_normalized_absolute_path(
+                    &file_path,
+                    &self.get_current_directory(),
+                ),
+            }),
             Err(err) => Err(errors::errorf(
                 format!("{}: failed to stop CPU profile: {}", *ERR_CLIENT_ERROR, err),
                 vec![ERR_CLIENT_ERROR.clone(), err],
@@ -2436,8 +2466,16 @@ impl Session {
                 vec![ERR_CLIENT_ERROR.clone()],
             ));
         };
-        match crate::pprof::save_heap_profile(&params.dir) {
-            Ok(file_path) => Ok(ProfileResult { file: file_path }),
+        // ts#64159 (Go N' api/session.go:1395)
+        let profile_directory =
+            tspath::get_normalized_absolute_path(&params.dir, &self.get_current_directory());
+        match crate::pprof::save_heap_profile(&profile_directory) {
+            Ok(file_path) => Ok(ProfileResult {
+                file: tspath::get_normalized_absolute_path(
+                    &file_path,
+                    &self.get_current_directory(),
+                ),
+            }),
             Err(err) => Err(errors::errorf(
                 format!(
                     "{}: failed to save heap profile: {}",
@@ -2451,7 +2489,10 @@ impl Session {
     // Go: api/session.go:1218 handleInitialize
     pub fn handle_initialize(&self, _ctx: &Context) -> Result<InitializeResponse, GoError> {
         Ok(InitializeResponse {
-            use_case_sensitive_file_names: self.use_case_sensitive_file_names(),
+            // ts#64159
+            case_sensitivity: CaseSensitivity::from_use_case_sensitive_file_names(
+                self.use_case_sensitive_file_names(),
+            ),
             current_directory: self.get_current_directory(),
         })
     }
@@ -2715,7 +2756,7 @@ impl Session {
         let cwd = self.get_current_directory();
 
         for p in &changes.open_projects {
-            let config_file_name = p.to_absolute_file_name(&cwd);
+            let config_file_name = p.to_file_name(&cwd);
             let (configured_project_id, ok) =
                 project::parse_configured_project_id(&self.to_path(&config_file_name));
             if !ok {
@@ -2748,7 +2789,7 @@ impl Session {
         }
 
         for p in &changes.close_projects {
-            let config_path = self.to_path(&p.to_absolute_file_name(&cwd));
+            let config_path = self.to_path(&p.to_file_name(&cwd));
             api_request
                 .close_projects
                 .get_or_insert_with(|| {
@@ -2762,7 +2803,7 @@ impl Session {
 
         if let Some(open_files) = &changes.open_files {
             for f in open_files {
-                let file_name = f.to_absolute_file_name(&cwd);
+                let file_name = f.to_file_name(&cwd);
                 let path = self.to_path(&file_name);
                 if api_request.open_files.is_none() {
                     api_request.open_files = Some(IndexMap::with_capacity(open_files.len()));
@@ -2809,7 +2850,7 @@ impl Session {
             let root_file_names: Vec<String> = program_params
                 .root_files
                 .iter()
-                .map(|root_file| root_file.to_absolute_file_name(&cwd))
+                .map(|root_file| root_file.to_file_name(&cwd))
                 .collect();
             let mut request = project::APICreateProgramRequest {
                 root_file_names,
@@ -2865,7 +2906,7 @@ impl Session {
             let root_file_names: Vec<String> = program_params
                 .root_files
                 .iter()
-                .map(|root_file| root_file.to_absolute_file_name(&cwd))
+                .map(|root_file| root_file.to_file_name(&cwd))
                 .collect();
             let mut request = project::APIReconfigureProgramRequest {
                 program_id,
@@ -3328,9 +3369,7 @@ impl Session {
         _ctx: &Context,
         params: &ReadConfigFileParams,
     ) -> Result<ReadConfigFileResponse, GoError> {
-        let config_file_name = params
-            .file
-            .to_absolute_file_name(&self.get_current_directory());
+        let config_file_name = params.file.to_file_name(&self.get_current_directory());
         let (config_file_content, ok) = self.snapshot_host.fs().read_file(&config_file_name);
         if !ok {
             return Ok(ReadConfigFileResponse {
@@ -3386,7 +3425,7 @@ impl Session {
                 .config_file_name
                 .as_ref()
                 .expect("configFileName is set")
-                .to_absolute_file_name(&self.get_current_directory());
+                .to_file_name(&self.get_current_directory());
             base_path = tspath::get_directory_path(&config_file_name);
         }
 
@@ -3409,9 +3448,7 @@ impl Session {
         _ctx: &Context,
         params: &ParseConfigFileParams,
     ) -> Result<ConfigFileResponse, GoError> {
-        let config_file_name = params
-            .file
-            .to_absolute_file_name(&self.get_current_directory());
+        let config_file_name = params.file.to_file_name(&self.get_current_directory());
         let (config_file_content, ok) = self.snapshot_host.fs().read_file(&config_file_name);
         if !ok {
             return Err(errors::errorf(
@@ -3887,7 +3924,7 @@ impl Session {
 
         self.encode_source_file_response(
             program
-                .get_source_file(&params.file.to_file_name())
+                .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
                 .map_or(Node::NIL, |f| f.root),
         )
     }
@@ -3942,8 +3979,10 @@ impl Session {
             return self.encode_source_file_response(Node::NIL);
         };
 
+        // ts#64159 (Go N' api/session.go handleGetConfigSourceFile): the
+        // request's file name is rooted against the base directory.
         let requested_path = tspath::to_path(
-            &params.file.to_file_name(),
+            &params.file.to_file_name(&program_base_directory(&program)),
             &program.get_current_directory(),
             program.use_case_sensitive_file_names(),
         );
@@ -4048,7 +4087,9 @@ impl Session {
 
         let program = &sd.get_program(&params.project)?;
 
-        let Some(source_file) = program.get_source_file(&params.file.to_file_name()) else {
+        let Some(source_file) =
+            program.get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
+        else {
             return Ok(None);
         };
 
@@ -4273,7 +4314,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -4318,7 +4363,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -4355,7 +4404,7 @@ impl Session {
         for (i, file) in params.files.iter().enumerate() {
             let source_file = setup
                 .program
-                .get_source_file(&file.to_file_name())
+                .get_source_file(&file.to_file_name(&program_base_directory(&setup.program)))
                 .map_or(Node::NIL, |f| f.root);
             if source_file.is_nil() {
                 return Err(errors::errorf(
@@ -4389,7 +4438,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -4730,7 +4783,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -4773,7 +4830,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -5161,7 +5222,7 @@ impl Session {
         let mut working_snapshot = sd.snapshot.clone();
         let mut program = sd.get_program(&params.project)?;
         let mut source_file = program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -5220,7 +5281,7 @@ impl Session {
             };
             program = proj_program;
             source_file = program
-                .get_source_file(&params.file.to_file_name())
+                .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
                 .map_or(Node::NIL, |f| f.root);
             if source_file.is_nil() {
                 return Err(errors::errorf(

@@ -106,8 +106,9 @@ child_test! {
             response.operation.as_ref().unwrap().created_programs.as_ref().unwrap(),
             &vec![synthetic_project_id(1), synthetic_project_id(2)]
         );
-        assert_eq!(response.projects[0].config_file_name, "");
-        assert_eq!(response.projects[1].config_file_name, "");
+        // ts#64159: nil (Go session_createprogram_test.go:76).
+        assert_eq!(response.projects[0].config_file_name, None);
+        assert_eq!(response.projects[1].config_file_name, None);
         assert_eq!(response.projects[0].root_files, vec![FILE_A, FILE_B]);
         assert_eq!(
             response.projects[0].compiler_options.as_ref().unwrap().strict,
