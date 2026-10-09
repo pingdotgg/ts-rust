@@ -12,7 +12,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use crate::baseline::util::{
     is_default_library_file, remove_line_delimiters, remove_test_path_prefixes,
 };
-use crate::frontend::tspath::path::get_base_file_name;
+use crate::frontend::tspath::path::{get_base_file_name, get_normalized_absolute_path};
 use crate::prelude::*;
 
 /// Go `baseline.NoContent`.
@@ -195,6 +195,19 @@ fn payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
+/// Go `tspath.ToRootedFilePath(filename, walker.program.Program().BaseDirectory())`
+/// (ts#64159, type_symbol_baseline.go:293): the name of `getTypes` and
+/// `getSymbols` is rooted against the program's base directory.
+// PORT: Go `ToRootedFilePath` is `get_normalized_absolute_path` here; the
+// names that callers give are absolute or relative, never empty. A process
+// without a frontend program looks the name up as given.
+fn program_file_name(filename: &str) -> String {
+    match crate::program::go_frontend_program() {
+        Some(program) => get_normalized_absolute_path(filename, &program.base_directory()),
+        None => filename.to_string(),
+    }
+}
+
 impl TypeWriterWalker {
     // Go: type_symbol_baseline.go:278 getTypeCheckerForCurrentFile
     // PORT: Go returns the checker and a release func. The Rust pool lends
@@ -209,14 +222,14 @@ impl TypeWriterWalker {
 
     // Go: type_symbol_baseline.go:292 getTypes
     pub fn get_types(&mut self, filename: &str) -> Vec<TypeWriterResult> {
-        let source_file = get_source_file(filename);
+        let source_file = get_source_file(&program_file_name(filename));
         self.current_source_file = source_file;
         self.visit_node(source_file, false /*isSymbolWalk*/)
     }
 
     // Go: type_symbol_baseline.go:298 getSymbols
     pub fn get_symbols(&mut self, filename: &str) -> Vec<TypeWriterResult> {
-        let source_file = get_source_file(filename);
+        let source_file = get_source_file(&program_file_name(filename));
         self.current_source_file = source_file;
         self.visit_node(source_file, true /*isSymbolWalk*/)
     }

@@ -27,6 +27,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use ts_goport::api::to_rooted_path;
 use ts_goport::contentmapper::ProcessExitState;
 use ts_goport::core::version;
 use ts_goport::diag;
@@ -46,7 +47,7 @@ use ts_goport::frontend::tsoptions::{
 };
 use ts_goport::frontend::tspath::{
     ComparePathsOptions, EXTENSION_TS_BUILD_INFO, Path, file_extension_is,
-    get_relative_path_from_directory, to_path,
+    relative_path_from_directory, to_path,
 };
 use ts_goport::frontend::vfs::{Entries, FileInfo, Fs, FsError};
 use ts_goport::gostd::GoError;
@@ -647,14 +648,16 @@ impl TestSys {
         }
 
         if !config_file_path.is_empty() {
-            builder.push_str(&get_relative_path_from_directory(
+            // ts#64159 (sys.go:340): across roots there is no relative path
+            // (R4), so the header is the absolute name.
+            match relative_path_from_directory(
                 &self.cwd,
                 config_file_path,
-                &compare_paths_options(
-                    self.fs.use_case_sensitive_file_names(),
-                    &self.get_current_directory(),
-                ),
-            ));
+                self.fs.use_case_sensitive_file_names(),
+            ) {
+                Some(relative_path) => builder.push_str(&relative_path),
+                None => builder.push_str(config_file_path),
+            }
             builder.push_str("::\n");
         }
     }
@@ -883,22 +886,28 @@ impl TestSys {
     }
 
     // Go: sys.go:560 writeFileNoError
+    // ts#64159: the path is rooted against the current directory (sys.go:576,
+    // :582, :588).
     pub fn write_file_no_error(&self, path: &str, content: &str) {
-        if let Err(err) = self.fs_from_file_map().write_file(path, content) {
+        let path = to_rooted_path(path, &self.get_current_directory());
+        if let Err(err) = self.fs_from_file_map().write_file(&path, content) {
             panic!("{}", fs_error_text(&err));
         }
     }
 
     // Go: sys.go:566 removeNoError
     pub fn remove_no_error(&self, path: &str) {
-        if let Err(err) = self.fs_from_file_map().remove(path) {
+        let path = to_rooted_path(path, &self.get_current_directory());
+        if let Err(err) = self.fs_from_file_map().remove(&path) {
             panic!("{}", fs_error_text(&err));
         }
     }
 
     // Go: sys.go:572 readFileNoError
     pub fn read_file_no_error(&self, path: &str) -> String {
-        let (content, ok) = self.fs_from_file_map().read_file(path);
+        let (content, ok) = self
+            .fs_from_file_map()
+            .read_file(&to_rooted_path(path, &self.get_current_directory()));
         assert!(ok, "File not found: {path}");
         content
     }

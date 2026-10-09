@@ -834,7 +834,7 @@ fn test_vfs_test_map_fs() {
         assert_eq!(realpath, "/does/not/exist.ts");
     }
 
-    // t.Run("UseCaseSensitiveFileNames")
+    // t.Run("CaseSensitivity") (ts#64159 renames "UseCaseSensitiveFileNames")
     {
         assert!(!fs.use_case_sensitive_file_names());
     }
@@ -1214,7 +1214,7 @@ fn test_iofs() {
         assert_eq!(realpath, "/foo.ts");
     }
 
-    // t.Run("UseCaseSensitiveFileNames")
+    // t.Run("CaseSensitivity") (ts#64159 renames "UseCaseSensitiveFileNames")
     {
         assert!(fs.use_case_sensitive_file_names());
     }

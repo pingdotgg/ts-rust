@@ -1,6 +1,7 @@
 //! Go: internal/testutil/harnessutil/sourcemap_recorder.go, and
-//! `CompilationResult.GetSourceMapRecord` (harnessutil.go:870).
+//! `CompilationResult.GetSourceMapRecord` (harnessutil.go:909).
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::baseline::type_symbol::TestFile;
 use ts_goport::frontend::json::append_json_quote;
 use ts_goport::frontend::prelude::*;
@@ -581,7 +582,9 @@ fn compute_position_of_line_and_utf16_character(
 }
 
 impl CompilationResult {
-    // Go: harnessutil.go:915 GetSourceMapRecord
+    // Go: harnessutil.go:909 GetSourceMapRecord
+    // ts#64159: the generated and input file names are rooted against the
+    // result's current directory before the lookups (:920, :932).
     pub fn get_source_map_record(&self) -> String {
         if self.result.source_maps.is_empty() {
             return String::new();
@@ -591,10 +594,12 @@ impl CompilationResult {
         for source_map_data in &self.result.source_maps {
             let mut prev_source_file: Option<String> = None;
 
+            let generated_file =
+                to_rooted_path(&source_map_data.generated_file, &self.current_directory);
             let current_file = if is_declaration_file_name(&source_map_data.generated_file) {
-                self.dts.get(&source_map_data.generated_file)
+                self.dts.get(&generated_file)
             } else {
-                self.js.get(&source_map_data.generated_file)
+                self.js.get(&generated_file)
             };
             // PORT: Go dereferences a nil file (a panic) when the generated
             // file was not recorded.
@@ -617,7 +622,8 @@ impl CompilationResult {
                     [decoded_source_mapping.source_index as usize];
                 // Go compares `*ast.SourceFile` pointers; the file name
                 // identifies the file.
-                let current_source_file = self.source_file_name(name);
+                let current_source_file =
+                    self.source_file_name(&to_rooted_path(name, &self.current_directory));
                 if current_source_file != prev_source_file {
                     if let Some(name) = &current_source_file {
                         let text = self

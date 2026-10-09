@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::execute::watchmanager::{WatchBackend, WatchDirectoryRequest};
 use ts_goport::frontend::tspath;
 use ts_goport::fswatch::{self, Event, EventKind};
@@ -168,13 +169,19 @@ impl MockWatchBackend {
                     if w.is_closed() {
                         continue;
                     }
+                    // ts#64159 (mock_watch_backend.go:98): the event path is
+                    // rooted against the watched directory.
+                    let event = Event {
+                        path: to_rooted_path(&e.path, &w.path),
+                        ..e.clone()
+                    };
                     if let Some(ignore) = &w.ignore {
-                        if ignore(&e.path) {
+                        if ignore(&event.path) {
                             continue;
                         }
                     }
                     if !path_is_under(
-                        &e.path,
+                        &event.path,
                         &w.path,
                         w.recursive,
                         self.use_case_sensitive_file_names,
@@ -182,8 +189,8 @@ impl MockWatchBackend {
                         continue;
                     }
                     match targets.iter_mut().find(|(t, _)| Arc::ptr_eq(t, w)) {
-                        Some((_, t_events)) => t_events.push(e.clone()),
-                        None => targets.push((w.clone(), vec![e.clone()])),
+                        Some((_, t_events)) => t_events.push(event),
+                        None => targets.push((w.clone(), vec![event])),
                     }
                 }
             }
@@ -256,37 +263,32 @@ impl MockWatchBackend {
     }
 }
 
-// Go: mock_watch_backend.go:184 pathIsUnder
+// Go: mock_watch_backend.go:172 pathIsUnder
 /// pathIsUnder reports whether eventPath is inside dir. If recursive is
 /// false, only direct children match.
+///
+/// ts#64159: the paths compare as path keys (`PathKey.ContainsPath`), so a
+/// watch of a root ("/", "c:/") sees its children. N compared text and
+/// wanted a "/" after the directory.
 fn path_is_under(
     event_path: &str,
     dir: &str,
     recursive: bool,
     use_case_sensitive_file_names: bool,
 ) -> bool {
-    let (event_path, dir) = if use_case_sensitive_file_names {
-        (event_path.to_string(), dir.to_string())
-    } else {
-        (
-            tspath::get_canonical_file_name(event_path, false),
-            tspath::get_canonical_file_name(dir, false),
-        )
-    };
-    let Some(rest) = event_path.strip_prefix(dir.as_str()) else {
+    let dir_key = tspath::to_path(dir, "", use_case_sensitive_file_names);
+    let event_key = tspath::to_path(event_path, "", use_case_sensitive_file_names);
+    if dir_key == event_key || !dir_key.contains_path(&event_key) {
         return false;
-    };
-    if rest.is_empty() {
-        return false; // exact match = the dir itself, not a child
     }
-    if !rest.starts_with('/') {
-        return false; // e.g. dir="/foo", path="/foobar"
+    if recursive {
+        return true;
     }
-    if !recursive {
-        // Direct child only: no further '/' after the separator.
-        return !rest[1..].contains('/');
-    }
-    true
+    tspath::to_path(
+        &tspath::get_directory_path(event_path),
+        "",
+        use_case_sensitive_file_names,
+    ) == dir_key
 }
 
 impl MockWatchBackend {

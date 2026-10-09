@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::frontend::prelude::*;
 
 use super::go_regex;
@@ -44,7 +45,7 @@ const FOURSLASH_DIRECTIVES: &[&str] = &["emitthisfile", "noopen"];
 // Given a test file containing // @FileName directives,
 // return an array of named units of code to be added to an existing compiler instance.
 pub fn make_units_from_test(code: &str, file_name: &str) -> TestCaseContent {
-    let (mut test_units, symlinks, mut current_directory, global_options, _) =
+    let (mut test_units, symlinks, raw_current_directory, global_options, _) =
         parse_test_files_and_symlinks(code, file_name, |filename, content, _file_options| {
             Ok(TestUnit {
                 content: content.to_string(),
@@ -52,15 +53,19 @@ pub fn make_units_from_test(code: &str, file_name: &str) -> TestCaseContent {
             })
         });
 
-    if current_directory.is_empty() {
-        current_directory = SRC_FOLDER.to_string();
-    }
+    // ts#64159 (test_case_parser.go:60): a raw current directory is rooted
+    // against `srcFolder`.
+    let current_directory = if raw_current_directory.is_empty() {
+        SRC_FOLDER.to_string()
+    } else {
+        to_rooted_path(&raw_current_directory, SRC_FOLDER)
+    };
 
     // unit tests always list files explicitly
     let mut all_files: BTreeMap<String, String> = BTreeMap::new();
     for data in &test_units {
         all_files.insert(
-            get_normalized_absolute_path(&data.name, &current_directory),
+            to_rooted_path(&data.name, &current_directory),
             data.content.clone(),
         );
     }
@@ -88,9 +93,11 @@ pub fn make_units_from_test(code: &str, file_name: &str) -> TestCaseContent {
     for i in 0..test_units.len() {
         let data = &test_units[i];
         if !get_config_name_from_file_name(&data.name).is_empty() {
-            let config_file_name = get_normalized_absolute_path(&data.name, &current_directory);
+            let config_file_name = to_rooted_path(&data.name, &current_directory);
+            // Go `configFS.CaseSensitivity().PathKey(configFileName)`
+            // (test_case_parser.go:86): `to_path` of the rooted name.
             let path = to_path(
-                &data.name,
+                &config_file_name,
                 &parse_config_host.get_current_directory(),
                 parse_config_host.fs().use_case_sensitive_file_names(),
             );

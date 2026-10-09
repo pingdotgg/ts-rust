@@ -120,7 +120,9 @@ impl TracerForBaselining {
         msg.to_string()
     }
 
-    /// Go `tspath.ToPath(file, t.opts.CurrentDirectory, t.opts.UseCaseSensitiveFileNames)`.
+    /// Go `t.caseSensitivity.PathKey(tspath.ToRootedPath(file, t.currentDirectory))`
+    /// (ts#64159, harnessutil.go:536): `to_path` of the name against the
+    /// current directory gives the same key.
     fn to_path(&self, file: &str) -> Path {
         to_path(
             file,

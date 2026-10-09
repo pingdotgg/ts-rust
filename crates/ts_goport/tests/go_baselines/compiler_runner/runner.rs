@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::baseline::type_symbol::TestFile;
 use ts_goport::frontend::prelude::*;
 use ts_goport::program as tsprogram;
@@ -326,13 +327,15 @@ pub fn new_compiler_test_inputs(
 ) -> CompilerTestInputs {
     let mut harness_config: Option<TestConfiguration> =
         named_configuration.map(|named| named.config.clone());
-    let current_directory = get_normalized_absolute_path(
-        harness_config
-            .as_ref()
-            .and_then(|config| config.get("currentdirectory"))
-            .map_or("", String::as_str),
-        SRC_FOLDER,
-    );
+    // ts#64159 (compiler_runner.go:254): `srcFolder`, or the raw
+    // `@currentDirectory` rooted against it.
+    let current_directory = match harness_config
+        .as_ref()
+        .and_then(|config| config.get("currentdirectory"))
+    {
+        Some(raw) if !raw.is_empty() => to_rooted_path(raw, SRC_FOLDER),
+        _ => SRC_FOLDER.to_string(),
+    };
 
     let units = &test_content.test_unit_data;
     let mut to_be_compiled = Vec::new();
@@ -353,10 +356,7 @@ pub fn new_compiler_test_inputs(
             if ts_config
                 .parsed_config
                 .file_names
-                .contains(&get_normalized_absolute_path(
-                    &unit.name,
-                    &current_directory,
-                ))
+                .contains(&to_rooted_path(&unit.name, &current_directory))
             {
                 to_be_compiled.push(create_harness_test_file(unit, &current_directory));
             } else {
@@ -370,7 +370,7 @@ pub fn new_compiler_test_inputs(
         {
             config.insert(
                 "baseurl".to_string(),
-                get_normalized_absolute_path(&base_url, &current_directory),
+                to_rooted_path(&base_url, &current_directory),
             );
         }
 
@@ -426,7 +426,13 @@ pub fn precompute_compiler_options(inputs: &CompilerTestInputs) -> CompilerOptio
         compiler_options.skip_default_lib_check = Tristate::True;
     }
     compiler_options.no_error_truncation = Tristate::True;
-    let mut harness_options = HarnessOptions::default();
+    // The harness options of `CompileFiles`: a `@currentDirectory` roots
+    // against the current directory (ts#64159).
+    let mut harness_options = HarnessOptions {
+        use_case_sensitive_file_names: true,
+        current_directory: inputs.current_directory.clone(),
+        ..HarnessOptions::default()
+    };
     if let Some(config) = &inputs.harness_config {
         set_options_from_test_config(
             config,
@@ -469,12 +475,15 @@ pub fn new_compiler_test(
     let mut other_files = inputs.other_files;
     let mut changed = false;
     for file in to_be_compiled.iter_mut().chain(other_files.iter_mut()) {
+        // ts#64159 (compiler_runner.go:320): the program lookup roots the
+        // unit name against the current directory.
+        let file_name = to_rooted_path(&file.unit_name, &inputs.current_directory);
         if result
-            .source_file_content_mapper(&file.unit_name)
+            .source_file_content_mapper(&file_name)
             .is_some_and(|content_mapper| !content_mapper.is_empty())
         {
             file.content = result
-                .source_file_text(&file.unit_name)
+                .source_file_text(&file_name)
                 .expect("the program has the file");
             changed = true;
         }
@@ -503,7 +512,7 @@ pub fn new_compiler_test(
 // Go: compiler_runner.go:522 createHarnessTestFile
 fn create_harness_test_file(unit: &TestUnit, current_directory: &str) -> TestFile {
     TestFile {
-        unit_name: get_normalized_absolute_path(&unit.name, current_directory),
+        unit_name: to_rooted_path(&unit.name, current_directory),
         content: unit.content.clone(),
     }
 }
@@ -597,12 +606,9 @@ impl CompilerTest {
                 // be rendered against the correct text; the squiggle renderer here assumes a single coordinate space.
                 let content_mapped = self.content_mapped_file_names();
                 if !content_mapped.is_empty() {
-                    files.retain(|f| {
-                        !content_mapped.contains(&get_normalized_absolute_path(
-                            &f.unit_name,
-                            &self.current_directory,
-                        ))
-                    });
+                    // ts#64159 (compiler_runner.go:350): unit names are rooted
+                    // already, so they are looked up as they are.
+                    files.retain(|f| !content_mapped.contains(&f.unit_name));
                     diagnostics.retain(|d| {
                         tsbaseline::diagnostic_file_name(d)
                             .is_none_or(|name| !content_mapped.contains(&name))
@@ -808,7 +814,11 @@ impl CompilerTest {
             .to_be_compiled
             .iter()
             .chain(&self.other_files)
-            .filter(|f| tsprogram::get_source_file(&f.unit_name).is_some())
+            .filter(|f| {
+                // ts#64159 (compiler_runner.go:488)
+                tsprogram::get_source_file(&to_rooted_path(&f.unit_name, &self.current_directory))
+                    .is_some()
+            })
             .cloned()
             .collect();
 

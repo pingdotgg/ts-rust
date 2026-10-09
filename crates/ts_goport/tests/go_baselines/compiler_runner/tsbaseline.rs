@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::baseline::type_symbol::{TestFile, generate_baseline, new_type_writer_walker};
 use ts_goport::baseline::util::{is_default_library_file, remove_test_path_prefixes};
 use ts_goport::contentmapper::Mapper;
@@ -59,8 +60,11 @@ fn sanitize_test_file_path(name: &str) -> String {
     let path = go_regex::replace_test_path_characters(name);
     let path = normalize_slashes(&path);
     let path = go_regex::replace_dot_dot_slash(&path);
-    let path = to_path(&path, "", false /*useCaseSensitiveFileNames*/);
-    path.0.strip_prefix('/').unwrap_or(&path.0).to_string()
+    // ts#64159 (util.go:69): `CaseInsensitive.Canonicalize(NormalizePath(path))`.
+    // N used `ToPath(path, "", false)`, which also resolved a relative name
+    // against "".
+    let path = to_file_name_lower_case(&normalize_path(&path));
+    path.strip_prefix('/').unwrap_or(&path).to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -623,10 +627,13 @@ pub fn do_js_emit_baseline(
             js_code.push_str("\r\n");
         }
         if result.diagnostics.is_empty() && file.unit_name.ends_with(EXTENSION_JSON) {
+            // ts#64159 (js_emit_baseline.go:59): the name is rooted against the
+            // result's current directory; the key is its case-sensitive form.
+            let file_name = to_rooted_path(&file.unit_name, &result.current_directory);
             let file_parse_result = parse_source_file(
                 &SourceFileParseOptions {
-                    file_name: file.unit_name.clone(),
-                    path: Path(file.unit_name.clone()),
+                    path: Path(file_name.clone()),
+                    file_name,
                     ..SourceFileParseOptions::default()
                 },
                 &*Box::leak(file.content.clone().into_boxed_str()),
@@ -816,19 +823,30 @@ fn prepare_declaration_compilation_context(
     };
 
     let find_result_code_file = |file_name: &str| -> Option<TestFile> {
-        let Some(source_file_name) = result.source_file_name(file_name) else {
+        let Some(mut source_file_name) =
+            result.source_file_name(&to_rooted_path(file_name, &result.current_directory))
+        else {
             panic!("Program has no source file with name '{file_name}'");
         };
         // Is this file going to be emitted separately
-        let source_file_name = if !options.out_dir.is_empty() {
-            let source_file_path =
-                get_normalized_absolute_path(&source_file_name, &result.current_directory);
-            let source_file_path =
-                source_file_path.replacen(&result.common_source_directory(), "", 1);
-            combine_paths(&options.out_dir, &[&source_file_path])
-        } else {
-            source_file_name
-        };
+        // ts#64159 (js_emit_baseline.go:212): the path relative to the
+        // common source directory goes under `OutDir`; across roots (R4) the
+        // file keeps its name. N cut the common source directory text out of
+        // the name (`strings.Replace`).
+        if !options.out_dir.is_empty()
+            && let Some(relative_path) = relative_path_from_directory(
+                &result.common_source_directory(),
+                &source_file_name,
+                result.use_case_sensitive_file_names,
+            )
+        {
+            // Go `options.OutDir.ResolveRelativeFile(relativePath)`.
+            source_file_name = if relative_path.is_empty() {
+                options.out_dir.clone()
+            } else {
+                to_rooted_path(&relative_path, &options.out_dir)
+            };
+        }
 
         let d_ts_file_name = result.change_to_declaration_extension(&source_file_name);
         result.dts.get(&d_ts_file_name).cloned()
@@ -840,7 +858,8 @@ fn prepare_declaration_compilation_context(
                         decl_other_files: &[TestFile]| {
         if is_declaration_file_name(&file.unit_name) || has_json_file_extension(&file.unit_name) {
             dts_files.push(file.clone());
-        } else if let Some(content_mapper) = result.source_file_content_mapper(&file.unit_name)
+        } else if let Some(content_mapper) = result
+            .source_file_content_mapper(&to_rooted_path(&file.unit_name, &result.current_directory))
             && (has_ts_file_extension(&file.unit_name)
                 || (has_js_file_extension(&file.unit_name) && options.get_allow_js())
                 || !content_mapper.is_empty())
@@ -864,6 +883,13 @@ fn prepare_declaration_compilation_context(
 
     // if the .d.ts is non-empty, confirm it compiles correctly as well
     if options.declaration.is_true() && result.diagnostics.is_empty() && !result.dts.is_empty() {
+        // ts#64159 (js_emit_baseline.go:243): a given current directory is
+        // rooted against the harness one.
+        let declaration_current_directory = if current_directory.is_empty() {
+            harness_settings.current_directory.clone()
+        } else {
+            to_rooted_path(current_directory, &harness_settings.current_directory)
+        };
         for file in input_files {
             let mut dts_files = std::mem::take(&mut decl_input_files);
             let current = dts_files.clone();
@@ -881,11 +907,7 @@ fn prepare_declaration_compilation_context(
             decl_other_files,
             harness_settings: harness_settings.clone(),
             options: options.clone(),
-            current_directory: if !current_directory.is_empty() {
-                current_directory.to_string()
-            } else {
-                harness_settings.current_directory.clone()
-            },
+            current_directory: declaration_current_directory,
             config: result.command_line.clone(),
         });
     }
@@ -904,7 +926,7 @@ fn compile_declaration_files(
     context: Option<DeclarationCompilationContext>,
     symlinks: &BTreeMap<String, String>,
 ) -> Option<DeclarationCompilationResult> {
-    let mut context = context?;
+    let context = context?;
     let tsconfig =
         context
             .config
@@ -912,6 +934,10 @@ fn compile_declaration_files(
             .clone()
             .map(|config_file| super::harness::TsConfigPart {
                 config_file: Some(config_file),
+                // Go (js_emit_baseline.go:277) gives this command line no
+                // base directory, so the compilation's base directory is
+                // `context.currentDirectory` (ts#64159).
+                base_directory: String::new(),
                 errors: Vec::new(),
                 content_mappers: context.config.content_mappers().to_vec(),
             });
@@ -919,7 +945,7 @@ fn compile_declaration_files(
         &context.decl_input_files,
         &context.decl_other_files,
         &context.harness_settings,
-        &mut context.options,
+        &context.options,
         &context.current_directory,
         symlinks,
         tsconfig.as_ref(),
@@ -1025,9 +1051,14 @@ fn create_source_map_preview_link(source_map: &TestFile, result: &CompilationRes
                 .iter()
                 .find(|td| td.unit_name.ends_with(s.as_str()));
             if let Some(source_file) = source_file {
-                // Go: `result.Program.GetSourceFile(sourceFile.UnitName)` (ts#63936)
+                // Go: `result.Program.GetSourceFile(...)` (ts#63936), with the
+                // unit name rooted against the current directory (ts#64159,
+                // sourcemap_baseline.go:99).
                 let _scope = ts_goport::core::enter_program(Some(result.program));
-                let program_source = ts_goport::program::get_source_file(&source_file.unit_name);
+                let program_source = ts_goport::program::get_source_file(&to_rooted_path(
+                    &source_file.unit_name,
+                    &result.current_directory,
+                ));
                 if program_source.is_some() {
                     return Some(TestFile {
                         unit_name: source_file.unit_name.clone(),

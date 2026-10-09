@@ -20,6 +20,9 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 
+// PORT: Go `tspath.ToRootedPath` (rooted_path.go:29) and its typed forms
+// are the API lane's copy until tspath has the ts#64159 rooted path types.
+use ts_goport::api::to_rooted_path;
 use ts_goport::baseline::type_symbol::TestFile;
 use ts_goport::contentmapper::{self, Mapper, ProjectSpec};
 use ts_goport::core::{ProgramScope, enter_program};
@@ -67,7 +70,10 @@ pub struct NamedTestConfiguration {
     pub config: TestConfiguration,
 }
 
-// Go: harnessutil.go:62 HarnessOptions
+// Go: harnessutil.go:64 HarnessOptions
+// PORT: Go `CaseSensitivity` (ts#64159) is the bool
+// `use_case_sensitive_file_names`; Go `CurrentDirectory` is a rooted
+// directory path.
 #[derive(Clone, Debug, Default)]
 pub struct HarnessOptions {
     pub use_case_sensitive_file_names: bool,
@@ -100,13 +106,27 @@ pub fn skip(message: String) -> ! {
 }
 
 /// The part of a Go `*tsoptions.ParsedCommandLine` that `CompileFilesEx`
-/// reads: `ConfigFile`, `Errors` and `ParsedConfig.ContentMappers`
-/// (tsgo#4712).
+/// reads: `ConfigFile`, `Errors`, `ParsedConfig.ContentMappers` (tsgo#4712)
+/// and `BaseDirectory()` (ts#64159).
 #[derive(Clone, Default)]
 pub struct TsConfigPart {
     pub config_file: Option<Rc<TsConfigSourceFile>>,
+    /// Go `BaseDirectory()`: the config file's directory. The Rust
+    /// `ParsedCommandLine` keeps it in `compare_paths_options`.
+    pub base_directory: String,
     pub errors: Vec<Diagnostic>,
     pub content_mappers: Vec<Rc<Mapper>>,
+}
+
+impl TsConfigPart {
+    fn new(tsconfig: &ParsedCommandLine) -> TsConfigPart {
+        TsConfigPart {
+            config_file: tsconfig.config_file.clone(),
+            base_directory: tsconfig.compare_paths_options.current_directory.clone(),
+            errors: tsconfig.errors.clone(),
+            content_mappers: tsconfig.parsed_config.content_mappers.clone(),
+        }
+    }
 }
 
 /// Go `defer f()`: runs `f` when the scope ends, also on a panic.
@@ -158,16 +178,12 @@ pub fn compile_files(
         );
     }
 
-    let tsconfig_part = tsconfig.map(|tsconfig| TsConfigPart {
-        config_file: tsconfig.config_file.clone(),
-        errors: tsconfig.errors.clone(),
-        content_mappers: tsconfig.parsed_config.content_mappers.clone(),
-    });
+    let tsconfig_part = tsconfig.map(TsConfigPart::new);
     compile_files_ex(
         input_files,
         other_files,
         &harness_options,
-        &mut compiler_options,
+        &compiler_options,
         current_directory,
         symlinks,
         tsconfig_part.as_ref(),
@@ -191,14 +207,14 @@ pub fn compile_files_ex(
     input_files: &[TestFile],
     other_files: &[TestFile],
     harness_options: &HarnessOptions,
-    compiler_options: &mut CompilerOptions,
+    compiler_options: &CompilerOptions,
     current_directory: &str,
     symlinks: &BTreeMap<String, String>,
     tsconfig: Option<&TsConfigPart>,
 ) -> CompilationResult {
     let mut program_file_names = Vec::new();
     for file in input_files {
-        let file_name = get_normalized_absolute_path(&file.unit_name, current_directory);
+        let file_name = to_rooted_path(&file.unit_name, current_directory);
 
         if !file_extension_is(&file_name, EXTENSION_JSON)
             && !file_extension_is(&file_name, EXTENSION_TS_BUILD_INFO)
@@ -224,7 +240,11 @@ pub fn compile_files_ex(
             // We used to override lib with a custom lib.d.ts for some reason. Skip this unless it becomes necessary.
             continue;
         }
-        program_file_names.push(combine_paths(TEST_LIB_FOLDER, &[lib_file]));
+        // Go `currentDirectory.ResolveFile(tspath.CombinePaths(testLibFolder, libFile))`.
+        program_file_names.push(to_rooted_path(
+            &combine_paths(TEST_LIB_FOLDER, &[lib_file]),
+            current_directory,
+        ));
         include_lib_dir = true;
     }
 
@@ -236,42 +256,9 @@ pub fn compile_files_ex(
         skip("TypeScript submodule does not exist".to_string());
     }
 
-    // !!!
-    // ts.assign(options, ts.convertToOptionsWithAbsolutePaths(options, path => ts.getNormalizedAbsolutePath(path, currentDirectory)));
-    if !compiler_options.out_dir.is_empty() {
-        compiler_options.out_dir =
-            get_normalized_absolute_path(&compiler_options.out_dir, current_directory);
-    }
-    if !compiler_options.project.is_empty() {
-        compiler_options.project =
-            get_normalized_absolute_path(&compiler_options.project, current_directory);
-    }
-    if !compiler_options.root_dir.is_empty() {
-        compiler_options.root_dir =
-            get_normalized_absolute_path(&compiler_options.root_dir, current_directory);
-    }
-    if !compiler_options.ts_build_info_file.is_empty() {
-        compiler_options.ts_build_info_file =
-            get_normalized_absolute_path(&compiler_options.ts_build_info_file, current_directory);
-    }
-    if !compiler_options.base_url.is_empty() {
-        compiler_options.base_url =
-            get_normalized_absolute_path(&compiler_options.base_url, current_directory);
-    }
-    if !compiler_options.declaration_dir.is_empty() {
-        compiler_options.declaration_dir =
-            get_normalized_absolute_path(&compiler_options.declaration_dir, current_directory);
-    }
-    if let Some(root_dirs) = compiler_options.root_dirs.as_mut() {
-        for root_dir in root_dirs.iter_mut() {
-            *root_dir = get_normalized_absolute_path(root_dir, current_directory);
-        }
-    }
-    if let Some(type_roots) = compiler_options.type_roots.as_mut() {
-        for type_root in type_roots.iter_mut() {
-            *type_root = get_normalized_absolute_path(type_root, current_directory);
-        }
-    }
+    // ts#64159 removes the N block that made the path options absolute
+    // (`convertToOptionsWithAbsolutePaths`, harnessutil.go:162 at
+    // 673a5f17d713): `getOptionValue` and the tsconfig parse root them.
 
     let content_mappers: Vec<Rc<Mapper>> = tsconfig
         .map(|tsconfig| tsconfig.content_mappers.clone())
@@ -323,19 +310,28 @@ pub fn compile_files_ex(
         }
     }));
 
-    let config = Rc::new(ParsedCommandLine {
-        parsed_config: ParsedOptions {
-            compiler_options: Rc::new(compiler_options.clone()),
-            file_names: program_file_names,
-            content_mappers,
-            ..ParsedOptions::default()
+    // ts#64159 (harnessutil.go:208): the base directory is the config's,
+    // else the current directory. The program resolves against it (R1), so
+    // include specs match as in the config (`GetMatchedIncludeSpec`).
+    let base_directory = match tsconfig {
+        Some(tsconfig) if !tsconfig.base_directory.is_empty() => tsconfig.base_directory.clone(),
+        _ => current_directory.to_string(),
+    };
+    let mut config = new_parsed_command_line(
+        Rc::new(compiler_options.clone()),
+        program_file_names,
+        None,
+        ComparePathsOptions {
+            use_case_sensitive_file_names: harness_options.use_case_sensitive_file_names,
+            current_directory: base_directory,
         },
-        config_file: tsconfig.and_then(|tsconfig| tsconfig.config_file.clone()),
-        errors: tsconfig
-            .map(|tsconfig| tsconfig.errors.clone())
-            .unwrap_or_default(),
-        ..ParsedCommandLine::default()
-    });
+    );
+    config.parsed_config.content_mappers = content_mappers;
+    config.config_file = tsconfig.and_then(|tsconfig| tsconfig.config_file.clone());
+    config.errors = tsconfig
+        .map(|tsconfig| tsconfig.errors.clone())
+        .unwrap_or_default();
+    let config = Rc::new(config);
     // PORT: Go `Host.Project` returns nil only after `Close`, which cannot
     // happen here.
     let content_mapper_project: Option<Rc<dyn contentmapper::Project>> =
@@ -542,7 +538,11 @@ fn parse_harness_option(
             harness_options.lib_files = list.iter().map(as_string).collect();
         }
         "noImplicitReferences" => harness_options.no_implicit_references = as_bool(&value),
-        "currentDirectory" => harness_options.current_directory = as_string(&value),
+        // ts#64159 (harnessutil.go:395): rooted against the current one.
+        "currentDirectory" => {
+            harness_options.current_directory =
+                to_rooted_path(&as_string(&value), &harness_options.current_directory);
+        }
         "symlink" => harness_options.symlink = as_string(&value),
         "link" => harness_options.link = as_string(&value),
         "noTypesAndSymbols" => harness_options.no_types_and_symbols = as_bool(&value),
@@ -697,22 +697,22 @@ fn compile_files_with_host(
     // !!!
     // if (compilerOptions.project || !rootFiles || rootFiles.length === 0) { ... readProject ... }
 
-    let current_directory = host.get_current_directory();
     let use_case_sensitive_file_names = host.fs().use_case_sensitive_file_names();
 
     let mut pre_compiler_options = (**config.compiler_options()).clone();
     pre_compiler_options.trace_resolution = Tristate::False;
-    let pre_config = Rc::new(ParsedCommandLine {
-        parsed_config: ParsedOptions {
-            compiler_options: Rc::new(pre_compiler_options),
-            file_names: config.file_names().to_vec(),
-            content_mappers: config.content_mappers().to_vec(),
-            ..ParsedOptions::default()
-        },
-        config_file: config.config_file.clone(),
-        errors: config.errors.clone(),
-        ..ParsedCommandLine::default()
-    });
+    // ts#64159 (harnessutil.go:627): the pre-emit command line keeps the
+    // project references, base directory and case sensitivity of `config`.
+    let mut pre_config = new_parsed_command_line(
+        Rc::new(pre_compiler_options),
+        config.file_names().to_vec(),
+        config.parsed_config.project_references.clone(),
+        config.compare_paths_options.clone(),
+    );
+    pre_config.parsed_config.content_mappers = config.content_mappers().to_vec();
+    pre_config.config_file = config.config_file.clone();
+    pre_config.errors = config.errors.clone();
+    let pre_config = Rc::new(pre_config);
     let pre_program = create_program(host.clone(), pre_config.clone());
     let pre_errors = {
         let _scope = enter_program(Some(pre_program.program()));
@@ -770,8 +770,10 @@ fn compile_files_with_host(
         post_errors
     };
 
+    // ts#64159 (harnessutil.go:695): the result's current directory is the
+    // harness option, not the host's.
     new_compilation_result(
-        current_directory,
+        harness_options.current_directory.clone(),
         use_case_sensitive_file_names,
         post_program.program(),
         config,
@@ -871,9 +873,9 @@ fn new_ad_hoc_compiler_diagnostic(message: String) -> Diagnostic {
     diag
 }
 
-// Go: harnessutil.go:679 CompilationResult
+// Go: harnessutil.go:698 CompilationResult
 // PORT: `Program` is the program version, read inside `enter`. `Host` is
-// kept as its current directory and case sensitivity. `Repeat` is
+// kept as its case sensitivity. `Repeat` is
 // `repeat`. `inputsAndOutputs` is not kept: the compiler runner does not
 // read it.
 pub struct CompilationResult {
@@ -889,9 +891,10 @@ pub struct CompilationResult {
     outputs: Vec<TestFile>,
     inputs: Vec<TestFile>,
     pub trace: String,
-    /// Go `Host.GetCurrentDirectory()`.
+    /// Go `currentDirectory` (`CurrentDirectory()`): the harness option
+    /// `CurrentDirectory` (ts#64159; N read the host's).
     pub current_directory: String,
-    /// Go `Host.FS().UseCaseSensitiveFileNames()`.
+    /// Go `Host.FS().CaseSensitivity()`.
     pub use_case_sensitive_file_names: bool,
     /// Go `Program.Program().CommandLine()`.
     pub command_line: Rc<ParsedCommandLine>,
@@ -900,7 +903,7 @@ pub struct CompilationResult {
     repeat_inputs: Option<Box<CompileInputs>>,
 }
 
-// Go: harnessutil.go:704 newCompilationResult
+// Go: harnessutil.go:724 newCompilationResult
 #[allow(clippy::too_many_arguments)]
 fn new_compilation_result(
     current_directory: String,
@@ -1002,9 +1005,14 @@ fn new_compilation_result(
 }
 
 impl CompilationResult {
-    // Go: harnessutil.go:794 getOutputPath
-    fn get_output_path(&self, path: &str, ext: &str) -> String {
-        let mut path = resolve_path(&self.current_directory, &[path]);
+    // Go: harnessutil.go:824 getOutputPath
+    // ts#64159: `file_path` is rooted (N resolved it against the host's
+    // current directory). The path relative to the common source directory
+    // goes under `OutDir`, or under the declaration directory when there is
+    // no `OutDir` (N used the current directory then). Across roots there is
+    // no relative path (R4), and the file keeps its own directory.
+    fn get_output_path(&self, file_path: &str, ext: &str) -> String {
+        let mut output_path = file_path.to_string();
         let out_dir = if ext == ".d.ts"
             || ext == ".d.mts"
             || ext == ".d.cts"
@@ -1019,29 +1027,31 @@ impl CompilationResult {
             &self.options.out_dir
         };
         if !out_dir.is_empty() {
-            let common = {
-                let _scope = self.enter_program_only();
-                tsprogram::common_source_directory().to_string()
-            };
-            if !common.is_empty() {
-                path = get_relative_path_from_directory(
+            let common = self.common_source_directory();
+            if !common.is_empty()
+                && let Some(relative_path) = relative_path_from_directory(
                     &common,
-                    &path,
-                    &ComparePathsOptions {
-                        use_case_sensitive_file_names: self.use_case_sensitive_file_names,
-                        current_directory: self.current_directory.clone(),
-                    },
-                );
-                path = combine_paths(
-                    &resolve_path(&self.current_directory, &[&self.options.out_dir]),
-                    &[&path],
-                );
+                    file_path,
+                    self.use_case_sensitive_file_names,
+                )
+            {
+                let output_directory = if self.options.out_dir.is_empty() {
+                    out_dir
+                } else {
+                    &self.options.out_dir
+                };
+                // Go `outputDirectory.ResolveRelativeFile(relativePath)`.
+                output_path = if relative_path.is_empty() {
+                    output_directory.clone()
+                } else {
+                    to_rooted_path(&relative_path, output_directory)
+                };
             }
         }
-        if ext == get_declaration_emit_extension_for_path(&path) {
-            return self.change_to_declaration_extension(&path);
+        if ext == get_declaration_emit_extension_for_path(&output_path) {
+            return self.change_to_declaration_extension(&output_path);
         }
-        change_extension(&path, ext)
+        change_extension(&output_path, ext)
     }
 
     /// Go `outputpaths.ChangeToDeclarationExtension(path, c.Program.Program())`
@@ -1175,7 +1185,7 @@ impl CompilationResult {
             &inputs.input_files,
             &inputs.other_files,
             &new_harness_options,
-            &mut new_compiler_options,
+            &new_compiler_options,
             &inputs.current_directory,
             &inputs.symlinks,
             inputs.tsconfig.as_ref(),
