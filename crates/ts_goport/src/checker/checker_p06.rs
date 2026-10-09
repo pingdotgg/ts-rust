@@ -5,129 +5,11 @@
 use crate::diagnostics::Message;
 use crate::prelude::*;
 
-// PORT: Go `tspath.IsExternalModuleNameRelative`, `tspath.FileExtensionIsOneOf`
-// and their helpers. tspath has no port in this crate, so these private
-// copies follow the Go code exactly.
-
-// Go: tspath/path.go:954 PathIsRelative
-fn path_is_relative_p06(path: &str) -> bool {
-    // True if path is ".", "..", or starts with "./", "../", ".\\", or "..\\".
-    if path == "." || path == ".." {
-        return true;
-    }
-    let b = path.as_bytes();
-    if b.len() >= 2 && b[0] == b'.' && (b[1] == b'/' || b[1] == b'\\') {
-        return true;
-    }
-    if b.len() >= 3 && b[0] == b'.' && b[1] == b'.' && (b[2] == b'/' || b[2] == b'\\') {
-        return true;
-    }
-    false
-}
-
-// Go: tspath/path.go IsVolumeCharacter
-fn is_volume_character_p06(ch: u8) -> bool {
-    (b'a'..=b'z').contains(&ch) || (b'A'..=b'Z').contains(&ch)
-}
-
-// Go: tspath/path.go:152 getFileUrlVolumeSeparatorEnd
-fn get_file_url_volume_separator_end_p06(url: &[u8], start: usize) -> i32 {
-    if url.len() <= start {
-        return -1;
-    }
-    let ch0 = url[start];
-    if ch0 == b':' {
-        return (start + 1) as i32;
-    }
-    if ch0 == b'%' && url.len() > start + 2 && url[start + 1] == b'3' {
-        let ch2 = url[start + 2];
-        if ch2 == b'a' || ch2 == b'A' {
-            return (start + 3) as i32;
-        }
-    }
-    -1
-}
-
-// Go: tspath/path.go:169 GetEncodedRootLength
-fn get_encoded_root_length_p06(path: &str) -> i32 {
-    let b = path.as_bytes();
-    let ln = b.len();
-    if ln == 0 {
-        return 0;
-    }
-    let ch0 = b[0];
-
-    // POSIX or UNC
-    if ch0 == b'/' || ch0 == b'\\' {
-        if ln == 1 || b[1] != ch0 {
-            return 1; // POSIX: "/" (or non-normalized "\")
-        }
-        let offset = 2;
-        return match b[offset..].iter().position(|&c| c == ch0) {
-            None => ln as i32,                    // UNC: "//server" or "\\server"
-            Some(p1) => (p1 + offset + 1) as i32, // UNC: "//server/" or "\\server\"
-        };
-    }
-
-    // DOS
-    if is_volume_character_p06(ch0) && ln > 1 && b[1] == b':' {
-        if ln == 2 {
-            return 2; // DOS: "c:" (but not "c:d")
-        }
-        let ch2 = b[2];
-        if ch2 == b'/' || ch2 == b'\\' {
-            return 3; // DOS: "c:/" or "c:\"
-        }
-    }
-
-    // Untitled paths (e.g., "^/untitled/ts-nul-authority/Untitled-1")
-    if ch0 == b'^' && ln > 1 && b[1] == b'/' {
-        return 2; // Untitled: "^/"
-    }
-
-    // URL
-    const URL_SCHEME_SEPARATOR: &str = "://";
-    if let Some(scheme_end) = path.find(URL_SCHEME_SEPARATOR) {
-        let authority_start = scheme_end + URL_SCHEME_SEPARATOR.len();
-        if let Some(authority_length) = path[authority_start..].find('/') {
-            // URL: "file:///", "file://server/", "file://server/path"
-            let authority_end = authority_start + authority_length;
-
-            // For local "file" URLs, include the leading DOS volume (if present).
-            let scheme = &path[..scheme_end];
-            let authority = &path[authority_start..authority_end];
-            if scheme == "file"
-                && (authority.is_empty() || authority == "localhost")
-                && (ln > authority_end + 2)
-                && is_volume_character_p06(b[authority_end + 1])
-            {
-                let volume_separator_end =
-                    get_file_url_volume_separator_end_p06(b, authority_end + 2);
-                if volume_separator_end != -1 {
-                    if volume_separator_end as usize == ln {
-                        return !volume_separator_end;
-                    }
-                    if b[volume_separator_end as usize] == b'/' {
-                        return !(volume_separator_end + 1);
-                    }
-                }
-            }
-            return !((authority_end + 1) as i32); // URL: "file://server/", "http://server/"
-        }
-        return !(ln as i32); // URL: "file://server", "http://server"
-    }
-
-    // relative
-    0
-}
-
-// Go: tspath/path.go:981 IsExternalModuleNameRelative
-fn is_external_module_name_relative_p06(module_name: &str) -> bool {
-    // TypeScript 1.0 spec (April 2014): 11.2.1
-    // An external module name is "relative" if the first term is "." or "..".
-    // Update: We also consider a path like `C:\foo.ts` "relative" because we do not search for it in `node_modules` or treat it as an ambient module.
-    path_is_relative_p06(module_name) || get_encoded_root_length_p06(module_name) > 0
-}
+// PORT: Go `tspath.FileExtensionIsOneOf` as a private copy. ts#64544 and
+// ts#64159 changed the root rules of `tspath.IsExternalModuleNameRelative`
+// (dynamic file names, file URLs without case), so that one is the tspath
+// port.
+use crate::frontend::tspath::is_external_module_name_relative;
 
 // Go: tspath/extension.go:79 FileExtensionIsOneOf
 fn file_extension_is_one_of_p06(path: &str, extensions: &[&str]) -> bool {
@@ -887,7 +769,7 @@ impl Checker {
                         diag::Augmentations_for_the_global_scope_can_only_be_directly_nested_in_external_modules_or_ambient_module_declarations,
                         args![],
                     );
-                } else if is_external_module_name_relative_p06(node.name().text()) {
+                } else if is_external_module_name_relative(node.name().text()) {
                     self.error(
                         node.name(),
                         diag::Ambient_module_declaration_cannot_specify_relative_module_name,
@@ -1175,7 +1057,7 @@ impl Checker {
             );
             return false;
         }
-        if in_ambient_external_module && is_external_module_name_relative_p06(module_name.text()) {
+        if in_ambient_external_module && is_external_module_name_relative(module_name.text()) {
             // we have already reported errors on top level imports/exports in external module augmentations in checkModuleDeclaration
             // no need to do this again.
             if !is_top_level_in_external_module_augmentation(node) {

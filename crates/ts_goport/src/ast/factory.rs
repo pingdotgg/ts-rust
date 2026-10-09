@@ -206,6 +206,8 @@ impl NodeFactory {
     // `Path` are kept (see `SyntheticSourceFileData`). A synthetic
     // SourceFile keeps the Go fields in its slot. A store SourceFile (the
     // ported parser) keeps file name and text in its node store.
+    // ts#64159 removes the panic on a file name that is not normalized and
+    // absolute: Go `opts.FileName` is a `RootedFilePath` now.
     pub fn new_source_file(
         &self,
         file_name: &'static str,
@@ -214,11 +216,6 @@ impl NodeFactory {
         statements: NodeList,
         end_of_file_token: Node,
     ) -> Node {
-        if crate::frontend::tspath::get_encoded_root_length(file_name) == 0
-            || file_name != crate::frontend::tspath::normalize_path(file_name)
-        {
-            panic!("fileName should be normalized and absolute: {file_name:?}");
-        }
         let node = self.new_node(
             SyntaxKind::SourceFile,
             D::SourceFile(Box::new(crate::astdata::SourceFileData {

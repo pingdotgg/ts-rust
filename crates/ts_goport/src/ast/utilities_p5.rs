@@ -228,7 +228,7 @@ pub struct HasFileNameImpl {
     pub path: String,
 }
 
-// Go: ast/utilities.go:3819 NewHasFileName
+// Go: ast/utilities.go:3850 NewHasFileName
 pub fn new_has_file_name(file_name: &str, path: &str) -> HasFileNameImpl {
     HasFileNameImpl {
         file_name: file_name.to_string(),
@@ -237,12 +237,13 @@ pub fn new_has_file_name(file_name: &str, path: &str) -> HasFileNameImpl {
 }
 
 impl HasFileNameImpl {
-    // Go: ast/utilities.go:3765 (*hasFileNameImpl).FileName
+    // Go: ast/utilities.go:3857 (*hasFileNameImpl).FileName
     pub fn file_name(&self) -> String {
         self.file_name.clone()
     }
 
-    // Go: ast/utilities.go:3769 (*hasFileNameImpl).Path
+    // Go: ast/utilities.go:3830 (*hasFileNameImpl).Path (at 673a5f17d713; ts#64159 renames it
+    // PathKey, ast/utilities.go:3861)
     pub fn path(&self) -> String {
         self.path.clone()
     }

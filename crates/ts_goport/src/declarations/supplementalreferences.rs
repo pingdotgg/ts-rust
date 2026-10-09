@@ -2,6 +2,7 @@
 //! (tsgo#4712).
 
 use super::DeclarationEmitHost;
+use crate::checker::checker_p17::tspath_p17;
 use crate::frontend::tspath;
 use crate::prelude::*;
 
@@ -57,14 +58,17 @@ impl SupplementalReferencesTransformer {
             if declaration_path.is_empty() {
                 continue;
             }
-            let file_name = tspath::get_relative_path_from_file(
+            // ts#64159 (supplementalreferences.go:37): both outputs must share a root.
+            let Some(relative_path) = tspath_p17::relative_path_from_file(
                 &self.declaration_file_path,
                 &declaration_path,
-                &tspath::ComparePathsOptions {
-                    current_directory: self.host.get_current_directory(),
-                    use_case_sensitive_file_names: self.host.use_case_sensitive_file_names(),
-                },
-            );
+                self.host.use_case_sensitive_file_names(),
+            ) else {
+                panic!(
+                    "supplemental declaration output must share a root with the primary declaration"
+                );
+            };
+            let file_name = tspath::ensure_path_is_non_module_name(&relative_path);
             update_synthetic_source_file(source_file, |d| {
                 d.referenced_files.push(FileReference {
                     range: TextRange::new(-1, -1),
