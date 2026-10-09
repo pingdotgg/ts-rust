@@ -10,7 +10,8 @@
 //! getESSymbolLikeTypeForNode), and the node builder counts the length of
 //! that name toward truncation (checker/nodebuilderimpl.go:2614
 //! addPropertyToElementList). So the digits of the id move where
-//! `... N more ...` starts (`SymbolArenaLinks`, `program::new_pool_checker`).
+//! `... N more ...` starts (`ValueSymbolLinkStore`,
+//! `program::new_pool_checker`).
 //!
 //! Here `k4` has id 13 with the 2 checkers of the default pool (8 ids from
 //! `NewChecker`, then `a0` to `a3` and `k4`) and id 9 with `--checkers 1`.
@@ -240,9 +241,12 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
     run_test_in_child(
         "tsctests::symbol_id_truncation::ids_count_on_across_watch_cycles_single_threaded",
         || {
-            // Go: k4 gets id 9 in the first build. The edit adds e1, and
-            // the next build's checker counts on from the 35 ids of the
-            // first: k4 gets 44, so one member less shows.
+            // Go: k4 gets id 9 in the first build, which gives 35 ids. The
+            // edit adds e1, and the next build counts on from there: after
+            // the 4 ids of `NewChecker`, the d.ts signature of the changed
+            // a.ts gives k4 its id before the check (the declaration
+            // transform asks `EmitResolver.IsLateBound`). k4 gets 40, so
+            // one member less shows.
             let file = |name: &str, text: String| (format!("{PROJECT}/{name}"), text.into());
             let input = TscInput {
                 files: [
