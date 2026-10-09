@@ -2749,8 +2749,13 @@ impl Session {
             if source_file.is_nil() {
                 return Ok((None, source_file));
             }
-            let lang_svc =
-                self.setup_language_service(snapshot, Rc::clone(program), &params.project, "")?;
+            // ts#64554: the source file is the active file.
+            let lang_svc = self.setup_language_service(
+                snapshot,
+                Rc::clone(program),
+                &params.project,
+                source_file_file_name(source_file),
+            )?;
             // PORT: Go converts the uint32 position to a 64-bit int, and
             // UTF16ToUTF8 adds the delta of the last entry to a position past
             // all entries. A port position past i32::MAX is past any text.
@@ -2835,6 +2840,17 @@ impl Session {
         if let Err(err) = &result
             && errors::is(err, &ls::ERR_NEEDS_AUTO_IMPORTS)
         {
+            // ts#64554 (Go N' api/session.go:5508): symbols must come from the
+            // requested snapshot, so it must be prepared already.
+            if params.include_symbol {
+                return Err(errors::errorf(
+                    format!(
+                        "{}: snapshot is not prepared for auto-imports for {}",
+                        *ERR_CLIENT_ERROR, params.file
+                    ),
+                    vec![ERR_CLIENT_ERROR.clone()],
+                ));
+            }
             // ts#64163
             let prepared_snapshot = self.snapshot_host.clone_snapshot_with_auto_imports(
                 ctx,

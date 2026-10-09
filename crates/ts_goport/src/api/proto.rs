@@ -888,6 +888,12 @@ impl MarshalerTo for EnsurePrograms {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CreateSnapshotParams {
     pub snapshot_request_changes_params: SnapshotRequestChangesParams,
+    // UserPreferences configures language service behavior in the new snapshot.
+    // ts#64554 (Go N' api/proto.go:443). PORT: Go nil is `None`.
+    pub user_preferences: Option<crate::ls::lsutil::UserPreferences>,
+    // PrepareAutoImports identifies the file whose auto-import indexes should be ready in the new snapshot.
+    // ts#64554 (Go N' api/proto.go:445)
+    pub prepare_auto_imports: Option<DocumentIdentifier>,
     // FileNotifications describes host file system changes to invalidate while creating the snapshot.
     pub file_notifications: Option<FileNotifications>,
     // FileSystem supplies file contents and directory listings for the new snapshot.
@@ -900,6 +906,9 @@ impl UnmarshalerFrom for CreateSnapshotParams {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         let is_object = unmarshal_struct_fields(dec, "api.CreateSnapshotParams", |name, dec| {
             match name {
+                // ts#64554
+                "userPreferences" => json_unmarshal_decode(dec, &mut self.user_preferences)?,
+                "prepareAutoImports" => json_unmarshal_decode(dec, &mut self.prepare_auto_imports)?,
                 "fileNotifications" => json_unmarshal_decode(dec, &mut self.file_notifications)?,
                 "fileSystem" => json_unmarshal_decode(dec, &mut self.file_system)?,
                 _ => {
@@ -926,6 +935,14 @@ impl MarshalerTo for CreateSnapshotParams {
         let mut first = true;
         self.snapshot_request_changes_params
             .marshal_members(enc, &mut first)?;
+        // ts#64554
+        marshal_field_omitempty(enc, &mut first, "userPreferences", &self.user_preferences)?;
+        marshal_field_omitempty(
+            enc,
+            &mut first,
+            "prepareAutoImports",
+            &self.prepare_auto_imports,
+        )?;
         marshal_field_omitempty(
             enc,
             &mut first,

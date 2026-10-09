@@ -2422,6 +2422,13 @@ impl Session {
     ) -> Result<CreateSnapshotResponse, GoError> {
         let mut api_request =
             self.to_api_snapshot_request(ctx, &params.snapshot_request_changes_params)?;
+        // ts#64554 (Go N' api/session.go:1422). PORT: `APISnapshotRequest`
+        // has no fields for these yet (`clone_api_snapshot`).
+        let user_preferences = params.user_preferences.as_ref();
+        let prepare_auto_imports = params
+            .prepare_auto_imports
+            .as_ref()
+            .map(|file| file.to_uri(&self.get_current_directory()));
 
         let open_state =
             self.reconcile_snapshot_opens(&mut api_request, SnapshotOpenState::default());
@@ -2448,9 +2455,14 @@ impl Session {
                 request_file_system.kind == requestfilesystem::Kind::FULL;
         }
         let root = self.snapshot_host.new_root_snapshot_exported();
-        let (snapshot, err) =
-            self.snapshot_host
-                .clone_snapshot(ctx, &root, file_changes, Some(&api_request));
+        let (snapshot, err) = self.clone_api_snapshot(
+            ctx,
+            &root,
+            file_changes,
+            &api_request,
+            user_preferences,
+            prepare_auto_imports.as_ref(),
+        );
         project::Snapshot::deref(&root);
         if let Some(err) = err {
             project::Snapshot::deref(&snapshot);
@@ -2458,6 +2470,15 @@ impl Session {
                 format!("{}: failed to create snapshot: {}", *ERR_CLIENT_ERROR, err),
                 vec![ERR_CLIENT_ERROR.clone(), err],
             ));
+        }
+        // ts#64554
+        if let Err(err) = self.validate_prepared_auto_imports(
+            ctx,
+            &snapshot,
+            params.prepare_auto_imports.as_ref(),
+        ) {
+            project::Snapshot::deref(&snapshot);
+            return Err(err);
         }
         // ts#64299
         if let Some(err) = module_resolution_error(&snapshot) {
@@ -2488,6 +2509,12 @@ impl Session {
             let changes = params.changes.as_ref().unwrap_or(&default_changes);
             let mut api_request =
                 self.to_api_snapshot_request(ctx, &changes.snapshot_request_changes_params)?;
+            // ts#64554 (Go N' api/session.go:1475)
+            let user_preferences = changes.user_preferences.as_ref();
+            let prepare_auto_imports = changes
+                .prepare_auto_imports
+                .as_ref()
+                .map(|file| file.to_uri(&self.get_current_directory()));
             let open_state = self.reconcile_snapshot_opens(
                 &mut api_request,
                 SnapshotOpenState {
@@ -2522,11 +2549,13 @@ impl Session {
                     .as_ref()
                     .is_some_and(|file_system| file_system.kind == requestfilesystem::Kind::FULL);
             }
-            let (snapshot, err) = self.snapshot_host.clone_snapshot(
+            let (snapshot, err) = self.clone_api_snapshot(
                 ctx,
                 &base_sd.snapshot,
                 file_changes,
-                Some(&api_request),
+                &api_request,
+                user_preferences,
+                prepare_auto_imports.as_ref(),
             );
             if let Some(err) = err {
                 project::Snapshot::deref(&snapshot);
@@ -2534,6 +2563,15 @@ impl Session {
                     format!("{}: failed to update snapshot: {}", *ERR_CLIENT_ERROR, err),
                     vec![ERR_CLIENT_ERROR.clone(), err],
                 ));
+            }
+            // ts#64554
+            if let Err(err) = self.validate_prepared_auto_imports(
+                ctx,
+                &snapshot,
+                changes.prepare_auto_imports.as_ref(),
+            ) {
+                project::Snapshot::deref(&snapshot);
+                return Err(err);
             }
             // ts#64299
             if let Some(err) = module_resolution_error(&snapshot) {
@@ -2551,6 +2589,77 @@ impl Session {
         })();
         let _ = self.release_snapshot(params.snapshot);
         result
+    }
+
+    // Go: project/snapshothost.go:111 SnapshotHost.CloneSnapshot (N', with
+    // the ts#64554 lines :125-:129)
+    // PORT: Go sets `UserPreferences` and `PrepareAutoImports` on the
+    // `APISnapshotRequest`, and `CloneSnapshot` moves them into the change.
+    // The server lane owns `project/snapshothost.rs` and that request type
+    // (bump D step 2), so until it ports ts#64554 the session builds the
+    // change here. After that, this is `snapshot_host.clone_snapshot` with
+    // the two fields set on `api_request`.
+    fn clone_api_snapshot(
+        &self,
+        ctx: &Context,
+        base_snapshot: &Rc<project::Snapshot>,
+        file_changes: project::FileChangeSummary,
+        api_request: &project::APISnapshotRequest,
+        user_preferences: Option<&ls::lsutil::UserPreferences>,
+        prepare_auto_imports: Option<&lsproto::DocumentUri>,
+    ) -> (Rc<project::Snapshot>, Option<GoError>) {
+        let mut change = project::SnapshotChange {
+            api_request: Some(api_request.clone()),
+            file_changes,
+            fs: api_request.file_system.clone(),
+            file_system_override: api_request.file_system.is_some(),
+            replace_file_system: api_request.replace_file_system,
+            new_config: user_preferences.cloned(),
+            ..Default::default()
+        };
+        if let Some(uri) = prepare_auto_imports {
+            change.resource_request = base_snapshot.resource_request_for_document(uri);
+            change.resource_request.auto_imports = uri.clone();
+        }
+        let snapshot = self.snapshot_host.update(ctx, base_snapshot, change);
+        let api_error = snapshot.api_error.clone();
+        (snapshot, api_error)
+    }
+
+    // Go: api/session.go:1659 validatePreparedAutoImports (ts#64554)
+    pub fn validate_prepared_auto_imports(
+        &self,
+        ctx: &Context,
+        snapshot: &Rc<project::Snapshot>,
+        file: Option<&DocumentIdentifier>,
+    ) -> Result<(), GoError> {
+        let Some(file) = file else {
+            return Ok(());
+        };
+        if let Some(err) = ctx.err() {
+            return Err(err);
+        }
+        let uri = file.to_uri(&self.get_current_directory());
+        let prepared = snapshot.get_default_project(&uri).is_some_and(|proj| {
+            let registry = snapshot.auto_import_registry();
+            registry.is_some()
+                && autoimport::Registry::is_prepared_for_importing_file(
+                    registry.as_deref(),
+                    &uri.file_name(),
+                    &autoimport::ProjectID(proj.borrow().id().0.clone()),
+                    &snapshot.user_preferences(),
+                )
+        });
+        if !prepared {
+            return Err(errors::errorf(
+                format!(
+                    "{}: could not prepare auto-imports for {}",
+                    *ERR_CLIENT_ERROR, file
+                ),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ));
+        }
+        Ok(())
     }
 
     // Go: api/session.go toAPISnapshotRequest (ts#64204, ts#64319, ts#64324, ts#64391)
