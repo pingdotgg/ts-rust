@@ -3513,10 +3513,14 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
 }
 
 /// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id of this thread for a one-checker `--singleThreaded` pool.
+/// symbol id of this thread for a one-checker `--singleThreaded` pool
+/// (`singleThreaded` on the command line or in the project tsconfig).
 /// Watch mode makes the next program before it releases the last one, so
 /// the pool of the last program can still be here: its symbol ids become
-/// this thread's first (`CheckerPool::carry_symbol_ids`).
+/// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
+/// builders the last pool can still be checking: the copy then waits for
+/// its jobs, so such projects check one after the other (PORTING.md,
+/// Threads).
 fn symbol_id_carry_start(count: usize) -> Option<u64> {
     if count != 1 || !single_threaded() {
         return None;
