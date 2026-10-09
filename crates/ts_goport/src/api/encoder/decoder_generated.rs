@@ -247,7 +247,9 @@ impl AstDecoder<'_> {
             | SyntaxKind::GlobalKeyword
             | SyntaxKind::OverrideKeyword
             | SyntaxKind::OfKeyword
-            | SyntaxKind::DeferKeyword => Ok(self.factory.new_token(kind)),
+            | SyntaxKind::DeferKeyword
+            // ts#63915
+            | SyntaxKind::SourceKeyword => Ok(self.factory.new_token(kind)),
             SyntaxKind::QualifiedName => {
                 let mut it = new_child_iter(child_indices);
                 let left = self.node_at(it.next_if(mask, 0));
@@ -1608,6 +1610,8 @@ impl AstDecoder<'_> {
                 match common_data & 3 {
                     1 => phase_modifier = SyntaxKind::TypeKeyword,
                     2 => phase_modifier = SyntaxKind::DeferKeyword,
+                    // ts#63915
+                    3 => phase_modifier = SyntaxKind::SourceKeyword,
                     _ => {}
                 }
                 let mut it = new_child_iter(child_indices);

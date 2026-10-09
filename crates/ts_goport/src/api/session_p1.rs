@@ -4199,8 +4199,9 @@ impl Session {
             ));
         }
         let file = file_of(source_file);
-        let mode = program.get_mode_for_usage_location(&file, node);
-        let resolution = program.get_resolved_module(&file, node.text(), mode);
+        // ts#63915 (Go N' api/session.go:2628): the program's lookup, which
+        // gives nil for a source phase import.
+        let resolution = program.get_resolved_module_from_module_specifier(&file, node);
         Ok(new_resolved_module_response(resolution.as_deref()))
     }
 

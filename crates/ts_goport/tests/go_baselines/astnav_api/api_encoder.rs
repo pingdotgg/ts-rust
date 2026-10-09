@@ -765,6 +765,20 @@ fn test_decode_source_file_import_declaration() {
     assert_eq!(as_kind(spec.name(), SyntaxKind::Identifier).text(), "bar");
 }
 
+// Go: api/encoder/decoder_test.go:202 TestDecodeSourceFile_SourcePhaseImport (ts#63915; N' line)
+#[test]
+fn test_decode_source_file_source_phase_import() {
+    let sf = parse_source_file(r#"import source a from "./a.wasm";"#);
+    let (buf, _) = encode_source_file(sf).expect("assert.NilError");
+
+    let decoded = decode_source_file(&buf).expect("assert.NilError");
+
+    let imp = as_kind(decoded.statements().get(0), SyntaxKind::ImportDeclaration);
+    let clause = as_kind(imp.import_clause(), SyntaxKind::ImportClause);
+    assert_eq!(clause.phase_modifier(), SyntaxKind::SourceKeyword);
+    assert_eq!(clause.name().text(), "a");
+}
+
 // Go: api/encoder/decoder_test.go:184 TestDecodeSourceFile_IfStatement
 #[test]
 fn test_decode_source_file_if_statement() {

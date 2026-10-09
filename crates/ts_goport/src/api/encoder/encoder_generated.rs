@@ -1078,6 +1078,8 @@ pub fn node_common_data_of_kind(node: Node, kind: SyntaxKind) -> u32 {
             match node.phase_modifier() {
                 SyntaxKind::TypeKeyword => phase_modifier_idx = 1,
                 SyntaxKind::DeferKeyword => phase_modifier_idx = 2,
+                // ts#63915
+                SyntaxKind::SourceKeyword => phase_modifier_idx = 3,
                 _ => {}
             }
             return phase_modifier_idx << 24;
