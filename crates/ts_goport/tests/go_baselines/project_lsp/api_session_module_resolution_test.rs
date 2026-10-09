@@ -27,17 +27,20 @@ use super::projecttestutil::{self, files};
 use super::util::bg;
 
 // Go: session_module_resolution_test.go:15 failingModuleResolutionConn
+// (at 673a5f17d713: the ts#64519 api part is not ported)
 struct FailingModuleResolutionConn {
     calls: Cell<usize>,
 }
 
 impl ipc::Conn for FailingModuleResolutionConn {
     // Go: session_module_resolution_test.go:19 failingModuleResolutionConn.Run
+    // (at 673a5f17d713: the ts#64519 api part is not ported)
     fn run(&self, _ctx: &Context) -> Result<(), GoError> {
         Ok(())
     }
 
     // Go: session_module_resolution_test.go:23 failingModuleResolutionConn.Call
+    // (at 673a5f17d713: the ts#64519 api part is not ported)
     fn call(
         &self,
         _ctx: &Context,
@@ -49,6 +52,7 @@ impl ipc::Conn for FailingModuleResolutionConn {
     }
 
     // Go: session_module_resolution_test.go:28 failingModuleResolutionConn.Notify
+    // (at 673a5f17d713: the ts#64519 api part is not ported)
     fn notify(
         &self,
         _ctx: &Context,
@@ -86,7 +90,7 @@ fn no_lib_node_next() -> CompilerOptions {
     }
 }
 
-// Go: session_module_resolution_test.go:32 TestModuleResolverUsesSnapshotFileSystem
+// Go: session_module_resolution_test.go:35 TestModuleResolverUsesSnapshotFileSystem
 child_test! {
     fn module_resolver_uses_snapshot_file_system() {
         let (project_session, _) = projecttestutil::setup(files(&[
@@ -138,7 +142,7 @@ child_test! {
     }
 }
 
-// Go: session_module_resolution_test.go:66 TestStaticModuleResolutionSpecificityAndLifetime
+// Go: session_module_resolution_test.go:69 TestStaticModuleResolutionSpecificityAndLifetime
 child_test! {
     fn static_module_resolution_specificity_and_lifetime() {
         let (project_session, _) = projecttestutil::setup(files(&[
@@ -227,7 +231,7 @@ child_test! {
     }
 }
 
-// Go: session_module_resolution_test.go:129 TestCreateProgramUsesStaticModuleResolutions
+// Go: session_module_resolution_test.go:132 TestCreateProgramUsesStaticModuleResolutions
 child_test! {
     fn create_program_uses_static_module_resolutions() {
         const ROOT: &str = "/home/projects/p/src/index.ts";
@@ -377,7 +381,7 @@ child_test! {
                 files: Some(vec![doc(ROOT)]),
             },
         ));
-        for diagnostic in &diagnostics {
+        if let Some(diagnostic) = diagnostics.first() {
             panic!(
                 "handleGetSemanticDiagnostics({ROOT}) reported TS{} at {}: {}",
                 diagnostic.code, diagnostic.pos, diagnostic.text
@@ -388,7 +392,7 @@ child_test! {
     }
 }
 
-// Go: session_module_resolution_test.go:181 TestStaticModuleResolutionPreservesStaticIdentity
+// Go: session_module_resolution_test.go:243 TestStaticModuleResolutionPreservesStaticIdentity
 child_test! {
     fn static_module_resolution_preserves_static_identity() {
         let (project_session, _) = projecttestutil::setup(files(&[]));
@@ -441,6 +445,7 @@ child_test! {
 }
 
 // Go: session_module_resolution_test.go:225 TestModuleResolutionCallbackErrorsAreReturned
+// (at 673a5f17d713: the ts#64519 api part is not ported)
 // PORT: the Go test builds the unexported `moduleResolverFactory` with its
 // fields. The port's factory fields are private; the test registers the
 // same registration (id 1) and connection on the session and takes the
@@ -497,6 +502,7 @@ child_test! {
 }
 
 // Go: session_module_resolution_test.go:258 TestModuleResolutionCallbackErrorRejectsLanguageServerUpdate
+// (at 673a5f17d713: the ts#64519 api part is not ported)
 child_test! {
     fn module_resolution_callback_error_rejects_language_server_update() {
         let (project_session, _) = projecttestutil::setup(files(&[("/src/index.ts", r#"import "pkg";"#)]));
@@ -547,7 +553,7 @@ child_test! {
     }
 }
 
-// Go: session_module_resolution_test.go:297 staticResolutionEntry
+// Go: session_module_resolution_test.go:388 staticResolutionEntry
 fn static_resolution_entry(
     module_name: &str,
     directory: &str,
