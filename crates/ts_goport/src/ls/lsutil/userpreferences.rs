@@ -2027,3 +2027,143 @@ fn strings_to_lower(s: &str) -> String {
         .map(|c| c.to_lowercase().next().unwrap_or(c))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ls::lsutil::IndentStyle;
+
+    fn config(entries: Vec<(&str, LspAny)>) -> IndexMap<String, LspAny> {
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+
+    fn object(entries: Vec<(&str, LspAny)>) -> LspAny {
+        LspAny::Object(config(entries))
+    }
+
+    fn string(s: &str) -> LspAny {
+        LspAny::String(s.to_string())
+    }
+
+    // Go: ls/lsutil/userpreferences_test.go:13 TestUserPreferencesParsingEdgeCases (ts#64554)
+    // PORT: "empty array is not nil" has no Rust subject (a Vec has no nil);
+    // the case is kept and checks the empty Vec.
+    #[test]
+    fn test_user_preferences_parsing_edge_cases() {
+        type Expected = fn(&mut UserPreferences);
+        let tests: Vec<(&str, IndexMap<String, LspAny>, Expected)> = vec![
+            (
+                "null raw values leave preferences unchanged",
+                config(vec![
+                    ("quotePreference", LspAny::Null),
+                    ("maximumHoverLength", LspAny::Null),
+                    ("includeCompletionsForModuleExports", LspAny::Null),
+                ]),
+                |_| {},
+            ),
+            (
+                "invalid boolean becomes unknown",
+                config(vec![(
+                    "includeCompletionsForModuleExports",
+                    string("invalid"),
+                )]),
+                |p| p.include_completions_for_module_exports = Tristate::Unknown,
+            ),
+            (
+                "case-insensitive enums",
+                config(vec![
+                    ("quotePreference", string("SINGLE")),
+                    ("jsxAttributeCompletionStyle", string("BRACES")),
+                    ("organizeImportsCaseFirst", string("LOWER")),
+                    ("includeInlayParameterNameHints", string("ALL")),
+                    ("organizeImportsTypeOrder", string("FIRST")),
+                    ("workspaceSymbolsScope", string("CURRENTPROJECT")),
+                ]),
+                |p| {
+                    p.quote_preference = QuotePreference::SINGLE;
+                    p.jsx_attribute_completion_style = JsxAttributeCompletionStyle::BRACES;
+                    p.organize_imports_case_first = OrganizeImportsCaseFirst::LOWER;
+                    p.inlay_hints.include_inlay_parameter_name_hints =
+                        IncludeInlayParameterNameHints::ALL;
+                    p.organize_imports_type_order = OrganizeImportsTypeOrder::FIRST;
+                    p.workspace_symbols_scope = WorkspaceSymbolsScope::CURRENT_PROJECT;
+                },
+            ),
+            (
+                "present null primary path prevents fallback",
+                config(vec![(
+                    "suggest",
+                    object(vec![
+                        ("jsdoc", object(vec![("enabled", LspAny::Null)])),
+                        ("completeJSDocs", LspAny::Bool(false)),
+                    ]),
+                )]),
+                |_| {},
+            ),
+            (
+                "null case sensitivity becomes unknown",
+                config(vec![(
+                    "preferences",
+                    object(vec![(
+                        "organizeImports",
+                        object(vec![("caseSensitivity", LspAny::Null)]),
+                    )]),
+                )]),
+                |p| p.organize_imports_ignore_case = Tristate::Unknown,
+            ),
+            (
+                "numeric conversion and array filtering",
+                config(vec![
+                    ("maximumHoverLength", LspAny::Number(9.8)),
+                    ("indentStyle", LspAny::Number(1.7)),
+                    (
+                        "autoImportFileExcludePatterns",
+                        LspAny::Array(vec![
+                            string("first"),
+                            LspAny::Bool(false),
+                            LspAny::Number(3.0),
+                            string("second"),
+                        ]),
+                    ),
+                ]),
+                |p| {
+                    p.maximum_hover_length = 9;
+                    p.format_code_settings.editor_settings.indent_style = IndentStyle::BLOCK;
+                    p.auto_import_file_exclude_patterns =
+                        vec!["first".to_string(), "second".to_string()];
+                },
+            ),
+            (
+                "empty array is not nil",
+                config(vec![(
+                    "autoImportFileExcludePatterns",
+                    LspAny::Array(vec![]),
+                )]),
+                |p| p.auto_import_file_exclude_patterns = Vec::new(),
+            ),
+            (
+                "invalid module specifier preference uses its default",
+                config(vec![(
+                    "importModuleSpecifierPreference",
+                    LspAny::Bool(true),
+                )]),
+                |p| {
+                    p.import_module_specifier_preference =
+                        ImportModuleSpecifierPreference::Shortest;
+                },
+            ),
+        ];
+        for (name, config, expected) in tests {
+            let mut base = new_default_user_preferences();
+            base.quote_preference = QuotePreference::DOUBLE;
+            base.maximum_hover_length = 17;
+            base.organize_imports_ignore_case = Tristate::True;
+            let mut want = base.clone();
+            expected(&mut want);
+            assert_eq!(base.with_config(&config), want, "{name}");
+        }
+    }
+}
