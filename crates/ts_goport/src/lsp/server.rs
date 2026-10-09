@@ -3704,23 +3704,31 @@ impl Server {
             },
             None => None,
         };
+        // ts#64159: the workspace folder and root URI give rooted file
+        // names, and a root path counts only when it is absolute; each is
+        // normalized (server.go:1752-1762).
         if client_capabilities.workspace.workspace_folders && single_workspace_folder.is_some() {
             let folder = single_workspace_folder
                 .expect("checked above")
                 .as_ref()
                 .unwrap_or_else(|| crate::core::go_nil_dereference());
-            cwd = lsproto::DocumentUri(folder.uri.0.clone()).file_name();
+            let file_name = lsproto::DocumentUri(folder.uri.0.clone()).file_name();
+            if !file_name.is_empty() {
+                cwd = file_name;
+            }
         } else if let Some(root_uri) = &initialize_params.root_uri.document_uri {
-            cwd = root_uri.file_name();
+            let file_name = root_uri.file_name();
+            if !file_name.is_empty() {
+                cwd = file_name;
+            }
         } else if let Some(root_path) = initialize_params
             .root_path
             .as_ref()
             .and_then(|root_path| root_path.string.as_ref())
         {
-            cwd = root_path.clone();
-        }
-        if !tspath::path_is_absolute(&cwd) {
-            cwd = self.shared.cwd.clone();
+            if tspath::path_is_absolute(root_path) {
+                cwd = lsproto::rooted_path_from_absolute(root_path);
+            }
         }
 
         self.telemetry_enabled.set(enable_telemetry);
@@ -4434,14 +4442,18 @@ impl Server {
             return Err(errors::new("completion item data is nil"));
         };
         // ts#64544: the file name must be absolute, and a dynamic one must
-        // decode to a URI (server.go:2163).
-        if !tspath::path_is_absolute(&data.file_name) {
+        // decode to a URI (server.go:2161). ts#64159: it is rooted and
+        // normalized first (TryRootedFilePathFromAbsolute).
+        // PORT: Go also passes the normalized name to ResolveCompletionItem
+        // (ls lane), which finds the file by it; the port's
+        // `resolve_completion_item` reads `data.file_name`.
+        let Some(file_name) = lsproto::try_rooted_path_from_absolute(&data.file_name) else {
             return Err(errors::new(
                 "completion item data fileName must be absolute",
             ));
-        }
-        let uri = if tspath::is_dynamic_file_name(&data.file_name) {
-            match lsproto::try_dynamic_file_name_to_document_uri(&data.file_name) {
+        };
+        let uri = if tspath::is_dynamic_file_name(&file_name) {
+            match lsproto::try_dynamic_file_name_to_document_uri(&file_name) {
                 Some(uri) => uri,
                 None => {
                     return Err(errors::new(
@@ -4450,7 +4462,7 @@ impl Server {
                 }
             }
         } else {
-            lsconv::file_name_to_document_uri(&data.file_name)
+            lsconv::file_name_to_document_uri(&file_name)
         };
         let language_service = self.session_ref().get_language_service(ctx, &uri)?;
         self.recover_guard(
@@ -5566,7 +5578,9 @@ pub fn parse_content_mapper_contributions(
                     gostd::strconv::quote(&identity)
                 )));
             }
-            mapper.package_directory = cwd.clone();
+            // ts#64159: the directory is rooted and normalized
+            // (RootedDirectoryPathFromAbsolute, server.go:2591).
+            mapper.package_directory = lsproto::rooted_path_from_absolute(cwd);
         }
         result.mappers.push(Rc::new(mapper));
     }

@@ -86,3 +86,25 @@ fn test_unmarshal_completion_item() {
         }
     );
 }
+
+// Go: lsp_test.go:87 TestTryDynamicFileNameToDocumentUri (ts#64159)
+#[test]
+fn test_try_dynamic_file_name_to_document_uri() {
+    let uri = DocumentUri("untitled://wsl+ubuntu/home/user/file.ts?version=1".to_string());
+    let path = uri.file_name();
+    let round_trip = try_dynamic_file_name_to_document_uri(&path);
+    assert_eq!(round_trip, Some(uri));
+
+    for malformed in [
+        "^/invalid",
+        "^/~ts-uri~//authority/path",
+        "^/~ts-uri~/scheme/~ts-uri-escape~zz~/path",
+        "^/~ts-uri~/scheme/authority/~ts-uri-escape~zz~",
+        "^/~ts-uri~/scheme/authority/~ts-uri-no-path~zz~",
+    ] {
+        assert!(
+            try_dynamic_file_name_to_document_uri(malformed).is_none(),
+            "expected {malformed:?} to be rejected"
+        );
+    }
+}

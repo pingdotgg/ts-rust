@@ -225,8 +225,9 @@ impl autoimport::RegistryCloneHost for AutoImportRegistryCloneHost {
         let Some(fh) = self.fs.get_file(file_name) else {
             return Node::NIL;
         };
+        // ts#64159: the file takes the handle's name (autoimport.go:149).
         let opts = parser::SourceFileParseOptions {
-            file_name: file_name.to_string(),
+            file_name: fh.file_name(),
             path: path.clone(),
             ..Default::default()
         };

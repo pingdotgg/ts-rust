@@ -649,9 +649,12 @@ impl Session {
                     has_relevant_change = true;
                     continue;
                 }
-                let path_str = path.as_str();
-                let i = path_str.rfind('.');
-                if i.is_none_or(|i| path_str.rfind('/').is_some_and(|slash| slash > i)) {
+                // ts#64159: only a known extension counts (Go
+                // `PathKey.Extension`, tspath.TryGetExtensionFromPath), so a
+                // declaration file gives ".d.ts", which is not a relevant
+                // extension, and other extensions count as no extension.
+                let extension = tspath::try_get_extension_from_path(path.as_str());
+                if extension.is_empty() {
                     // Extensionless paths might be directories.
                     // For creations/changes, we can check the file system.
                     // For deletions, consult the current snapshot cache to avoid treating extensionless file deletions as relevant.
@@ -666,12 +669,10 @@ impl Session {
                             has_relevant_change = true;
                         }
                     }
-                } else if let Some(i) = i {
-                    if is_relevant_extension(&path_str[i..])
-                        || tspath::file_extension_is_one_of(path_str, &content_mapper_extensions)
-                    {
-                        has_relevant_change = true;
-                    }
+                } else if is_relevant_extension(extension)
+                    || tspath::file_extension_is_one_of(path.as_str(), &content_mapper_extensions)
+                {
+                    has_relevant_change = true;
                 }
             }
         }
@@ -3319,10 +3320,10 @@ impl Session {
             for old_project in old_snapshot.project_collection.projects_by_id().values() {
                 let (configured_id, configured) = old_project.borrow().id().configured();
                 if configured && old_open_projects.contains(&configured_id) {
-                    let config_file_path = old_project.borrow().config_file_path();
+                    let config_file_name = old_project.borrow().config_file_name();
                     self.publish_project_diagnostics(
                         &self.background_context(),
-                        &config_file_path,
+                        &config_file_name,
                         &[],
                         &old_snapshot.converters,
                     );
@@ -3351,11 +3352,11 @@ impl Session {
                 {
                     return;
                 }
-                let config_file_path = added_project.borrow().config_file_path();
+                let config_file_name = added_project.borrow().config_file_name();
                 let diagnostics = added_project.borrow().get_project_diagnostics(&ctx);
                 self.publish_project_diagnostics(
                     &ctx,
-                    &config_file_path,
+                    &config_file_name,
                     &diagnostics,
                     &new_snapshot.converters,
                 );
@@ -3364,10 +3365,10 @@ impl Session {
                 if removed_project.borrow().kind != Kind::CONFIGURED {
                     return;
                 }
-                let config_file_path = removed_project.borrow().config_file_path();
+                let config_file_name = removed_project.borrow().config_file_name();
                 self.publish_project_diagnostics(
                     &ctx,
-                    &config_file_path,
+                    &config_file_name,
                     &[],
                     &old_snapshot.converters,
                 );
@@ -3380,11 +3381,11 @@ impl Session {
                 {
                     return;
                 }
-                let config_file_path = new_project.borrow().config_file_path();
+                let config_file_name = new_project.borrow().config_file_name();
                 let diagnostics = new_project.borrow().get_project_diagnostics(&ctx);
                 self.publish_project_diagnostics(
                     &ctx,
-                    &config_file_path,
+                    &config_file_name,
                     &diagnostics,
                     &new_snapshot.converters,
                 );
@@ -3399,7 +3400,7 @@ impl Session {
                 continue; // Handled by added project case above
             }
             let (configured_id, _) = new_project.borrow().id().configured();
-            let config_file_path = new_project.borrow().config_file_path();
+            let config_file_name = new_project.borrow().config_file_name();
             let old_project = old_projects.get(project_id);
             let new_has_open_files = new_open_projects.contains(&configured_id);
             let old_has_open_files = old_open_projects.contains(&configured_id);
@@ -3415,7 +3416,7 @@ impl Session {
                 let diagnostics = new_project.borrow().get_project_diagnostics(&ctx);
                 self.publish_project_diagnostics(
                     &ctx,
-                    &config_file_path,
+                    &config_file_name,
                     &diagnostics,
                     &new_snapshot.converters,
                 );
@@ -3423,7 +3424,7 @@ impl Session {
                 // Project closed
                 self.publish_project_diagnostics(
                     &ctx,
-                    &config_file_path,
+                    &config_file_name,
                     &[],
                     &new_snapshot.converters,
                 );
@@ -3443,10 +3444,12 @@ pub fn should_publish_program_diagnostics(p: &Project, snapshot_id: u64) -> bool
 impl Session {
     // Go: project/session.go:1944 publishProjectDiagnostics
     // PORT: Go `[]*ast.Diagnostic` is `&[Diagnostic]` (nil is empty).
+    // ts#64159: the URI comes from the config file name, not its path key
+    // (which is lower case on a case-insensitive file system).
     pub fn publish_project_diagnostics(
         &self,
         ctx: &Context,
-        config_file_path: &str,
+        config_file_name: &str,
         diagnostics: &[Diagnostic],
         converters: &lsconv::Converters,
     ) {
@@ -3468,7 +3471,7 @@ impl Session {
             .publish_diagnostics(
                 ctx,
                 lsproto::PublishDiagnosticsParams {
-                    uri: lsconv::file_name_to_document_uri(config_file_path),
+                    uri: lsconv::file_name_to_document_uri(config_file_name),
                     diagnostics: lsp_diagnostics,
                     ..Default::default()
                 },
@@ -3519,7 +3522,7 @@ impl Session {
                 let diagnostics = project.get_project_diagnostics(ctx);
                 self.publish_project_diagnostics(
                     ctx,
-                    &project.config_file_path,
+                    &project.config_file_name(),
                     &diagnostics,
                     &snapshot.converters,
                 );

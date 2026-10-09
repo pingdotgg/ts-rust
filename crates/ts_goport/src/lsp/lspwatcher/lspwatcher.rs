@@ -453,7 +453,9 @@ impl Watcher {
                     }
                 };
 
-                let path = tspath::normalize_slashes(&event.path);
+                // ts#64159: the event path is rooted and normalized
+                // (lspwatcher.go:48 `RootedPathFromAbsolute`).
+                let path = lsproto::rooted_path_from_absolute(&event.path);
                 let uri = lsconv::file_name_to_document_uri(&path);
                 pending.insert(
                     uri.0.clone(),
@@ -775,22 +777,46 @@ pub fn nearest_existing_ancestor(fs: &dyn vfs::Fs, dir: &str) -> (String, bool) 
 // whether the subscription should be recursive.
 //
 // Returned roots are tspath-normalized (forward-slash) absolute paths.
+// ts#64159: a pattern's root must be absolute. A relative pattern's root
+// is resolved against its base (so "../shared/*" in "/workspace/app" is
+// "/workspace/shared"), not joined to it first.
 pub fn watch_root(file_system_watcher: &lsproto::FileSystemWatcher) -> (String, bool) {
     if let Some(pattern) = &file_system_watcher.glob_pattern.pattern {
-        return (root_from_glob(pattern), true);
+        return to_watch_root(&root_from_glob(pattern));
     }
     if let Some(relative_pattern) = &file_system_watcher.glob_pattern.relative_pattern {
-        let base = match &relative_pattern.base_uri.uri {
-            Some(uri) => lsproto::DocumentUri(uri.0.clone()).file_name(),
-            None => return (String::new(), false),
-        };
-        let pattern = tspath::combine_paths(&base, &[&relative_pattern.pattern]);
-        return (root_from_glob(&pattern), true);
+        if let Some(uri) = &relative_pattern.base_uri.uri {
+            let base = lsproto::DocumentUri(uri.0.clone()).file_name();
+            if !base.is_empty() {
+                let root = root_from_glob(&relative_pattern.pattern);
+                // Go: RootedDirectoryPath.ResolveDirectory(root)
+                if root.is_empty() {
+                    return (base, true);
+                }
+                return (
+                    lsproto::rooted_path_from_absolute(&tspath::get_normalized_absolute_path(
+                        &root, &base,
+                    )),
+                    true,
+                );
+            }
+        }
+        return (String::new(), false);
     }
     (String::new(), false)
 }
 
-// Go: lsp/lspwatcher/lspwatcher.go:548 rootFromGlob
+// Go: lsp/lspwatcher/lspwatcher.go:566 toWatchRoot (ts#64159)
+// PORT: Go also checks that the root is normalized
+// (`RootedDirectoryPathFromNormalized`); `root_from_glob` normalizes it.
+fn to_watch_root(root: &str) -> (String, bool) {
+    if root.is_empty() || !tspath::path_is_absolute(root) {
+        return (String::new(), false);
+    }
+    (root.to_string(), true)
+}
+
+// Go: lsp/lspwatcher/lspwatcher.go:573 rootFromGlob
 pub fn root_from_glob(pattern: &str) -> String {
     let pattern = tspath::normalize_slashes(pattern);
     let mut meta_index: i32 = -1;

@@ -323,12 +323,15 @@ impl ProjectCollectionBuilder {
             // PORT: Go map order is random; FxHashSet order here.
             for config_file_name in open_projects {
                 let config_path = (self.to_path)(config_file_name);
-                if let Some(entry) = self.find_or_create_project(
-                    config_file_name,
-                    &config_path,
-                    ProjectLoadKind::CREATE,
-                    logger.clone(),
-                ) {
+                if self
+                    .find_or_create_project(
+                        config_file_name,
+                        &config_path,
+                        ProjectLoadKind::CREATE,
+                        logger.clone(),
+                    )
+                    .is_some()
+                {
                     *self
                         .api_state
                         .borrow_mut()
@@ -337,8 +340,10 @@ impl ProjectCollectionBuilder {
                         .or_insert(0) += 1;
                     // A project re-opened in the same request shouldn't be closed.
                     projects_to_close.remove(&config_path);
-                    // ts#64204
-                    self.update_program(&*entry, logger.clone());
+                    // ts#64159 drops `b.updateProgram(entry, logger)` here
+                    // (ts#64204; projectcollectionbuilder.go:212 at
+                    // 673a5f17d713): the API asks for the program with
+                    // EnsurePrograms (api/session.go:1526).
                 } else {
                     return Err(gostd::errors::errorf(
                         format!("project not found for open: {}", config_file_name),

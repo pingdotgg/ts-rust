@@ -155,7 +155,41 @@ pub struct TypingsInstaller {
     pub semaphore_waiters: SemaphoreWaiters,
 }
 
-// Go: project/ata/ata.go:67 NewTypingsInstaller
+// Go: project/ata/ata.go:63 resolutionHost (ts#64159)
+// The module resolution host of ATA: the installer's file system, with the
+// typings location as the current directory. N resolved with the session as
+// the host, whose current directory is the workspace's.
+// PORT: Go `TypingsInstaller` keeps `fs` and `npmExecutor` instead of the
+// host (ts#64159 drops `TypingsInstallerHost`); the port keeps the host for
+// both and gives the resolver this host.
+struct ResolutionHost {
+    host: Rc<dyn TypingsInstallerHost>,
+    current_directory: String,
+}
+
+impl module::ResolutionHost for ResolutionHost {
+    // Go: project/ata/ata.go:68 resolutionHost.FS
+    fn fs(&self) -> &dyn vfs::Fs {
+        self.host.fs()
+    }
+
+    // Go: project/ata/ata.go:72 resolutionHost.GetCurrentDirectory
+    fn get_current_directory(&self) -> &str {
+        &self.current_directory
+    }
+}
+
+impl TypingsInstaller {
+    /// Go `&resolutionHost{fs: ti.fs, currentDirectory: ti.typingsLocation}`.
+    fn resolution_host(&self) -> Rc<dyn module::ResolutionHost> {
+        Rc::new(ResolutionHost {
+            host: self.host.clone(),
+            current_directory: self.typings_location.clone(),
+        })
+    }
+}
+
+// Go: project/ata/ata.go:76 NewTypingsInstaller
 pub fn new_typings_installer(
     options: &TypingsInstallerOptions,
     host: Rc<dyn TypingsInstallerHost>,
@@ -359,7 +393,8 @@ impl TypingsInstaller {
             // PORT: Go `%v` of a slice; log text is not compared.
             logger.log(&format!("ATA:: Installed typings {package_names:?}"));
             let mut installed_typing_files: Vec<String> = Vec::new();
-            let host: Rc<dyn module::ResolutionHost> = self.host.clone();
+            // ts#64159
+            let host = self.resolution_host();
             // ts#64299
             let resolver = module::new_resolver(module::ResolverOptions {
                 host: Some(host),
@@ -1090,7 +1125,8 @@ impl TypingsInstaller {
             ));
 
             // !!! sheetal strada uses Node10
-            let host: Rc<dyn module::ResolutionHost> = self.host.clone();
+            // ts#64159
+            let host = self.resolution_host();
             // ts#64299
             let resolver = module::new_resolver(module::ResolverOptions {
                 host: Some(host),

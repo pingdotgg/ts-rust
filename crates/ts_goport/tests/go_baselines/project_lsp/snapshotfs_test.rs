@@ -258,7 +258,7 @@ fn file_content(file: Option<Rc<dyn ts_goport::project::FileHandle>>) -> String 
 fn alias_has(aliases: &Aliases, realpath: &str, symlink: &str) -> bool {
     aliases
         .get(&p(realpath))
-        .is_some_and(|set| set.borrow().paths.contains(&p(symlink)))
+        .is_some_and(|set| set.borrow().paths.contains_key(&p(symlink)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,7 +1431,7 @@ fn adding_symlink_to_inherited_realpath_key_does_not_mutate_previous_snapshot() 
         aliases1
             .borrow()
             .paths
-            .contains(&p("/project/node_modules/mylib/package.json"))
+            .contains_key(&p("/project/node_modules/mylib/package.json"))
     );
 
     // Snapshot 2: read via the SECOND symlink, which maps to the same realpath.
@@ -1449,13 +1449,13 @@ fn adding_symlink_to_inherited_realpath_key_does_not_mutate_previous_snapshot() 
         aliases2
             .borrow()
             .paths
-            .contains(&p("/project/node_modules/mylib/package.json"))
+            .contains_key(&p("/project/node_modules/mylib/package.json"))
     );
     assert!(
         aliases2
             .borrow()
             .paths
-            .contains(&p("/project/node_modules/alias/package.json"))
+            .contains_key(&p("/project/node_modules/alias/package.json"))
     );
 
     // Snapshot 1 must NOT have been mutated — it should still have only one alias.
@@ -1468,7 +1468,7 @@ fn adding_symlink_to_inherited_realpath_key_does_not_mutate_previous_snapshot() 
         !aliases1
             .borrow()
             .paths
-            .contains(&p("/project/node_modules/alias/package.json")),
+            .contains_key(&p("/project/node_modules/alias/package.json")),
         "snapshot1 must not contain alias added in snapshot2"
     );
 }

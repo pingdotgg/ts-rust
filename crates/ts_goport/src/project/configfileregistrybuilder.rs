@@ -721,10 +721,11 @@ impl ConfigFileRegistryBuilder {
                 summary.changed.len() + summary.created.len() + summary.deleted.len(),
             );
         for uri in summary.changed.iter() {
-            if tspath::contains_ignored_path(&uri.0) {
+            // ts#64159: the file name is checked, not the URI text.
+            let file_name = uri.file_name();
+            if tspath::contains_ignored_path(&file_name) {
                 continue;
             }
-            let file_name = uri.file_name();
             let path = (self.fs.to_path)(&file_name);
             let base_name = tspath::get_base_file_name(&path);
             if self.is_config_base_name(&base_name) {
@@ -733,10 +734,11 @@ impl ConfigFileRegistryBuilder {
             created_or_changed_or_deleted_files.insert(path);
         }
         for uri in summary.deleted.iter() {
-            if tspath::contains_ignored_path(&uri.0) {
+            // ts#64159: the file name is checked, not the URI text.
+            let file_name = uri.file_name();
+            if tspath::contains_ignored_path(&file_name) {
                 continue;
             }
-            let file_name = uri.file_name();
             let path = (self.fs.to_path)(&file_name);
             deleted_files.insert(path.clone(), file_name);
             let base_name = tspath::get_base_file_name(&path);
@@ -746,10 +748,11 @@ impl ConfigFileRegistryBuilder {
             created_or_changed_or_deleted_files.insert(path);
         }
         for uri in summary.created.iter() {
-            if tspath::contains_ignored_path(&uri.0) {
+            // ts#64159: the file name is checked, not the URI text.
+            let file_name = uri.file_name();
+            if tspath::contains_ignored_path(&file_name) {
                 continue;
             }
-            let file_name = uri.file_name();
             let path = (self.fs.to_path)(&file_name);
             created_files.insert(path.clone(), file_name);
             let base_name = tspath::get_base_file_name(&path);

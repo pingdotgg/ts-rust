@@ -20,11 +20,18 @@ use std::marker::PhantomData;
 pub struct DocumentUri(pub String); // !!!
 
 impl DocumentUri {
-    // Go: lsp.go:19 FileName
+    // Go: lsp.go:19 Path (ts#64159: N's FileName; FileName at :77 is the
+    // same text with file intent)
+    // ts#64159: a bundled or file URI gives a rooted, normalized path
+    // (`RootedPathFromAbsolute`; a relative path panics), so "/a/../b.ts"
+    // is "/b.ts" and a trailing separator goes.
+    // PORT: Go also validates the dynamic name with
+    // `RootedPathFromNormalized`; the encoding above never gives one that
+    // fails it.
     pub fn file_name(&self) -> String {
         let uri = self.0.as_str();
         if is_bundled(uri) {
-            return uri.to_string();
+            return rooted_path_from_absolute(uri);
         }
         if uri.starts_with("file://") {
             let parsed = match gostd::url::parse(uri) {
@@ -32,9 +39,9 @@ impl DocumentUri {
                 Err(_) => crate::core::go_panic(format!("invalid file URI: {uri}")),
             };
             if !parsed.host.is_empty() {
-                return format!("//{}{}", parsed.host, parsed.path);
+                return rooted_path_from_absolute(&format!("//{}{}", parsed.host, parsed.path));
             }
-            return fix_windows_uri_path(&parsed.path);
+            return rooted_path_from_absolute(&fix_windows_uri_path(&parsed.path));
         }
 
         // Leave all other URIs escaped so we can round-trip them.
@@ -153,6 +160,44 @@ fn dynamic_file_name_to_document_uri_worker(file_name: &str, strict: bool) -> Op
         return Some(DocumentUri(format!("{scheme}:{uri_path}")));
     }
     Some(DocumentUri(format!("{scheme}://{authority}/{uri_path}")))
+}
+
+// Go: tspath/rooted_path.go:48 RootedPathFromAbsolute (ts#64159)
+// The rooted, normalized form of an absolute path; a relative path, or a
+// URL path with a query or fragment, is a Go panic.
+// PORT: the port keeps string paths (bump D plan section 3, behavior only),
+// and the Rust tspath (program lane) has no typed path helpers, so the
+// server files share this copy.
+pub fn rooted_path_from_absolute(path: &str) -> String {
+    match try_rooted_path_from_absolute(path) {
+        Some(path) => path,
+        None => crate::core::go_panic("path must be absolute".to_string()),
+    }
+}
+
+// Go: tspath/rooted_path.go:58 TryRootedPathFromAbsolute (ts#64159)
+pub fn try_rooted_path_from_absolute(path: &str) -> Option<String> {
+    if has_rooted_url_suffix(path) || !tspath::path_is_absolute(path) {
+        return None;
+    }
+    let mut normalized = tspath::get_normalized_absolute_path(path, "");
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if tspath::get_root_length(&normalized) == normalized.len()
+        && !tspath::has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    Some(normalized)
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    // Go: tspath/rooted_path.go:114 hasURLRoot
+    if !(tspath::get_encoded_root_length(path) < 0 && path.contains("://")) {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, rest)| rest);
+    after_scheme.contains(['?', '#'])
 }
 
 // Go: lsp.go:144 fixWindowsURIPath

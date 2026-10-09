@@ -721,7 +721,7 @@ child_test! {
 }
 
 // ---------------------------------------------------------------------------
-// Go `internal/lsp/server_completion_internal_test.go` (ts#64544)
+// Go `internal/lsp/server_completion_internal_test.go` (ts#64544, ts#64159)
 // PORT: Go tests package `lsp` from inside with `&Server{}`. The port makes
 // a server that never runs (`lsp::new_server`) and calls the handler, which
 // is `pub`. The tests are here so that no new test module is needed.
@@ -789,20 +789,23 @@ mod completion_internal {
 }
 
 child_test! {
-    // Go: server_completion_internal_test.go:11 TestCompletionItemResolveRejectsInvalidFileName (ts#64544)
-    fn completion_item_resolve_rejects_invalid_file_name() {
-        for (file_name, message) in [
-            ("relative.ts", "completion item data fileName must be absolute"),
-            (
-                "^/invalid",
+    // Go: server_completion_internal_test.go:11 TestCompletionItemResolveRejectsRelativeFileName (ts#64159)
+    fn completion_item_resolve_rejects_relative_file_name() {
+        completion_internal::assert_resolve_error(
+            "relative.ts",
+            "completion item data fileName must be absolute",
+        );
+    }
+}
+
+child_test! {
+    // Go: server_completion_internal_test.go:21 TestCompletionItemResolveRejectsMalformedDynamicFileName (ts#64159)
+    fn completion_item_resolve_rejects_malformed_dynamic_file_name() {
+        for file_name in ["^/invalid", "^/~ts-uri~/scheme/authority/~ts-uri-escape~zz~"] {
+            completion_internal::assert_resolve_error(
+                file_name,
                 "completion item data fileName must be a valid dynamic path",
-            ),
-            (
-                "^/~ts-uri~/scheme/authority/~ts-uri-escape~zz~",
-                "completion item data fileName must be a valid dynamic path",
-            ),
-        ] {
-            completion_internal::assert_resolve_error(file_name, message);
+            );
         }
     }
 }

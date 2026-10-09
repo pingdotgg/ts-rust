@@ -1002,7 +1002,20 @@ fn test_unmarshal_field_ordering_inlay_hint_with_kind_before_label() {
     assert_eq!(hint.kind.unwrap(), InlayHintKind::TYPE);
 }
 
-// Go: lsp_json_test.go:838 TestUnmarshalEmptyObject, "WorkDoneProgressOptions empty"
+// Go: lsp_json_test.go:838 TestUnmarshalCompletionItemDataFileName (ts#64159)
+#[test]
+fn test_unmarshal_completion_item_data_file_name() {
+    let mut data = CompletionItemData::default();
+    let err = json_unmarshal(
+        br#"{"fileName":"/src/index.ts","position":1,"name":"value"}"#,
+        &mut data,
+        &[],
+    );
+    assert_nil_error("CompletionItemData", &err);
+    assert_eq!(data.file_name, "/src/index.ts");
+}
+
+// Go: lsp_json_test.go:847 TestUnmarshalEmptyObject, "WorkDoneProgressOptions empty"
 #[test]
 fn test_unmarshal_empty_object_work_done_progress_options_empty() {
     let mut v = WorkDoneProgressOptions::default();

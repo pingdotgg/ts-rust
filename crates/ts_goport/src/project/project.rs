@@ -505,13 +505,11 @@ impl Project {
         if self.kind == Kind::CONFIGURED {
             name = self.config_file_name();
         }
-        tspath::convert_to_relative_path(
-            &name,
-            &tspath::ComparePathsOptions {
-                current_directory: cwd.to_string(),
-                ..Default::default()
-            },
-        )
+        // ts#64159: a name on another root stays absolute (R4).
+        match tspath::relative_path_from_directory(cwd, &name, false) {
+            Some(relative_path) => relative_path,
+            None => name,
+        }
     }
 
     // Go: project/project.go:333 Project.ID (ts#64319: the project ID)

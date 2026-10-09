@@ -812,6 +812,11 @@ child_test! {
                 FileChangeSummary::default(),
                 Some(&APISnapshotRequest {
                     open_projects: Some(FxHashSet::from_iter([APP_CONFIG_PATH.to_string()])),
+                    // ts#64159: the open does not build the program.
+                    ensure_programs: Some(FxHashSet::from_iter([ConfiguredProjectID(
+                        (session.to_path)(APP_CONFIG_PATH),
+                    )
+                    .as_id()])),
                     ..Default::default()
                 }),
             )

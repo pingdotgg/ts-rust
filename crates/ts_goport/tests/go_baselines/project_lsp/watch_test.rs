@@ -5,9 +5,10 @@ use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 use ts_goport::frontend::tspath;
+use ts_goport::lsp::lsproto;
 use ts_goport::project::{
     PatternsAndIgnored, SeenFiles, WatchedFiles, create_resolution_lookup_glob_mapper,
-    get_path_components_for_watching,
+    get_path_components_for_watching, new_recursive_directory_watcher,
 };
 
 fn components(path: &str) -> Vec<String> {
@@ -62,20 +63,44 @@ fn seen_files(file_names: &[&str], use_case_sensitive_file_names: bool) -> Optio
     Some(Rc::new(RefCell::new(files)))
 }
 
-/// Go `createResolutionLookupGlobMapper("/Workspace", "/Lib", "/Project", useCaseSensitiveFileNames)(&files)`.
-fn lookup_globs(file_names: &[&str], use_case_sensitive_file_names: bool) -> PatternsAndIgnored {
-    create_resolution_lookup_glob_mapper(
-        "/Workspace",
-        "/Lib",
-        "/Project",
-        use_case_sensitive_file_names,
-    )(&seen_files(file_names, use_case_sensitive_file_names))
+/// Go `createResolutionLookupGlobMapper(workspace, lib, project, caseSensitivity)(&files)`.
+fn lookup_globs(
+    [workspace, lib, project]: [&str; 3],
+    file_names: &[&str],
+    use_case_sensitive_file_names: bool,
+) -> PatternsAndIgnored {
+    create_resolution_lookup_glob_mapper(workspace, lib, project, use_case_sensitive_file_names)(
+        &seen_files(file_names, use_case_sensitive_file_names),
+    )
 }
 
-// Go: watch_test.go:32 TestResolutionLookupWatcherPreservesIncludedDirectorySpelling (ts#64544)
+const UPPER_DIRS: [&str; 3] = ["/Workspace", "/Lib", "/Project"];
+const LOWER_DIRS: [&str; 3] = ["/workspace", "/lib", "/current"];
+
+// Go: watch_test.go:33 TestResolutionLookupWatcherPreservesDirectorySpelling (ts#64159)
+#[test]
+fn resolution_lookup_watcher_preserves_directory_spelling() {
+    let result = lookup_globs(LOWER_DIRS, &["/External/Dir/file.ts"], false);
+    assert_eq!(result.directories_outside_workspace, ["/External/Dir"]);
+    let watcher = new_recursive_directory_watcher(
+        &result.directories_outside_workspace[0],
+        lsproto::WatchKind::CREATE,
+        true,
+    );
+    let base_uri = watcher
+        .glob_pattern
+        .relative_pattern
+        .as_ref()
+        .and_then(|pattern| pattern.base_uri.uri.as_ref())
+        .expect("a relative pattern with a base URI");
+    assert_eq!(base_uri.0, "file:///External/Dir");
+}
+
+// Go: watch_test.go:73 TestResolutionLookupWatcherPreservesIncludedDirectorySpelling (ts#64544)
 #[test]
 fn resolution_lookup_watcher_preserves_included_directory_spelling() {
     let result = lookup_globs(
+        UPPER_DIRS,
         &[
             "/Workspace/src/index.ts",
             "/Project/src/index.ts",
@@ -92,7 +117,11 @@ fn resolution_lookup_watcher_preserves_included_directory_spelling() {
 // Go: watch_test.go:57 TestResolutionLookupWatcherPreservesNodeModulesSpelling (ts#64544)
 #[test]
 fn resolution_lookup_watcher_preserves_node_modules_spelling() {
-    let result = lookup_globs(&["/External/Node_Modules/pkg/index.ts"], false);
+    let result = lookup_globs(
+        LOWER_DIRS,
+        &["/External/Node_Modules/pkg/index.d.ts"],
+        false,
+    );
     assert_eq!(
         result.patterns_inside_workspace,
         ["/External/Node_Modules/**/*"]
@@ -106,6 +135,7 @@ fn resolution_lookup_watcher_aggregates_using_host_case_sensitivity() {
         [("case sensitive", true), ("case insensitive", false)]
     {
         let result = lookup_globs(
+            UPPER_DIRS,
             &["/External/Lib/src/a.ts", "/external/LIB/test/b.ts"],
             use_case_sensitive_file_names,
         );

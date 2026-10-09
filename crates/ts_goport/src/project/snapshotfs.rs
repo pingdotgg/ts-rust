@@ -254,15 +254,17 @@ impl vfs::Fs for CachedLayeredFileSystem {
 // realpathAliasSet is a thread-safe set of symlink paths that alias a single realpath.
 // It implements dirty.Cloneable so it can be used as a value in dirty.SyncMap.
 // PORT: `mu` is dropped. Go `*realpathAliasSet` is `Rc<RefCell<..>>`.
+// ts#64159: each alias path keeps the file name it was seen as
+// (`aliasPaths`, snapshotfs.go:71).
 #[derive(Debug, Default)]
 pub struct RealpathAliasSet {
-    pub paths: FxHashSet<tspath::Path>,
+    pub paths: FxHashMap<tspath::Path, String>,
 }
 
 impl RealpathAliasSet {
-    // Go: project/snapshotfs.go:76 realpathAliasSet.Add
-    pub fn add(&mut self, path: tspath::Path) {
-        self.paths.insert(path);
+    // Go: project/snapshotfs.go:87 realpathAliasSet.Add
+    pub fn add(&mut self, path: tspath::Path, file_name: String) {
+        self.paths.insert(path, file_name);
     }
 
     // Go: project/snapshotfs.go:82 realpathAliasSet.Clone
@@ -320,8 +322,9 @@ impl SnapshotFS {
         for uri in &change.changed {
             let path = (self.to_path)(&uri.file_name());
             if let Some(aliases) = self.node_modules_realpath_aliases.get(&path) {
-                for alias_path in &aliases.borrow().paths {
-                    additional_changed.insert(lsconv::file_name_to_document_uri(alias_path));
+                // ts#64159: the URI of the alias's file name.
+                for alias_file_name in aliases.borrow().paths.values() {
+                    additional_changed.insert(lsconv::file_name_to_document_uri(alias_file_name));
                 }
             }
         }
@@ -333,8 +336,8 @@ impl SnapshotFS {
         for uri in &change.deleted {
             let path = (self.to_path)(&uri.file_name());
             if let Some(aliases) = self.node_modules_realpath_aliases.get(&path) {
-                for alias_path in &aliases.borrow().paths {
-                    additional_deleted.insert(lsconv::file_name_to_document_uri(alias_path));
+                for alias_file_name in aliases.borrow().paths.values() {
+                    additional_deleted.insert(lsconv::file_name_to_document_uri(alias_file_name));
                 }
             }
         }
@@ -401,9 +404,14 @@ impl FileSource for SnapshotFS {
         merge_cached_directory_entries(
             lower_entries,
             &directory.borrow(),
-            &|path: &tspath::Path| {
+            // ts#64159: the file system is asked with the directory's name
+            // and the child's name, not the path key.
+            &|path: &tspath::Path, child_name: &str| {
                 let cached = self.cache_files.contains_key(path);
-                cached || self.fs.file_exists(path.as_str())
+                cached
+                    || self
+                        .fs
+                        .file_exists(&tspath::combine_paths(directory_name, &[child_name]))
             },
             self.fs.use_case_sensitive_file_names(),
         )
@@ -440,7 +448,7 @@ impl dirty::Cloneable for CachedDirectory {
 pub fn merge_cached_directory_entries(
     directory_entries: vfs::Entries,
     cached_entries: &IndexMap<tspath::Path, String>,
-    is_cached_file: &dyn Fn(&tspath::Path) -> bool,
+    is_cached_file: &dyn Fn(&tspath::Path, &str) -> bool,
     use_case_sensitive_file_names: bool,
 ) -> vfs::Entries {
     let mut entries = vfs::Entries {
@@ -458,7 +466,7 @@ pub fn merge_cached_directory_entries(
         if let Some(symlinks) = &mut entries.symlinks {
             symlinks.retain(|name| !equal_name(name, child_name));
         }
-        if is_cached_file(child_path) {
+        if is_cached_file(child_path, child_name) {
             entries.files.push(child_name.clone());
         } else {
             entries.directories.push(child_name.clone());
@@ -730,7 +738,9 @@ impl SnapshotFSBuilder {
             entry
                 .unwrap_or_else(|| crate::core::go_nil_dereference())
                 .change(&mut |alias_set: &Rc<RefCell<RealpathAliasSet>>| {
-                    alias_set.borrow_mut().add(symlink_path.clone());
+                    alias_set
+                        .borrow_mut()
+                        .add(symlink_path.clone(), symlink_file_name.to_string());
                 });
         }
     }
@@ -976,10 +986,9 @@ impl SnapshotFSBuilder {
         if open_files.contains_key(&path) {
             return true;
         }
-        let Some(i) = path.0.rfind('.') else {
-            return false;
-        };
-        is_relevant_extension(&path.0[i..])
+        // ts#64159: the extension of the file name's base name, with its
+        // case (N took the text after the last "." of the path key).
+        is_relevant_extension(&tspath::get_any_extension_from_path(&file_name, &[], false))
     }
 
     // Go: project/snapshotfs.go:651 snapshotFSBuilder.expandAndFilterWatchEvents
@@ -1191,10 +1200,12 @@ impl FileSource for SnapshotFSBuilder {
         merge_cached_directory_entries(
             lower_entries,
             &directory,
-            &|path: &tspath::Path| {
-                let (entry, cached) = self.cache_files.load(path);
+            &|key: &tspath::Path, child_name: &str| {
+                let (entry, cached) = self.cache_files.load(key);
                 cached && entry.is_some_and(|entry| entry.value().is_some())
-                    || self.fs.file_exists(path.as_str())
+                    || self
+                        .fs
+                        .file_exists(&tspath::combine_paths(path, &[child_name]))
             },
             self.fs.use_case_sensitive_file_names(),
         )
