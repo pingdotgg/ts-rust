@@ -300,42 +300,60 @@ impl ResolutionState<'_> {
         );
 
         let root_dirs = self.compiler_options.root_dirs.clone().unwrap_or_default();
+        // ts#64159 (resolver.go:1518 HasDirectoryPrefix): the candidate is in a
+        // root dir as a path (roots without case), and a directory candidate
+        // is in its own root dir.
+        let candidate_directory_only = has_trailing_directory_separator(&candidate);
+        let candidate_path =
+            if candidate_directory_only && candidate.len() > get_root_length(&candidate) {
+                remove_trailing_directory_separator(&candidate)
+            } else {
+                candidate.as_str()
+            };
         let mut matched_root_dir = String::new();
-        let mut matched_normalized_prefix = String::new();
+        let mut matched_normalized_root = String::new();
+        let mut matched_relative = String::new();
         for root_dir in &root_dirs {
             // rootDirs are expected to be absolute
             // in case of tsconfig.json this will happen automatically - compiler will expand relative names
             // using location of tsconfig.json as base location
-            let mut normalized_root = normalize_path(root_dir);
-            if !normalized_root.ends_with('/') {
-                normalized_root.push('/');
-            }
-            let is_longest_matching_prefix = candidate.starts_with(&normalized_root)
-                && (matched_normalized_prefix.is_empty()
-                    || matched_normalized_prefix.len() < normalized_root.len());
+            let normalized_root = normalize_path(root_dir);
+            let relative = relative_path_within_directory(&normalized_root, candidate_path, true)
+                .filter(|relative| !relative.is_empty() || candidate_directory_only);
+            let is_longest_matching_prefix = relative.is_some()
+                && (matched_normalized_root.is_empty()
+                    || matched_normalized_root.len() < normalized_root.len());
 
             trace_write!(
                 self,
                 diag::Checking_if_0_is_the_longest_matching_prefix_for_1_2,
-                normalized_root,
+                ensure_trailing_directory_separator(&normalized_root),
                 candidate,
                 is_longest_matching_prefix
             );
 
             if is_longest_matching_prefix {
-                matched_normalized_prefix = normalized_root;
+                matched_relative = relative.unwrap().into_owned();
+                matched_normalized_root = normalized_root;
                 matched_root_dir = root_dir.clone();
             }
         }
 
-        if !matched_normalized_prefix.is_empty() {
+        if !matched_normalized_root.is_empty() {
+            let matched_normalized_prefix =
+                ensure_trailing_directory_separator(&matched_normalized_root);
             trace_write!(
                 self,
                 diag::Longest_matching_prefix_for_0_is_1,
                 candidate,
                 matched_normalized_prefix
             );
-            let suffix = candidate[matched_normalized_prefix.len()..].to_string();
+            // Go: candidate.RelativeToDirectory(matchedRootDir)
+            let suffix = if candidate_directory_only && !matched_relative.is_empty() {
+                ensure_trailing_directory_separator(&matched_relative)
+            } else {
+                matched_relative
+            };
 
             // first - try to load from a initial location
             trace_write!(
@@ -367,27 +385,32 @@ impl ResolutionState<'_> {
                 // map between their encoded and logical forms.
                 let directory_only = suffix.is_empty() || has_trailing_directory_separator(&suffix);
                 let logical_suffix = suffix.as_str();
+                // ts#64159 (resolver.go:1556-1573): the suffix is relative to
+                // the root dir, never rooted ("d:/generated" + "c:/dep"), and
+                // an empty suffix names the root dir itself.
                 let candidate = match (
                     is_encoded_dynamic_file_name(root_dir),
                     is_encoded_dynamic_file_name(&matched_root_dir),
                 ) {
-                    (true, true) => resolve_dynamic_logical_path(
+                    (true, true) => candidate_from_dynamic_logical_path(
                         &normalize_path(root_dir),
                         &decode_dynamic_uri_path(logical_suffix),
-                        directory_only,
                     ),
-                    (true, false) => resolve_dynamic_logical_path(
+                    (true, false) => candidate_from_dynamic_logical_path(
                         &normalize_path(root_dir),
                         logical_suffix,
-                        directory_only,
                     ),
                     (false, true) => {
                         let Some(decoded) = decode_dynamic_uri_path_for_disk(logical_suffix) else {
                             continue;
                         };
-                        resolve_path_for_module(&normalize_path(root_dir), &decoded, directory_only)
+                        candidate_from_relative_path(
+                            &normalize_path(root_dir),
+                            &decoded,
+                            directory_only,
+                        )
                     }
-                    (false, false) => resolve_path_for_module(
+                    (false, false) => candidate_from_relative_path(
                         &normalize_path(root_dir),
                         logical_suffix,
                         directory_only,

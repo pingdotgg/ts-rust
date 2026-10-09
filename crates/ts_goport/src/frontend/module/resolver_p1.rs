@@ -129,6 +129,48 @@ pub(crate) fn resolve_dynamic_logical_path(
     resolved
 }
 
+// Go: module/resolver.go:140 resolutionCandidateFromRelativePath and :100
+// resolutionCandidateFromDiskLogicalPath (ts#64159)
+// `path` relative to `directory`, appended as written (a rooted-looking
+// segment such as "c:" stays a segment). An empty path is the directory. A
+// directory candidate ends with "/".
+pub(crate) fn candidate_from_relative_path(
+    directory: &str,
+    path: &str,
+    directory_only: bool,
+) -> String {
+    let path = if !path.is_empty() && directory_only {
+        remove_trailing_directory_separator(path)
+    } else {
+        path
+    };
+    if path.is_empty() {
+        return ensure_trailing_directory_separator(directory);
+    }
+    // Go RootedDirectoryPath.ResolveRelativeFile: a parent-relative path is
+    // resolved, any other is appended.
+    let resolved = if path == ".." || path.starts_with("../") {
+        get_normalized_absolute_path(path, directory)
+    } else if has_trailing_directory_separator(directory) {
+        format!("{directory}{path}")
+    } else {
+        format!("{directory}/{path}")
+    };
+    if directory_only {
+        return ensure_trailing_directory_separator(&resolved);
+    }
+    resolved
+}
+
+// Go: module/resolver.go:83 resolutionCandidateFromDynamicLogicalPath (ts#64159)
+// `resolve_dynamic_logical_path`, except that an empty path is the directory.
+pub(crate) fn candidate_from_dynamic_logical_path(directory: &str, path: &str) -> String {
+    if path.is_empty() {
+        return ensure_trailing_directory_separator(directory);
+    }
+    resolve_dynamic_logical_path(directory, path, has_trailing_directory_separator(path))
+}
+
 // Go: module/resolver.go:77 dynamicDirectoryCandidate (ts#64544 at 59f5b0233; ts#64159
 // replaces it with resolutionCandidate.directoryPath)
 // A dynamic candidate whose last segment is encoded as a directory segment
@@ -2295,5 +2337,138 @@ impl ResolutionState<'_> {
             }
         }
         loader(self, ext, &candidate)
+    }
+}
+
+// Go: module/resolver_internal_test.go (ts#64159)
+// PORT: Go uses `vfstest.FromMap`; these tests write the files to a
+// temporary directory and use the OS file system, as `cache.rs` tests do.
+#[cfg(test)]
+mod internal_tests {
+    use super::*;
+    use crate::frontend::vfs::osvfs_fs;
+
+    struct TestHost {
+        fs: Rc<dyn Fs>,
+        current_directory: String,
+    }
+
+    impl ResolutionHost for TestHost {
+        fn fs(&self) -> &dyn Fs {
+            &*self.fs
+        }
+
+        fn get_current_directory(&self) -> &str {
+            &self.current_directory
+        }
+    }
+
+    /// A temporary directory `name` with `files` in it; its path with "/".
+    fn write_files(name: &str, files: &[(&str, &str)]) -> String {
+        let root = std::env::temp_dir().join(format!("ts_goport_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, text) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        root.to_string_lossy().replace('\\', "/")
+    }
+
+    fn test_resolver(dir: &str, options: CompilerOptions) -> DefaultResolver {
+        let host: Rc<dyn ResolutionHost> = Rc::new(TestHost {
+            fs: osvfs_fs(),
+            current_directory: dir.to_string(),
+        });
+        new_resolver(ResolverOptions {
+            host: Some(host),
+            compiler_options: Some(Rc::new(options)),
+            ..Default::default()
+        })
+    }
+
+    // Go: module/resolver_internal_test.go:85 TestPackageJSONPathWithTrailingSeparatorDoesNotResolveAsFile
+    #[test]
+    fn package_json_path_with_trailing_separator_does_not_resolve_as_file() {
+        let dir = write_files(
+            "pjson_trailing_separator",
+            &[("project/index.d.ts", "export {};")],
+        );
+        let resolver = test_resolver(&dir, CompilerOptions::default());
+        let mut state = ResolutionState::zero(&resolver, resolver.compiler_options.clone());
+        // Go resolveResolutionCandidate("/project", "index.d.ts/").
+        let candidate = resolve_path_for_module(&format!("{dir}/project"), "index.d.ts/", true);
+        let result = state.load_file_name_from_package_json_field(
+            Extensions::DECLARATION,
+            &candidate,
+            "./index.d.ts/",
+        );
+        assert!(
+            result.is_none(),
+            "directory-only candidate resolved as {:?}",
+            result.map(|r| r.path)
+        );
+    }
+
+    // Go: module/resolver_internal_test.go:102 TestExtensionReplacementPreservesEmptyAndDotStems
+    #[test]
+    fn extension_replacement_preserves_empty_and_dot_stems() {
+        let mut errors = Vec::new();
+        for (index, (import_name, expected)) in [
+            (".js", "project/.native.ts"),
+            ("..js", "project/..native.ts"),
+            ("...js", "project/...native.ts"),
+            (".js", "project/.native.d.ts"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let dir = write_files(
+                &format!("extension_replacement_stems_{index}"),
+                &[(expected, "export {};")],
+            );
+            let resolver = test_resolver(
+                &dir,
+                CompilerOptions {
+                    module_suffixes: Some(vec![".native".to_string(), String::new()]),
+                    ..Default::default()
+                },
+            );
+            let mut state = ResolutionState::zero(&resolver, resolver.compiler_options.clone());
+            // Go resolveResolutionCandidate("/project", importName).
+            let candidate = resolve_path_for_module(&format!("{dir}/project"), import_name, false);
+            let result = state.load_module_from_file_no_implicit_extensions(
+                Extensions::TYPE_SCRIPT | Extensions::DECLARATION,
+                &candidate,
+            );
+            let expected = format!("{dir}/{expected}");
+            if result.as_ref().map(|r| r.path.as_str()) != Some(expected.as_str()) {
+                errors.push(format!(
+                    "{import_name:?}: got {:?}, expected {expected:?}",
+                    result.map(|r| r.path)
+                ));
+            }
+        }
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
+
+    // Go: module/resolver_internal_test.go:132 TestOutputDirectoriesRemoveTrailingSeparators
+    // PORT: the port keeps N's `getOutputDirectoriesForBaseDirectory`; with
+    // rooted options the guess directory is not read.
+    #[test]
+    fn output_directories_remove_trailing_separators() {
+        let resolver = test_resolver(
+            "/",
+            CompilerOptions {
+                declaration_dir: "/project/types/".to_string(),
+                out_dir: "/project/dist/".to_string(),
+                ..Default::default()
+            },
+        );
+        let state = ResolutionState::zero(&resolver, resolver.compiler_options.clone());
+        assert_eq!(
+            state.get_output_directories_for_base_directory(""),
+            ["/project/types", "/project/dist"]
+        );
     }
 }

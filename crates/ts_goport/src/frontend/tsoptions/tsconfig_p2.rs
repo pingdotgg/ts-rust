@@ -1592,7 +1592,10 @@ fn get_tsconfig_object_literal_expression(tsconfig_source_file: Node) -> Node {
 }
 
 // Go: tsoptions/tsconfigparsing.go:1705 getSubstitutedPathWithConfigDirTemplate
-fn get_substituted_path_with_config_dir_template(value: &str, base_path: &str) -> String {
+pub(crate) fn get_substituted_path_with_config_dir_template(
+    value: &str,
+    base_path: &str,
+) -> String {
     get_normalized_absolute_path(&value.replacen(CONFIG_DIR_TEMPLATE, "./", 1), base_path)
 }
 
@@ -1847,9 +1850,13 @@ pub(crate) fn get_file_names_from_config_specs(
         );
     // Literal files are always included verbatim. An "include" or "exclude" specification cannot
     // remove a literal file.
+    // ts#64159 (tsconfigparsing.go:1820): the key is the PathKey of the
+    // resolved file name (validatedFileNames), not the spec text, so
+    // "./src/a.ts" and "src//a.ts" are one root file, and "include" does not
+    // add a "files" entry again.
     for file_name in validated_files_spec {
         let file = get_normalized_absolute_path(file_name, &base_path);
-        literal_file_map.insert(key_mappper(file_name), file);
+        literal_file_map.insert(key_mappper(&file), file);
     }
 
     let mut json_only_include_matchers: Option<SpecMatcher> = None;

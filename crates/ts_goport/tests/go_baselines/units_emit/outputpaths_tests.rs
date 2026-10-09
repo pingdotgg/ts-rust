@@ -1,10 +1,11 @@
 //! Port of internal/outputpaths/outputpaths_test.go (tsgo#4900).
 
 use ts_goport::frontend::outputpaths::{
-    OutputPathsHost, get_output_declaration_file_name_worker, get_output_js_file_name_worker,
-    get_source_file_path_in_new_dir,
+    OutputPathsHost, get_build_info_file_name, get_output_declaration_file_name_worker,
+    get_output_js_file_name_worker, get_source_file_path_in_new_dir,
 };
-use ts_goport::options::CompilerOptions;
+use ts_goport::frontend::tspath::ComparePathsOptions;
+use ts_goport::options::{CompilerOptions, Tristate};
 
 // Go: outputpaths/outputpaths_test.go:29 TestGetSourceFileNameInNewDirSourceMatchesCommonDirectory
 // (ts#64159 renames TestGetSourceFilePathInNewDirSourceMatchesCommonDirectory)
@@ -14,7 +15,7 @@ fn test_get_source_file_name_in_new_dir_source_matches_common_directory() {
         "/project/src",
         "/project/out",
         "/project",
-        "/project/src/",
+        "/project/src",
         true,
     );
     assert_eq!(actual, "/project/src");
@@ -39,6 +40,48 @@ fn test_get_source_file_name_in_new_dir_canonicalization_shrinks_common_director
         false,
     );
     assert_eq!(actual, "/out/a.ts");
+}
+
+// Go: outputpaths/outputpaths_test.go:59 TestGetBuildInfoFileNameAcrossRoots (ts#64159)
+#[test]
+fn test_get_build_info_file_name_across_roots() {
+    let mut failures = Vec::new();
+    #[rustfmt::skip]
+    let tests: &[(&str, &str, &str, &str, &str)] = &[
+        // (name, rootDir, outDir, configFilePath, expected)
+        ("same root", "c:/src", "c:/out", "c:/src/project/tsconfig.json", "c:/out/project/tsconfig.tsbuildinfo"),
+        ("empty stem", "c:/src", "c:/out", "c:/src/project/.json", "c:/out/project/.tsbuildinfo"),
+        ("dot stem", "c:/src", "c:/out", "c:/src/project/..json", "c:/out/project/..tsbuildinfo"),
+        ("empty filename stem without rootDir", "", "c:/out", "c:/src/project/.json", "c:/out/.tsbuildinfo"),
+        ("parent-dot filename stem without rootDir", "", "c:/out", "c:/src/project/...json", "c:/out/...tsbuildinfo"),
+        ("empty filename stem without outDir", "", "", "c:/src/project/.json", "c:/src/project/.tsbuildinfo"),
+        ("dot filename stem without outDir", "", "", "c:/src/project/..json", "c:/src/project/..tsbuildinfo"),
+        ("different drive", "c:/src", "c:/out", "d:/project/tsconfig.json", "d:/project/tsconfig.tsbuildinfo"),
+        ("different UNC authority", "//server-a/src", "//server-a/out", "//server-b/project/tsconfig.json", "//server-b/project/tsconfig.tsbuildinfo"),
+        ("different URL authority", "file://server-a/src", "file://server-a/out", "file://server-b/project/tsconfig.json", "file://server-b/project/tsconfig.tsbuildinfo"),
+    ];
+    for &(name, root_dir, out_dir, config_file_path, expected) in tests {
+        let options = CompilerOptions {
+            incremental: Tristate::True,
+            root_dir: root_dir.to_string(),
+            out_dir: out_dir.to_string(),
+            config_file_path: config_file_path.to_string(),
+            ..Default::default()
+        };
+        // Go passes tspath.CaseInsensitive; the paths are rooted, so the
+        // current directory is never read.
+        let actual = get_build_info_file_name(
+            &options,
+            &ComparePathsOptions {
+                use_case_sensitive_file_names: false,
+                current_directory: String::new(),
+            },
+        );
+        if actual != expected {
+            failures.push(format!("{name}: got {actual:?}, expected {expected:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Go `outputPathsHost` (outputpaths_test.go:12): a common source directory,

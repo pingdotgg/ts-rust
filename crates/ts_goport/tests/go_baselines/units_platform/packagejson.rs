@@ -362,3 +362,26 @@ fn test_parse() {
         &no_content_mapper,
     );
 }
+
+// Go: packagejson_test.go:58 TestForEachAncestorDirectoryStoppingAtGlobalCache (ts#64159)
+// PORT: Go walks `packagejson.PackageDirectory` values (a name and its
+// path key). The port walks directory names with
+// `tspath::for_each_ancestor_directory_stopping_at_global_cache`; the key
+// of a name is its `tspath::to_path`.
+#[test]
+fn test_for_each_ancestor_directory_stopping_at_global_cache() {
+    use ts_goport::frontend::tspath;
+    let mut names = Vec::new();
+    let mut keys = Vec::new();
+    tspath::for_each_ancestor_directory_stopping_at_global_cache(
+        "/Repo",
+        "/Repo/Project/src",
+        |directory| {
+            names.push(directory.to_string());
+            keys.push(tspath::to_path(directory, "", false).to_string());
+            ((), false)
+        },
+    );
+    assert_eq!(names, ["/Repo/Project/src", "/Repo/Project", "/Repo"]);
+    assert_eq!(keys, ["/repo/project/src", "/repo/project", "/repo"]);
+}

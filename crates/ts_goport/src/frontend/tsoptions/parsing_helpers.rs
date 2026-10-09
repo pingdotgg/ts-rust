@@ -412,7 +412,9 @@ fn parse_compiler_options_worker(
         "listFiles" => all_options.list_files = parse_tristate(value),
         "listFilesOnly" => all_options.list_files_only = parse_tristate(value),
         "locale" => all_options.locale = parse_string(value),
-        "mapRoot" => all_options.map_root = parse_string(value),
+        // ts#64159 (options_generated.go:105): tspath.ToSourceMapLocation,
+        // slashes normalized, not rooted.
+        "mapRoot" => all_options.map_root = normalize_slashes(&parse_string(value)),
         "module" => all_options.module = float_or_int32_to_flag(value, as_module_kind, ModuleKind),
         "moduleDetectionKind" => {
             all_options.module_detection =
@@ -514,7 +516,8 @@ fn parse_compiler_options_worker(
         }
         "skipDefaultLibCheck" => all_options.skip_default_lib_check = parse_tristate(value),
         "sourceMap" => all_options.source_map = parse_tristate(value),
-        "sourceRoot" => all_options.source_root = parse_string(value),
+        // ts#64159 (options_generated.go:208): tspath.ToSourceMapLocation.
+        "sourceRoot" => all_options.source_root = normalize_slashes(&parse_string(value)),
         "stripInternal" => all_options.strip_internal = parse_tristate(value),
         "suppressOutputPathCheck" => all_options.suppress_output_path_check = parse_tristate(value),
         "target" => {
@@ -957,9 +960,179 @@ pub fn convert_option_to_absolute_path(
     (CompilerOptionsValue::Nil, false)
 }
 
+// Go: tsoptions/rawcompileroptions.go:67 RawCompilerOptions.Finalize (ts#64159)
+/// Compiler options from raw JSON values (the API's `compilerOptions`), with
+/// each file system path option rooted against `base_path` (a
+/// `${configDir}` prefix is replaced by it). Only exact option names and the
+/// internal `configFilePath`, `allowNonTsExtensions` and
+/// `suppressOutputPathCheck` are read; other keys are dropped.
+/// PORT: Go `RawCompilerOptions` keeps the JSON values in an ordered map;
+/// here the caller converts them to `CompilerOptionsValue`. The option path
+/// kinds that Go roots (File, Directory, FileOrDirectory) are the
+/// `is_file_path` options (see `tests::option_path_kinds`). Go returns no
+/// diagnostics.
+pub fn finalize_raw_compiler_options(
+    raw: &IndexMap<String, CompilerOptionsValue>,
+    base_path: &str,
+) -> CompilerOptions {
+    let mut options = CompilerOptions::default();
+    let root = |path: &str| {
+        if starts_with_config_dir_template(&CompilerOptionsValue::String(path.to_string())) {
+            get_substituted_path_with_config_dir_template(path, base_path)
+        } else {
+            get_normalized_absolute_path(path, base_path)
+        }
+    };
+    for (key, value) in raw {
+        let option = COMMAND_LINE_COMPILER_OPTIONS_MAP.get(key);
+        if option.is_some_and(|option| key != option.name) {
+            continue;
+        }
+        let rooted = match option {
+            Some(option) if option.kind == CommandLineOptionKind::LIST => option
+                .elements()
+                .is_some_and(|element| element.is_file_path),
+            Some(option) => option.is_file_path,
+            None if key == "configFilePath" => true,
+            None if key == "allowNonTsExtensions" || key == "suppressOutputPathCheck" => false,
+            None => continue,
+        };
+        let value = if !rooted {
+            value.clone()
+        } else if option.is_some_and(|option| option.kind == CommandLineOptionKind::LIST) {
+            // Go `core.Map(ParseStringArray(value), ...)`.
+            match parse_string_array(value) {
+                Some(paths) => CompilerOptionsValue::List(
+                    paths
+                        .iter()
+                        .map(|path| CompilerOptionsValue::String(root(path)))
+                        .collect(),
+                ),
+                None => CompilerOptionsValue::NilList,
+            }
+        } else {
+            match value {
+                CompilerOptionsValue::String(path) if !path.is_empty() => {
+                    CompilerOptionsValue::String(root(path))
+                }
+                _ => value.clone(),
+            }
+        };
+        parse_compiler_options(key, value, &mut options);
+    }
+    options
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Go: tsoptions/rawcompileroptions_test.go:14 TestRawCompilerOptionsFinalizePaths (ts#64159)
+    // PORT: the JSON is given as `CompilerOptionsValue`s in the same order.
+    #[test]
+    fn finalize_raw_compiler_options_paths() {
+        let string = |s: &str| CompilerOptionsValue::String(s.to_string());
+        let mut paths = IndexMap::default();
+        paths.insert(
+            "*a".to_string(),
+            CompilerOptionsValue::List(vec![string("first/*")]),
+        );
+        paths.insert(
+            "*".to_string(),
+            CompilerOptionsValue::List(vec![string("fallback/*")]),
+        );
+        let mut raw = IndexMap::default();
+        for (key, value) in [
+            ("outDir", string("dist")),
+            (
+                "rootDirs",
+                CompilerOptionsValue::List(vec![string("src"), string("${configDir}/generated")]),
+            ),
+            ("tsBuildInfoFile", string("cache/build.tsbuildinfo")),
+            ("sourceRoot", string("sources\\mapped")),
+            ("paths", CompilerOptionsValue::Map(paths)),
+            ("allowNonTsExtensions", CompilerOptionsValue::Bool(true)),
+            ("suppressOutputPathCheck", CompilerOptionsValue::Bool(true)),
+            ("configFilePath", string("")),
+            ("NoImplicitAny", CompilerOptionsValue::Bool(true)),
+        ] {
+            raw.insert(key.to_string(), value);
+        }
+
+        let options = finalize_raw_compiler_options(&raw, "/project");
+        assert_eq!(options.out_dir, "/project/dist");
+        assert_eq!(
+            options.root_dirs,
+            Some(vec![
+                "/project/src".to_string(),
+                "/project/generated".to_string()
+            ])
+        );
+        assert_eq!(
+            options.ts_build_info_file,
+            "/project/cache/build.tsbuildinfo"
+        );
+        assert_eq!(options.source_root, "sources/mapped");
+        let paths = options.paths.as_ref().expect("paths");
+        assert_eq!(
+            paths.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["*a", "*"]
+        );
+        assert_eq!(paths.get("*a"), Some(&Some(vec!["first/*".to_string()])));
+        assert_eq!(options.allow_non_ts_extensions, Tristate::True);
+        assert_eq!(options.suppress_output_path_check, Tristate::True);
+        assert_eq!(options.config_file_path, "");
+        assert_eq!(options.no_implicit_any, Tristate::Unknown);
+    }
+
+    // Go: tsoptions/decls_test.go:72 TestCommandLineOptionPathKinds (ts#64159)
+    // PORT: the port keeps N's `is_file_path` flag. Go roots the File,
+    // Directory and FileOrDirectory kinds, which are the `is_file_path`
+    // options; "sourceRoot" and "mapRoot" (SourceMapLocation) are not rooted.
+    #[test]
+    fn option_path_kinds() {
+        let mut expected: Vec<&str> = vec![
+            "baseUrl",
+            "declarationDir",
+            "generateCpuProfile",
+            "generateTrace",
+            "outDir",
+            "outFile",
+            "pprofDir",
+            "project",
+            "rootDir",
+            "tsBuildInfoFile",
+        ];
+        let mut errors = Vec::new();
+        for option in OPTIONS_DECLARATIONS.iter() {
+            match expected.iter().position(|name| *name == option.name) {
+                Some(index) => {
+                    if !option.is_file_path {
+                        errors.push(format!("{} is not a file path", option.name));
+                    }
+                    expected.remove(index);
+                }
+                None => {
+                    if option.is_file_path {
+                        errors.push(format!("{} has unexpected path kind", option.name));
+                    }
+                }
+            }
+        }
+        for name in expected {
+            errors.push(format!("{name} was not found in option declarations"));
+        }
+        for name in ["rootDirs", "typeRoots"] {
+            let option = COMPILER_NAME_MAP.get_option_declaration_from_name(name, false);
+            if !option
+                .and_then(|option| option.elements())
+                .is_some_and(|element| element.is_file_path)
+            {
+                errors.push(format!("{name} element is not classified as a directory"));
+            }
+        }
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
 
     // Go keeps an explicit `[]` as a non-nil slice, so it overrides the
     // extended config in `mergeCompilerOptions`.

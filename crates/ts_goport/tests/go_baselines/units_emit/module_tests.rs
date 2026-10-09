@@ -449,6 +449,520 @@ fn test_resolve_module_name_export_target_with_trailing_slash_does_not_resolve_a
     );
 }
 
+// ---------------------------------------------------------------------------
+// ts#64159 resolver tests (config part 3)
+// ---------------------------------------------------------------------------
+
+/// Go `NewResolver(ResolverOptions{Host: &resolutionTestInputs{fs: fs, cwd:
+/// cwd}, CompilerOptions: opts})` over `vfstest.FromMap(files,
+/// caseSensitivity)`.
+fn new_test_resolver(
+    files: &[(&str, &str)],
+    use_case_sensitive_file_names: bool,
+    cwd: &str,
+    options: CompilerOptions,
+) -> DefaultResolver {
+    let fs = vfstest::from_map(files.iter().copied(), use_case_sensitive_file_names);
+    new_resolver_over(fs, cwd, options)
+}
+
+/// `new_test_resolver` over a given FS.
+fn new_resolver_over(fs: Rc<dyn Fs>, cwd: &str, options: CompilerOptions) -> DefaultResolver {
+    let host: Rc<dyn ResolutionHost> = Rc::new(ResolutionHostStub {
+        fs,
+        cwd: cwd.to_string(),
+    });
+    new_resolver(ResolverOptions {
+        host: Some(host),
+        compiler_options: Some(Rc::new(options)),
+        ..Default::default()
+    })
+}
+
+/// Go: the one package.json entry that exists in `PackageJsonCacheEntries`.
+/// PORT: the package scope of `package_directory`, as in
+/// `test_generated_dynamic_entrypoint_specifier_resolves_encoded_file`.
+fn package_json_entry(
+    resolver: &DefaultResolver,
+    package_directory: &str,
+) -> Option<Rc<ts_goport::frontend::packagejson::InfoCacheEntry>> {
+    resolver
+        .get_package_scope_for_path(&format!("{package_directory}/"))
+        .filter(|entry| entry.exists())
+}
+
+/// The module specifiers of `GetEntrypointsFromPackageJsonInfo`.
+fn entrypoint_specifiers(
+    resolver: &DefaultResolver,
+    package_directory: &str,
+    package_name: &str,
+    enable_directory_search: bool,
+) -> Result<Vec<String>, String> {
+    let package_json = package_json_entry(resolver, package_directory);
+    if package_json.is_none() {
+        return Err("expected package JSON cache entry".to_string());
+    }
+    Ok(resolver
+        .get_entrypoints_from_package_json_info(
+            &package_json,
+            package_name,
+            enable_directory_search,
+        )
+        .iter()
+        .map(|e| e.module_specifier.clone())
+        .collect())
+}
+
+// Go: module/resolver_test.go:258 TestRootDirsEscapesRootLikeDynamicSegments (ts#64159)
+#[test]
+fn test_root_dirs_escapes_root_like_dynamic_segments() {
+    let mut t = Subtests::new("TestRootDirsEscapesRootLikeDynamicSegments");
+    for (source_file, target_file) in [
+        (
+            "^/~ts-uri~/custom/ts-nul-authority/src/c:/main.ts",
+            "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~633a~/dep.ts",
+        ),
+        (
+            "^/~ts-uri~/custom/ts-nul-authority/src/^/main.ts",
+            "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~5e~/dep.ts",
+        ),
+    ] {
+        t.run(source_file, || {
+            let resolver = new_test_resolver(
+                &[
+                    (source_file, ""),
+                    (target_file, "export const value = 1;"),
+                    ("c:/dep.ts", "export const wrong = 1;"),
+                    ("^/dep.ts", "export const wrong = 1;"),
+                ],
+                true,
+                DYNAMIC_ROOT,
+                bundler_options_with_root_dirs(&[
+                    "^/~ts-uri~/custom/ts-nul-authority/src",
+                    "^/~ts-uri~/custom/ts-nul-authority/generated",
+                ]),
+            );
+            let resolved = resolved_file(&resolver, "./dep", source_file, ModuleKind::ES_NEXT);
+            if resolved.as_deref() != Some(target_file) {
+                return Err(format!(
+                    "resolved file = {resolved:?}, expected {target_file:?}"
+                ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:303 TestRootDirsPreservesRelativeDiskSuffixes (ts#64159)
+#[test]
+fn test_root_dirs_preserves_relative_disk_suffixes() {
+    let mut t = Subtests::new("TestRootDirsPreservesRelativeDiskSuffixes");
+    for (source_file, target_root, target_file) in [
+        (
+            "c:/src/^/main.ts",
+            "^/~ts-uri~/custom/ts-nul-authority/generated",
+            "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~5e~/dep.ts",
+        ),
+        (
+            "c:/src/c:/main.ts",
+            "d:/generated",
+            "d:/generated/c:/dep.ts",
+        ),
+    ] {
+        t.run(source_file, || {
+            let resolver = new_test_resolver(
+                &[
+                    (source_file, ""),
+                    (target_file, "export const value = 1;"),
+                    ("^/dep.ts", "export const wrong = 1;"),
+                    ("c:/dep.ts", "export const wrong = 1;"),
+                ],
+                true,
+                "c:/",
+                bundler_options_with_root_dirs(&["c:/src", target_root]),
+            );
+            let resolved = resolved_file(&resolver, "./dep", source_file, ModuleKind::ES_NEXT);
+            if resolved.as_deref() != Some(target_file) {
+                return Err(format!(
+                    "resolved file = {resolved:?}, expected {target_file:?}"
+                ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:351 TestRootDirsPreservesRelativeDirectoryIntent (ts#64159)
+#[test]
+fn test_root_dirs_preserves_relative_directory_intent() {
+    let mut t = Subtests::new("TestRootDirsPreservesRelativeDirectoryIntent");
+    #[rustfmt::skip]
+    let tests: &[(&str, &str, &str, &str, &str)] = &[
+        ("disk to disk", "c:/src", "c:/src/^/main.ts", "d:/generated", "d:/generated/^/pkg/index.ts"),
+        ("disk to dynamic", "c:/src", "c:/src/^/main.ts", "^/~ts-uri~/custom/ts-nul-authority/generated", "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~5e~/pkg/index.ts"),
+        ("empty suffix to dynamic", "c:/src", "c:/src/main.ts", "^/~ts-uri~/custom/ts-nul-authority/generated", "^/~ts-uri~/custom/ts-nul-authority/generated/index.ts"),
+        ("empty suffix to disk", "^/~ts-uri~/custom/ts-nul-authority/src", "^/~ts-uri~/custom/ts-nul-authority/src/main.ts", "d:/generated", "d:/generated/index.ts"),
+        ("literal empty segment to dynamic", "^/~ts-uri~/custom/ts-nul-authority/src", "^/~ts-uri~/custom/ts-nul-authority/src/~ts-uri-escape~~/main.ts", "^/~ts-uri~/custom/ts-nul-authority/generated", "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~~/index.ts"),
+    ];
+    for &(name, source_root, source_file, target_root, target_file) in tests {
+        t.run(name, || {
+            let resolver = new_test_resolver(
+                &[
+                    (source_file, ""),
+                    (target_file, "export const value = 1;"),
+                    ("^/pkg/index.ts", "export const wrong = 1;"),
+                    ("d:/generated.ts", "export const wrong = 1;"),
+                ],
+                true,
+                "c:/",
+                CompilerOptions {
+                    module: ModuleKind::COMMON_JS,
+                    ..bundler_options_with_root_dirs(&[source_root, target_root])
+                },
+            );
+            let module_name =
+                if name.contains("empty suffix") || name == "literal empty segment to dynamic" {
+                    "./"
+                } else {
+                    "./pkg/"
+                };
+            let resolved =
+                resolved_file(&resolver, module_name, source_file, ModuleKind::COMMON_JS);
+            if resolved.as_deref() != Some(target_file) {
+                return Err(format!(
+                    "resolved file = {resolved:?}, expected {target_file:?}"
+                ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:661 TestDynamicExportPatternEntrypointUsesLogicalName (ts#64159)
+#[test]
+fn test_dynamic_export_pattern_entrypoint_uses_logical_name() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg";
+    let mut t = Subtests::new("TestDynamicExportPatternEntrypointUsesLogicalName");
+    #[rustfmt::skip]
+    let tests: &[(&str, &str, &str, &str)] = &[
+        ("logical wildcard match", r#"{"name":"Pkg","exports":{"./*":"./*.d.ts"}}"#, "Pkg/~ts-uri-escape~value", "Pkg/~ts-uri-spec~7e74732d7572692d6573636170657e76616c7565~"),
+        ("reserved target pattern", r#"{"name":"Pkg","exports":{"./*":"./~ts-uri-escape~*.d.ts"}}"#, "Pkg/value", "Pkg/value"),
+        ("reserved wildcard with trailer", r#"{"name":"Pkg","exports":{"./*":"./*-impl.d.ts"}}"#, "Pkg/~ts-uri-escape~value", "Pkg/~ts-uri-spec~7e74732d7572692d6573636170657e76616c7565~"),
+    ];
+    for &(name, package_json, import_name, module_specifier) in tests {
+        t.run(name, || {
+            let target_file = if name == "reserved wildcard with trailer" {
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/~ts-uri-escape~7e74732d7572692d6573636170657e76616c75652d696d706c~.d.ts"
+            } else {
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/~ts-uri-escape~7e74732d7572692d6573636170657e76616c7565~.d.ts"
+            };
+            let package_json_file = format!("{PACKAGE_DIRECTORY}/package.json");
+            let resolver = new_dynamic_resolver(
+                &[
+                    (SOURCE_FILE, ""),
+                    (&package_json_file, package_json),
+                    (target_file, "export const value: number;"),
+                ],
+                (*bundler_options()).clone(),
+            );
+            if resolved_file(&resolver, import_name, SOURCE_FILE, ModuleKind::ES_NEXT).is_none() {
+                return Err("expected dynamic package export to resolve".to_string());
+            }
+            let entrypoints = entrypoint_specifiers(&resolver, PACKAGE_DIRECTORY, "Pkg", false)?;
+            if entrypoints.len() != 1 {
+                return Err(format!(
+                    "entrypoint count = {}, expected 1",
+                    entrypoints.len()
+                ));
+            }
+            if entrypoints[0] != module_specifier {
+                return Err(format!(
+                    "module specifier = {:?}, expected {module_specifier:?}",
+                    entrypoints[0]
+                ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:796 TestDynamicEntrypointsEncodePhysicalPackageNameAndRootLikePath (ts#64159)
+#[test]
+fn test_dynamic_entrypoints_encode_physical_package_name_and_root_like_path() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PHYSICAL_PACKAGE_NAME: &str =
+        "~ts-uri-escape~7e74732d7572692d6573636170657e706b672e6a73~";
+    const SOURCE_PACKAGE_NAME: &str = "~ts-uri-spec~7e74732d7572692d6573636170657e706b672e6a73~";
+    let package_directory =
+        format!("^/~ts-uri~/custom/ts-nul-authority/node_modules/{PHYSICAL_PACKAGE_NAME}");
+    let target_file = format!("{package_directory}/~ts-uri-escape~633a~/value.d.ts");
+    let module_specifier = format!("{SOURCE_PACKAGE_NAME}/~ts-uri-spec~633a~/value.d.ts");
+    let package_json_file = format!("{package_directory}/package.json");
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (&package_json_file, r#"{"name":"~ts-uri-escape~pkg.js"}"#),
+            (&target_file, "export const value: number;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+    let _ =
+        resolver.resolve_module_name(SOURCE_PACKAGE_NAME, SOURCE_FILE, ModuleKind::ES_NEXT, None);
+    let entrypoints =
+        entrypoint_specifiers(&resolver, &package_directory, PHYSICAL_PACKAGE_NAME, true).unwrap();
+    assert!(
+        entrypoints.len() == 1 && entrypoints[0] == module_specifier,
+        "entrypoints = {entrypoints:?}, expected {module_specifier:?}"
+    );
+    let resolved = resolved_file(
+        &resolver,
+        &module_specifier,
+        SOURCE_FILE,
+        ModuleKind::ES_NEXT,
+    );
+    assert_eq!(
+        resolved.as_deref(),
+        Some(target_file.as_str()),
+        "generated module specifier resolved to {resolved:?}"
+    );
+}
+
+/// The shared body of the tests that resolve `module_specifier` in a
+/// dynamic package `Pkg` with `package_json`, then expect one entrypoint
+/// whose specifier is `module_specifier` (Go resolver_test.go:852, :900,
+/// :1032).
+fn assert_single_dynamic_entrypoint(
+    source_file: &str,
+    package_directory: &str,
+    package_json: &str,
+    target_file: &str,
+    module_specifier: &str,
+) {
+    let package_json_file = format!("{package_directory}/package.json");
+    let resolver = new_dynamic_resolver(
+        &[
+            (source_file, ""),
+            (&package_json_file, package_json),
+            (target_file, "export const value: number;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+    assert!(
+        resolved_file(
+            &resolver,
+            module_specifier,
+            source_file,
+            ModuleKind::ES_NEXT
+        )
+        .is_some(),
+        "expected {module_specifier:?} to resolve"
+    );
+    let entrypoints = entrypoint_specifiers(&resolver, package_directory, "Pkg", false).unwrap();
+    assert!(
+        entrypoints.len() == 1 && entrypoints[0] == module_specifier,
+        "entrypoints = {entrypoints:?}, expected {module_specifier:?}"
+    );
+}
+
+// Go: module/resolver_test.go:852 TestDynamicExportPatternPreservesStaticSourcePrefix (ts#64159)
+#[test]
+fn test_dynamic_export_pattern_preserves_static_source_prefix() {
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg";
+    assert_single_dynamic_entrypoint(
+        "^/~ts-uri~/custom/ts-nul-authority/src/main.ts",
+        PACKAGE_DIRECTORY,
+        r#"{"name":"Pkg","exports":{"./~ts-uri-escape~prefix/*":"./*.d.ts"}}"#,
+        &format!("{PACKAGE_DIRECTORY}/foo.d.ts"),
+        "Pkg/~ts-uri-escape~prefix/foo",
+    );
+}
+
+// Go: module/resolver_test.go:900 TestDynamicExportPatternKeepsPackageForRootLikeMatch (ts#64159)
+#[test]
+fn test_dynamic_export_pattern_keeps_package_for_root_like_match() {
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg";
+    assert_single_dynamic_entrypoint(
+        "^/~ts-uri~/custom/ts-nul-authority/src/main.ts",
+        PACKAGE_DIRECTORY,
+        r#"{"name":"Pkg","exports":{"./*":"./*.d.ts"}}"#,
+        &format!("{PACKAGE_DIRECTORY}/~ts-uri-escape~633a~/value.d.ts"),
+        "Pkg/~ts-uri-spec~633a~/value",
+    );
+}
+
+// Go: module/resolver_test.go:1032 TestDynamicExportPatternUnderExceptionalParent (ts#64159)
+#[test]
+fn test_dynamic_export_pattern_under_exceptional_parent() {
+    const PACKAGE_DIRECTORY: &str =
+        "^/~ts-uri~/custom/ts-nul-authority/work/~ts-uri-escape~2e2e~/node_modules/Pkg";
+    assert_single_dynamic_entrypoint(
+        "^/~ts-uri~/custom/ts-nul-authority/work/~ts-uri-escape~2e2e~/src/main.ts",
+        PACKAGE_DIRECTORY,
+        r#"{"name":"Pkg","exports":{"./*":"./*.d.ts"}}"#,
+        &format!("{PACKAGE_DIRECTORY}/foo.d.ts"),
+        "Pkg/foo",
+    );
+}
+
+// Go: module/resolver_test.go:948 TestDynamicEntrypointsPreserveCaseDistinctFiles (ts#64159)
+#[test]
+fn test_dynamic_entrypoints_preserve_case_distinct_files() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg";
+    // Go caseInsensitiveViewFS (resolver_test.go:34): a case-sensitive map
+    // that reports a case-insensitive file system.
+    let fs = wrapvfs_wrap(
+        vfstest::from_map(
+            [
+                (SOURCE_FILE, ""),
+                (
+                    "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/package.json",
+                    r#"{"name":"Pkg","types":"Foo.d.ts"}"#,
+                ),
+                (
+                    "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/Foo.d.ts",
+                    "export const upper: number;",
+                ),
+                (
+                    "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/foo.d.ts",
+                    "export const lower: number;",
+                ),
+            ],
+            true,
+        ),
+        Replacements {
+            use_case_sensitive_file_names: Some(Box::new(|| false)),
+            ..Default::default()
+        },
+    );
+    let resolver = new_resolver_over(fs, DYNAMIC_ROOT, (*bundler_options()).clone());
+    let _ = resolver.resolve_module_name("Pkg", SOURCE_FILE, ModuleKind::ES_NEXT, None);
+    let entrypoints = entrypoint_specifiers(&resolver, PACKAGE_DIRECTORY, "Pkg", true).unwrap();
+    assert_eq!(entrypoints.len(), 2, "entrypoints = {entrypoints:?}");
+}
+
+// Go: module/resolver_test.go:992 TestDiskExportPatternKeepsReservedPrefixLiteral (ts#64159)
+#[test]
+fn test_disk_export_pattern_keeps_reserved_prefix_literal() {
+    let resolver = new_test_resolver(
+        &[
+            ("/repo/src/main.ts", ""),
+            (
+                "/repo/node_modules/pkg/package.json",
+                r#"{"name":"pkg","exports":{"./*":"./*.d.ts"}}"#,
+            ),
+            (
+                "/repo/node_modules/pkg/~ts-uri-escape~666f6f~.d.ts",
+                "export const value: number;",
+            ),
+        ],
+        true,
+        "/repo",
+        (*bundler_options()).clone(),
+    );
+    assert!(
+        resolved_file(
+            &resolver,
+            "pkg/~ts-uri-escape~666f6f~",
+            "/repo/src/main.ts",
+            ModuleKind::ES_NEXT
+        )
+        .is_some(),
+        "expected disk package export to resolve"
+    );
+    let entrypoints =
+        entrypoint_specifiers(&resolver, "/repo/node_modules/pkg", "pkg", false).unwrap();
+    assert!(
+        entrypoints.len() == 1 && entrypoints[0] == "pkg/~ts-uri-escape~666f6f~",
+        "entrypoints = {entrypoints:?}, expected literal reserved-prefix entrypoint"
+    );
+}
+
+// Go: module/resolver_test.go:1081 TestDynamicExportPatternWithEmptyMatch (ts#64159)
+#[test]
+fn test_dynamic_export_pattern_with_empty_match() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg";
+    const TARGET_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/index.d.ts";
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/package.json",
+                r#"{"name":"Pkg","exports":{"./foo/*":"./index*.d.ts"}}"#,
+            ),
+            (TARGET_FILE, "export const value: number;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+    assert!(
+        resolved_file(&resolver, "Pkg/foo/", SOURCE_FILE, ModuleKind::ES_NEXT).is_some(),
+        "expected empty wildcard package export to resolve"
+    );
+    let entrypoints = entrypoint_specifiers(&resolver, PACKAGE_DIRECTORY, "Pkg", false).unwrap();
+    assert_eq!(entrypoints.len(), 1, "entrypoints = {entrypoints:?}");
+    let generated = &entrypoints[0];
+    let resolved = resolved_file(&resolver, generated, SOURCE_FILE, ModuleKind::ES_NEXT);
+    assert_eq!(
+        resolved.as_deref(),
+        Some(TARGET_FILE),
+        "generated module specifier {generated:?} resolved to {resolved:?}"
+    );
+}
+
+// Go: module/resolver_test.go:1138 TestUnaddressableEmptyExportPatternIsNotAnEntrypoint (ts#64159)
+#[test]
+fn test_unaddressable_empty_export_pattern_is_not_an_entrypoint() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg";
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/package.json",
+                r#"{"name":"Pkg","exports":{"./*":"./index*.d.ts"}}"#,
+            ),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/index.d.ts",
+                "export const value: number;",
+            ),
+        ],
+        (*bundler_options()).clone(),
+    );
+    let _ = resolver.resolve_module_name("Pkg", SOURCE_FILE, ModuleKind::ES_NEXT, None);
+    let entrypoints = entrypoint_specifiers(&resolver, PACKAGE_DIRECTORY, "Pkg", false).unwrap();
+    assert!(
+        entrypoints.is_empty(),
+        "entrypoints = {entrypoints:?}, expected unaddressable empty wildcard match to be omitted"
+    );
+}
+
+// Go: module/resolver_test.go:1200 TestResolveModuleNameBlockedByNullExport (ts#64159)
+// PORT: the port keeps no `ResolvedPath` (the key is `tspath::to_path` of
+// the resolved file name), so only the resolution is checked.
+#[test]
+fn test_resolve_module_name_blocked_by_null_export() {
+    let resolver = new_test_resolver(
+        &[
+            (
+                "/repo/node_modules/pkg/package.json",
+                r#"{"name":"pkg","exports":{".":null}}"#,
+            ),
+            ("/repo/src/file.ts", ""),
+        ],
+        true,
+        "/repo",
+        (*bundler_options()).clone(),
+    );
+    let resolved = resolved_file(&resolver, "pkg", "/repo/src/file.ts", ModuleKind::ES_NEXT);
+    assert_eq!(resolved, None, "expected null export to remain unresolved");
+}
+
 /// A second resolution that a wrapped FS runs inside a `FileExists` call.
 type Nested = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
 

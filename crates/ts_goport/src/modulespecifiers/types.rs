@@ -107,6 +107,16 @@ pub trait ModuleSpecifierGenerationHost {
     fn get_global_typings_cache_location(&self) -> String;
     fn use_case_sensitive_file_names(&self) -> bool;
     fn get_current_directory(&self) -> String;
+    // Go: modulespecifiers/types.go:56 BaseDirectory (ts#64159, rule R1): the
+    // program's base directory, that is the config file's directory, or the
+    // current directory without a config. It is the base of "paths"
+    // (specifiers.go:524) and the project directory without a config file
+    // (:593).
+    // PORT: the default is the current directory. A host whose program knows
+    // its base directory returns it.
+    fn base_directory(&self) -> String {
+        self.get_current_directory()
+    }
 
     fn get_project_reference_from_source(
         &self,
