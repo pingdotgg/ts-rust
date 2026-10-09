@@ -267,7 +267,7 @@ fn print_all_help(sys: &dyn System, locale: &Locale, options: &[&'static Command
     }
 }
 
-// Go: execute/tsc/help.go:135 PrintBuildHelp
+// Go: execute/tsc/help.go:131 PrintBuildHelp
 pub fn print_build_help(
     sys: &dyn System,
     locale: &Locale,
@@ -307,7 +307,7 @@ pub fn print_build_help(
     }
 }
 
-// Go: execute/tsc/help.go:149 generateSectionOptionsOutput
+// Go: execute/tsc/help.go:145 generateSectionOptionsOutput
 fn generate_section_options_output(
     sys: &dyn System,
     locale: &Locale,
@@ -371,7 +371,7 @@ fn generate_section_options_output(
     output
 }
 
-// Go: execute/tsc/help.go:194 generateGroupOptionOutput
+// Go: execute/tsc/help.go:190 generateGroupOptionOutput
 fn generate_group_option_output(
     sys: &dyn System,
     locale: &Locale,
@@ -410,7 +410,7 @@ fn generate_group_option_output(
     lines
 }
 
-// Go: execute/tsc/help.go:222 generateOptionOutput
+// Go: execute/tsc/help.go:218 generateOptionOutput
 fn generate_option_output(
     sys: &dyn System,
     locale: &Locale,
@@ -522,7 +522,7 @@ fn generate_option_output(
     text
 }
 
-// Go: execute/tsc/help.go:295 formatDefaultValue
+// Go: execute/tsc/help.go:291 formatDefaultValue
 // PORT: Go `option` is a pointer that can be nil (`Elements()` of a list
 // without elements); Go dereferences it after the nil value check.
 fn format_default_value(
@@ -619,14 +619,14 @@ fn format_float_v(value: f64) -> String {
     }
 }
 
-// Go: execute/tsc/help.go:313 valueCandidate
+// Go: execute/tsc/help.go:309 valueCandidate
 struct ValueCandidate {
     // "one or more" or "any of"
     value_type: String,
     possible_values: String,
 }
 
-// Go: execute/tsc/help.go:319 showAdditionalInfoOutput
+// Go: execute/tsc/help.go:315 showAdditionalInfoOutput
 fn show_additional_info_output(
     value_candidates: Option<&ValueCandidate>,
     option: &CommandLineOption,
@@ -650,7 +650,7 @@ fn show_additional_info_output(
     true
 }
 
-// Go: execute/tsc/help.go:332 getValueCandidate
+// Go: execute/tsc/help.go:328 getValueCandidate
 // PORT: Go takes `sys` and does not use it.
 fn get_value_candidate(
     _sys: &dyn System,
@@ -690,7 +690,7 @@ fn get_value_candidate(
     })
 }
 
-// Go: execute/tsc/help.go:366 getPossibleValues
+// Go: execute/tsc/help.go:362 getPossibleValues
 fn get_possible_values(option: &CommandLineOption) -> String {
     if option.kind == CommandLineOptionKind::STRING
         || option.kind == CommandLineOptionKind::NUMBER
@@ -729,7 +729,7 @@ fn get_possible_values(option: &CommandLineOption) -> String {
     syns.join(", ")
 }
 
-// Go: execute/tsc/help.go:397 getPrettyOutput
+// Go: execute/tsc/help.go:393 getPrettyOutput
 // PORT: Go cuts `right` at a byte index, so a cut inside a UTF-8 sequence
 // writes invalid UTF-8. The loop cuts the Go bytes of `right` and keeps
 // each piece in port form (see `scanner_util::GO_STRING_MARKER`). The
@@ -778,7 +778,7 @@ fn get_pretty_output(
     res
 }
 
-// Go: execute/tsc/help.go:424 getDisplayNameTextOfOption
+// Go: execute/tsc/help.go:420 getDisplayNameTextOfOption
 fn get_display_name_text_of_option(option: &CommandLineOption) -> String {
     format!(
         "--{}{}",

@@ -14,7 +14,7 @@ use ts_goport::frontend::tspath::ComparePathsOptions;
 use ts_goport::fswatch;
 use ts_goport::gostd::GoError;
 
-// Go: watchmanager_test.go:11 caseSensitiveOpts
+// Go: watchmanager_test.go:13 caseSensitiveOpts
 fn case_sensitive_opts() -> ComparePathsOptions {
     ComparePathsOptions {
         use_case_sensitive_file_names: true,
@@ -22,7 +22,7 @@ fn case_sensitive_opts() -> ComparePathsOptions {
     }
 }
 
-// Go: watchmanager_test.go:12 caseInsensitiveOpts
+// Go: watchmanager_test.go:14 caseInsensitiveOpts
 fn case_insensitive_opts() -> ComparePathsOptions {
     ComparePathsOptions {
         use_case_sensitive_file_names: false,
@@ -30,7 +30,7 @@ fn case_insensitive_opts() -> ComparePathsOptions {
     }
 }
 
-// Go: watchmanager_test.go:18 TestDirWatchSetCoverage
+// Go: watchmanager_test.go:20 TestDirWatchSetCoverage
 /// TestDirWatchSetCoverage checks the core coverage rules: a recursive watch
 /// covers itself and all descendants, while a non-recursive watch covers only
 /// itself. Ancestors and unrelated paths are never covered.
@@ -57,7 +57,7 @@ fn test_dir_watch_set_coverage() {
     }
 }
 
-// Go: watchmanager_test.go:47 TestDirWatchSetCaseSensitive
+// Go: watchmanager_test.go:49 TestDirWatchSetCaseSensitive
 /// TestDirWatchSetCaseSensitive verifies that on a case-sensitive filesystem a
 /// differently-cased directory is a distinct, uncovered directory.
 #[test]
@@ -81,7 +81,7 @@ fn test_dir_watch_set_case_sensitive() {
     );
 }
 
-// Go: watchmanager_test.go:62 TestDirWatchSetCaseInsensitive
+// Go: watchmanager_test.go:64 TestDirWatchSetCaseInsensitive
 /// TestDirWatchSetCaseInsensitive verifies that on a case-insensitive filesystem
 /// coverage ignores casing for both exact matches and recursive containment.
 #[test]
@@ -104,7 +104,7 @@ fn test_dir_watch_set_case_insensitive() {
     );
 }
 
-// Go: watchmanager_test.go:77 TestDirWatchSetCanonicalDedup
+// Go: watchmanager_test.go:80 TestDirWatchSetCanonicalDedup
 /// TestDirWatchSetCanonicalDedup verifies that on a case-insensitive filesystem
 /// directories that differ only by casing collapse to a single canonical entry,
 /// while a case-sensitive filesystem keeps them distinct.
@@ -136,7 +136,7 @@ fn test_dir_watch_set_canonical_dedup() {
     );
 }
 
-// Go: watchmanager_test.go:97 TestDirWatchSetUpgradeToRecursive
+// Go: watchmanager_test.go:100 TestDirWatchSetUpgradeToRecursive
 /// TestDirWatchSetUpgradeToRecursive verifies that upgrading a directory from
 /// non-recursive to recursive begins covering its descendants.
 #[test]
@@ -157,7 +157,7 @@ fn test_dir_watch_set_upgrade_to_recursive() {
     assert!(set.dirs().get("/repo/src").copied().unwrap_or(false));
 }
 
-// Go: watchmanager_test.go:112 TestDirWatchSetNeverDowngrades
+// Go: watchmanager_test.go:115 TestDirWatchSetNeverDowngrades
 /// TestDirWatchSetNeverDowngrades verifies a recursive watch is not downgraded by
 /// a subsequent non-recursive Set of the same directory.
 #[test]
@@ -173,7 +173,7 @@ fn test_dir_watch_set_never_downgrades() {
     );
 }
 
-// Go: watchmanager_test.go:125 TestDirWatchSetDirs
+// Go: watchmanager_test.go:128 TestDirWatchSetDirs
 /// TestDirWatchSetDirs verifies the emitted map reflects every added directory
 /// with the expected recursive flags.
 #[test]
@@ -302,7 +302,7 @@ fn test_resolve_desired_dirs_deduplicates_case_insensitive_ancestors() {
     }
 }
 
-// Go: watchmanager_test.go:221 recordingWatchBackend
+// Go: watchmanager_test.go:222 recordingWatchBackend
 #[derive(Default)]
 struct RecordingWatchBackend {
     requests: RefCell<Vec<WatchDirectoryRequest>>,
@@ -335,7 +335,7 @@ impl WatchBackend for RecordingWatchBackend {
         Ok(closers.remove(0))
     }
 
-    // Go: watchmanager_test.go:225 recordingWatchBackend.WatchDirectories
+    // Go: watchmanager_test.go:226 recordingWatchBackend.WatchDirectories
     fn watch_directories(
         &self,
         requests: Vec<WatchDirectoryRequest>,

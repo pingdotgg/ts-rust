@@ -85,7 +85,7 @@ pub fn build_info_to_snapshot(
     to.snapshot
 }
 
-// Go: incremental/buildinfotosnapshot.go:49 toSnapshot
+// Go: incremental/buildinfotosnapshot.go:46 toSnapshot
 struct ToSnapshot<'a> {
     build_info: &'a BuildInfo,
     build_info_directory: String,
@@ -97,17 +97,19 @@ struct ToSnapshot<'a> {
 }
 
 impl ToSnapshot<'_> {
-    // Go: incremental/buildinfotosnapshot.go:57 toAbsolutePath
+    // Go: incremental/buildinfotosnapshot.go:57 toAbsolutePath (at 673a5f17d713; ts#64159
+    // renames it toAbsoluteFileName, buildinfotosnapshot.go:54)
     fn to_absolute_path(&self, path: &str) -> String {
         get_normalized_absolute_path(path, &self.build_info_directory)
     }
 
-    // Go: incremental/buildinfotosnapshot.go:61 toFilePath
+    // Go: incremental/buildinfotosnapshot.go:61 toFilePath (at 673a5f17d713; ts#64159
+    // renames it filePathKey, buildinfotosnapshot.go:58)
     fn to_file_path(&self, file_id: BuildInfoFileId) -> Path {
         go_index(&self.file_paths, i64::from(file_id.0) - 1).clone()
     }
 
-    // Go: incremental/buildinfotosnapshot.go:65 toFilePathSet
+    // Go: incremental/buildinfotosnapshot.go:62 toFilePathSet
     fn to_file_path_set(&self, file_id_list_id: BuildInfoFileIdListId) -> Arc<FxIndexSet<Path>> {
         Arc::clone(go_index(
             &self.file_path_set,
@@ -115,7 +117,7 @@ impl ToSnapshot<'_> {
         ))
     }
 
-    // Go: incremental/buildinfotosnapshot.go:69 toBuildInfoDiagnosticsWithFileName
+    // Go: incremental/buildinfotosnapshot.go:66 toBuildInfoDiagnosticsWithFileName
     // PORT: Go `core.Map` gives nil (`None`) for nil and an empty slice for
     // an empty one.
     fn to_build_info_diagnostics_with_file_name(
@@ -155,7 +157,7 @@ impl ToSnapshot<'_> {
         Some(converted)
     }
 
-    // Go: incremental/buildinfotosnapshot.go:96 toDiagnosticsOrBuildInfoDiagnosticsWithFileName
+    // Go: incremental/buildinfotosnapshot.go:93 toDiagnosticsOrBuildInfoDiagnosticsWithFileName
     fn to_diagnostics_or_build_info_diagnostics_with_file_name(
         &self,
         dig: &BuildInfoDiagnosticsOfFile,
@@ -170,7 +172,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:114 setCompilerOptions
+    // Go: incremental/buildinfotosnapshot.go:111 setCompilerOptions
     fn set_compiler_options(&mut self) {
         let options = self
             .build_info
@@ -178,7 +180,7 @@ impl ToSnapshot<'_> {
         self.snapshot.options = Box::leak(Box::new(options));
     }
 
-    // Go: incremental/buildinfotosnapshot.go:118 setFileInfoAndEmitSignatures
+    // Go: incremental/buildinfotosnapshot.go:115 setFileInfoAndEmitSignatures
     fn set_file_info_and_emit_signatures(&mut self) {
         let is_composite = self.snapshot.options.composite.is_true();
         for (index, build_info_file_info) in self.build_info.file_infos.iter().flatten().enumerate()
@@ -211,7 +213,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:140 setReferencedMap
+    // Go: incremental/buildinfotosnapshot.go:137 setReferencedMap
     fn set_referenced_map(&mut self) {
         for entry in self.build_info.referenced_map.iter().flatten() {
             let path = self.to_file_path(entry.file_id);
@@ -220,7 +222,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:146 setChangeFileSet
+    // Go: incremental/buildinfotosnapshot.go:143 setChangeFileSet
     fn set_change_file_set(&mut self) {
         for &file_id in self.build_info.change_file_set.iter().flatten() {
             let file_path = self.to_file_path(file_id);
@@ -228,7 +230,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:153 setSemanticDiagnostics
+    // Go: incremental/buildinfotosnapshot.go:150 setSemanticDiagnostics
     fn set_semantic_diagnostics(&mut self) {
         let snapshot = &mut self.snapshot;
         for path in snapshot.file_infos.keys() {
@@ -268,7 +270,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:172 setEmitDiagnostics
+    // Go: incremental/buildinfotosnapshot.go:169 setEmitDiagnostics
     fn set_emit_diagnostics(&mut self) {
         for diagnostic in self.build_info.emit_diagnostics_per_file.iter().flatten() {
             let file_path = self.to_file_path(diagnostic.file_id);
@@ -279,7 +281,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:179 setAffectedFilesPendingEmit
+    // Go: incremental/buildinfotosnapshot.go:176 setAffectedFilesPendingEmit
     fn set_affected_files_pending_emit(&mut self) {
         let Some(affected_files_pending_emit) = self
             .build_info
@@ -303,7 +305,7 @@ impl ToSnapshot<'_> {
         }
     }
 
-    // Go: incremental/buildinfotosnapshot.go:189 setPackageJsons
+    // Go: incremental/buildinfotosnapshot.go:186 setPackageJsons
     fn set_package_jsons(&mut self) {
         self.snapshot.package_jsons = Some(
             self.build_info
@@ -338,7 +340,7 @@ fn go_index<T>(s: &[T], i: i64) -> &T {
     }
 }
 
-// Go: incremental/buildinfotosnapshot.go:102 fromBuildInfoRepopulateInfo
+// Go: incremental/buildinfotosnapshot.go:99 fromBuildInfoRepopulateInfo
 #[must_use]
 pub fn from_build_info_repopulate_info(
     info: Option<&BuildInfoRepopulateInfo>,

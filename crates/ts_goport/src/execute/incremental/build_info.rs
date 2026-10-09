@@ -440,11 +440,11 @@ impl<'a> ObjectWriter<'a> {
 // buildInfo.go
 // ---------------------------------------------------------------------------
 
-// Go: incremental/buildInfo.go:16 BuildInfoFileId
+// Go: incremental/buildInfo.go:19 BuildInfoFileId
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BuildInfoFileId(pub i32);
 
-// Go: incremental/buildInfo.go:17 BuildInfoFileIdListId
+// Go: incremental/buildInfo.go:20 BuildInfoFileIdListId
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BuildInfoFileIdListId(pub i32);
 
@@ -462,7 +462,7 @@ impl MarshalerTo for BuildInfoFileId {
     }
 }
 
-// Go: incremental/buildInfo.go:21 BuildInfoRoot
+// Go: incremental/buildInfo.go:37 BuildInfoRoot
 // buildInfoRoot is
 // - for incremental program buildinfo
 //   - start and end of FileId for consecutive fileIds to be included as root
@@ -478,7 +478,7 @@ pub struct BuildInfoRoot {
 }
 
 impl MarshalerTo for BuildInfoRoot {
-    // Go: incremental/buildInfo.go:35 MarshalJSON
+    // Go: incremental/buildInfo.go:43 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         if self.start.0 != 0 {
             if self.end.0 != 0 {
@@ -493,7 +493,7 @@ impl MarshalerTo for BuildInfoRoot {
 }
 
 impl UnmarshalerFrom for BuildInfoRoot {
-    // Go: incremental/buildInfo.go:47 UnmarshalJSON
+    // Go: incremental/buildInfo.go:55 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -535,7 +535,7 @@ impl UnmarshalerFrom for BuildInfoRoot {
     }
 }
 
-// Go: incremental/buildInfo.go:73 buildInfoFileInfoNoSignature
+// Go: incremental/buildInfo.go:81 buildInfoFileInfoNoSignature
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildInfoFileInfoNoSignature {
     pub version: String,
@@ -571,7 +571,7 @@ impl UnmarshalerFrom for BuildInfoFileInfoNoSignature {
     }
 }
 
-// Go: incremental/buildInfo.go:83 buildInfoFileInfoWithSignature
+// Go: incremental/buildInfo.go:91 buildInfoFileInfoWithSignature
 //
 //	 Signature is
 //		 - undefined if FileInfo.version === FileInfo.signature
@@ -672,7 +672,7 @@ impl UnmarshalerFrom for BuildInfoFileInfoMembers {
     }
 }
 
-// Go: incremental/buildInfo.go:90 BuildInfoFileInfo
+// Go: incremental/buildInfo.go:98 BuildInfoFileInfo
 // PORT: Go unexported fields are plain `pub` fields. Go nil pointers are
 // `None`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -682,7 +682,7 @@ pub struct BuildInfoFileInfo {
     pub file_info: Option<BuildInfoFileInfoWithSignature>,
 }
 
-// Go: incremental/buildInfo.go:96 newBuildInfoFileInfo
+// Go: incremental/buildInfo.go:104 newBuildInfoFileInfo
 #[must_use]
 pub fn new_build_info_file_info(file_info: &FileInfo) -> BuildInfoFileInfo {
     if file_info.version == file_info.signature {
@@ -721,7 +721,7 @@ pub fn new_build_info_file_info(file_info: &FileInfo) -> BuildInfoFileInfo {
 }
 
 impl BuildInfoFileInfo {
-    // Go: incremental/buildInfo.go:116 GetFileInfo
+    // Go: incremental/buildInfo.go:125 GetFileInfo
     // PORT: the Go nil receiver check is the caller's `Option`.
     #[must_use]
     pub fn get_file_info(&self) -> FileInfo {
@@ -757,7 +757,7 @@ impl BuildInfoFileInfo {
         }
     }
 
-    // Go: incremental/buildInfo.go:142 HasSignature
+    // Go: incremental/buildInfo.go:151 HasSignature
     #[must_use]
     pub fn has_signature(&self) -> bool {
         !self.signature.is_empty()
@@ -765,7 +765,7 @@ impl BuildInfoFileInfo {
 }
 
 impl MarshalerTo for BuildInfoFileInfo {
-    // Go: incremental/buildInfo.go:146 MarshalJSON
+    // Go: incremental/buildInfo.go:155 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         if !self.signature.is_empty() {
             return self.signature.marshal_json_to(enc);
@@ -785,7 +785,7 @@ impl MarshalerTo for BuildInfoFileInfo {
 }
 
 impl UnmarshalerFrom for BuildInfoFileInfo {
-    // Go: incremental/buildInfo.go:156 UnmarshalJSON
+    // Go: incremental/buildInfo.go:165 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -838,7 +838,7 @@ impl UnmarshalerFrom for BuildInfoFileInfo {
     }
 }
 
-// Go: incremental/buildInfo.go:176 BuildInfoReferenceMapEntry
+// Go: incremental/buildInfo.go:184 BuildInfoReferenceMapEntry
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildInfoReferenceMapEntry {
     pub file_id: BuildInfoFileId,
@@ -846,7 +846,7 @@ pub struct BuildInfoReferenceMapEntry {
 }
 
 impl MarshalerTo for BuildInfoReferenceMapEntry {
-    // Go: incremental/buildInfo.go:181 MarshalJSON
+    // Go: incremental/buildInfo.go:189 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         enc.push('[');
         marshal_int(enc, i64::from(self.file_id.0));
@@ -858,7 +858,7 @@ impl MarshalerTo for BuildInfoReferenceMapEntry {
 }
 
 impl UnmarshalerFrom for BuildInfoReferenceMapEntry {
-    // Go: incremental/buildInfo.go:185 UnmarshalJSON
+    // Go: incremental/buildInfo.go:193 UnmarshalJSON
     // PORT: Go reads a `*[2]int`; null leaves it nil and then panics on the
     // index. The port returns an error instead.
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
@@ -876,7 +876,7 @@ impl UnmarshalerFrom for BuildInfoReferenceMapEntry {
     }
 }
 
-// Go: incremental/buildInfo.go:197 BuildInfoDiagnostic
+// Go: incremental/buildInfo.go:205 BuildInfoDiagnostic
 // PORT: Go `diagnostics.Category` (int32) is stored as `i32`, so the zero
 // value (`CategoryWarning`) is omitted like in Go. Go `diagnostics.Key` is
 // `String`.
@@ -965,7 +965,7 @@ impl UnmarshalerFrom for BuildInfoDiagnostic {
     }
 }
 
-// Go: incremental/buildInfo.go:214 BuildInfoRepopulateInfo
+// Go: incremental/buildInfo.go:225 BuildInfoRepopulateInfo
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildInfoRepopulateInfo {
     pub kind: RepopulateDiagnosticKind,
@@ -1001,7 +1001,7 @@ impl UnmarshalerFrom for BuildInfoRepopulateInfo {
     }
 }
 
-// Go: incremental/buildInfo.go:221 BuildInfoDiagnosticsOfFile
+// Go: incremental/buildInfo.go:232 BuildInfoDiagnosticsOfFile
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildInfoDiagnosticsOfFile {
     pub file_id: BuildInfoFileId,
@@ -1009,7 +1009,7 @@ pub struct BuildInfoDiagnosticsOfFile {
 }
 
 impl MarshalerTo for BuildInfoDiagnosticsOfFile {
-    // Go: incremental/buildInfo.go:226 MarshalJSON
+    // Go: incremental/buildInfo.go:237 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         enc.push('[');
         self.file_id.marshal_json_to(enc)?;
@@ -1021,7 +1021,7 @@ impl MarshalerTo for BuildInfoDiagnosticsOfFile {
 }
 
 impl UnmarshalerFrom for BuildInfoDiagnosticsOfFile {
-    // Go: incremental/buildInfo.go:233 UnmarshalJSON
+    // Go: incremental/buildInfo.go:244 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -1076,7 +1076,7 @@ impl UnmarshalerFrom for BuildInfoDiagnosticsOfFilePtr {
     }
 }
 
-// Go: incremental/buildInfo.go:233 UnmarshalJSON (body)
+// Go: incremental/buildInfo.go:244 UnmarshalJSON (body)
 fn build_info_diagnostics_of_file_from_bytes(
     data: &[u8],
 ) -> Result<BuildInfoDiagnosticsOfFile, JsonError> {
@@ -1113,7 +1113,7 @@ fn build_info_diagnostics_of_file_from_bytes(
     })
 }
 
-// Go: incremental/buildInfo.go:258 BuildInfoSemanticDiagnostic
+// Go: incremental/buildInfo.go:268 BuildInfoSemanticDiagnostic
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildInfoSemanticDiagnostic {
     pub file_id: BuildInfoFileId, // File is not in changedSet and still doesnt have cached diagnostics
@@ -1121,7 +1121,7 @@ pub struct BuildInfoSemanticDiagnostic {
 }
 
 impl MarshalerTo for BuildInfoSemanticDiagnostic {
-    // Go: incremental/buildInfo.go:263 MarshalJSON
+    // Go: incremental/buildInfo.go:273 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         if self.file_id.0 != 0 {
             return self.file_id.marshal_json_to(enc);
@@ -1137,7 +1137,7 @@ impl MarshalerTo for BuildInfoSemanticDiagnostic {
 }
 
 impl UnmarshalerFrom for BuildInfoSemanticDiagnostic {
-    // Go: incremental/buildInfo.go:270 UnmarshalJSON
+    // Go: incremental/buildInfo.go:280 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -1169,7 +1169,7 @@ impl UnmarshalerFrom for BuildInfoSemanticDiagnostic {
     }
 }
 
-// Go: incremental/buildInfo.go:289 BuildInfoFilePendingEmit
+// Go: incremental/buildInfo.go:301 BuildInfoFilePendingEmit
 // fileId if pending emit is same as what compilerOptions suggest
 // [fileId] if pending emit is only dts file emit
 // [fileId, emitKind] if any other type emit is pending
@@ -1180,7 +1180,7 @@ pub struct BuildInfoFilePendingEmit {
 }
 
 impl MarshalerTo for BuildInfoFilePendingEmit {
-    // Go: incremental/buildInfo.go:294 MarshalJSON
+    // Go: incremental/buildInfo.go:306 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         if self.emit_kind.is_empty() {
             return self.file_id.marshal_json_to(enc);
@@ -1199,7 +1199,7 @@ impl MarshalerTo for BuildInfoFilePendingEmit {
 }
 
 impl UnmarshalerFrom for BuildInfoFilePendingEmit {
-    // Go: incremental/buildInfo.go:306 UnmarshalJSON
+    // Go: incremental/buildInfo.go:318 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -1250,7 +1250,7 @@ impl UnmarshalerFrom for BuildInfoFilePendingEmit {
     }
 }
 
-// Go: incremental/buildInfo.go:338 BuildInfoEmitSignature
+// Go: incremental/buildInfo.go:350 BuildInfoEmitSignature
 // [fileId, signature] if different from file's signature
 // fileId if file wasnt emitted
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1262,13 +1262,13 @@ pub struct BuildInfoEmitSignature {
 }
 
 impl BuildInfoEmitSignature {
-    // Go: incremental/buildInfo.go:345 noEmitSignature
+    // Go: incremental/buildInfo.go:357 noEmitSignature
     #[must_use]
     pub fn no_emit_signature(&self) -> bool {
         self.signature.is_empty() && !self.differs_only_in_dts_map && !self.differs_in_options
     }
 
-    // Go: incremental/buildInfo.go:350 toEmitSignature
+    // Go: incremental/buildInfo.go:361 toEmitSignature
     // PORT: Go `collections.SyncMap[tspath.Path, *emitSignature]` is a plain
     // map. Go dereferences a missing entry (nil pointer panic); so does the
     // `expect`.
@@ -1302,7 +1302,7 @@ impl BuildInfoEmitSignature {
 }
 
 impl MarshalerTo for BuildInfoEmitSignature {
-    // Go: incremental/buildInfo.go:370 MarshalJSON
+    // Go: incremental/buildInfo.go:380 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         if self.no_emit_signature() {
             return self.file_id.marshal_json_to(enc);
@@ -1323,7 +1323,7 @@ impl MarshalerTo for BuildInfoEmitSignature {
 }
 
 impl UnmarshalerFrom for BuildInfoEmitSignature {
-    // Go: incremental/buildInfo.go:389 UnmarshalJSON
+    // Go: incremental/buildInfo.go:398 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -1401,7 +1401,7 @@ impl UnmarshalerFrom for BuildInfoEmitSignature {
     }
 }
 
-// Go: incremental/buildInfo.go:444 BuildInfoResolvedRoot
+// Go: incremental/buildInfo.go:452 BuildInfoResolvedRoot
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildInfoResolvedRoot {
     pub resolved: BuildInfoFileId,
@@ -1409,14 +1409,14 @@ pub struct BuildInfoResolvedRoot {
 }
 
 impl MarshalerTo for BuildInfoResolvedRoot {
-    // Go: incremental/buildInfo.go:449 MarshalJSON
+    // Go: incremental/buildInfo.go:457 MarshalJSON
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         vec![self.resolved, self.root].marshal_json_to(enc)
     }
 }
 
 impl UnmarshalerFrom for BuildInfoResolvedRoot {
-    // Go: incremental/buildInfo.go:453 UnmarshalJSON
+    // Go: incremental/buildInfo.go:461 UnmarshalJSON
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         if dec.peek_kind() == b'n' {
             dec.read_token()?;
@@ -1437,7 +1437,7 @@ impl UnmarshalerFrom for BuildInfoResolvedRoot {
     }
 }
 
-// Go: incremental/buildInfo.go:465 BuildInfo
+// Go: incremental/buildInfo.go:473 BuildInfo
 // PORT: Go `*collections.OrderedMap[string, any]` is
 // `Option<IndexMap<String, CompilerOptionsValue>>`. Go `any` values read
 // from JSON are `Nil`, `Bool`, `Number`, `String`, `List` or `Map`.
@@ -1583,7 +1583,7 @@ impl UnmarshalerFrom for BuildInfo {
     }
 }
 
-// Go: incremental/buildInfo.go:501 ContentMapperIdentities (tsgo#4712)
+// Go: incremental/buildInfo.go:508 ContentMapperIdentities (tsgo#4712)
 // ContentMapperIdentities returns the project's sorted mapper transform identities. A nil project means
 // the compiler host has no configured content mappers.
 // PORT: Go nil (the slice and the project) is `None`.
@@ -1622,7 +1622,7 @@ pub fn build_info_version(effect: bool) -> std::borrow::Cow<'static, str> {
 }
 
 impl BuildInfo {
-    // Go: incremental/buildInfo.go:495 IsValidVersion
+    // Go: incremental/buildInfo.go:502 IsValidVersion
     // PORT: `effect` is whether the reading program runs the Effect rules
     // (`build_info_version`). Build info with Effect options and the plain
     // version is from tsc-rs before effectfix2 (Theo PR #4), which did not
@@ -1634,7 +1634,7 @@ impl BuildInfo {
         self.version == build_info_version(effect) && (effect || self.effect.is_none())
     }
 
-    // Go: incremental/buildInfo.go:510 ContentMapperIdentitiesMatch (tsgo#4712)
+    // Go: incremental/buildInfo.go:517 ContentMapperIdentitiesMatch (tsgo#4712)
     // ContentMapperIdentitiesMatch reports whether the content mapper identities recorded in this build info
     // match the given current identities (as produced by ContentMapperIdentities).
     // PORT: Go `slices.Equal` treats nil and empty alike, as `unwrap_or_default` does.
@@ -1646,7 +1646,7 @@ impl BuildInfo {
             == current.unwrap_or_default()
     }
 
-    // Go: incremental/buildInfo.go:496 IsIncremental
+    // Go: incremental/buildInfo.go:521 IsIncremental
     // PORT: the Go nil receiver check is the caller's `Option`.
     #[must_use]
     pub fn is_incremental(&self) -> bool {
@@ -1655,7 +1655,7 @@ impl BuildInfo {
             .is_some_and(|names| !names.is_empty())
     }
 
-    // Go: incremental/buildInfo.go:502 fileName
+    // Go: incremental/buildInfo.go:536 fileName
     // PORT: an id out of range gives "", as in Go.
     #[must_use]
     pub fn file_name(&self, file_id: BuildInfoFileId) -> &str {
@@ -1666,7 +1666,7 @@ impl BuildInfo {
         &file_names[(file_id.0 - 1) as usize]
     }
 
-    // Go: incremental/buildInfo.go:509 fileInfo
+    // Go: incremental/buildInfo.go:543 fileInfo
     // PORT: an id out of range gives `None` (Go nil).
     #[must_use]
     pub fn file_info(&self, file_id: BuildInfoFileId) -> Option<&BuildInfoFileInfo> {
@@ -1677,7 +1677,7 @@ impl BuildInfo {
         Some(&file_infos[(file_id.0 - 1) as usize])
     }
 
-    // Go: incremental/buildInfo.go:508 GetCompilerOptions
+    // Go: incremental/buildInfo.go:550 GetCompilerOptions
     #[must_use]
     pub fn get_compiler_options(&self, build_info_directory: &str) -> CompilerOptions {
         let mut options = CompilerOptions::default();
@@ -1705,7 +1705,7 @@ impl BuildInfo {
         options
     }
 
-    // Go: incremental/buildInfo.go:524 IsEmitPending
+    // Go: incremental/buildInfo.go:578 IsEmitPending
     #[must_use]
     pub fn is_emit_pending(
         &self,
@@ -1728,12 +1728,12 @@ impl BuildInfo {
         false
     }
 
-    // Go: incremental/buildInfo.go:544 GetPackageJsons
+    // Go: incremental/buildInfo.go:590 GetPackageJsons
     pub fn get_package_jsons(&self, build_info_directory: &str) -> impl Iterator<Item = String> {
         get_normalized_paths(self.package_jsons.as_deref(), build_info_directory)
     }
 
-    // Go: incremental/buildInfo.go:548 GetMissingPackageJsons
+    // Go: incremental/buildInfo.go:594 GetMissingPackageJsons
     pub fn get_missing_package_jsons(
         &self,
         build_info_directory: &str,
@@ -1741,7 +1741,7 @@ impl BuildInfo {
         get_normalized_paths(self.missing_package_jsons.as_deref(), build_info_directory)
     }
 
-    // Go: incremental/buildInfo.go:562 GetBuildInfoRootInfoReader
+    // Go: incremental/buildInfo.go:608 GetBuildInfoRootInfoReader
     #[must_use]
     pub fn get_build_info_root_info_reader(
         &self,
@@ -1821,13 +1821,14 @@ impl BuildInfo {
     }
 }
 
-// Go: incremental/buildInfo.go:498 IsBuildInfoFileNameDefaultLibrary
+// Go: incremental/buildInfo.go:525 IsBuildInfoFileNameDefaultLibrary
 #[must_use]
 pub fn is_build_info_file_name_default_library(file_name: &str) -> bool {
     !path_is_relative(file_name) && !path_is_absolute(file_name)
 }
 
-// Go: incremental/buildInfo.go:552 getNormalizedPaths
+// Go: incremental/buildInfo.go:552 getNormalizedPaths (at 673a5f17d713; ts#64159 renames
+// it getBuildInfoFileNames, incremental/buildInfo.go:598)
 // PORT: both lifetimes stay separate (edition 2024 captures both) so the
 // public getters can return this opaque type.
 fn get_normalized_paths(
@@ -1840,7 +1841,7 @@ fn get_normalized_paths(
         .map(move |path| get_normalized_absolute_path(path, build_info_directory))
 }
 
-// Go: incremental/buildInfo.go:613 BuildInfoRootInfoReader
+// Go: incremental/buildInfo.go:669 BuildInfoRootInfoReader
 #[derive(Clone, Debug, Default)]
 pub struct BuildInfoRootInfoReader {
     pub resolved_root_file_infos: FxHashMap<Path, BuildInfoFileInfo>,
@@ -1850,7 +1851,7 @@ pub struct BuildInfoRootInfoReader {
 }
 
 impl BuildInfoRootInfoReader {
-    // Go: incremental/buildInfo.go:584 GetBuildInfoFileInfo
+    // Go: incremental/buildInfo.go:676 GetBuildInfoFileInfo
     // PORT: Go nil info is `None`; a missing root gives `(None, "")`.
     #[must_use]
     pub fn get_build_info_file_info(
@@ -1869,7 +1870,7 @@ impl BuildInfoRootInfoReader {
         (None, Path::default())
     }
 
-    // Go: incremental/buildInfo.go:594 Roots
+    // Go: incremental/buildInfo.go:686 Roots
     pub fn roots(&self) -> impl Iterator<Item = &Path> {
         self.root_to_resolved.keys()
     }

@@ -60,7 +60,7 @@ fn path_key(dir: &str, use_case_sensitive_file_names: bool) -> String {
     tspath::to_path(dir, "", use_case_sensitive_file_names).0
 }
 
-// Go: watchmanager.go:33 WatchManager
+// Go: watchmanager.go:35 WatchManager
 /// WatchManager manages fswatch directory watches, event accumulation,
 /// and DoCycle signaling. It is shared by the CLI watcher and the build
 /// mode orchestrator.
@@ -218,17 +218,17 @@ pub fn new_watch_manager(
 }
 
 impl WatchManager {
-    // Go: watchmanager.go:59 WatchManager.SetBackend
+    // Go: watchmanager.go:63 WatchManager.SetBackend
     pub fn set_backend(&mut self, b: Rc<dyn WatchBackend>) {
         self.backend = Some(b);
     }
 
-    // Go: watchmanager.go:61 WatchManager.Backend
+    // Go: watchmanager.go:65 WatchManager.Backend
     pub fn backend(&self) -> Option<Rc<dyn WatchBackend>> {
         self.backend.clone()
     }
 
-    // Go: watchmanager.go:63 WatchManager.EnsureDefaultBackend
+    // Go: watchmanager.go:67 WatchManager.EnsureDefaultBackend
     pub fn ensure_default_backend(&mut self) {
         if self.backend.is_none() {
             let fsw = fswatch::default();
@@ -242,22 +242,22 @@ impl WatchManager {
         }
     }
 
-    // Go: watchmanager.go:73 WatchManager.Lock
+    // Go: watchmanager.go:77 WatchManager.Lock
     pub fn lock(&self) {
         self.shared.mu.lock();
     }
 
-    // Go: watchmanager.go:75 WatchManager.Unlock
+    // Go: watchmanager.go:79 WatchManager.Unlock
     pub fn unlock(&self) {
         self.shared.mu.unlock();
     }
 
-    // Go: watchmanager.go:77 WatchManager.DoCycleCh
+    // Go: watchmanager.go:81 WatchManager.DoCycleCh
     pub fn do_cycle_ch(&self) -> &DoCycleCh {
         &self.shared.do_cycle_ch
     }
 
-    // Go: watchmanager.go:79 WatchManager.DrainEvents
+    // Go: watchmanager.go:83 WatchManager.DrainEvents
     /// PORT: Go returns a nil map when nothing changed; the port returns an
     /// empty map.
     pub fn drain_events(&self) -> (FxHashMap<String, fswatch::EventKind>, bool) {
@@ -269,13 +269,13 @@ impl WatchManager {
         (changed_paths, overflow)
     }
 
-    // Go: watchmanager.go:89 WatchManager.ForceOverflow
+    // Go: watchmanager.go:93 WatchManager.ForceOverflow
     pub fn force_overflow(&self) {
         let mut changed = self.shared.changed_mu.lock().unwrap();
         changed.changed_overflow = true;
     }
 
-    // Go: watchmanager.go:167 WatchManager.CloseAllWatches
+    // Go: watchmanager.go:171 WatchManager.CloseAllWatches
     pub fn close_all_watches(&self) {
         self.shared.mu.lock();
         let closers: Vec<Arc<WatchedDir>> = {
@@ -292,7 +292,7 @@ impl WatchManager {
         }
     }
 
-    // Go: watchmanager.go:180 WatchManager.createDirWatchRequest
+    // Go: watchmanager.go:184 WatchManager.createDirWatchRequest
     fn create_dir_watch_request(
         &self,
         update: &DirWatchUpdate,
@@ -321,7 +321,7 @@ impl WatchManager {
         }
     }
 
-    // Go: watchmanager.go:195 WatchManager.ResolveDesiredDirs
+    // Go: watchmanager.go:199 WatchManager.ResolveDesiredDirs
     pub fn resolve_desired_dirs(
         &self,
         desired_dirs: &FxHashMap<String, bool>,
@@ -391,7 +391,7 @@ impl WatchManager {
         resolved
     }
 
-    // Go: watchmanager.go:226 WatchManager.ReconcileWatches
+    // Go: watchmanager.go:246 WatchManager.ReconcileWatches
     // PORT: Go ranges over `wm.watchedDirs` while the callbacks delete
     // entries (Go allows that). The port passes a copy of the map and the
     // callbacks change the live map.
@@ -473,7 +473,7 @@ impl WatchManager {
         self.create_dir_watches(additions)
     }
 
-    // Go: watchmanager.go:264 WatchManager.createDirWatches
+    // Go: watchmanager.go:295 WatchManager.createDirWatches
     fn create_dir_watches(&self, updates: Vec<DirWatchUpdate>) -> Result<(), GoError> {
         if updates.is_empty() {
             return Ok(());
@@ -543,7 +543,7 @@ impl WatchManager {
         false
     }
 
-    // Go: watchmanager.go:354 WatchManager.RunLoop
+    // Go: watchmanager.go:382 WatchManager.RunLoop
     // PORT: Go selects on `ctx.Done()` and `doCycleCh`. The port waits on
     // the channel with a timeout and checks `ctx.err()` (PORTING "Go
     // runtime"). `doCycle` is the caller's DoCycle method value. After a
@@ -567,14 +567,14 @@ impl WatchManager {
 }
 
 impl WatchManagerShared {
-    // Go: watchmanager.go:95 WatchManager.signalDoCycle
+    // Go: watchmanager.go:99 WatchManager.signalDoCycle
     pub fn signal_do_cycle(&self) {
         // Signal sent; the DoCycle loop will pick it up. Or a signal is
         // already pending; coalesced.
         let _ = self.do_cycle_ch.try_send();
     }
 
-    // Go: watchmanager.go:104 WatchManager.onWatchEvents
+    // Go: watchmanager.go:108 WatchManager.onWatchEvents
     // PORT: runs on the fswatch callback thread. `debug_log` is whether Go
     // `wm.DebugLog` is non-nil; the text goes to the process stdout, as does
     // the `warnWriter` warning (see the file comment).
@@ -629,7 +629,7 @@ impl WatchManagerShared {
         }
     }
 
-    // Go: watchmanager.go:147 WatchManager.handleWatchTerminated
+    // Go: watchmanager.go:151 WatchManager.handleWatchTerminated
     // PORT: runs on the fswatch callback thread (see onWatchEvents).
     // ts#64159: `key` is the path key of the watch.
     pub fn handle_watch_terminated(&self, debug_log: bool, key: &str, identity: &Arc<WatchedDir>) {
@@ -659,7 +659,7 @@ impl WatchManagerShared {
     }
 }
 
-// Go: watchmanager.go:295 DirWatchSet
+// Go: watchmanager.go:326 DirWatchSet
 /// DirWatchSet accumulates the set of directories that should be watched while
 /// answering coverage queries efficiently. A directory is "covered" when it is
 /// already present in the set, or when it is contained within a recursive watch
@@ -672,7 +672,7 @@ pub struct DirWatchSet {
     names: FxHashMap<String, String>,
 }
 
-// Go: watchmanager.go:301 NewDirWatchSet
+// Go: watchmanager.go:331 NewDirWatchSet
 pub fn new_dir_watch_set(opts: tspath::ComparePathsOptions) -> DirWatchSet {
     DirWatchSet {
         opts,
@@ -688,7 +688,7 @@ impl DirWatchSet {
         path_key(dir, self.opts.use_case_sensitive_file_names)
     }
 
-    // Go: watchmanager.go:313 DirWatchSet.Set (ts#64210)
+    // Go: watchmanager.go:338 DirWatchSet.Set (ts#64210)
     pub fn set(&mut self, dir: &str, recursive: bool) {
         let original = dir;
         let dir = self.canonical(dir);
@@ -699,7 +699,7 @@ impl DirWatchSet {
         *entry = *entry || recursive;
     }
 
-    // Go: watchmanager.go:322 DirWatchSet.Covered
+    // Go: watchmanager.go:348 DirWatchSet.Covered
     pub fn covered(&self, dir: &str) -> bool {
         let mut dir = self.canonical(dir);
         if self.dirs.contains_key(&dir) {
@@ -715,7 +715,7 @@ impl DirWatchSet {
         false
     }
 
-    // Go: watchmanager.go:337 DirWatchSet.Dirs (ts#64210)
+    // Go: watchmanager.go:365 DirWatchSet.Dirs (ts#64210)
     // PORT: Go ranges over a map; the result is a map, so the order does
     // not matter.
     pub fn dirs(&self) -> FxHashMap<String, bool> {

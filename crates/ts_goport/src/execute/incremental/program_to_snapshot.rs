@@ -816,7 +816,7 @@ fn referenced_file_name_paths(file: Node) -> Vec<Path> {
     referenced_files
 }
 
-// Go: incremental/programtosnapshot.go:337 repopulateDiagnosticsOfFile
+// Go: incremental/programtosnapshot.go:341 repopulateDiagnosticsOfFile
 // repopulateDiagnosticsOfFile repopulates diagnostic chains that depend on program state.
 // When diagnostics are copied from a previous build, their message chains may reference
 // stale program state (e.g., resolved module alternate results, package.json scope).
@@ -842,7 +842,7 @@ pub fn repopulate_diagnostics_of_file(
     diags.clone()
 }
 
-// Go: incremental/programtosnapshot.go:351 repopulateDiagnosticsList
+// Go: incremental/programtosnapshot.go:355 repopulateDiagnosticsList
 // repopulateDiagnosticsList repopulates diagnostic chains in a list of diagnostics.
 // Returns nil if no diagnostics needed repopulation (i.e., no changes were made).
 #[must_use]
@@ -865,7 +865,7 @@ pub fn repopulate_diagnostics_list(diags: &[Diagnostic], file: Node) -> Option<V
     Some(result)
 }
 
-// Go: incremental/programtosnapshot.go:373 repopulateDiagnosticMessageChain
+// Go: incremental/programtosnapshot.go:377 repopulateDiagnosticMessageChain
 // repopulateDiagnosticMessageChain repopulates chains that have repopulate info.
 // Returns nil if no changes were made.
 #[must_use]
@@ -921,7 +921,7 @@ pub fn repopulate_diagnostic_message_chain(
     Some(result)
 }
 
-// Go: incremental/programtosnapshot.go:418 astDiagToBuildInfoDiag
+// Go: incremental/programtosnapshot.go:422 astDiagToBuildInfoDiag
 #[must_use]
 pub fn ast_diag_to_build_info_diag(d: &Diagnostic) -> BuildInfoDiagnosticWithFileName {
     // PORT: Go byte offsets (see `go_text_range`).

@@ -466,13 +466,13 @@ impl Snapshot {
         compute_signature_with_diagnostics(file, text, data, self.hash_with_text)
     }
 
-    // Go: incremental/snapshot.go:436 computeHash
+    // Go: incremental/snapshot.go:437 computeHash
     #[must_use]
     pub fn compute_hash(&self, text: &str) -> String {
         compute_hash(text, self.hash_with_text)
     }
 
-    // Go: incremental/snapshot.go:440 canUseIncrementalState
+    // Go: incremental/snapshot.go:441 canUseIncrementalState
     #[must_use]
     pub fn can_use_incremental_state(&self) -> bool {
         if !self.options.is_incremental() && self.options.build.is_true() {

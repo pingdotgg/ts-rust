@@ -24,7 +24,7 @@ use crate::frontend::tspath::Path;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-// Go: compiler/program.go:1957 ProgramLike
+// Go: compiler/program.go:1980 ProgramLike
 // PORT: only the methods that `EmitFilesAndReportErrors` and
 // `GetDiagnosticsOfAnyProgram` call. Config, syntactic and program
 // diagnostics are read from the current program by
@@ -56,7 +56,7 @@ impl ProgramLike for CompilerProgram {
     fn options(&self) -> &'static CompilerOptions {
         options()
     }
-    // Go: compiler/program.go:787 GetBindDiagnostics
+    // Go: compiler/program.go:811 GetBindDiagnostics
     fn get_bind_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         get_bind_diagnostics(file)
     }
@@ -64,7 +64,7 @@ impl ProgramLike for CompilerProgram {
     fn get_global_diagnostics(&self) -> Vec<Diagnostic> {
         get_global_diagnostics()
     }
-    // Go: compiler/program.go:798 GetSemanticDiagnostics
+    // Go: compiler/program.go:822 GetSemanticDiagnostics
     fn get_semantic_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         get_semantic_diagnostics(file)
     }

@@ -37,7 +37,7 @@ impl BuildInfoReader for BuildInfoReaderImpl {
     }
 }
 
-// Go: incremental/incremental.go:30 (json.Unmarshal into BuildInfo)
+// Go: incremental/incremental.go:31 (json.Unmarshal into BuildInfo)
 // PORT: split out of `ReadBuildInfo` so callers with the text in hand (and
 // tests) can parse it. Returns `None` on any unmarshal error, like Go.
 #[must_use]
@@ -50,7 +50,7 @@ pub fn parse_build_info(data: &str) -> Option<BuildInfo> {
     Some(build_info)
 }
 
-// Go: incremental/program.go:300 (json.Marshal of the BuildInfo)
+// Go: incremental/program.go:360 (json.Marshal of the BuildInfo)
 // PORT: the text that Go writes for a `BuildInfo`. `snapshotToBuildInfo`
 // callers use it to write the `.tsbuildinfo` file.
 pub fn marshal_build_info(build_info: &BuildInfo) -> Result<String, JsonError> {
@@ -76,30 +76,30 @@ pub trait Host {
     fn set_m_time(&self, file_name: &str, m_time: Option<SystemTime>) -> Result<(), FsError>;
 }
 
-// Go: incremental/host.go:16 host
+// Go: incremental/host.go:15 host
 // PORT: Go unexported type behind the `Host` interface.
 pub struct HostImpl {
     host: Rc<dyn CompilerHost>,
 }
 
 impl Host for HostImpl {
-    // Go: incremental/host.go:22 FS
+    // Go: incremental/host.go:22 FS (at 673a5f17d713; removed by ts#64159)
     fn fs(&self) -> Rc<dyn Fs> {
         self.host.fs()
     }
 
-    // Go: incremental/host.go:26 GetMTime
+    // Go: incremental/host.go:33 GetMTime
     fn get_m_time(&self, file_name: &str) -> Option<SystemTime> {
         get_m_time(&*self.host, file_name)
     }
 
-    // Go: incremental/host.go:30 SetMTime
+    // Go: incremental/host.go:25 SetMTime
     fn set_m_time(&self, file_name: &str, m_time: Option<SystemTime>) -> Result<(), FsError> {
         self.host.fs().chtimes(file_name, None, m_time)
     }
 }
 
-// Go: incremental/host.go:34 CreateHost
+// Go: incremental/host.go:29 CreateHost
 #[must_use]
 pub fn create_host(compiler_host: Rc<dyn CompilerHost>) -> Rc<dyn Host> {
     Rc::new(HostImpl {
@@ -107,7 +107,7 @@ pub fn create_host(compiler_host: Rc<dyn CompilerHost>) -> Rc<dyn Host> {
     })
 }
 
-// Go: incremental/host.go:38 GetMTime
+// Go: incremental/host.go:33 GetMTime
 #[must_use]
 pub fn get_m_time(host: &dyn CompilerHost, file_name: &str) -> Option<SystemTime> {
     let stat = host.fs().stat(file_name);

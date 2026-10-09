@@ -6,7 +6,7 @@ use std::time::SystemTime;
 // as in `vfs::Fs::chtimes`. `Option` orders `None` first, so Go `After`,
 // `Before` and `IsZero` are `>`, `<` and `is_none()`.
 
-// Go: build/uptodatestatus.go:5 upToDateStatusType
+// Go: build/uptodatestatus.go:9 upToDateStatusType
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
 pub enum UpToDateStatusType {
@@ -56,21 +56,21 @@ pub enum UpToDateStatusType {
     Solution,
 }
 
-// Go: build/uptodatestatus.go:54 inputOutputName
+// Go: build/uptodatestatus.go:58 inputOutputName
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InputOutputName {
     pub input: String,
     pub output: String,
 }
 
-// Go: build/uptodatestatus.go:59 fileAndTime
+// Go: build/uptodatestatus.go:63 fileAndTime
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileAndTime {
     pub file: String,
     pub time: Option<SystemTime>,
 }
 
-// Go: build/uptodatestatus.go:64 inputOutputFileAndTime
+// Go: build/uptodatestatus.go:68 inputOutputFileAndTime
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InputOutputFileAndTime {
     pub input: FileAndTime,
@@ -78,7 +78,7 @@ pub struct InputOutputFileAndTime {
     pub build_info: String,
 }
 
-// Go: build/uptodatestatus.go:70 upstreamErrors
+// Go: build/uptodatestatus.go:73 upstreamErrors
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UpstreamErrors {
     pub ref_: String,
@@ -97,7 +97,7 @@ pub enum UpToDateStatusData {
     UpstreamErrors(UpstreamErrors),
 }
 
-// Go: build/uptodatestatus.go:75 upToDateStatus
+// Go: build/uptodatestatus.go:78 upToDateStatus
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpToDateStatus {
     pub kind: UpToDateStatusType,
@@ -118,7 +118,7 @@ impl UpToDateStatus {
         UpToDateStatus { kind, data }
     }
 
-    // Go: build/uptodatestatus.go:80 (*upToDateStatus).isError
+    // Go: build/uptodatestatus.go:83 (*upToDateStatus).isError
     pub fn is_error(&self) -> bool {
         matches!(
             self.kind,
@@ -128,7 +128,7 @@ impl UpToDateStatus {
         )
     }
 
-    // Go: build/uptodatestatus.go:91 (*upToDateStatus).isPseudoBuild
+    // Go: build/uptodatestatus.go:94 (*upToDateStatus).isPseudoBuild
     pub fn is_pseudo_build(&self) -> bool {
         matches!(
             self.kind,
@@ -137,7 +137,7 @@ impl UpToDateStatus {
         )
     }
 
-    // Go: build/uptodatestatus.go:101 (*upToDateStatus).inputOutputFileAndTime
+    // Go: build/uptodatestatus.go:104 (*upToDateStatus).inputOutputFileAndTime
     pub fn input_output_file_and_time(&self) -> Option<&InputOutputFileAndTime> {
         match &self.data {
             UpToDateStatusData::InputOutputFileAndTime(data) => Some(data),
@@ -145,7 +145,7 @@ impl UpToDateStatus {
         }
     }
 
-    // Go: build/uptodatestatus.go:109 (*upToDateStatus).inputOutputName
+    // Go: build/uptodatestatus.go:112 (*upToDateStatus).inputOutputName
     pub fn input_output_name(&self) -> Option<&InputOutputName> {
         match &self.data {
             UpToDateStatusData::InputOutputName(data) => Some(data),
@@ -153,7 +153,7 @@ impl UpToDateStatus {
         }
     }
 
-    // Go: build/uptodatestatus.go:117 (*upToDateStatus).oldestOutputFileName
+    // Go: build/uptodatestatus.go:120 (*upToDateStatus).oldestOutputFileName
     pub fn oldest_output_file_name(&self) -> String {
         if !self.is_pseudo_build() && self.kind != UpToDateStatusType::UpToDate {
             panic!("only valid for up to date status of pseudo-build or up to date");
@@ -172,7 +172,7 @@ impl UpToDateStatus {
         }
     }
 
-    // Go: build/uptodatestatus.go:131 (*upToDateStatus).upstreamErrors
+    // Go: build/uptodatestatus.go:134 (*upToDateStatus).upstreamErrors
     pub fn upstream_errors(&self) -> &UpstreamErrors {
         match &self.data {
             UpToDateStatusData::UpstreamErrors(data) => data,

@@ -333,7 +333,7 @@ fn is_typescript_source(file_name: &str) -> bool {
 // `CreateDiagnosticReporter`) into this shape.
 pub type TaskDiagnosticReporter = Box<dyn Fn(&mut String, &Diagnostic)>;
 
-// Go: build/buildtask.go:44 taskResult
+// Go: build/buildtask.go:45 taskResult
 // PORT: Go `program *incremental.Program` is `program` (`None` = nil). In
 // tests the task keeps it until it reports, for `Testing.OnProgram`, and
 // the orchestrator releases it there (`release_task_program`), where Go
@@ -466,9 +466,10 @@ pub trait BuildTaskOrchestrator {
     fn command(&self) -> &ParsedBuildCommandLine;
     // Go: `o.comparePathsOptions`
     fn compare_paths_options(&self) -> &ComparePathsOptions;
-    // Go: orchestrator.go:93 (*Orchestrator).relativeFileName
+    // Go: orchestrator.go:94 (*Orchestrator).relativeFileName
     fn relative_file_name(&self, file_name: &str) -> String;
-    // Go: orchestrator.go:97 (*Orchestrator).toPath
+    // Go: orchestrator.go:97 (*Orchestrator).toPath (at 673a5f17d713; removed by ts#64159: Go N' calls
+    // caseSensitivity.PathKey)
     fn to_path(&self, file_name: &str) -> Path;
     // Go: `o.opts.Sys.Now()`
     fn now(&self) -> SystemTime;
@@ -513,7 +514,7 @@ pub trait BuildTaskOrchestrator {
     fn content_mapper_host(&self) -> Option<Rc<dyn contentmapper::Host>>;
 }
 
-// Go: build/buildtask.go:55 BuildTask
+// Go: build/buildtask.go:56 BuildTask
 // PORT: Go `*tsoptions.ParsedCommandLine` shared with the host cache is
 // `Option<Rc<ParsedCommandLine>>`. Go `*upToDateStatus` is
 // `Option<UpToDateStatus>`. `pending` is a plain bool (see top). Go
@@ -618,7 +619,7 @@ impl BuildTask {
         }
     }
 
-    // Go: build/buildtask.go:82 (*BuildTask).getContentMapperProject (tsgo#4712)
+    // Go: build/buildtask.go:84 (*BuildTask).getContentMapperProject (tsgo#4712)
     pub(crate) fn get_content_mapper_project(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -642,7 +643,7 @@ impl BuildTask {
         )
     }
 
-    // Go: build/buildtask.go:96 (*BuildTask).refreshContentMapperProject (tsgo#4712)
+    // Go: build/buildtask.go:98 (*BuildTask).refreshContentMapperProject (tsgo#4712)
     pub(crate) fn refresh_content_mapper_project(&mut self) {
         if let Some(project) = &self.content_mapper_project {
             self.content_mapper_project_err = project.refresh().err();
@@ -667,25 +668,25 @@ impl BuildTask {
         (result.report_status)(&mut result.builder, &diagnostic);
     }
 
-    // Go: build/buildtask.go:102 (*BuildTask).waitOnUpstream
+    // Go: build/buildtask.go:104 (*BuildTask).waitOnUpstream
     // PORT: no-op. The orchestrator starts a task only when its upstream
     // tasks are done (see top).
     pub fn wait_on_upstream(&self) {}
 
-    // Go: build/buildtask.go:108 (*BuildTask).unblockDownstream
+    // Go: build/buildtask.go:110 (*BuildTask).unblockDownstream
     pub fn unblock_downstream(&mut self) {
         self.pending = false;
         self.is_initial_cycle = false;
     }
 
-    // Go: build/buildtask.go:114 (*BuildTask).reportDiagnostic
+    // Go: build/buildtask.go:116 (*BuildTask).reportDiagnostic
     pub fn report_diagnostic(&mut self, err: Diagnostic) {
         self.errors.push(err.clone());
         let result = self.result_mut();
         (result.diagnostic_reporter)(&mut result.builder, &err);
     }
 
-    // Go: build/buildtask.go:119 (*BuildTask).report
+    // Go: build/buildtask.go:121 (*BuildTask).report
     // PORT: the orchestrator calls it in `order` when the task is built
     // (ts#64220: Go no longer waits for the previous task here). Go writes
     // the buffered output to `Sys.Writer()` and merges into the
@@ -708,7 +709,7 @@ impl BuildTask {
         (result, self.errors.clone())
     }
 
-    // Go: build/buildtask.go:145 (*BuildTask).buildProject, up to the
+    // Go: build/buildtask.go:147 (*BuildTask).buildProject, up to the
     // program that `compileAndEmit` makes (`compile_and_emit_start`).
     // PORT: Go runs up to `numRoutines` tasks at the same time, and a task
     // that runs beside others makes its program before they write their
@@ -817,7 +818,7 @@ impl BuildTask {
         crate::program::send_checker_barrier(signal)
     }
 
-    // Go: build/buildtask.go:145 (*BuildTask).buildProject, from the emit
+    // Go: build/buildtask.go:147 (*BuildTask).buildProject, from the emit
     // of `compileAndEmit` on (see `build_project_start`).
     // PORT: a `go_panic` here (a bad diagnostic of a `.tsbuildinfo` panics
     // when it is reported) is kept for `report` too.
@@ -831,7 +832,7 @@ impl BuildTask {
         }
     }
 
-    // Go: build/buildtask.go:176 (*BuildTask).updateDownstream
+    // Go: build/buildtask.go:178 (*BuildTask).updateDownstream
     pub fn update_downstream(&mut self, orchestrator: &dyn BuildTaskOrchestrator, path: &Path) {
         if self.is_initial_cycle {
             return;
@@ -901,7 +902,7 @@ impl BuildTask {
         }
     }
 
-    // Go: build/buildtask.go:221 (*BuildTask).compileAndEmit, up to
+    // Go: build/buildtask.go:223 (*BuildTask).compileAndEmit, up to
     // `incremental.NewProgram` (see `build_project_start`). It returns
     // false when Go returns before the program (the content mapper project
     // failed): then there is nothing for `compile_and_emit_finish`.
@@ -1104,7 +1105,7 @@ impl BuildTask {
         true
     }
 
-    // Go: build/buildtask.go:221 (*BuildTask).compileAndEmit, from
+    // Go: build/buildtask.go:223 (*BuildTask).compileAndEmit, from
     // `EmitAndReportStatistics` on (see `compile_and_emit_start`).
     pub fn compile_and_emit_finish(&mut self, orchestrator: &dyn BuildTaskOrchestrator) {
         let PendingCompile {
@@ -1254,7 +1255,7 @@ impl BuildTask {
         }
     }
 
-    // Go: build/buildtask.go:296 (*BuildTask).handleStatusThatDoesntRequireBuild
+    // Go: build/buildtask.go:298 (*BuildTask).handleStatusThatDoesntRequireBuild
     pub fn handle_status_that_doesnt_require_build(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -1339,7 +1340,7 @@ impl BuildTask {
         false
     }
 
-    // Go: build/buildtask.go:346 (*BuildTask).getUpToDateStatus
+    // Go: build/buildtask.go:348 (*BuildTask).getUpToDateStatus
     pub fn get_up_to_date_status(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -1875,7 +1876,7 @@ impl BuildTask {
         )
     }
 
-    // Go: build/buildtask.go:638 (*BuildTask).reportUpToDateStatus
+    // Go: build/buildtask.go:640 (*BuildTask).reportUpToDateStatus
     pub fn report_up_to_date_status(&mut self, orchestrator: &dyn BuildTaskOrchestrator) {
         if !orchestrator.command().build_options.verbose.is_true() {
             return;
@@ -1990,13 +1991,13 @@ impl BuildTask {
         self.report_status(diagnostic);
     }
 
-    // Go: build/buildtask.go:750 (*BuildTask).canUpdateJsDtsOutputTimestamps
+    // Go: build/buildtask.go:752 (*BuildTask).canUpdateJsDtsOutputTimestamps
     pub fn can_update_js_dts_output_timestamps(&self) -> bool {
         let options = self.resolved().compiler_options();
         !options.no_emit.is_true() && !options.is_incremental()
     }
 
-    // Go: build/buildtask.go:754 (*BuildTask).updateTimeStamps
+    // Go: build/buildtask.go:756 (*BuildTask).updateTimeStamps
     pub fn update_time_stamps(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -2038,7 +2039,7 @@ impl BuildTask {
         update_time_stamp(self, &build_info_file_name);
     }
 
-    // Go: build/buildtask.go:789 (*BuildTask).cleanProject
+    // Go: build/buildtask.go:791 (*BuildTask).cleanProject
     pub fn clean_project(&mut self, orchestrator: &dyn BuildTaskOrchestrator, path: &Path) {
         let Some(resolved) = self.resolved.clone() else {
             let config = self.config.clone();
@@ -2061,7 +2062,7 @@ impl BuildTask {
         self.clean_project_output(orchestrator, &resolved.get_build_info_file_name(), &inputs);
     }
 
-    // Go: build/buildtask.go:803 (*BuildTask).cleanProjectOutput
+    // Go: build/buildtask.go:807 (*BuildTask).cleanProjectOutput
     pub fn clean_project_output(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -2091,7 +2092,7 @@ impl BuildTask {
         }
     }
 
-    // Go: build/buildtask.go:821 (*BuildTask).updateWatch
+    // Go: build/buildtask.go:825 (*BuildTask).updateWatch
     // PORT: in orchestrator_watch.rs.
 
     /// PORT: not in Go (perf). Drops what a prefetch thread made for the
@@ -2114,7 +2115,7 @@ impl BuildTask {
         }
     }
 
-    // Go: build/buildtask.go:831 (*BuildTask).resetStatus
+    // Go: build/buildtask.go:835 (*BuildTask).resetStatus
     pub fn reset_status(&mut self) {
         self.status = None;
         self.pending = true;
@@ -2125,10 +2126,10 @@ impl BuildTask {
         self.held_file_versions = Vec::new();
     }
 
-    // Go: build/buildtask.go:837 (*BuildTask).resetConfig
+    // Go: build/buildtask.go:841 (*BuildTask).resetConfig
     // PORT: in orchestrator_watch.rs.
 
-    // Go: build/buildtask.go:842 (*BuildTask).loadOrStoreBuildInfo
+    // Go: build/buildtask.go:846 (*BuildTask).loadOrStoreBuildInfo
     pub fn load_or_store_build_info(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -2163,7 +2164,7 @@ impl BuildTask {
         (build_info, m_time)
     }
 
-    // Go: build/buildtask.go:861 (*BuildTask).onBuildInfoEmit
+    // Go: build/buildtask.go:866 (*BuildTask).onBuildInfoEmit
     // PORT: Go takes `mTime := orchestrator.opts.Sys.Now()` here, in the
     // `writeFile` call of the build info, before the test `OnEmittedFiles`
     // stamps the emitted files. `new_task_write_file` takes the time at
@@ -2196,7 +2197,7 @@ impl BuildTask {
         });
     }
 
-    // Go: build/buildtask.go:879 (*BuildTask).hasConflictingBuildInfo
+    // Go: build/buildtask.go:885 (*BuildTask).hasConflictingBuildInfo
     pub fn has_conflicting_build_info(
         &self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -2210,7 +2211,7 @@ impl BuildTask {
         false
     }
 
-    // Go: build/buildtask.go:886 (*BuildTask).getLatestChangedDtsMTime
+    // Go: build/buildtask.go:892 (*BuildTask).getLatestChangedDtsMTime
     pub fn get_latest_changed_dts_m_time(
         &mut self,
         orchestrator: &dyn BuildTaskOrchestrator,
@@ -2240,7 +2241,7 @@ impl BuildTask {
         dts_time
     }
 
-    // Go: build/buildtask.go:902 (*BuildTask).storeOutputTimeStamp
+    // Go: build/buildtask.go:909 (*BuildTask).storeOutputTimeStamp
     pub fn store_output_time_stamp(&self, orchestrator: &dyn BuildTaskOrchestrator) -> bool {
         orchestrator.command().compiler_options.watch.is_true()
             && !self.resolved().compiler_options().is_incremental()
@@ -2262,7 +2263,7 @@ fn reader_of<'a>(
     }
 }
 
-// Go: build/buildtask.go:621 isContentMapperSupplementalBuildInfoPath (tsgo#4712)
+// Go: build/buildtask.go:623 isContentMapperSupplementalBuildInfoPath (tsgo#4712)
 // PORT: Go `strconv.Atoi(index) == nil` is `index.parse::<i64>().is_ok()`:
 // both take an optional sign and decimal digits, and fail on an empty
 // text and on overflow of a 64-bit int.
@@ -2298,7 +2299,7 @@ fn is_content_mapper_supplemental_build_info_path<'a>(
 /// taken at the write.
 type WrittenBuildInfo = Arc<Mutex<Option<(String, Arc<BuildInfo>, SystemTime)>>>;
 
-// Go: build/buildtask.go:906 (*BuildTask).writeFile
+// Go: build/buildtask.go:913 (*BuildTask).writeFile
 // PORT: emit writes the source outputs on the checker threads, so the
 // callback is `Send` and cannot hold the task, the `Rc` system or the `Rc`
 // file system. Go writes through `orchestrator.host.FS()` (cachedvfs over

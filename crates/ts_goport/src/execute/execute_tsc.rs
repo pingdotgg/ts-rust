@@ -211,7 +211,7 @@ pub fn command_line(
 // PORT: not ported. Its only call (the `-f` case in `CommandLine`) is
 // commented out in Go, so it is dead code, and the formatter is not ported.
 
-// Go: execute/tsc.go:91 tscBuildCompilation
+// Go: execute/tsc.go:92 tscBuildCompilation
 // PORT: Go `CommandLine` parses the build command line and passes it in;
 // here it is the first step, which runs in the same order.
 // `command_line_args` is the full command line (Go `commandLineArgs`).
@@ -277,7 +277,7 @@ pub fn tsc_build_compilation(
     orchestrator.start_exported(ctx)
 }
 
-// Go: execute/tsc.go:122 tscCompilation
+// Go: execute/tsc.go:123 tscCompilation
 // PORT: `hooks.prepare_compilation` is the bin's step (not in Go).
 pub fn tsc_compilation(
     ctx: &Context,
@@ -533,7 +533,7 @@ pub fn tsc_compilation(
     )
 }
 
-// Go: execute/tsc.go:269 findConfigFile
+// Go: execute/tsc.go:274 findConfigFile
 fn find_config_file(
     search_path: &str,
     file_exists: impl Fn(&str) -> bool,
@@ -552,7 +552,7 @@ fn find_config_file(
     result
 }
 
-// Go: execute/tsc.go:283 getTraceFromSys
+// Go: execute/tsc.go:288 getTraceFromSys
 pub(crate) fn get_trace_from_sys(
     sys: &dyn System,
     locale: crate::locale::Locale,
@@ -604,7 +604,7 @@ fn program_options(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) ->
     }
 }
 
-// Go: execute/tsc.go:287 performIncrementalCompilation
+// Go: execute/tsc.go:292 performIncrementalCompilation
 // PORT: the incremental program reads back the installed program. A bin
 // that replaces the program (`TscCompilationHooks::program_like`) skips
 // `incremental.ReadBuildInfoProgram` and `incremental.NewProgram`: `goport`
@@ -726,7 +726,7 @@ fn perform_incremental_compilation(
     result(emit_result.status)
 }
 
-// Go: execute/tsc.go:345 performCompilation
+// Go: execute/tsc.go:356 performCompilation
 // PORT: `sys_rc` is the `Rc` so that the content mapper host can keep
 // `sys` as its spawner. The body uses `sys: &dyn System`.
 fn perform_compilation(
@@ -817,7 +817,7 @@ impl Drop for CloseContentMapperProject {
     }
 }
 
-// Go: execute/tsc.go:394 getContentMapperProject (tsgo#4712)
+// Go: execute/tsc.go:411 getContentMapperProject (tsgo#4712)
 fn get_content_mapper_project(
     host: Option<&Rc<dyn ContentMapperHost>>,
     config: &ParsedCommandLine,
@@ -833,7 +833,7 @@ fn get_content_mapper_project(
     })
 }
 
-// Go: execute/tsc.go:405 showConfig
+// Go: execute/tsc.go:422 showConfig
 fn show_config(sys: &dyn System, config: &ParsedCommandLine, config_file_name: &str) {
     let ts_config = convert_to_ts_config(config, config_file_name);
     let writer = sys.writer();

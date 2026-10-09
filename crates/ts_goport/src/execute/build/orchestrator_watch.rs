@@ -31,7 +31,7 @@ use std::sync::PoisonError;
 use std::time::SystemTime;
 
 impl Orchestrator {
-    // Go: build/orchestrator.go:264 (*Orchestrator).Watch
+    // Go: build/orchestrator.go:473 (*Orchestrator).Watch
     pub fn watch(&mut self, ctx: &Context) {
         self.wm.borrow().lock();
 
@@ -64,7 +64,7 @@ impl Orchestrator {
         }
     }
 
-    // Go: build/orchestrator.go:289 (*Orchestrator).updateWatch
+    // Go: build/orchestrator.go:498 (*Orchestrator).updateWatch
     pub fn update_watch(&self) {
         let old_cache = std::mem::take(
             &mut *self
@@ -78,7 +78,7 @@ impl Orchestrator {
         });
     }
 
-    // Go: build/orchestrator.go:297 (*Orchestrator).resetCaches
+    // Go: build/orchestrator.go:506 (*Orchestrator).resetCaches
     pub fn reset_caches(&self) {
         // Clean out all the caches
         // PORT: Go reaches the cached file system as
@@ -95,7 +95,7 @@ impl Orchestrator {
         *self.host.config_times.borrow_mut() = FxHashMap::default();
     }
 
-    // Go: build/orchestrator.go:306 (*Orchestrator).checkTasksForEventChanges
+    // Go: build/orchestrator.go:515 (*Orchestrator).checkTasksForEventChanges
     // PORT: Go map iteration order is random; `changed_paths` is an
     // `FxHashMap`. The result does not depend on the order.
     pub fn check_tasks_for_event_changes(
@@ -277,7 +277,7 @@ impl Orchestrator {
         }
     }
 
-    // Go: build/orchestrator.go:464 (*Orchestrator).packageJsonLookupChanged
+    // Go: build/orchestrator.go:670 (*Orchestrator).packageJsonLookupChanged
     // PORT: Go ranges over a map (random order); the result does not depend
     // on the order.
     fn package_json_lookup_changed(
@@ -303,7 +303,7 @@ impl Orchestrator {
         false
     }
 
-    // Go: build/orchestrator.go:477 (*Orchestrator).computeDesiredWatches
+    // Go: build/orchestrator.go:683 (*Orchestrator).computeDesiredWatches
     // PORT: Go ranges over `WildcardDirectories()` (a map, random order);
     // the result does not depend on the order.
     pub fn compute_desired_watches(&self) -> FxHashMap<String, bool> {
@@ -417,7 +417,7 @@ impl Orchestrator {
         self.wm.borrow().resolve_desired_dirs(&desired_dirs.dirs())
     }
 
-    // Go: build/orchestrator.go:572 (*Orchestrator).addWatchDir
+    // Go: build/orchestrator.go:769 (*Orchestrator).addWatchDir
     fn add_watch_dir(&self, desired_dirs: &mut DirWatchSet, dir: &str) {
         if !desired_dirs.covered(dir) && can_watch_directory(dir) {
             desired_dirs.set(dir, false);
@@ -433,7 +433,7 @@ impl Orchestrator {
         }
     }
 
-    // Go: build/orchestrator.go:578 (*Orchestrator).addPackageJsonWatchDirs
+    // Go: build/orchestrator.go:783 (*Orchestrator).addPackageJsonWatchDirs
     fn add_package_json_watch_dirs(&self, desired_dirs: &mut DirWatchSet, package_json: &str) {
         let dir = get_directory_path(package_json);
         let mut dirs = vec![dir.clone()];
@@ -465,7 +465,7 @@ impl Orchestrator {
         }
     }
 
-    // Go: build/orchestrator.go:607 (*Orchestrator).DoCycle
+    // Go: build/orchestrator.go:812 (*Orchestrator).DoCycle
     // PORT: Go unlocks with `defer`; the port unlocks before each return.
     pub fn do_cycle(&mut self) {
         self.wm.borrow().lock();
@@ -610,12 +610,12 @@ impl Orchestrator {
         changed
     }
 
-    // Go: build/orchestrator.go:919 (*Orchestrator).rangeTask
+    // Go: build/orchestrator.go:913 (*Orchestrator).rangeTask
     pub(crate) fn range_task(&self, f: &mut dyn FnMut(&Path, &Rc<RefCell<BuildTask>>)) {
         self.range_tasks(&self.order, f);
     }
 
-    // Go: build/orchestrator.go:923 (*Orchestrator).rangeTasks (ts#64158)
+    // Go: build/orchestrator.go:917 (*Orchestrator).rangeTasks (ts#64158)
     // PORT: the build itself uses `build_all_tasks` (orchestrator.rs). The
     // other callers pass an `f` that touches only its own task and the host
     // caches, so the tasks run one at a time in `order`, the order in which
