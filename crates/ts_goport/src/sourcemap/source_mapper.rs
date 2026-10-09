@@ -1151,4 +1151,113 @@ mod tests {
             Some(pos("/project/out/out.d.ts", 0))
         );
     }
+
+    // No Go test: the paths skeptic's go-to-definition probe (10 declaration
+    // map variants, ts#64159 tryResolveSourceMapPath, source_mapper.go:209)
+    // as GetDocumentPositionMapper (:279) and GetSourcePosition (:224) calls.
+    // The values are the Go N' (fed0bf24149f) results of the same calls.
+    #[test]
+    fn test_source_mapper_declaration_map_variants() {
+        const MAPPINGS: &str = r#""names":[],"mappings":"AACA,wBAAgB,IAAI,IAAI,IAAI,CAAG"}"#;
+        // (sourceMappingURL, map "file", extra map fields, map source, source position)
+        let variants = [
+            ("lib1.d.ts.map", "lib1.d.ts", "", "../src/lib1.ts", Some(25)),
+            (
+                "lib2.d.ts.map",
+                "lib2.d.ts",
+                "",
+                "https://example.com/src/lib2.ts?v=1",
+                None,
+            ),
+            (
+                "lib3.d.ts.map",
+                "https://example.com/lib3.d.ts?v=1",
+                "",
+                "../src/lib3.ts",
+                None,
+            ),
+            (
+                "https://example.com/lib4.d.ts.map?v=1",
+                "lib4.d.ts",
+                "",
+                "../src/lib4.ts",
+                Some(25),
+            ),
+            (
+                "lib5.d.ts.map",
+                "lib5.d.ts",
+                "",
+                "file:///project/pkg/src/lib5.ts",
+                None,
+            ),
+            (
+                "lib6.d.ts.map",
+                "lib6.d.ts",
+                "",
+                "/project/pkg/src/lib6.ts",
+                Some(25),
+            ),
+            (
+                "lib7.d.ts.map",
+                "lib7.d.ts",
+                r#""sourceRoot":"https://example.com/","#,
+                "lib7.ts?x",
+                None,
+            ),
+            (
+                "lib8.d.ts.map",
+                "lib8.d.ts",
+                "",
+                "../src/lib8.ts#frag",
+                None,
+            ),
+            (
+                "lib9.d.ts.map",
+                "https://example.com/lib9.d.ts",
+                "",
+                "../src/lib9.ts",
+                None,
+            ),
+            (
+                "lib10.d.ts.map?v=1",
+                "lib10.d.ts",
+                "",
+                "../src/lib10.ts",
+                Some(26),
+            ),
+        ];
+        let mut files = Vec::new();
+        for (i, (url, file, extra, source, _)) in variants.iter().enumerate() {
+            let n = i + 1;
+            files.push((
+                format!("/project/pkg/dist/lib{n}.d.ts"),
+                format!("export declare function foo{n}(): void;\n//# sourceMappingURL={url}"),
+            ));
+            files.push((
+                format!("/project/pkg/dist/lib{n}.d.ts.map"),
+                format!(
+                    r#"{{"version":3,"file":"{file}",{extra}"sources":["{source}"],{MAPPINGS}"#
+                ),
+            ));
+            files.push((
+                format!("/project/pkg/src/lib{n}.ts"),
+                format!("// lib {n}\nexport function foo{n}(): void {{}}\n"),
+            ));
+        }
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        let host = SourceMapperTestHost::new(&files);
+        for (i, (_, _, _, _, want)) in variants.iter().enumerate() {
+            let n = i + 1;
+            let generated = format!("/project/pkg/dist/lib{n}.d.ts");
+            // Go gives no mapper for lib3 (its map `file` does not resolve).
+            let mapper = get_document_position_mapper(&host, &generated);
+            assert_eq!(mapper.is_some(), n != 3, "lib{n}: mapper");
+            let got = mapper.and_then(|mapper| source_position(&mapper, pos(&generated, 24)));
+            let want = want.map(|p| pos(&format!("/project/pkg/src/lib{n}.ts"), p));
+            assert_eq!(got, want, "lib{n}");
+        }
+    }
 }
