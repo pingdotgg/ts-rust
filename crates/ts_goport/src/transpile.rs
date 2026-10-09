@@ -155,55 +155,7 @@ fn transpile_worker(
 ) -> Option<Output> {
     let mut opts = options.compiler_options.unwrap_or_default();
 
-    // Clear options that do not apply to single-file transpilation.
-    opts.incremental = Tristate::Unknown;
-    opts.declaration = Tristate::Unknown;
-    opts.emit_declaration_only = Tristate::Unknown;
-    opts.no_emit = Tristate::Unknown;
-    opts.lib = None;
-    opts.out_file = String::new();
-    opts.composite = Tristate::Unknown;
-    opts.ts_build_info_file = String::new();
-    opts.paths = None;
-    opts.root_dirs = None;
-    opts.types = None;
-    opts.allow_importing_ts_extensions = Tristate::Unknown;
-    opts.no_emit_on_error = Tristate::Unknown;
-    opts.declaration_dir = String::new();
-
-    // Do not set `isolatedModules` if `verbatimModuleSyntax` was supplied, since
-    // it would be redundant.
-    if !opts.verbatim_module_syntax.is_true() {
-        opts.isolated_modules = Tristate::True;
-    }
-    opts.no_check = Tristate::True;
-    opts.no_resolve = Tristate::True;
-
-    // transpileModule/transpileDeclaration do not write anything to disk, so
-    // there's no need to verify there are no conflicts between input and
-    // output paths.
-    opts.suppress_output_path_check = Tristate::True;
-
-    // FileName can be a non-ts file.
-    opts.allow_non_ts_extensions = Tristate::True;
-
-    if declaration {
-        opts.declaration = Tristate::True;
-        opts.emit_declaration_only = Tristate::True;
-        opts.isolated_declarations = Tristate::True;
-    } else {
-        opts.declaration = Tristate::False;
-        opts.declaration_map = Tristate::False;
-        opts.isolated_declarations = Tristate::False;
-    }
-
-    // When transpiling declarations, we need a lib. GetDefaultLibFileName will
-    // cause the barebones lib below to be used instead of a real lib.
-    if declaration {
-        opts.no_lib = Tristate::False;
-    } else {
-        opts.no_lib = Tristate::True;
-    }
+    set_options_for_transpile(&mut opts, declaration);
 
     // If jsx is specified, then treat the file as .tsx.
     let mut file_name = options.file_name;
@@ -335,6 +287,54 @@ fn transpile_worker(
     output
 }
 
+// Go: transpile/options_generated.go:7 setOptionsForTranspile (ts#64457)
+// PORT: Go generates it from `tools/scripts/tsc/options.ts`; the port keeps
+// it by hand. It sets the same values as the N code it replaces.
+fn set_options_for_transpile(options: &mut CompilerOptions, declaration: bool) {
+    options.allow_importing_ts_extensions = Tristate::Unknown;
+    options.allow_non_ts_extensions = Tristate::True;
+    options.composite = Tristate::Unknown;
+    if declaration {
+        options.emit_declaration_only = Tristate::True;
+    } else {
+        options.emit_declaration_only = Tristate::Unknown;
+    }
+    if declaration {
+        options.declaration = Tristate::True;
+    } else {
+        options.declaration = Tristate::False;
+    }
+    options.declaration_dir = String::new();
+    if !declaration {
+        options.declaration_map = Tristate::False;
+    }
+    if !options.verbatim_module_syntax.is_true() {
+        options.isolated_modules = Tristate::True;
+    }
+    if declaration {
+        options.isolated_declarations = Tristate::True;
+    } else {
+        options.isolated_declarations = Tristate::False;
+    }
+    options.incremental = Tristate::Unknown;
+    options.lib = None;
+    options.no_emit = Tristate::Unknown;
+    options.no_check = Tristate::True;
+    if declaration {
+        options.no_lib = Tristate::False;
+    } else {
+        options.no_lib = Tristate::True;
+    }
+    options.no_emit_on_error = Tristate::Unknown;
+    options.no_resolve = Tristate::True;
+    options.paths = None;
+    options.root_dirs = None;
+    options.suppress_output_path_check = Tristate::True;
+    options.ts_build_info_file = String::new();
+    options.types = None;
+    options.out_file = String::new();
+}
+
 // Go: transpile/fs.go:11 transpileFS
 // transpileFS embeds unsupported operations so unexpected filesystem access
 // panics.
@@ -448,5 +448,105 @@ mod tests {
             },
             r#"unexpected realpath request for "/src/module.ts""#,
         );
+    }
+
+    // Go: options_test.go:12 TestTranspileConditionalOptions (ts#64457)
+    #[test]
+    fn test_transpile_conditional_options() {
+        for (declaration, want_map) in [(false, Tristate::False), (true, Tristate::True)] {
+            for (verbatim, isolated, want) in [
+                (Tristate::Unknown, Tristate::Unknown, Tristate::True),
+                (Tristate::False, Tristate::False, Tristate::True),
+                (Tristate::True, Tristate::Unknown, Tristate::Unknown),
+                (Tristate::True, Tristate::False, Tristate::False),
+                (Tristate::True, Tristate::True, Tristate::True),
+            ] {
+                let mut options = CompilerOptions {
+                    verbatim_module_syntax: verbatim,
+                    isolated_modules: isolated,
+                    declaration_map: Tristate::True,
+                    ..CompilerOptions::default()
+                };
+                set_options_for_transpile(&mut options, declaration);
+                assert!(
+                    options.isolated_modules == want && options.declaration_map == want_map,
+                    "declaration={declaration} verbatim={verbatim:?} isolated={isolated:?}: got isolated={:?} declarationMap={:?}, want {want:?} {want_map:?}",
+                    options.isolated_modules,
+                    options.declaration_map,
+                );
+            }
+        }
+    }
+
+    // Go: options_test.go:46 TestTranspileClearsInapplicableOptions (ts#64457)
+    // PORT: the port's `Options` owns its compiler options, so the worker
+    // cannot change the caller's copy; the last check still compares them.
+    #[test]
+    fn test_transpile_clears_inapplicable_options() {
+        for declaration in [false, true] {
+            let transpile = if declaration {
+                transpile_declaration
+            } else {
+                transpile_module
+            };
+            let mut paths = IndexMap::default();
+            paths.insert("*".to_string(), Some(vec!["/missing/*".to_string()]));
+            let options = CompilerOptions {
+                incremental: Tristate::True,
+                declaration: Tristate::True,
+                emit_declaration_only: Tristate::True,
+                no_emit: Tristate::True,
+                lib: Some(vec!["missing.d.ts".to_string()]),
+                out_file: "/other/output.js".to_string(),
+                composite: Tristate::True,
+                ts_build_info_file: "/other/buildinfo".to_string(),
+                paths: Some(paths),
+                root_dirs: Some(vec!["/missing".to_string()]),
+                types: Some(vec!["missing".to_string()]),
+                allow_importing_ts_extensions: Tristate::True,
+                no_emit_on_error: Tristate::True,
+                declaration_dir: "/other/declarations".to_string(),
+                ..CompilerOptions::default()
+            };
+            let before = options.clone();
+            const SOURCE: &str = "export const value: number = 1;";
+            let ctx = crate::gostd::context::background();
+            let expected = transpile(
+                &ctx,
+                SOURCE,
+                Options {
+                    report_diagnostics: true,
+                    ..Options::default()
+                },
+            );
+            let actual = transpile(
+                &ctx,
+                SOURCE,
+                Options {
+                    compiler_options: Some(options.clone()),
+                    report_diagnostics: true,
+                    ..Options::default()
+                },
+            );
+            let (Some(expected), Some(actual)) = (expected, actual) else {
+                panic!("Transpilation was unexpectedly canceled");
+            };
+            assert!(
+                !expected.output_text.is_empty()
+                    && actual.output_text == expected.output_text
+                    && actual.source_map_text == expected.source_map_text,
+                "Inapplicable options changed the output: got {actual:?}, want {expected:?}"
+            );
+            assert!(
+                expected.diagnostics.is_empty() && actual.diagnostics.is_empty(),
+                "Unexpected diagnostics: got {:?}, want {:?}",
+                actual.diagnostics,
+                expected.diagnostics
+            );
+            assert!(
+                options.deep_equal(&before),
+                "Transpilation modified the caller's options"
+            );
+        }
     }
 }

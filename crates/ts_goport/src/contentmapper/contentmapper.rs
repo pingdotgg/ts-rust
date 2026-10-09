@@ -105,8 +105,9 @@ pub struct Manifest {
 // PORT: Go embeds `Definition` and `Manifest`; here they are the fields
 // `definition` and `manifest` (Go `m.Name` is `m.manifest.name`, Go
 // `m.Package` is `m.definition.package`). Go `*Mapper` is `Rc<Mapper>`, and
-// Go compares and keys mappers by pointer (`Rc::as_ptr`).
-#[derive(Clone, Debug, Default, PartialEq)]
+// Go compares and keys mappers by pointer (`Rc::as_ptr`). `==` is Go
+// `Mapper.Equals` (ts#64457).
+#[derive(Clone, Debug, Default)]
 pub struct Mapper {
     pub definition: Definition,
     // json:"-"
@@ -117,6 +118,12 @@ pub struct Mapper {
     // ContributionID is provided by an LSP client extension for inferred project content mappers.
     // json:"-"
     pub contribution_id: String,
+}
+
+impl PartialEq for Mapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other)
+    }
 }
 
 // Go JSON v2: the embedded `Definition` is inlined; the other fields are
@@ -192,6 +199,28 @@ impl Mapper {
         } else {
             format!("{}@{}", self.manifest.name, self.manifest.version)
         }
+    }
+
+    // Go: contentmapper/contentmapper.go:101 Mapper.Equals (ts#64457)
+    // Equals compares the complete mapper configuration, not just its advertised identity.
+    // PORT: Go `m == other` is `ptr::eq`. A nil `*Mapper` has no Rust form.
+    // Go also tells a nil slice from an empty one (`Extensions`, `Options`,
+    // `Exec`, `CompilerOptions`); the port has no nil slice, so those are equal.
+    #[must_use]
+    pub fn equals(&self, other: &Mapper) -> bool {
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        self.definition.package == other.definition.package
+            && self.definition.extensions == other.definition.extensions
+            && self.definition.options == other.definition.options
+            && self.manifest.name == other.manifest.name
+            && self.manifest.version == other.manifest.version
+            && self.manifest.exec == other.manifest.exec
+            && self.manifest.compiler_options == other.manifest.compiler_options
+            && self.manifest.dynamic_config == other.manifest.dynamic_config
+            && self.package_directory == other.package_directory
+            && self.contribution_id == other.contribution_id
     }
 
     // Go: contentmapper/contentmapper.go:104 Mapper.TransformIdentity
