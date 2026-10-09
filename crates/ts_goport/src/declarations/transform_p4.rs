@@ -1203,7 +1203,7 @@ impl DeclarationTransformer {
         cleanup.run(self);
     }
 
-    // Go: transformers/declarations/transform.go:2924 DeclarationTransformer.createFullExpandoBlock
+    // Go: transformers/declarations/transform.go:2934 DeclarationTransformer.createFullExpandoBlock
     pub(crate) fn create_full_expando_block(&mut self, id: Node) -> Node {
         // Process any expando assignments on this host that were skipped because it wasn't
         // visible when they were collected - if it's still not visible, they simply get
@@ -1255,7 +1255,7 @@ impl DeclarationTransformer {
         n
     }
 
-    // Go: transformers/declarations/transform.go:2987 DeclarationTransformer.tryGetPropertyName
+    // Go: transformers/declarations/transform.go:2997 DeclarationTransformer.tryGetPropertyName
     pub(crate) fn try_get_property_name(&mut self, node: Node) -> String {
         if is_element_access_expression(node) {
             return self.resolver.get_element_access_expression_name(node);
@@ -1272,7 +1272,7 @@ fn is_not_declare_modifier(m: Node) -> bool {
     m.kind() != SyntaxKind::DeclareKeyword
 }
 
-// Go: transformers/declarations/transform.go:2973 extractExpandoHostParams
+// Go: transformers/declarations/transform.go:2983 extractExpandoHostParams
 // Returns (typeParameters, parameters, asteriskToken).
 fn extract_expando_host_params(node: Node) -> (NodeList, NodeList, Node) {
     // PORT: Go switches on FunctionExpression, ArrowFunction and (default)

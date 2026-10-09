@@ -79,7 +79,7 @@ impl std::ops::Deref for EmitContextFactory {
     }
 }
 
-// Go: printer/emitcontext.go:45 NewEmitContext
+// Go: printer/emitcontext.go:44 NewEmitContext
 #[must_use]
 pub fn new_emit_context() -> Rc<EmitContext> {
     let c = Rc::new(EmitContext::default());
@@ -218,17 +218,17 @@ impl EmitContext {
         self.emit_node_refs.set(false);
     }
 
-    // Go: printer/emitcontext.go:71 onCreate
+    // Go: printer/emitcontext.go:50 onCreate
     pub(crate) fn on_create(&self, node: Node) {
         crate::ast::synthetic::add_node_flags(node, NodeFlags::SYNTHESIZED);
     }
 
-    // Go: printer/emitcontext.go:75 onUpdate
+    // Go: printer/emitcontext.go:54 onUpdate
     pub(crate) fn on_update(&self, updated: Node, original: Node) {
         self.set_original(updated, original);
     }
 
-    // Go: printer/emitcontext.go:79 onClone
+    // Go: printer/emitcontext.go:58 onClone
     pub(crate) fn on_clone(&self, updated: Node, original: Node) {
         self.set_original(updated, original);
         if is_identifier(updated) || is_private_identifier(updated) {
@@ -241,7 +241,7 @@ impl EmitContext {
         }
     }
 
-    // Go: printer/emitcontext.go:90 NewNodeVisitor
+    // Go: printer/emitcontext.go:69 NewNodeVisitor
     // Creates a new NodeVisitor attached to this EmitContext
     // PORT: `ctx` is the callback state (see `ast/visitor.rs`). Go sets five
     // hooks that close over `c`. Here the visitor borrows this context for
@@ -267,7 +267,7 @@ impl EmitContext {
     // Environment tracking
     //
 
-    // Go: printer/emitcontext.go:109 StartVariableEnvironment
+    // Go: printer/emitcontext.go:88 StartVariableEnvironment
     // Starts a new VariableEnvironment used to track hoisted `var` statements and function declarations.
     //
     // NOTE: This is the equivalent of `transformContext.startLexicalEnvironment` in Strada.
@@ -278,7 +278,7 @@ impl EmitContext {
         self.start_lexical_environment();
     }
 
-    // Go: printer/emitcontext.go:117 EndVariableEnvironment
+    // Go: printer/emitcontext.go:96 EndVariableEnvironment
     // Ends the current VariableEnvironment, returning a list of statements that should be emitted at the start of the current scope.
     //
     // NOTE: This is the equivalent of `transformContext.endLexicalEnvironment` in Strada.
@@ -316,7 +316,7 @@ impl EmitContext {
         statements
     }
 
-    // Go: printer/emitcontext.go:136 EndAndMergeVariableEnvironmentList
+    // Go: printer/emitcontext.go:115 EndAndMergeVariableEnvironmentList
     // Invokes c.EndVariableEnvironment() and merges the results into `statements`
     pub fn end_and_merge_variable_environment_list(&self, statements: NodeList) -> NodeList {
         let nodes: Vec<Node> = if statements.is_some() {
@@ -334,21 +334,21 @@ impl EmitContext {
         statements
     }
 
-    // Go: printer/emitcontext.go:152 EndAndMergeVariableEnvironment
+    // Go: printer/emitcontext.go:131 EndAndMergeVariableEnvironment
     // Invokes c.EndVariableEnvironment() and merges the results into `statements`
     pub fn end_and_merge_variable_environment(&self, statements: &[Node]) -> Vec<Node> {
         let (result, _) = self.end_and_merge_variable_environment_(statements);
         result
     }
 
-    // Go: printer/emitcontext.go:157 endAndMergeVariableEnvironment
+    // Go: printer/emitcontext.go:136 endAndMergeVariableEnvironment
     // PORT: trailing `_` separates the unexported Go method from the exported one.
     fn end_and_merge_variable_environment_(&self, statements: &[Node]) -> (Vec<Node>, bool) {
         let declarations = self.end_variable_environment();
         self.merge_environment_(statements, &declarations)
     }
 
-    // Go: printer/emitcontext.go:164 AddVariableDeclaration
+    // Go: printer/emitcontext.go:143 AddVariableDeclaration
     // Adds a `var` declaration to the current VariableEnvironment
     //
     // NOTE: This is the equivalent of `transformContext.hoistVariableDeclaration` in Strada.
@@ -373,7 +373,7 @@ impl EmitContext {
         }
     }
 
-    // Go: printer/emitcontext.go:177 AddHoistedFunctionDeclaration
+    // Go: printer/emitcontext.go:156 AddHoistedFunctionDeclaration
     // Adds a hoisted function declaration to the current VariableEnvironment
     //
     // NOTE: This is the equivalent of `transformContext.hoistFunctionDeclaration` in Strada.
@@ -388,7 +388,7 @@ impl EmitContext {
         scope.borrow_mut().functions.push(node);
     }
 
-    // Go: printer/emitcontext.go:189 StartLexicalEnvironment
+    // Go: printer/emitcontext.go:168 StartLexicalEnvironment
     // Starts a new LexicalEnvironment used to track block-scoped `let`, `const`, and `using` declarations.
     //
     // NOTE: This is the equivalent of `transformContext.startBlockScope` in Strada.
@@ -399,7 +399,7 @@ impl EmitContext {
             .push(Rc::new(RefCell::new(VarScope::default())));
     }
 
-    // Go: printer/emitcontext.go:197 EndLexicalEnvironment
+    // Go: printer/emitcontext.go:176 EndLexicalEnvironment
     // Ends the current EndLexicalEnvironment, returning a list of statements that should be emitted at the start of the current scope.
     //
     // NOTE: This is the equivalent of `transformContext.endLexicalEnvironment` in Strada.
@@ -424,7 +424,7 @@ impl EmitContext {
         statements
     }
 
-    // Go: printer/emitcontext.go:210 EndAndMergeLexicalEnvironmentList
+    // Go: printer/emitcontext.go:189 EndAndMergeLexicalEnvironmentList
     // Invokes c.EndLexicalEnvironment() and merges the results into `statements`
     pub fn end_and_merge_lexical_environment_list(&self, statements: NodeList) -> NodeList {
         let nodes: Vec<Node> = if statements.is_some() {
@@ -442,21 +442,21 @@ impl EmitContext {
         statements
     }
 
-    // Go: printer/emitcontext.go:226 EndAndMergeLexicalEnvironment
+    // Go: printer/emitcontext.go:205 EndAndMergeLexicalEnvironment
     // Invokes c.EndLexicalEnvironment() and merges the results into `statements`
     pub fn end_and_merge_lexical_environment(&self, statements: &[Node]) -> Vec<Node> {
         let (result, _) = self.end_and_merge_lexical_environment_(statements);
         result
     }
 
-    // Go: printer/emitcontext.go:232 endAndMergeLexicalEnvironment
+    // Go: printer/emitcontext.go:211 endAndMergeLexicalEnvironment
     // Invokes c.EndLexicalEnvironment() and merges the results into `statements`
     fn end_and_merge_lexical_environment_(&self, statements: &[Node]) -> (Vec<Node>, bool) {
         let declarations = self.end_lexical_environment();
         self.merge_environment_(statements, &declarations)
     }
 
-    // Go: printer/emitcontext.go:237 AddLexicalDeclaration
+    // Go: printer/emitcontext.go:216 AddLexicalDeclaration
     // Adds a `let` declaration to the current LexicalEnvironment.
     pub fn add_lexical_declaration(&self, name: Node) {
         let var_decl = self.factory().new_variable_declaration(
@@ -475,7 +475,7 @@ impl EmitContext {
         scope.borrow_mut().variables.push(var_decl);
     }
 
-    // Go: printer/emitcontext.go:245 MergeEnvironmentList
+    // Go: printer/emitcontext.go:224 MergeEnvironmentList
     // Merges declarations produced by c.EndVariableEnvironment() or c.EndLexicalEnvironment() into a statement list
     pub fn merge_environment_list(&self, statements: NodeList, declarations: &[Node]) -> NodeList {
         let (result, changed) = self.merge_environment_(&statements.nodes().to_vec(), declarations);
@@ -486,14 +486,14 @@ impl EmitContext {
         statements
     }
 
-    // Go: printer/emitcontext.go:255 MergeEnvironment
+    // Go: printer/emitcontext.go:234 MergeEnvironment
     // Merges declarations produced by c.EndVariableEnvironment() or c.EndLexicalEnvironment() into a slice of statements
     pub fn merge_environment(&self, statements: &[Node], declarations: &[Node]) -> Vec<Node> {
         let (result, _) = self.merge_environment_(statements, declarations);
         result
     }
 
-    // Go: printer/emitcontext.go:260 mergeEnvironment
+    // Go: printer/emitcontext.go:239 mergeEnvironment
     fn merge_environment_(&self, statements: &[Node], declarations: &[Node]) -> (Vec<Node>, bool) {
         if declarations.is_empty() {
             return (statements.to_vec(), false);
@@ -638,17 +638,17 @@ impl EmitContext {
         (left, changed)
     }
 
-    // Go: printer/emitcontext.go:354 isCustomPrologue
+    // Go: printer/emitcontext.go:333 isCustomPrologue
     fn is_custom_prologue(&self, node: Node) -> bool {
         self.emit_flags(node).intersects(EmitFlags::CUSTOM_PROLOGUE)
     }
 
-    // Go: printer/emitcontext.go:358 isHoistedFunction
+    // Go: printer/emitcontext.go:337 isHoistedFunction
     fn is_hoisted_function(&self, node: Node) -> bool {
         self.is_custom_prologue(node) && is_function_declaration(node)
     }
 
-    // Go: printer/emitcontext.go:366 isHoistedVariableStatement
+    // Go: printer/emitcontext.go:345 isHoistedVariableStatement
     fn is_hoisted_variable_statement(&self, node: Node) -> bool {
         self.is_custom_prologue(node)
             && is_variable_statement(node)
@@ -664,7 +664,7 @@ impl EmitContext {
     // Name Generation
     //
 
-    // Go: printer/emitcontext.go:377 HasAutoGenerateInfo
+    // Go: printer/emitcontext.go:356 HasAutoGenerateInfo
     // Gets whether a given name has an associated AutoGenerateInfo entry.
     #[must_use]
     pub fn has_auto_generate_info(&self, node: Node) -> bool {
@@ -674,7 +674,7 @@ impl EmitContext {
         false
     }
 
-    // Go: printer/emitcontext.go:386 GetAutoGenerateInfo
+    // Go: printer/emitcontext.go:365 GetAutoGenerateInfo
     // Gets the associated AutoGenerateInfo entry for a given name.
     // PORT: Go returns the shared `*AutoGenerateInfo`; this returns a copy.
     #[must_use]
@@ -685,7 +685,7 @@ impl EmitContext {
         self.auto_generate.borrow().get(&name).cloned()
     }
 
-    // Go: printer/emitcontext.go:394 GetNodeForGeneratedName
+    // Go: printer/emitcontext.go:373 GetNodeForGeneratedName
     // Walks the associated AutoGenerateInfo entries of a name to find the root Nopde from which the name should be generated.
     #[must_use]
     pub fn get_node_for_generated_name(&self, name: Node) -> Node {
@@ -699,7 +699,7 @@ impl EmitContext {
         name
     }
 
-    // Go: printer/emitcontext.go:401 getNodeForGeneratedNameWorker
+    // Go: printer/emitcontext.go:380 getNodeForGeneratedNameWorker
     pub(crate) fn get_node_for_generated_name_worker(
         &self,
         mut node: Node,
@@ -731,7 +731,7 @@ impl EmitContext {
     // Original Node Tracking
     //
 
-    // Go: printer/emitcontext.go:446 SetOriginal
+    // Go: printer/emitcontext.go:425 SetOriginal
     // Sets the original node for a given node.
     //
     // NOTE: This is the equivalent to `setOriginalNode` in Strada.
@@ -739,12 +739,12 @@ impl EmitContext {
         self.set_original_ex(node, original, false);
     }
 
-    // Go: printer/emitcontext.go:450 UnsetOriginal
+    // Go: printer/emitcontext.go:429 UnsetOriginal
     pub fn unset_original(&self, node: Node) {
         self.original.borrow_mut().remove(node);
     }
 
-    // Go: printer/emitcontext.go:454 SetOriginalEx
+    // Go: printer/emitcontext.go:433 SetOriginalEx
     pub fn set_original_ex(&self, node: Node, original: Node, allow_overwrite: bool) {
         if original.is_nil() {
             panic!("Original cannot be nil.");
@@ -766,7 +766,7 @@ impl EmitContext {
         }
     }
 
-    // Go: printer/emitcontext.go:479 Original
+    // Go: printer/emitcontext.go:458 Original
     // Gets the original node for a given node.
     //
     // NOTE: This is the equivalent to reading `node.original` in Strada.
@@ -775,7 +775,7 @@ impl EmitContext {
         self.original.borrow().get(node)
     }
 
-    // Go: printer/emitcontext.go:487 MostOriginal
+    // Go: printer/emitcontext.go:466 MostOriginal
     // Gets the most original node associated with this node by walking Original pointers.
     //
     // NOTE: This method is analogous to `getOriginalNode` in the old compiler, but the name has changed to avoid accidental
@@ -792,7 +792,7 @@ impl EmitContext {
         node
     }
 
-    // Go: printer/emitcontext.go:501 ParseNode
+    // Go: printer/emitcontext.go:480 ParseNode
     // Gets the original parse tree node for a given node.
     //
     // NOTE: This is the equivalent to `getParseTreeNode` in Strada.
@@ -805,7 +805,7 @@ impl EmitContext {
         Node::NIL
     }
 
-    // Go: printer/emitcontext.go:509 IsFileLevelUniqueName
+    // Go: printer/emitcontext.go:488 IsFileLevelUniqueName
     // PORT: `source_file_has_identifier` is Go `(*SourceFile).HasIdentifier`
     // (tsgo#4731, the syntax lane's part).
     pub fn is_file_level_unique_name(
@@ -824,7 +824,7 @@ impl EmitContext {
     }
 }
 
-// Go: printer/emitcontext.go:362 isHoistedVariable
+// Go: printer/emitcontext.go:341 isHoistedVariable
 fn is_hoisted_variable(node: Node) -> bool {
     is_identifier(node.name()) && node.initializer().is_nil()
 }
@@ -871,12 +871,12 @@ pub(crate) type EmitNodeFlags = u32;
 pub(crate) const HAS_COMMENT_RANGE: EmitNodeFlags = 1 << 0;
 pub(crate) const HAS_SOURCE_MAP_RANGE: EmitNodeFlags = 1 << 1;
 
-// Go: printer/emitcontext.go:528 SnippetKind
+// Go: printer/emitcontext.go:507 SnippetKind
 go_enum!(SnippetKind, i32 {
     TAB_STOP = 0; // SnippetKindTabStop
 });
 
-// Go: printer/emitcontext.go:534 SnippetElement
+// Go: printer/emitcontext.go:513 SnippetElement
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SnippetElement {
     pub kind: SnippetKind,
@@ -928,7 +928,7 @@ impl EmitNode {
         }
     }
 
-    // Go: printer/emitcontext.go:562 copyFrom
+    // Go: printer/emitcontext.go:541 copyFrom
     // NOTE: This method is not guaranteed to be thread-safe
     // PORT: `source` is a copy (`copied_fields`), so its map and helper
     // list move here; Go clones them (`maps.Clone`, `slices.Clone`).
@@ -954,7 +954,7 @@ fn append_helper_if_unique(helpers: &mut Vec<EmitHelperRef>, helper: EmitHelperR
 }
 
 impl EmitContext {
-    // Go: printer/emitcontext.go:576 EmitFlags
+    // Go: printer/emitcontext.go:555 EmitFlags
     #[must_use]
     pub fn emit_flags(&self, node: Node) -> EmitFlags {
         if let Some(emit_node) = self.emit_nodes.borrow().try_get(node) {
@@ -963,19 +963,19 @@ impl EmitContext {
         EmitFlags::NONE
     }
 
-    // Go: printer/emitcontext.go:583 SetEmitFlags
+    // Go: printer/emitcontext.go:562 SetEmitFlags
     pub fn set_emit_flags(&self, node: Node, flags: EmitFlags) {
         self.emit_nodes.borrow_mut().get(node).emit_flags = flags;
     }
 
-    // Go: printer/emitcontext.go:587 AddEmitFlags
+    // Go: printer/emitcontext.go:566 AddEmitFlags
     pub fn add_emit_flags(&self, node: Node, flags: EmitFlags) {
         let mut emit_nodes = self.emit_nodes.borrow_mut();
         let emit_node = emit_nodes.get(node);
         emit_node.emit_flags = emit_node.emit_flags | flags;
     }
 
-    // Go: printer/emitcontext.go:591 SnippetElement
+    // Go: printer/emitcontext.go:570 EmitContext.SnippetElement
     #[must_use]
     pub fn snippet_element(&self, node: Node) -> Option<SnippetElement> {
         if let Some(emit_node) = self.emit_nodes.borrow().try_get(node) {
@@ -984,12 +984,12 @@ impl EmitContext {
         None
     }
 
-    // Go: printer/emitcontext.go:598 SetSnippetElement
+    // Go: printer/emitcontext.go:577 SetSnippetElement
     pub fn set_snippet_element(&self, node: Node, snippet_element: SnippetElement) {
         self.emit_nodes.borrow_mut().get(node).snippet_element = Some(snippet_element);
     }
 
-    // Go: printer/emitcontext.go:603 CommentRange
+    // Go: printer/emitcontext.go:582 CommentRange
     // Gets the range to use for a node when emitting comments.
     #[must_use]
     pub fn comment_range(&self, node: Node) -> TextRange {
@@ -1001,7 +1001,7 @@ impl EmitContext {
         node.loc()
     }
 
-    // Go: printer/emitcontext.go:611 SetCommentRange
+    // Go: printer/emitcontext.go:590 SetCommentRange
     // Sets the range to use for a node when emitting comments.
     pub fn set_comment_range(&self, node: Node, loc: TextRange) {
         let mut emit_nodes = self.emit_nodes.borrow_mut();
@@ -1010,13 +1010,13 @@ impl EmitContext {
         emit_node.flags |= HAS_COMMENT_RANGE;
     }
 
-    // Go: printer/emitcontext.go:618 AssignCommentRange
+    // Go: printer/emitcontext.go:597 AssignCommentRange
     // Sets the range to use for a node when emitting comments.
     pub fn assign_comment_range(&self, to: Node, from: Node) {
         self.set_comment_range(to, self.comment_range(from));
     }
 
-    // Go: printer/emitcontext.go:623 SourceMapRange
+    // Go: printer/emitcontext.go:602 SourceMapRange
     // Gets the range to use for a node when emitting source maps.
     #[must_use]
     pub fn source_map_range(&self, node: Node) -> TextRange {
@@ -1028,7 +1028,7 @@ impl EmitContext {
         node.loc()
     }
 
-    // Go: printer/emitcontext.go:631 SetSourceMapRange
+    // Go: printer/emitcontext.go:610 SetSourceMapRange
     // Sets the range to use for a node when emitting source maps.
     pub fn set_source_map_range(&self, node: Node, loc: TextRange) {
         let mut emit_nodes = self.emit_nodes.borrow_mut();
@@ -1037,13 +1037,13 @@ impl EmitContext {
         emit_node.flags |= HAS_SOURCE_MAP_RANGE;
     }
 
-    // Go: printer/emitcontext.go:638 AssignSourceMapRange
+    // Go: printer/emitcontext.go:617 AssignSourceMapRange
     // Sets the range to use for a node when emitting source maps.
     pub fn assign_source_map_range(&self, to: Node, from: Node) {
         self.set_source_map_range(to, self.source_map_range(from));
     }
 
-    // Go: printer/emitcontext.go:643 AssignCommentAndSourceMapRanges
+    // Go: printer/emitcontext.go:622 AssignCommentAndSourceMapRanges
     // Sets the range to use for a node when emitting comments and source maps.
     pub fn assign_comment_and_source_map_ranges(&self, to: Node, from: Node) {
         // PORT: Go gets `emitNode` for `to` first. The Rust borrow is taken
@@ -1057,7 +1057,7 @@ impl EmitContext {
         emit_node.flags |= HAS_COMMENT_RANGE | HAS_SOURCE_MAP_RANGE;
     }
 
-    // Go: printer/emitcontext.go:653 TokenSourceMapRange
+    // Go: printer/emitcontext.go:632 TokenSourceMapRange
     // Gets the range for a token of a node when emitting source maps.
     #[must_use]
     pub fn token_source_map_range(&self, node: Node, kind: SyntaxKind) -> (TextRange, bool) {
@@ -1071,7 +1071,7 @@ impl EmitContext {
         (TextRange::new(0, 0), false)
     }
 
-    // Go: printer/emitcontext.go:663 SetTokenSourceMapRange
+    // Go: printer/emitcontext.go:642 SetTokenSourceMapRange
     // Sets the range for a token of a node when emitting source maps.
     pub fn set_token_source_map_range(&self, node: Node, kind: SyntaxKind, loc: TextRange) {
         let mut emit_nodes = self.emit_nodes.borrow_mut();
@@ -1082,7 +1082,7 @@ impl EmitContext {
             .insert(kind, loc);
     }
 
-    // Go: printer/emitcontext.go:671 AssignedName
+    // Go: printer/emitcontext.go:650 AssignedName
     #[must_use]
     pub fn assigned_name(&self, node: Node) -> Node {
         self.assigned_name
@@ -1092,7 +1092,7 @@ impl EmitContext {
             .unwrap_or(Node::NIL)
     }
 
-    // Go: printer/emitcontext.go:675 TextSource
+    // Go: printer/emitcontext.go:654 TextSource
     #[must_use]
     pub fn text_source(&self, node: Node) -> Node {
         self.text_source
@@ -1102,12 +1102,12 @@ impl EmitContext {
             .unwrap_or(Node::NIL)
     }
 
-    // Go: printer/emitcontext.go:679 SetAssignedName
+    // Go: printer/emitcontext.go:658 SetAssignedName
     pub fn set_assigned_name(&self, node: Node, name: Node) {
         self.assigned_name.borrow_mut().insert(node, name);
     }
 
-    // Go: printer/emitcontext.go:686 ClassThis
+    // Go: printer/emitcontext.go:665 ClassThis
     #[must_use]
     pub fn class_this(&self, node: Node) -> Node {
         self.class_this
@@ -1117,12 +1117,12 @@ impl EmitContext {
             .unwrap_or(Node::NIL)
     }
 
-    // Go: printer/emitcontext.go:690 SetClassThis
+    // Go: printer/emitcontext.go:669 SetClassThis
     pub fn set_class_this(&self, node: Node, class_this: Node) {
         self.class_this.borrow_mut().insert(node, class_this);
     }
 
-    // Go: printer/emitcontext.go:697 RequestEmitHelper
+    // Go: printer/emitcontext.go:676 RequestEmitHelper
     pub fn request_emit_helper(&self, helper: EmitHelperRef) {
         if helper.scoped {
             panic!("Cannot request a scoped emit helper");
@@ -1133,12 +1133,12 @@ impl EmitContext {
         append_helper_if_unique(&mut self.emit_helpers.borrow_mut(), helper);
     }
 
-    // Go: printer/emitcontext.go:707 ReadEmitHelpers
+    // Go: printer/emitcontext.go:686 ReadEmitHelpers
     pub fn read_emit_helpers(&self) -> Vec<EmitHelperRef> {
         std::mem::take(&mut *self.emit_helpers.borrow_mut())
     }
 
-    // Go: printer/emitcontext.go:713 AddEmitHelper
+    // Go: printer/emitcontext.go:692 AddEmitHelper
     pub fn add_emit_helper(&self, node: Node, helper: &[EmitHelperRef]) {
         let mut emit_nodes = self.emit_nodes.borrow_mut();
         let emit_node = emit_nodes.get(node);
@@ -1147,7 +1147,7 @@ impl EmitContext {
         }
     }
 
-    // Go: printer/emitcontext.go:720 MoveEmitHelpers
+    // Go: printer/emitcontext.go:699 MoveEmitHelpers
     pub fn move_emit_helpers(
         &self,
         source: Node,
@@ -1183,7 +1183,7 @@ impl EmitContext {
         }
     }
 
-    // Go: printer/emitcontext.go:748 GetEmitHelpers
+    // Go: printer/emitcontext.go:727 GetEmitHelpers
     #[must_use]
     pub fn get_emit_helpers(&self, node: Node) -> Vec<EmitHelperRef> {
         if let Some(emit_node) = self.emit_nodes.borrow().try_get(node) {
@@ -1192,7 +1192,7 @@ impl EmitContext {
         Vec::new()
     }
 
-    // Go: printer/emitcontext.go:756 GetExternalHelpersModuleName
+    // Go: printer/emitcontext.go:735 GetExternalHelpersModuleName
     #[must_use]
     pub fn get_external_helpers_module_name(&self, node: Node) -> Node {
         let parse_node = self.parse_node(node);
@@ -1204,7 +1204,7 @@ impl EmitContext {
         Node::NIL
     }
 
-    // Go: printer/emitcontext.go:765 SetExternalHelpersModuleName
+    // Go: printer/emitcontext.go:744 SetExternalHelpersModuleName
     pub fn set_external_helpers_module_name(&self, node: Node, name: Node) {
         let parse_node = self.parse_node(node);
         if parse_node.is_nil() {
@@ -1220,7 +1220,7 @@ impl EmitContext {
         self.emit_node_refs.set(true);
     }
 
-    // Go: printer/emitcontext.go:775 HasRecordedExternalHelpers
+    // Go: printer/emitcontext.go:754 HasRecordedExternalHelpers
     #[must_use]
     pub fn has_recorded_external_helpers(&self, node: Node) -> bool {
         let parse_node = self.parse_node(node);
@@ -1236,7 +1236,7 @@ impl EmitContext {
         false
     }
 
-    // Go: printer/emitcontext.go:783 IsCallToHelper
+    // Go: printer/emitcontext.go:762 IsCallToHelper
     #[must_use]
     pub fn is_call_to_helper(&self, first_segment: Node, helper_name: &str) -> bool {
         is_call_expression(first_segment)
@@ -1251,7 +1251,7 @@ impl EmitContext {
     // Visitor Hooks
     //
 
-    // Go: printer/emitcontext.go:794 VisitVariableEnvironment
+    // Go: printer/emitcontext.go:773 VisitVariableEnvironment
     pub fn visit_variable_environment<C>(
         &self,
         nodes: NodeList,
@@ -1262,7 +1262,7 @@ impl EmitContext {
         self.end_and_merge_variable_environment_list(visited)
     }
 
-    // Go: printer/emitcontext.go:799 VisitParameters
+    // Go: printer/emitcontext.go:778 VisitParameters
     pub fn visit_parameters<C>(
         &self,
         nodes: NodeList,
@@ -1294,7 +1294,7 @@ impl EmitContext {
         nodes
     }
 
-    // Go: printer/emitcontext.go:820 addDefaultValueAssignmentsIfNeeded
+    // Go: printer/emitcontext.go:799 addDefaultValueAssignmentsIfNeeded
     fn add_default_value_assignments_if_needed(&self, node_list: NodeList) -> NodeList {
         if node_list.is_nil() {
             return node_list;
@@ -1314,7 +1314,7 @@ impl EmitContext {
         node_list
     }
 
-    // Go: printer/emitcontext.go:843 addDefaultValueAssignmentIfNeeded
+    // Go: printer/emitcontext.go:822 addDefaultValueAssignmentIfNeeded
     fn add_default_value_assignment_if_needed(&self, parameter: Node) -> Node {
         // A rest parameter cannot have a binding pattern or an initializer,
         // so let's just ignore it.
@@ -1332,7 +1332,7 @@ impl EmitContext {
         parameter
     }
 
-    // Go: printer/emitcontext.go:856 addDefaultValueAssignmentForBindingPattern
+    // Go: printer/emitcontext.go:835 addDefaultValueAssignmentForBindingPattern
     fn add_default_value_assignment_for_binding_pattern(&self, parameter: Node) -> Node {
         let f = self.factory();
         let init_node = if parameter.initializer().is_some() {
@@ -1372,7 +1372,7 @@ impl EmitContext {
         )
     }
 
-    // Go: printer/emitcontext.go:892 addDefaultValueAssignmentForInitializer
+    // Go: printer/emitcontext.go:871 addDefaultValueAssignmentForInitializer
     fn add_default_value_assignment_for_initializer(
         &self,
         parameter: Node,
@@ -1417,7 +1417,7 @@ impl EmitContext {
         )
     }
 
-    // Go: printer/emitcontext.go:921 AddInitializationStatement
+    // Go: printer/emitcontext.go:900 AddInitializationStatement
     pub fn add_initialization_statement(&self, node: Node) {
         // PORT: Go `Peek` panics on an empty stack before the nil check.
         let scope = self
@@ -1430,7 +1430,7 @@ impl EmitContext {
         scope.borrow_mut().initialization_statements.push(node);
     }
 
-    // Go: printer/emitcontext.go:930 ConvertToFunctionBlock
+    // Go: printer/emitcontext.go:909 ConvertToFunctionBlock
     pub fn convert_to_function_block(&self, node: Node, multi_line: bool) -> Node {
         if is_block(node) {
             return node;
@@ -1446,7 +1446,7 @@ impl EmitContext {
         block
     }
 
-    // Go: printer/emitcontext.go:943 VisitFunctionBody
+    // Go: printer/emitcontext.go:922 VisitFunctionBody
     pub fn visit_function_body<C>(&self, node: Node, visitor: &mut NodeVisitor<'_, C>) -> Node {
         // !!! c.resumeVariableEnvironment()
         let updated = visitor.visit_node(node);
@@ -1477,7 +1477,7 @@ impl EmitContext {
         )
     }
 
-    // Go: printer/emitcontext.go:972 VisitIterationBody
+    // Go: printer/emitcontext.go:951 VisitIterationBody
     pub fn visit_iteration_body<C>(&self, body: Node, visitor: &mut NodeVisitor<'_, C>) -> Node {
         if body.is_nil() {
             return Node::NIL;
@@ -1505,7 +1505,7 @@ impl EmitContext {
         updated
     }
 
-    // Go: printer/emitcontext.go:998 VisitEmbeddedStatement
+    // Go: printer/emitcontext.go:977 VisitEmbeddedStatement
     pub fn visit_embedded_statement<C>(
         &self,
         node: Node,
@@ -1525,7 +1525,7 @@ impl EmitContext {
         embedded_statement
     }
 
-    // Go: printer/emitcontext.go:1013 SetSyntheticLeadingComments
+    // Go: printer/emitcontext.go:992 SetSyntheticLeadingComments
     pub fn set_synthetic_leading_comments(
         &self,
         node: Node,
@@ -1535,7 +1535,7 @@ impl EmitContext {
         node
     }
 
-    // Go: printer/emitcontext.go:1018 AddSyntheticLeadingComment
+    // Go: printer/emitcontext.go:997 AddSyntheticLeadingComment
     pub fn add_synthetic_leading_comment(
         &self,
         node: Node,
@@ -1557,7 +1557,7 @@ impl EmitContext {
         node
     }
 
-    // Go: printer/emitcontext.go:1023 GetSyntheticLeadingComments
+    // Go: printer/emitcontext.go:1002 GetSyntheticLeadingComments
     #[must_use]
     pub fn get_synthetic_leading_comments(&self, node: Node) -> Vec<SynthesizedComment> {
         if let Some(emit_node) = self.emit_nodes.borrow().try_get(node) {
@@ -1566,7 +1566,7 @@ impl EmitContext {
         Vec::new()
     }
 
-    // Go: printer/emitcontext.go:1030 SetSyntheticTrailingComments
+    // Go: printer/emitcontext.go:1009 SetSyntheticTrailingComments
     pub fn set_synthetic_trailing_comments(
         &self,
         node: Node,
@@ -1576,7 +1576,7 @@ impl EmitContext {
         node
     }
 
-    // Go: printer/emitcontext.go:1035 AddSyntheticTrailingComment
+    // Go: printer/emitcontext.go:1014 AddSyntheticTrailingComment
     pub fn add_synthetic_trailing_comment(
         &self,
         node: Node,
@@ -1598,7 +1598,7 @@ impl EmitContext {
         node
     }
 
-    // Go: printer/emitcontext.go:1040 GetSyntheticTrailingComments
+    // Go: printer/emitcontext.go:1019 GetSyntheticTrailingComments
     #[must_use]
     pub fn get_synthetic_trailing_comments(&self, node: Node) -> Vec<SynthesizedComment> {
         if let Some(emit_node) = self.emit_nodes.borrow().try_get(node) {
@@ -1607,7 +1607,7 @@ impl EmitContext {
         Vec::new()
     }
 
-    // Go: printer/emitcontext.go:1049 SetTypeNode
+    // Go: printer/emitcontext.go:1028 SetTypeNode
     // SetTypeNode stores the original type node on a name node when the type is erased,
     // so the emitter can use the type's position for comment preservation.
     pub fn set_type_node(&self, node: Node, type_node: Node) {
@@ -1615,7 +1615,7 @@ impl EmitContext {
         self.emit_node_refs.set(true);
     }
 
-    // Go: printer/emitcontext.go:1054 GetTypeNode
+    // Go: printer/emitcontext.go:1033 GetTypeNode
     // GetTypeNode gets the type node stored on a name node by the type eraser.
     #[must_use]
     pub fn get_type_node(&self, node: Node) -> Node {
@@ -1625,7 +1625,7 @@ impl EmitContext {
         Node::NIL
     }
 
-    // Go: printer/emitcontext.go:1061 NewNotEmittedStatement
+    // Go: printer/emitcontext.go:1040 NewNotEmittedStatement
     pub fn new_not_emitted_statement(&self, node: Node) -> Node {
         let statement = self.factory().new_not_emitted_statement();
         set_node_loc(statement, node.loc());
