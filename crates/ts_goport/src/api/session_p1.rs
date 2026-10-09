@@ -2073,6 +2073,19 @@ impl ipc::Handler for Session {
             m if m == Method::GET_TARGET_SYMBOL.0 => self
                 .handle_method_get_target_symbol(ctx, assert_params(&parsed))
                 .map(to_any),
+            // ts#64598
+            m if m == Method::GET_MERGED_SYMBOL.0 => self
+                .handle_get_merged_symbol(ctx, assert_params(&parsed))
+                .map(to_any),
+            m if m == Method::GET_SYMBOL_OF_NODE.0 => self
+                .handle_get_symbol_of_node(ctx, assert_params(&parsed))
+                .map(to_any),
+            m if m == Method::GET_SYMBOL_OF_DECLARATION_FOR_CHECKER.0 => self
+                .handle_get_symbol_of_declaration_for_checker(ctx, assert_params(&parsed))
+                .map(to_any),
+            m if m == Method::GET_PARENT_OF_SYMBOL_FOR_CHECKER.0 => self
+                .handle_get_parent_of_symbol_for_checker(ctx, assert_params(&parsed))
+                .map(to_any),
             // ts#64264
             m if m == Method::GET_EXPORT_SYMBOL_OF_SYMBOL_FOR_CHECKER.0 => self
                 .handle_get_export_symbol_of_symbol_for_checker(ctx, assert_params(&parsed))

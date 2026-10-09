@@ -1845,6 +1845,70 @@ impl Session {
         Ok(setup.new_symbol_response(symbol))
     }
 
+    // Go: api/session.go:4692 handleGetMergedSymbol (ts#64598)
+    pub fn handle_get_merged_symbol(
+        &self,
+        ctx: &Context,
+        params: &CheckerSymbolParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
+        let symbol = checker_symbol(&setup.checker, &owner, symbol);
+
+        let merged = setup.checker.borrow().get_merged_symbol(symbol);
+        Ok(setup.new_symbol_response(merged))
+    }
+
+    // Go: api/session.go:4708 handleGetSymbolOfNode (ts#64598)
+    // @gen-proto-nullable
+    pub fn handle_get_symbol_of_node(
+        &self,
+        ctx: &Context,
+        params: &CheckerNodeParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let node = setup
+            .sd
+            .resolve_node_handle(&setup.program, &params.location)?;
+
+        let symbol = setup.checker.borrow_mut().get_symbol_of_node(node);
+        Ok(setup.new_symbol_response(symbol))
+    }
+
+    // Go: api/session.go:4724 handleGetSymbolOfDeclarationForChecker (ts#64598)
+    // @gen-proto-nullable
+    pub fn handle_get_symbol_of_declaration_for_checker(
+        &self,
+        ctx: &Context,
+        params: &CheckerNodeParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let node = setup
+            .sd
+            .resolve_node_handle(&setup.program, &params.location)?;
+        let symbol = setup.checker.borrow_mut().get_symbol_of_declaration(node);
+        Ok(setup.new_symbol_response(symbol))
+    }
+
+    // Go: api/session.go:4739 handleGetParentOfSymbolForChecker (ts#64598)
+    // @gen-proto-nullable
+    pub fn handle_get_parent_of_symbol_for_checker(
+        &self,
+        ctx: &Context,
+        params: &CheckerSymbolParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
+        let symbol = checker_symbol(&setup.checker, &owner, symbol);
+
+        let parent = setup.checker.borrow_mut().get_parent_of_symbol(symbol);
+        Ok(setup.new_symbol_response(parent))
+    }
+
     // Go: api/session.go:4271 handleGetAliasedSymbol
     // handleGetAliasedSymbol resolves an alias symbol to its target.
     pub fn handle_get_aliased_symbol(

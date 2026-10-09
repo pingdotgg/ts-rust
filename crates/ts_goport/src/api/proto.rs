@@ -507,6 +507,13 @@ impl Method {
         Method(Cow::Borrowed("getImmediateAliasedSymbol"));
     // ts#63945
     pub const GET_TARGET_SYMBOL: Method = Method(Cow::Borrowed("getTargetSymbol"));
+    // ts#64598
+    pub const GET_MERGED_SYMBOL: Method = Method(Cow::Borrowed("getMergedSymbol"));
+    pub const GET_SYMBOL_OF_NODE: Method = Method(Cow::Borrowed("getSymbolOfNode"));
+    pub const GET_SYMBOL_OF_DECLARATION_FOR_CHECKER: Method =
+        Method(Cow::Borrowed("getSymbolOfDeclarationForChecker"));
+    pub const GET_PARENT_OF_SYMBOL_FOR_CHECKER: Method =
+        Method(Cow::Borrowed("getParentOfSymbolForChecker"));
     // ts#64264
     pub const GET_EXPORT_SYMBOL_OF_SYMBOL_FOR_CHECKER: Method =
         Method(Cow::Borrowed("getExportSymbolOfSymbolForChecker"));
@@ -2190,6 +2197,23 @@ pub static UNMARSHALERS: LazyLock<FxHashMap<Method, Unmarshaler>> = LazyLock::ne
     // ts#63945
     m.insert(
         Method::GET_TARGET_SYMBOL,
+        unmarshaller_for::<CheckerSymbolParams>,
+    );
+    // ts#64598
+    m.insert(
+        Method::GET_MERGED_SYMBOL,
+        unmarshaller_for::<CheckerSymbolParams>,
+    );
+    m.insert(
+        Method::GET_SYMBOL_OF_NODE,
+        unmarshaller_for::<CheckerNodeParams>,
+    );
+    m.insert(
+        Method::GET_SYMBOL_OF_DECLARATION_FOR_CHECKER,
+        unmarshaller_for::<CheckerNodeParams>,
+    );
+    m.insert(
+        Method::GET_PARENT_OF_SYMBOL_FOR_CHECKER,
         unmarshaller_for::<CheckerSymbolParams>,
     );
     // ts#64264

@@ -241,7 +241,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:170 TestCreateSourceFile/declaration symbol lookup (ts#64571)
+// Go: session_createsourcefile_test.go:170 TestCreateSourceFile/declaration symbol lookup (ts#64571, ts#64598)
 child_test! {
     fn declaration_symbol_lookup() {
         let (project_session, session) = setup();
@@ -263,13 +263,8 @@ child_test! {
         assert_eq!(present.name, "present");
         assert_eq!(present.reference.kind, SymbolOwnerKind::FILE);
 
-        error_contains(
-            session.handle_get_symbol_of_declaration(&GetSymbolOfDeclarationParams {
-                file: descriptor.clone(),
-                index: table.get_index(source_file.statements().get(1)),
-            }),
-            "has no binder symbol",
-        );
+        // ts#64598 drops the Go check of the import declaration
+        // ("has no binder symbol").
 
         error_contains(
             session.handle_get_symbol_of_declaration(&GetSymbolOfDeclarationParams {
