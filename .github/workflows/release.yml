@@ -312,7 +312,7 @@ jobs:
           path: ${{ runner.temp }}/rs
       - name: Build Go's tsc
         run: |
-          (cd go-pin/tsc && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -tags=noembed -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
+          (cd go-pin/tsc && GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -tags=noembed -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
           cp go-pin/tsc/internal/bundled/libs/*.d.ts "$RUNNER_TEMP/go/"
           crates/ts_goport/scripts/copy-libs.sh "$RUNNER_TEMP/rs"
           "$RUNNER_TEMP/go/tsc.exe" --version
