@@ -662,6 +662,28 @@ The batch that adds it is not accepted until Theo approves.
   - A large `noEmitOnError` project with a syntax error (k2gaps1 probes
     `noeoe_syn_comp`, `noeoe_syn_inc`): it has no checker work, so it
     finishes at once, in start order. This is G1's family.
+  - G5: the other projects with no early emit finish when their check
+    ends, then emit and write, as in G3; Go's builder writes when that
+    emit ends. These are the projects where `check_cannot_see_outputs`
+    fails (F1: node16 or nodenext with a checked relative module name
+    without an extension; F2: a program file inside `outDir` or
+    `declarationDir`; F3: a `node_modules` segment in either), and the
+    other `early_emit_options_allow` cases: `preserveSymlinks` (F4),
+    `outFile`, `--generateTrace`, and every project with
+    `GOPORT_EARLY_EMIT=0`. `--singleThreaded` is not a gap: Go's build
+    then runs one task at a time (execute/build/orchestrator.go:925
+    `rangeTasks`).
+  - C1 rate shift (int56; state note `int56-decision-2026-10-09`). C1
+    makes a task with early emit finish when its emit pool jobs and d.ts
+    twins end (`program::send_checker_barrier`), as Go's task finishes
+    when its emit ends. In probes `c1_fan_imp_b2` and `c1_fan_nc_k600_b2x`
+    a small project k (one big file) and a big emit project w build
+    together, and readers read w's output without a reference. On loaded
+    zbook the rare answer (rc 0) came from int56 in 13 of 90 runs, from
+    R184 in 1 of 90 and from Go in 2 of 90 (Fisher p about 0.001). The
+    answer stays in Go's set, and quiet hosts gave one answer. Cause: in
+    the full build the port's k finishes late (350 to 460 ms against Go's
+    140 to 180 ms), so k and w almost tie, and C1 moves k a little later.
 
 `program.rs` defines `SourceFileInfo`, `load`, `bind_all`, the Go
 `Program` methods as free functions with Go snake names (`get_resolved_module(file, name, mode)` ->
