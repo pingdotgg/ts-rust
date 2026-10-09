@@ -1431,7 +1431,7 @@ impl ConcurrentTransform {
     /// makes it, errors and timings included. `None` when the mapper is
     /// disabled, or when the connection's read loop panicked: then the
     /// loader transforms the file itself, and its call panics.
-    // Go: contentmapper/hostimpl.go:770 host.transformLocked
+    // Go: contentmapper/hostimpl.go:772 host.transformLocked
     pub fn transform(
         &self,
         file_name: &str,
@@ -1818,7 +1818,7 @@ impl HostImpl {
         Ok(())
     }
 
-    // Go: contentmapper/hostimpl.go:728 host.closeProject
+    // Go: contentmapper/hostimpl.go:730 host.closeProject
     fn close_project(
         &self,
         mapper: &Mapper,
@@ -1838,7 +1838,7 @@ impl HostImpl {
         result.map(|_| ())
     }
 
-    // Go: contentmapper/hostimpl.go:770 host.transformLocked
+    // Go: contentmapper/hostimpl.go:772 host.transformLocked
     fn transform_locked(
         &self,
         mapper: &Rc<Mapper>,
@@ -1892,7 +1892,7 @@ impl HostImpl {
         }
     }
 
-    // Go: contentmapper/hostimpl.go:825 host.connFor
+    // Go: contentmapper/hostimpl.go:827 host.connFor
     // connFor returns the connection for a mapper's identity, spawning its process on first use. Mappers
     // sharing an identity share a single process.
     fn conn_for(
@@ -1939,7 +1939,7 @@ impl HostImpl {
         }))
     }
 
-    // Go: contentmapper/hostimpl.go:831 host.connForLocked
+    // Go: contentmapper/hostimpl.go:833 host.connForLocked
     fn conn_for_locked(
         &self,
         mapper: &Rc<Mapper>,
@@ -1992,7 +1992,7 @@ impl HostImpl {
         }
     }
 
-    // Go: contentmapper/hostimpl.go:1067 host.release
+    // Go: contentmapper/hostimpl.go:1069 host.release
     fn release(&self, identities: &[String]) {
         let mut closers: Vec<Arc<dyn ProcessExitState>> = Vec::new();
         {
@@ -2132,7 +2132,7 @@ impl Host for HostImpl {
         Some(lease)
     }
 
-    // Go: contentmapper/hostimpl.go:736 host.Acquire
+    // Go: contentmapper/hostimpl.go:738 host.Acquire
     fn acquire(&self, mappers: &[Rc<Mapper>]) -> Rc<dyn Fn()> {
         let mut seen: FxHashSet<String> = FxHashSet::default();
         let mut identities: Vec<String> = Vec::with_capacity(mappers.len());
@@ -2161,7 +2161,7 @@ impl Host for HostImpl {
         })
     }
 
-    // Go: contentmapper/hostimpl.go:761 host.Transform
+    // Go: contentmapper/hostimpl.go:763 host.Transform
     // Transform sends the file's content to the mapper's process and decodes the transformed result.
     fn transform(
         &self,
@@ -2183,7 +2183,7 @@ impl Host for HostImpl {
         result
     }
 
-    // Go: contentmapper/hostimpl.go:798 host.Close
+    // Go: contentmapper/hostimpl.go:800 host.Close
     // Close shuts down every mapper process. It is safe to call more than once and is invoked automatically
     // when the context passed to New is cancelled.
     fn close(&self) -> std::result::Result<(), GoError> {
@@ -2275,7 +2275,7 @@ fn json_value_kind(value: &JsonValue) -> u8 {
     }
 }
 
-// Go: contentmapper/hostimpl.go:853 projectLease
+// Go: contentmapper/hostimpl.go:855 projectLease
 // PORT: Go `map[*Mapper]string` is an `IndexMap` keyed by the mapper's `Rc`
 // pointer, in insertion order. `refs` and `once` are cells (dispatch thread).
 struct ProjectLease {
@@ -2287,7 +2287,7 @@ struct ProjectLease {
     once: Cell<bool>,
 }
 
-// Go: contentmapper/hostimpl.go:862 retainedProject
+// Go: contentmapper/hostimpl.go:864 retainedProject
 // PORT: Go embeds `*projectLease`; every method but Close forwards to it.
 struct RetainedProject {
     project_lease: Rc<ProjectLease>,
@@ -2295,7 +2295,7 @@ struct RetainedProject {
 }
 
 impl ProjectLease {
-    // Go: contentmapper/hostimpl.go:867 projectLease.retainLocked
+    // Go: contentmapper/hostimpl.go:869 projectLease.retainLocked
     fn retain_locked(self: &Rc<Self>) -> Rc<dyn Project> {
         self.refs.set(self.refs.get() + 1);
         Rc::new(RetainedProject {
@@ -2309,7 +2309,7 @@ impl ProjectLease {
         self.entries.get(&Rc::as_ptr(mapper))
     }
 
-    // Go: contentmapper/hostimpl.go:1029 projectLease.release
+    // Go: contentmapper/hostimpl.go:1031 projectLease.release
     fn release(&self) -> std::result::Result<(), GoError> {
         let host = &self.host;
         let mut result: Option<GoError> = None;
@@ -2366,7 +2366,7 @@ impl ProjectLease {
 }
 
 impl Project for ProjectLease {
-    // Go: contentmapper/hostimpl.go:877 projectLease.Refresh
+    // Go: contentmapper/hostimpl.go:879 projectLease.Refresh
     fn refresh(&self) -> std::result::Result<(), GoError> {
         let host = &self.host;
         if host.projects.borrow().is_none() {
@@ -2402,7 +2402,7 @@ impl Project for ProjectLease {
         }
     }
 
-    // Go: contentmapper/hostimpl.go:899 projectLease.Identities
+    // Go: contentmapper/hostimpl.go:901 projectLease.Identities
     fn identities(&self) -> std::result::Result<Vec<String>, GoError> {
         let host = &self.host;
         if host.projects.borrow().is_none() {
@@ -2430,7 +2430,7 @@ impl Project for ProjectLease {
         Ok(identities)
     }
 
-    // Go: contentmapper/hostimpl.go:927 projectLease.Identity
+    // Go: contentmapper/hostimpl.go:929 projectLease.Identity
     fn identity(&self, mapper: &Rc<Mapper>) -> std::result::Result<String, GoError> {
         let host = &self.host;
         if host.projects.borrow().is_none() {
@@ -2455,7 +2455,7 @@ impl Project for ProjectLease {
         Ok(static_identity(mapper, compiler_options.as_deref()))
     }
 
-    // Go: contentmapper/hostimpl.go:953 projectLease.WatchedFiles
+    // Go: contentmapper/hostimpl.go:955 projectLease.WatchedFiles
     fn watched_files(&self) -> std::result::Result<Vec<String>, GoError> {
         let host = &self.host;
         if host.projects.borrow().is_none() {
@@ -2476,7 +2476,7 @@ impl Project for ProjectLease {
         Ok(files)
     }
 
-    // Go: contentmapper/hostimpl.go:978 projectLease.Diagnostics
+    // Go: contentmapper/hostimpl.go:980 projectLease.Diagnostics
     fn diagnostics(&self) -> Vec<OptionDiagnostic> {
         let host = &self.host;
         if host.projects.borrow().is_none() {
@@ -2497,7 +2497,7 @@ impl Project for ProjectLease {
         diagnostics
     }
 
-    // Go: contentmapper/hostimpl.go:1000 projectLease.Transform
+    // Go: contentmapper/hostimpl.go:1002 projectLease.Transform
     fn transform(
         &self,
         mapper: &Rc<Mapper>,
@@ -2527,7 +2527,7 @@ impl Project for ProjectLease {
         host.concurrent_transform(mapper, &entry)
     }
 
-    // Go: contentmapper/hostimpl.go:1021 projectLease.Close
+    // Go: contentmapper/hostimpl.go:1023 projectLease.Close
     fn close(&self) -> std::result::Result<(), GoError> {
         if self.once.replace(true) {
             return Ok(());
@@ -2569,7 +2569,7 @@ impl Project for RetainedProject {
         Project::concurrent_transform(&*self.project_lease, mapper)
     }
 
-    // Go: contentmapper/hostimpl.go:872 retainedProject.Close
+    // Go: contentmapper/hostimpl.go:874 retainedProject.Close
     fn close(&self) -> std::result::Result<(), GoError> {
         if self.once.replace(true) {
             return Ok(());
@@ -2578,7 +2578,7 @@ impl Project for RetainedProject {
     }
 }
 
-// Go: contentmapper/hostimpl.go:1091 handshake
+// Go: contentmapper/hostimpl.go:1093 handshake
 fn handshake(
     ctx: &Context,
     conn: &Rc<dyn ipc::Conn>,
@@ -2649,7 +2649,7 @@ fn handshake(
     Ok((res.position_encoding, res.diagnostic_source))
 }
 
-// Go: contentmapper/hostimpl.go:1121 decodeTransformResult
+// Go: contentmapper/hostimpl.go:1123 decodeTransformResult
 fn decode_transform_result(
     raw: &JsonValue,
     original_text: &str,
@@ -2727,7 +2727,7 @@ fn decode_transform_result(
     Ok(result)
 }
 
-// Go: contentmapper/hostimpl.go:1170 decodeMappedOutput
+// Go: contentmapper/hostimpl.go:1172 decodeMappedOutput
 fn decode_mapped_output<'a>(
     output: &'a MappedOutput,
     original_text: &'a str,
@@ -2769,7 +2769,7 @@ fn decode_mapped_output<'a>(
     Ok((result, original_positions))
 }
 
-// Go: contentmapper/hostimpl.go:1208 normalizeDiagnosticDirectives
+// Go: contentmapper/hostimpl.go:1210 normalizeDiagnosticDirectives
 fn normalize_diagnostic_directives(
     diagnostic_directives: Option<&DiagnosticDirectives>,
     virtual_positions: &PositionNormalizer<'_>,
@@ -2891,7 +2891,7 @@ fn normalize_diagnostic_directives(
     Ok(result)
 }
 
-// Go: contentmapper/hostimpl.go:1291 normalizeMappings
+// Go: contentmapper/hostimpl.go:1293 normalizeMappings
 fn normalize_mappings(
     mappings: &spanmap::SpanMap,
     virtual_positions: &PositionNormalizer<'_>,
@@ -2937,7 +2937,7 @@ fn normalize_mappings(
     Ok(spanmap::new(&segments))
 }
 
-// Go: contentmapper/hostimpl.go:1316 positionNormalizer
+// Go: contentmapper/hostimpl.go:1318 positionNormalizer
 struct PositionNormalizer<'a> {
     text: &'a str,
     encoding: PositionEncoding,
@@ -2945,7 +2945,7 @@ struct PositionNormalizer<'a> {
     length: i32,
 }
 
-// Go: contentmapper/hostimpl.go:1323 newPositionNormalizer
+// Go: contentmapper/hostimpl.go:1325 newPositionNormalizer
 fn new_position_normalizer<'a>(
     text: &'a str,
     encoding: &PositionEncoding,
@@ -2972,12 +2972,12 @@ fn new_position_normalizer<'a>(
 }
 
 impl PositionNormalizer<'_> {
-    // Go: contentmapper/hostimpl.go:1337 positionNormalizer.normalizeTextPos
+    // Go: contentmapper/hostimpl.go:1339 positionNormalizer.normalizeTextPos
     fn normalize_text_pos(&self, position: i32) -> std::result::Result<i32, GoError> {
         self.normalize(position)
     }
 
-    // Go: contentmapper/hostimpl.go:1342 positionNormalizer.normalize
+    // Go: contentmapper/hostimpl.go:1344 positionNormalizer.normalize
     fn normalize(&self, position: i32) -> std::result::Result<i32, GoError> {
         if position < 0 {
             return Err(errors::new(format!("position {position} is negative")));
@@ -3010,13 +3010,13 @@ impl PositionNormalizer<'_> {
     }
 }
 
-// Go: contentmapper/hostimpl.go:1364 rejectHandler
+// Go: contentmapper/hostimpl.go:1366 rejectHandler
 // rejectHandler rejects any request initiated by the mapper. The content mapper protocol is currently
 // parent-driven only; a request from the child is a protocol violation.
 struct RejectHandler;
 
 impl ipc::Handler for RejectHandler {
-    // Go: contentmapper/hostimpl.go:1366 rejectHandler.HandleRequest
+    // Go: contentmapper/hostimpl.go:1368 rejectHandler.HandleRequest
     fn handle_request(
         &self,
         ctx: &Context,
@@ -3028,7 +3028,7 @@ impl ipc::Handler for RejectHandler {
         )))
     }
 
-    // Go: contentmapper/hostimpl.go:1370 rejectHandler.HandleNotification
+    // Go: contentmapper/hostimpl.go:1372 rejectHandler.HandleNotification
     fn handle_notification(
         &self,
         ctx: &Context,
@@ -4790,7 +4790,7 @@ mod tests {
         let _ = host.close();
     }
 
-    // Go: host_test.go:1074 TestProjectMethodsAfterHostClose
+    // Go: host_test.go:1076 TestProjectMethodsAfterHostClose
     #[test]
     fn test_project_methods_after_host_close() {
         let mapper_process = Arc::new(RecordingMapper {
@@ -4851,7 +4851,7 @@ mod tests {
             .kind
     }
 
-    // Go: host_test.go:1112 TestProjectRejectsRelativeWatchedFiles
+    // Go: host_test.go:1114 TestProjectRejectsRelativeWatchedFiles
     #[test]
     fn test_project_rejects_relative_watched_files() {
         let mapper_process = Arc::new(RecordingMapper {
@@ -4937,7 +4937,7 @@ mod tests {
         }
     }
 
-    // Go: host_test.go:1135 TestDynamicProjectRequiresConfigIdentity
+    // Go: host_test.go:1137 TestDynamicProjectRequiresConfigIdentity
     #[test]
     fn test_dynamic_project_requires_config_identity() {
         let mapper_process = Arc::new(RecordingMapper {
@@ -4976,7 +4976,7 @@ mod tests {
         let _ = host.close();
     }
 
-    // Go: host_test.go:1159 TestStaticMapperRejectsDynamicProjectResponseFields
+    // Go: host_test.go:1161 TestStaticMapperRejectsDynamicProjectResponseFields
     #[test]
     fn test_static_mapper_rejects_dynamic_project_response_fields() {
         let tests: [(&str, RecordingMapper, ProjectErrorKind); 2] = [
@@ -5021,7 +5021,7 @@ mod tests {
         }
     }
 
-    // Go: host_test.go:1191 TestProjectRejectsInvalidOptionDiagnosticPath
+    // Go: host_test.go:1193 TestProjectRejectsInvalidOptionDiagnosticPath
     #[test]
     fn test_project_rejects_invalid_option_diagnostic_path() {
         let mapper_process = Arc::new(RecordingMapper {
@@ -5057,7 +5057,7 @@ mod tests {
         let _ = host.close();
     }
 
-    // Go: host_test.go:1215 TestRunnerForwardsProjectOptions
+    // Go: host_test.go:1217 TestRunnerForwardsProjectOptions
     #[test]
     fn test_runner_forwards_project_options() {
         let mapper_process = Arc::new(RecordingMapper::default());
@@ -5112,7 +5112,7 @@ mod tests {
         let _ = r.close();
     }
 
-    // Go: host_test.go:1247 TestHostSetLocaleRestartsMapper
+    // Go: host_test.go:1249 TestHostSetLocaleRestartsMapper
     #[test]
     fn test_host_set_locale_restarts_mapper() {
         let mapper_process = Arc::new(RecordingMapper::default());
@@ -5140,7 +5140,7 @@ mod tests {
         let _ = r.close();
     }
 
-    // Go: host_test.go:1275 TestHostSetLocaleWaitsForTransform
+    // Go: host_test.go:1277 TestHostSetLocaleWaitsForTransform
     // PORT: Go runs the transform and SetLocale on two goroutines and checks
     // that SetLocale waits for the transform. The port's host is
     // dispatch-thread state, so a transform and SetLocale cannot overlap;

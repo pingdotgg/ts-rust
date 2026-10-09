@@ -27,7 +27,7 @@ use crate::gostd::Context;
 use crate::gostd::strconv::quote;
 use crate::program;
 
-// Go: transpile/transpile.go:17 Options
+// Go: transpile/transpile.go:16 Options
 /// Options configures single-file transpilation.
 // PORT: Go `CompilerOptions *core.CompilerOptions` is an owned value. The
 // Go worker clones it, so the caller's options stay unchanged either way.
@@ -53,7 +53,7 @@ pub struct Options {
     pub report_diagnostics: bool,
 }
 
-// Go: transpile/transpile.go:39 Output
+// Go: transpile/transpile.go:38 Output
 /// Output contains the emitted text and any requested diagnostics.
 // PORT: an empty `diagnostics` is also the Go nil slice.
 #[derive(Clone, Debug, Default)]
@@ -63,19 +63,19 @@ pub struct Output {
     pub source_map_text: String,
 }
 
-// Go: transpile/transpile.go:47 inputDirectory
+// Go: transpile/transpile.go:46 inputDirectory
 // inputDirectory is the synthetic current directory used to root the
 // single input file created for transpilation.
 // PORT: Go N' `tspath.RootedDirectoryPathFromNormalized("/")` (ts#64159);
 // the port keeps the text.
 const INPUT_DIRECTORY: &str = "/";
 
-// Go: transpile/transpile.go:51 libDirectory
+// Go: transpile/transpile.go:50 libDirectory
 // libDirectory is the synthetic directory that the barebones default library
 // file is placed in for declaration transpilation. See [barebonesLibContent].
 const LIB_DIRECTORY: &str = "/lib";
 
-// Go: transpile/transpile.go:59 barebonesLibContent
+// Go: transpile/transpile.go:58 barebonesLibContent
 // Declaration emit works without a `lib`, but some local inferences you'd
 // expect to work won't without at least a minimal `lib` available, since the
 // checker will type inferred declarations as `any` without these defined.
@@ -102,7 +102,7 @@ interface Symbol {
     readonly [Symbol.toStringTag]: string;
 }";
 
-// Go: transpile/transpile.go:93 TranspileModule
+// Go: transpile/transpile.go:92 TranspileModule
 /// TranspileModule transpiles a single file of source text to JavaScript
 /// using the specified options. If no compiler options are provided, a
 /// default set of compiler options is used. It returns nil if the context is
@@ -121,7 +121,7 @@ pub fn transpile_module(ctx: &Context, input: &str, options: Options) -> Option<
     transpile_worker(ctx, input, options, false /*declaration*/)
 }
 
-// Go: transpile/transpile.go:114 TranspileDeclaration
+// Go: transpile/transpile.go:113 TranspileDeclaration
 /// TranspileDeclaration creates a declaration (.d.ts) file from a single file
 /// of source text using the specified options. If no compiler options are
 /// provided, a default set of compiler options is used.
@@ -151,7 +151,7 @@ struct Written {
     source_map_text: Option<String>,
 }
 
-// Go: transpile/transpile.go:118 transpileWorker
+// Go: transpile/transpile.go:117 transpileWorker
 fn transpile_worker(
     ctx: &Context,
     input: &str,
@@ -400,7 +400,7 @@ fn set_options_for_transpile(options: &mut CompilerOptions, declaration: bool) {
     options.out_file = String::new();
 }
 
-// Go: transpile/fs.go:11 transpileFS
+// Go: transpile/fs.go:12 transpileFS
 // transpileFS embeds unsupported operations so unexpected filesystem access
 // panics.
 // PORT: Go embeds a nil `vfs.FS`, so any other method dereferences nil
@@ -416,7 +416,7 @@ impl Fs for TranspileFs {
         true
     }
 
-    // Go: transpile/fs.go:22 transpileFS.FileExists
+    // Go: transpile/fs.go:23 transpileFS.FileExists
     fn file_exists(&self, path: &str) -> bool {
         let ok = self.files.contains_key(path);
         if !ok {
@@ -428,7 +428,7 @@ impl Fs for TranspileFs {
         ok
     }
 
-    // Go: transpile/fs.go:30 transpileFS.ReadFile
+    // Go: transpile/fs.go:31 transpileFS.ReadFile
     fn read_file(&self, path: &str) -> (String, bool) {
         match self.files.get(path) {
             Some(content) => (content.clone(), true),
@@ -457,7 +457,7 @@ impl Fs for TranspileFs {
         go_nil_dereference()
     }
 
-    // Go: transpile/fs.go:38 transpileFS.DirectoryExists
+    // Go: transpile/fs.go:39 transpileFS.DirectoryExists
     fn directory_exists(&self, path: &str) -> bool {
         go_panic(format!(
             "unexpected directory existence check for {}",
@@ -473,7 +473,7 @@ impl Fs for TranspileFs {
         go_nil_dereference()
     }
 
-    // Go: transpile/fs.go:42 transpileFS.Realpath
+    // Go: transpile/fs.go:43 transpileFS.Realpath
     fn realpath(&self, path: &str) -> String {
         go_panic(format!("unexpected realpath request for {}", quote(path)))
     }
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(got, expected);
     }
 
-    // Go: fs_test.go:9 TestTranspileFSRejectsDirectoryAccess
+    // Go: fs_test.go:10 TestTranspileFSRejectsDirectoryAccess
     #[test]
     fn test_transpile_fs_rejects_directory_access() {
         let mut files = FxHashMap::default();

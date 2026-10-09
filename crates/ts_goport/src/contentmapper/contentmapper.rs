@@ -23,11 +23,11 @@ use crate::options_json::{CompilerOptionsJSON, marshal_field_omitempty};
 use std::result::Result;
 use std::sync::LazyLock;
 
-// Go: contentmapper/contentmapper.go:26 ErrProjectUnavailable
+// Go: contentmapper/contentmapper.go:28 ErrProjectUnavailable
 pub static ERR_PROJECT_UNAVAILABLE: LazyLock<GoError> =
     LazyLock::new(|| errors::new("content mapper project is unavailable"));
 
-// Go: contentmapper/contentmapper.go:30 Definition
+// Go: contentmapper/contentmapper.go:32 Definition
 // Definition is a content mapper as declared in a tsconfig's "contentMappers": the npm package that
 // implements the mapper and the otherwise unsupported file extensions it registers.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -86,7 +86,7 @@ impl UnmarshalerFrom for Definition {
     }
 }
 
-// Go: contentmapper/contentmapper.go:39 Manifest
+// Go: contentmapper/contentmapper.go:41 Manifest
 // Manifest is the content-mapper information read from a package's package.json: its name and version
 // (which form the mapper's identity), the argv used to run it, and the compiler options it declares it
 // depends on.
@@ -99,7 +99,7 @@ pub struct Manifest {
     pub dynamic_config: bool,
 }
 
-// Go: contentmapper/contentmapper.go:49 Mapper
+// Go: contentmapper/contentmapper.go:51 Mapper
 // Mapper is a resolved content mapper: its tsconfig Definition combined with the Manifest resolved from
 // the package's package.json, plus the package directory used as the mapper's working directory.
 // PORT: Go embeds `Definition` and `Manifest`; here they are the fields
@@ -150,7 +150,7 @@ impl UnmarshalerFrom for Mapper {
     }
 }
 
-// Go: contentmapper/contentmapper.go:58 supportedVirtualExtensions
+// Go: contentmapper/contentmapper.go:60 supportedVirtualExtensions
 static SUPPORTED_VIRTUAL_EXTENSIONS: LazyLock<FxHashSet<&'static str>> = LazyLock::new(|| {
     [
         ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json",
@@ -159,14 +159,14 @@ static SUPPORTED_VIRTUAL_EXTENSIONS: LazyLock<FxHashSet<&'static str>> = LazyLoc
     .collect()
 });
 
-// Go: contentmapper/contentmapper.go:62 IsSupportedVirtualExtension
+// Go: contentmapper/contentmapper.go:64 IsSupportedVirtualExtension
 #[must_use]
 pub fn is_supported_virtual_extension(extension: &str) -> bool {
     SUPPORTED_VIRTUAL_EXTENSIONS.contains(extension)
 }
 
 impl Mapper {
-    // Go: contentmapper/contentmapper.go:67 Mapper.DiagnosticName
+    // Go: contentmapper/contentmapper.go:69 Mapper.DiagnosticName
     // DiagnosticName returns the best available user-facing name, including when manifest resolution failed.
     #[must_use]
     pub fn diagnostic_name(&self) -> String {
@@ -179,7 +179,7 @@ impl Mapper {
         }
     }
 
-    // Go: contentmapper/contentmapper.go:80 Mapper.Identity
+    // Go: contentmapper/contentmapper.go:82 Mapper.Identity
     // Identity returns the mapper's "name@version" identity, or just the name when it declares no version,
     // or an empty string when the mapper has not been resolved to a name.
     #[must_use]
@@ -190,7 +190,7 @@ impl Mapper {
         self.manifest_identity()
     }
 
-    // Go: contentmapper/contentmapper.go:87 Mapper.manifestIdentity
+    // Go: contentmapper/contentmapper.go:89 Mapper.manifestIdentity
     fn manifest_identity(&self) -> String {
         if self.manifest.name.is_empty() {
             String::new()
@@ -223,7 +223,7 @@ impl Mapper {
             && self.contribution_id == other.contribution_id
     }
 
-    // Go: contentmapper/contentmapper.go:104 Mapper.TransformIdentity
+    // Go: contentmapper/contentmapper.go:130 Mapper.TransformIdentity
     // TransformIdentity returns a fingerprint of everything besides a file's content that determines the
     // output of transforming it with this mapper under the given options: the mapper's identity and the
     // values of the compiler options it declared it depends on. Folding it into a cache key means a change to
@@ -251,7 +251,7 @@ impl Mapper {
         xxhash_rust::xxh3::xxh3_128(&buf)
     }
 
-    // Go: contentmapper/contentmapper.go:119 Mapper.MarshalDeclaredOptions
+    // Go: contentmapper/contentmapper.go:145 Mapper.MarshalDeclaredOptions
     // MarshalDeclaredOptions marshals just the compiler options this mapper declared it depends on, in the
     // declared order, skipping any that are unset. Marshaling only the declared fields avoids serializing the
     // whole CompilerOptions when a mapper depends on few options (or none).
@@ -283,7 +283,7 @@ impl Mapper {
     }
 }
 
-// Go: contentmapper/contentmapper.go:145 compilerOptionFields
+// Go: contentmapper/contentmapper.go:171 compilerOptionFields
 // compilerOptionFields maps each CompilerOptions option name (its json tag) to its struct field index.
 // PORT: Go reads the `json` tags by reflection and marshals each set field
 // by itself. The port has no reflection: it marshals the whole options with
