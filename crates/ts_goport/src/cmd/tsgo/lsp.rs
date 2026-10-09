@@ -62,6 +62,11 @@ pub fn run_lsp(args: &[String]) -> i32 {
     let fs = bundled::wrap_fs_exported(osvfs::osvfs_fs());
     let default_library_path = bundled::lib_path_exported();
     let typings_location = get_global_typings_cache_location();
+    // ts#64159: Go roots and normalizes the current directory and the
+    // typings location (cmd/tsc/lsp.go:47 RootedDirectoryPathFromAbsolute,
+    // :60 ToRootedDirectoryPath).
+    let cwd = tspath::get_normalized_absolute_path(&must_getwd(), "");
+    let typings_location = tspath::get_normalized_absolute_path(&typings_location, &cwd);
 
     // Go: ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     let (ctx, stop) = notify_context(&context::background());
@@ -71,7 +76,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
         in_: crate::lsp::to_reader(Box::new(std::io::BufReader::new(stdio::Stdin))),
         out: crate::lsp::to_writer(Box::new(stdio::Stdout)),
         err: Box::new(stdio::Stderr),
-        cwd: must_getwd(),
+        cwd,
         fs,
         default_library_path,
         typings_location,
