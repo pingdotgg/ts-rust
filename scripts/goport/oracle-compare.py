@@ -44,16 +44,25 @@ absent). With a set of another oracle only (a later pin bump) it is protected li
 total also count retainedByAnswers, the output has kind and answers [{path, sha256, kind, pin, oracleSha256,
 requests, applied, notApplied}], and a lostFirst row of such a request names its set (answers, carried,
 answersWhy).
-Masked entries (bump C reviewer ruling 1 item 3, ruling 2 item 1): an API set whose header has "mask":
-"type-ids" (the only mask kind) may have entries with that "mask" and exactly one answer: the Go answer after
-mask_type_ids(), the same for every Go run at the set's pin. mask_type_ids replaces only type and signature ids;
-the symbol field, symbol names, all flags and every other field stay exact (api_oracle.mask_ids, which also masks
-symbols and defines the id_only class, is not used). goport's answer is masked the same way (the API tool loaded
-at the set's pin, after apply_multisets) before it is compared. A masked entry covers only its own key; every
-other key is compared unmasked. The header also has "maskTool" {<path>: sha256} of scripts/goport/api_oracle.py
-(SHAPES, walk_shape) and scripts/goport/oracle-compare.py (mask_type_ids) when the set was made. When a sha256
-differs from this checkout's file, every source golden of every masked entry is masked again with this
-checkout's tools, and each must give the entry's answer, or the set is refused. Retention
+Masked entries (bump C reviewer ruling 1 item 3, ruling 2 item 1): a set whose header has the "mask" of its kind
+(API "type-ids", LSP "auto-import-modules"; MASKS) may have entries with that "mask" and exactly one answer: the
+Go answer after the mask, the same for every Go run at the set's pin. goport's answer is masked the same way
+(after apply_multisets) before it is compared. A masked entry covers only its own key; every other key is
+compared unmasked.
+- API "type-ids": mask_type_ids (the API tool loaded at the set's pin) replaces only type and signature ids; the
+  symbol field, symbol names, all flags and every other field stay exact (api_oracle.mask_ids, which also masks
+  symbols and defines the id_only class, is not used).
+- LSP "auto-import-modules" (bump D): a textDocument/completion entry only. The header also has "maskModules"
+  {<auto-import name>: [<module>...]}: the names whose auto-import module Go varies between runs at the pin, each
+  with the modules that Go gives in some but not all runs of one request (masked-answers.py). mask_auto_import_modules
+  takes each auto-import item of such a name and one of its modules out of the ordered items and puts it, with "*"
+  for its module specifier, once into the sorted list maskedItems (Go gives AlgorithmTypes once from the hono index
+  in some runs, and twice, from middleware/jwt and utils/jwt/jwa, in others). An item of another name or of another
+  module stays in place and exact, as does every other field.
+The header also has "maskTool" {<path>: sha256} of the files whose code the mask runs when the set was made:
+scripts/goport/oracle-compare.py and the kind's tool (api_oracle.py: SHAPES, walk_shape; lsp_oracle.py: canon).
+When a sha256 differs from this checkout's file, every source golden of every masked entry is masked again with
+this checkout's tools, and each must give the entry's answer, or the set is refused. Retention
 through a masked entry counts as retainedByMaskedAnswers, not retainedByAnswers, and each set in the output has
 maskedRequests, mask and maskTool {same, rechecked (source goldens masked again)}. These fields appear only
 when a set has a masked entry, so other outputs stay the same.
@@ -88,9 +97,11 @@ parity]}, and writes it to --out when given. Without --answers, --parity and --i
 dir, the output is the same as before these options. Exit 0: no loss. Exit 1: a protected base request is
 lost, unrun or absent, or a parity problem. Exit 2: bad input or a refused answer set.
 """
-import argparse, collections, gzip, hashlib, importlib.util, json, os, re, sys
+import argparse, collections, gzip, hashlib, importlib.util, json, os, posixpath, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The main checkout (api_oracle.REPO): answer set sources are relative to it, also for a worktree's tools.
+REPO = '/home/theo/Code/sandbox/ts-rust'
 PROTECTED = ('same', 'oracle_error_same')
 UNRUN = ('not_run', 'skipped_method', 'skipped')
 FIELDS = ('retained', 'recovered', 'lost', 'unrun', 'absent', 'newRequests')
@@ -104,11 +115,15 @@ ORACLE_TOOLS = {'lsp': 'lsp_oracle', 'api': 'api_oracle'}
 # Parity: the classes that are always a problem, and (API) the classes that need a known diff.
 PARITY_BAD = {'lsp': ('diff', 'goport_error', 'oracle_error_diff', 'timeout', 'crash'), 'api': ('goport_error', 'crash', 'timeout')}
 PARITY_DIFF = {'lsp': (), 'api': ('diff', 'id_only', 'oracle_error_diff')}
-# The mask kind of masked answer set entries (see the docstring and mask_type_ids()).
-MASK = 'type-ids'
-# The files whose code a mask runs, keyed as the answer set header's maskTool names them.
-MASK_TOOL_FILES = {'scripts/goport/api_oracle.py': os.path.join(HERE, 'api_oracle.py'),
-                   'scripts/goport/oracle-compare.py': os.path.abspath(__file__)}
+# The mask kind of masked answer set entries per set kind (see the docstring, mask_type_ids() and
+# mask_auto_import_modules()). MASK is the API kind (masked-answers.py).
+MASKS = {'api': 'type-ids', 'lsp': 'auto-import-modules'}
+MASK = MASKS['api']
+# The method of every LSP masked entry.
+LSP_MASK_METHOD = 'textDocument/completion'
+# The files whose code a mask runs, per set kind, keyed as the answer set header's maskTool names them.
+MASK_TOOL_FILES = {kind: {f'scripts/goport/{ORACLE_TOOLS[kind]}.py': os.path.join(HERE, ORACLE_TOOLS[kind] + '.py'),
+                          'scripts/goport/oracle-compare.py': os.path.abspath(__file__)} for kind in MASKS}
 _tools = {}
 _pinned_tools = {}
 
@@ -164,6 +179,59 @@ def mask_type_ids(api, method, v):
     return api.walk_shape(shape, v, lambda kind, val: '#' if kind in ('type', 'sig') and val not in (None, 0) else val)
 
 
+def auto_import_module(item):
+    """(name, module) of an LSP completion item with data.autoImport {name, moduleSpecifier}, else None. A relative
+    module specifier (".", "..", "./..." or "../...") is resolved against the directory of data.fileName, so one
+    module has one form in every file (for example "@PROJECT_ROOT@/src/middleware/language"); any other specifier
+    (a package) stays as it is."""
+    data = item.get('data') if isinstance(item, dict) else None
+    auto = data.get('autoImport') if isinstance(data, dict) else None
+    if not isinstance(auto, dict) or not isinstance(auto.get('name'), str) or not isinstance(auto.get('moduleSpecifier'), str):
+        return None
+    spec = auto['moduleSpecifier']
+    if (spec in ('.', '..') or spec.startswith(('./', '../'))) and isinstance(data.get('fileName'), str):
+        spec = posixpath.normpath(posixpath.join(posixpath.dirname(data['fileName']), spec))
+    return auto['name'], spec
+
+
+def mask_auto_import_modules(v, modules):
+    """An LSP textDocument/completion answer v after the "auto-import-modules" mask (bump D). modules is the set
+    header's maskModules {name: [module...]}. Each item with data.autoImport whose name modules lists and whose
+    module (auto_import_module()) is one of that name's modules leaves items. Its copy with "*" for
+    data.autoImport.moduleSpecifier, and for data.source and labelDetails.description when they equal the
+    specifier, goes into maskedItems: each distinct copy once, sorted by canon() text. Go sorts the completion
+    items by module specifier, so the item moves when Go gives the other module, and when two of a name's modules
+    give one symbol, Go lists it once or twice. Every other item stays in its place and exact."""
+    if not isinstance(v, dict) or not isinstance(v.get('items'), list):
+        return v
+    canon, items, masked = tool('lsp').canon, [], set()
+    for item in v['items']:
+        found = auto_import_module(item)
+        if not found or found[1] not in modules.get(found[0], ()):
+            items.append(item)
+            continue
+        copy = json.loads(json.dumps(item))
+        spec = copy['data']['autoImport']['moduleSpecifier']
+        copy['data']['autoImport']['moduleSpecifier'] = '*'
+        if copy['data'].get('source') == spec:
+            copy['data']['source'] = '*'
+        details = copy.get('labelDetails')
+        if isinstance(details, dict) and details.get('description') == spec:
+            details['description'] = '*'
+        masked.add(canon(copy))
+    return {**v, 'items': items, 'maskedItems': [json.loads(text) for text in sorted(masked)]}
+
+
+def masker(s, entry):
+    """The mask function (answer -> masked answer) of a masked entry of the answer set s, or None."""
+    if not entry['mask']:
+        return None
+    if s['kind'] == 'api':
+        api = tool_at('api', s['pin'])
+        return lambda v: mask_type_ids(api, entry['method'], v)
+    return lambda v: mask_auto_import_modules(v, s['maskModules'])
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -172,9 +240,9 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def mask_tool():
-    """{path: sha256} of the files whose code the masks run (the maskTool of a masked answer set header)."""
-    return {name: sha256_file(path) for name, path in MASK_TOOL_FILES.items()}
+def mask_tool(kind='api'):
+    """{path: sha256} of the files whose code the mask of a set kind runs (the maskTool of a masked set header)."""
+    return {name: sha256_file(path) for name, path in MASK_TOOL_FILES[kind].items()}
 
 
 def keytext(key):
@@ -282,8 +350,8 @@ class Run:
 
     def answer(self, key, patterns, mask=None):
         """goport's answer to a request in this run as canon() text (normalized as the oracle tools do), or None
-        when goport gave no answer (no record, or a status other than ok and error). mask (pin, method): an ok
-        result is masked with mask_type_ids by the API tool at that pin (a masked answer set entry)."""
+        when goport gave no answer (no record, or a status other than ok and error). mask (masker() of a masked
+        answer set entry): an ok result is masked with it."""
         battery, trace, event = key
         path = os.path.join(self.dir, 'responses', battery, trace + '.jsonl.gz')
         if path not in self.response_cache:
@@ -304,9 +372,7 @@ class Run:
         if rec['status'] == 'error' or 'result' not in resp:
             return t.canon({'status': rec['status'], 'response': resp})
         v = t.apply_multisets(resp['result'], patterns)
-        if mask:
-            v = mask_type_ids(tool_at('api', mask[0]), mask[1], v)
-        return t.canon(v)
+        return t.canon(mask(v) if mask else v)
 
 
 def load_answers(ref, cache):
@@ -333,13 +399,18 @@ def load_answers(ref, cache):
             or doc.get('goldenSha12') != oracle[:12] or not isinstance(doc.get('requests'), dict)):
         raise ValueError(f'answer set {path} lacks the {ANSWERS_FORMAT} header (kind, pin, oracleSha256, goldenSha12, requests)')
     canon, requests = tool(kind).canon, {}
-    set_mask = doc.get('mask')
+    set_mask, modules = doc.get('mask'), doc.get('maskModules')
     if any(isinstance(e, dict) and e.get('mask') is not None for e in doc['requests'].values()) or set_mask is not None:
-        tools = doc.get('maskTool')
-        if (kind != 'api' or set_mask != MASK or not isinstance(tools, dict) or sorted(tools) != sorted(MASK_TOOL_FILES)
+        tools, files = doc.get('maskTool'), MASK_TOOL_FILES[kind]
+        if (set_mask != MASKS[kind] or not isinstance(tools, dict) or sorted(tools) != sorted(files)
                 or not all(isinstance(v, str) and SHA256.match(v) for v in tools.values())):
-            raise ValueError(f'answer set {path} has masked entries: an API set needs the header mask {MASK!r} and '
-                             f'maskTool {{{", ".join(sorted(MASK_TOOL_FILES))}: sha256}}')
+            raise ValueError(f'answer set {path} has masked entries: an {kind.upper()} set needs the header mask '
+                             f'{MASKS[kind]!r} and maskTool {{{", ".join(sorted(files))}: sha256}}')
+        if kind == 'lsp' and not (isinstance(modules, dict) and modules and all(
+                isinstance(ms, list) and ms and len(set(ms)) == len(ms) and all(isinstance(m, str) and m for m in ms)
+                for ms in modules.values())):
+            raise ValueError(f'answer set {path} has masked entries: an LSP set needs maskModules {{name: [module...]}}, '
+                             f'each name with distinct modules')
     for k, entry in doc['requests'].items():
         key = parse_key(k)
         answers = entry.get('answers') if isinstance(entry, dict) else None
@@ -350,6 +421,8 @@ def load_answers(ref, cache):
         if mask is not None and (mask != set_mask or len(answers) != 1):
             raise ValueError(f'answer set {path}: request {k} has mask {mask!r}; a masked entry has the mask of the set '
                              f'header ({set_mask!r}) and one answer')
+        if mask is not None and kind == 'lsp' and entry.get('method') != LSP_MASK_METHOD:
+            raise ValueError(f'answer set {path}: request {k} is masked; an LSP masked entry is a {LSP_MASK_METHOD} request')
         texts, sources = [], set()
         for a in answers:
             text = canon(a.get('answer')) if isinstance(a, dict) else None
@@ -366,7 +439,9 @@ def load_answers(ref, cache):
                          'sources': sorted(sources)}
     found = {'path': path, 'sha256': want, 'kind': kind, 'pin': doc['pin'], 'oracleSha256': oracle, 'requests': requests}
     if set_mask is not None:
-        same = doc['maskTool'] == mask_tool()
+        if kind == 'lsp':
+            found['maskModules'] = modules
+        same = doc['maskTool'] == mask_tool(kind)
         found.update(mask=set_mask, maskTool={'same': same, 'rechecked': 0 if same else recheck_masked(path, found)})
     cache[(path, want)] = found
     return found
@@ -374,24 +449,29 @@ def load_answers(ref, cache):
 
 def recheck_masked(path, s):
     """The mask code changed since the set was made: masks every source golden of every masked entry of the set s
-    again with this checkout's tools. Returns the number of goldens; raises ValueError when one is missing or does
-    not give the entry's answer."""
-    api, count, goldens = tool_at('api', s['pin']), 0, {}
+    again with this checkout's tools. Reads each golden once. Returns the number of (request, source golden) pairs;
+    raises ValueError when a golden is missing or does not give the entry's answer."""
+    t = tool_at('api', s['pin']) if s['kind'] == 'api' else tool('lsp')
+    by_source = collections.defaultdict(list)
     for key, entry in sorted(s['requests'].items()):
-        if not entry['mask']:
-            continue
-        for src in entry['sources']:
-            full = src if os.path.isabs(src) else os.path.join(api.REPO, src)
-            if full not in goldens:
-                try:
-                    with gzip.open(full, 'rt', encoding='utf-8') as f:
-                        lines = [json.loads(line) for line in f if line.strip()]
-                except (OSError, ValueError) as e:
-                    raise ValueError(f'answer set {path}: the mask tool changed and the source golden {src} cannot be read: {e}')
-                goldens[full] = {str(k): r for k, r in api.records_by_event(lines[1:]).items()}
-            rec = goldens[full].get(key[2]) or {}
+        if entry['mask']:
+            for src in entry['sources']:
+                by_source[src].append((key, entry))
+    count = 0
+    for src, entries in sorted(by_source.items()):
+        full = src if os.path.isabs(src) else os.path.join(REPO, src)
+        try:
+            with gzip.open(full, 'rt', encoding='utf-8') as f:
+                lines = [json.loads(line) for line in f if line.strip()]
+        except (OSError, ValueError) as e:
+            raise ValueError(f'answer set {path}: the mask tool changed and the source golden {src} cannot be read: {e}')
+        records = ({str(k): r for k, r in t.records_by_event(lines[1:]).items()} if s['kind'] == 'api'
+                   else {str(r['i']): r for r in lines[1:] if 'i' in r})
+        del lines
+        for key, entry in entries:
+            rec = records.get(key[2]) or {}
             resp = rec.get('response') or {}
-            text = (api.canon(mask_type_ids(api, entry['method'], api.apply_multisets(resp['result'], entry['multiset'])))
+            text = (t.canon(masker(s, entry)(t.apply_multisets(resp['result'], entry['multiset'])))
                     if rec.get('status') == 'ok' and 'result' in resp else None)
             if text != entry['texts'][0]:
                 raise ValueError(f'answer set {path}: the mask tool changed, and {keytext(key)} in the source golden {src} does '
@@ -405,7 +485,7 @@ def answer_why(new_run, key, method, s):
     entry = s['requests'][key]
     if method != entry['method']:
         return f'the new request has the method {method}, the answer set {s["path"]} {entry["method"]}'
-    got = new_run.answer(key, entry['multiset'], (s['pin'], entry['method']) if entry['mask'] else None)
+    got = new_run.answer(key, entry['multiset'], masker(s, entry))
     if got is None:
         return 'goport has no answer'
     if got not in entry['texts']:
