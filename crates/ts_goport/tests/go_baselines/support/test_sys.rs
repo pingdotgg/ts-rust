@@ -64,10 +64,10 @@ use crate::support::runner::{FileMap, TscInput};
 use crate::support::stringtestutil::dedent;
 use crate::support::vfstest::{Clock, MapFs};
 
-// Go: sys.go:35 tscLibPath
+// Go: sys.go:36 tscLibPath
 pub const TSC_LIB_PATH: &str = "/home/src/tslibs/TS/Lib";
 
-// Go: sys.go:37 tscDefaultLibContent
+// Go: sys.go:38 tscDefaultLibContent
 pub static TSC_DEFAULT_LIB_CONTENT: LazyLock<String> = LazyLock::new(|| {
     dedent(
         r#"
@@ -393,7 +393,7 @@ pub enum SysMode {
     Child,
 }
 
-// Go: sys.go:157 TestSys
+// Go: sys.go:168 TestSys
 pub struct TestSys {
     current_write: CurrentWrite,
     writer: Writer,
@@ -446,7 +446,7 @@ pub fn new_tsc_system(files: FileMap, use_case_sensitive_file_names: bool, cwd: 
     )
 }
 
-// Go: sys.go:104 GetFileMapWithBuild
+// Go: sys.go:105 GetFileMapWithBuild
 // PORT: the command runs in a child process (child.rs). Go changes the
 // caller's map in place and returns it; this takes it by value.
 pub fn get_file_map_with_build(mut files: FileMap, command_line_args: &[String]) -> FileMap {
@@ -470,7 +470,7 @@ pub fn get_file_map_with_build(mut files: FileMap, command_line_args: &[String])
     files
 }
 
-// Go: sys.go:118 newTestSys
+// Go: sys.go:119 newTestSys
 pub fn new_test_sys(tsc_input: &TscInput, for_incremental_correctness: bool) -> TestSys {
     let cwd = if tsc_input.cwd.is_empty() {
         "/home/src/workspaces/project"
@@ -578,17 +578,17 @@ impl TestSys {
         self.shared.clock.since_start()
     }
 
-    // Go: sys.go:186 FS
+    // Go: sys.go:198 FS
     pub fn fs(&self) -> Rc<dyn Fs> {
         self.fs.clone()
     }
 
-    // Go: sys.go:190 fsFromFileMap
+    // Go: sys.go:202 fsFromFileMap
     pub fn fs_from_file_map(&self) -> Rc<dyn Fs> {
         self.fs_from_file_map.clone()
     }
 
-    // Go: sys.go:194 mapFs
+    // Go: sys.go:206 mapFs
     pub fn map_fs(&self) -> &MapFs {
         &self.shared.map_fs
     }
@@ -621,7 +621,7 @@ impl TestSys {
         &self.mock_watch_backend
     }
 
-    // Go: sys.go:198 ensureLibPathExists
+    // Go: sys.go:210 ensureLibPathExists
     fn ensure_lib_path_exists(&self, path: &str) {
         let path = format!("{}/{}", self.default_library_path, path);
         let (_, ok) = self.fs_from_file_map().read_file(&path);
@@ -641,7 +641,7 @@ impl TestSys {
         }
     }
 
-    // Go: sys.go:320 writeHeaderToBaseline
+    // Go: sys.go:334 writeHeaderToBaseline
     fn write_header_to_baseline(&self, builder: &mut String, config_file_path: &str) {
         if !builder.is_empty() {
             builder.push('\n');
@@ -766,7 +766,7 @@ impl TestSys {
         }
     }
 
-    // Go: sys.go:408 baselinePrograms
+    // Go: sys.go:423 baselinePrograms
     pub fn baseline_programs(&self, baseline: &mut String, header: &str) -> String {
         baseline.push_str(&self.program_baselines.borrow());
         self.program_baselines.borrow_mut().clear();
@@ -783,7 +783,7 @@ impl TestSys {
         result
     }
 
-    // Go: sys.go:421 serializeState
+    // Go: sys.go:436 serializeState
     pub fn serialize_state(&self, baseline: &mut String) {
         self.baseline_output(baseline);
         self.baseline_fs_with_diff(baseline);
@@ -795,7 +795,7 @@ impl TestSys {
         // this.service?.baseline();
     }
 
-    // Go: sys.go:450 baselineOutput
+    // Go: sys.go:465 baselineOutput
     fn baseline_output(&self, baseline: &mut String) {
         baseline.push_str("\nOutput::\n");
         let output = self.get_output(false);
@@ -817,7 +817,7 @@ impl TestSys {
         *lock(&self.current_write.0) = bytes;
     }
 
-    // Go: sys.go:541 getOutput
+    // Go: sys.go:556 getOutput
     pub fn get_output(&self, for_comparing: bool) -> String {
         let text = self.output_text();
         let lines: Vec<&str> = text.split('\n').collect();
@@ -830,13 +830,13 @@ impl TestSys {
         transformer.transform_lines()
     }
 
-    // Go: sys.go:551 clearOutput
+    // Go: sys.go:566 clearOutput
     pub fn clear_output(&self) {
         lock(&self.current_write.0).clear();
         self.tracer.borrow_mut().reset();
     }
 
-    // Go: sys.go:556 baselineFSwithDiff
+    // Go: sys.go:571 baselineFSwithDiff
     pub fn baseline_fs_with_diff(&self, baseline: &mut String) {
         self.fs_differ.borrow_mut().baseline_fs_with_diff(baseline);
     }
@@ -885,7 +885,7 @@ impl TestSys {
         *lock(&self.child_serialized_mtimes) = Some(mtimes);
     }
 
-    // Go: sys.go:560 writeFileNoError
+    // Go: sys.go:575 writeFileNoError
     // ts#64159: the path is rooted against the current directory (sys.go:576,
     // :582, :588).
     pub fn write_file_no_error(&self, path: &str, content: &str) {
@@ -895,7 +895,7 @@ impl TestSys {
         }
     }
 
-    // Go: sys.go:566 removeNoError
+    // Go: sys.go:581 removeNoError
     pub fn remove_no_error(&self, path: &str) {
         let path = to_rooted_path(path, &self.get_current_directory());
         if let Err(err) = self.fs_from_file_map().remove(&path) {
@@ -903,7 +903,7 @@ impl TestSys {
         }
     }
 
-    // Go: sys.go:572 readFileNoError
+    // Go: sys.go:587 readFileNoError
     pub fn read_file_no_error(&self, path: &str) -> String {
         let (content, ok) = self
             .fs_from_file_map()
@@ -912,33 +912,33 @@ impl TestSys {
         content
     }
 
-    // Go: sys.go:580 renameFileNoError
+    // Go: sys.go:595 renameFileNoError
     pub fn rename_file_no_error(&self, old_path: &str, new_path: &str) {
         self.write_file_no_error(new_path, &self.read_file_no_error(old_path));
         self.remove_no_error(old_path);
     }
 
-    // Go: sys.go:585 replaceFileText
+    // Go: sys.go:600 replaceFileText
     pub fn replace_file_text(&self, path: &str, old_text: &str, new_text: &str) {
         let content = self.read_file_no_error(path);
         let content = content.replacen(old_text, new_text, 1);
         self.write_file_no_error(path, &content);
     }
 
-    // Go: sys.go:591 replaceFileTextAll
+    // Go: sys.go:606 replaceFileTextAll
     pub fn replace_file_text_all(&self, path: &str, old_text: &str, new_text: &str) {
         let content = self.read_file_no_error(path);
         let content = content.replace(old_text, new_text);
         self.write_file_no_error(path, &content);
     }
 
-    // Go: sys.go:597 appendFile
+    // Go: sys.go:612 appendFile
     pub fn append_file(&self, path: &str, text: &str) {
         let content = self.read_file_no_error(path);
         self.write_file_no_error(path, &format!("{content}{text}"));
     }
 
-    // Go: sys.go:602 prependFile
+    // Go: sys.go:617 prependFile
     pub fn prepend_file(&self, path: &str, text: &str) {
         let content = self.read_file_no_error(path);
         self.write_file_no_error(path, &format!("{text}{content}"));
@@ -946,31 +946,31 @@ impl TestSys {
 }
 
 impl System for TestSys {
-    // Go: sys.go:220 Writer
+    // Go: sys.go:232 Writer
     fn writer(&self) -> Writer {
         self.writer.clone()
     }
-    // Go: sys.go:224 ErrorWriter (tsgo#4712)
+    // Go: sys.go:236 ErrorWriter (tsgo#4712)
     fn error_writer(&self) -> ErrorWriter {
         self.current_write.0.clone()
     }
-    // Go: sys.go:186 FS
+    // Go: sys.go:198 FS
     fn fs(&self) -> Rc<dyn Fs> {
         self.fs.clone()
     }
-    // Go: sys.go:212 DefaultLibraryPath
+    // Go: sys.go:224 DefaultLibraryPath
     fn default_library_path(&self) -> String {
         self.default_library_path.clone()
     }
-    // Go: sys.go:216 GetCurrentDirectory
+    // Go: sys.go:228 GetCurrentDirectory
     fn get_current_directory(&self) -> String {
         self.cwd.clone()
     }
-    // Go: sys.go:233 WriteOutputIsTTY (ts#63941)
+    // Go: sys.go:240 WriteOutputIsTTY (ts#63941)
     fn write_output_is_tty(&self) -> bool {
         self.output_is_tty
     }
-    // Go: sys.go:237 GetWidthOfTerminal
+    // Go: sys.go:244 GetWidthOfTerminal
     fn get_width_of_terminal(&self) -> i32 {
         let (width, _) = self.get_environment_variable("TS_TEST_TERMINAL_WIDTH");
         if !width.is_empty() {
@@ -981,14 +981,14 @@ impl System for TestSys {
         }
         0
     }
-    // Go: sys.go:244 GetEnvironmentVariable (ts#63941)
+    // Go: sys.go:251 GetEnvironmentVariable (ts#63941)
     fn get_environment_variable(&self, name: &str) -> (String, bool) {
         match self.env.get(name) {
             Some(value) => (value.clone(), true),
             None => (String::new(), false),
         }
     }
-    // Go: sys.go:246 Spawn (tsgo#4712)
+    // Go: sys.go:259 Spawn (tsgo#4712)
     // Spawn serves the fake content mappers in-process, selecting the implementation by the exec command the
     // mapper package declares (see internal/testutil/contentmappertest), so tests exercise the full IPC stack
     // without spawning a subprocess.
@@ -1014,7 +1014,7 @@ impl System for TestSys {
 // PORT: `Rc<TestSys>` is the `Rc<dyn CommandLineTesting>` of the child
 // hooks (child.rs).
 impl CommandLineTesting for TestSys {
-    // Go: sys.go:250 OnEmittedFiles
+    // Go: sys.go:263 OnEmittedFiles
     fn on_emitted_files(
         &self,
         result: &EmitResult,
@@ -1052,47 +1052,47 @@ impl CommandLineTesting for TestSys {
         }
     }
 
-    // Go: sys.go:277 OnListFilesStart
+    // Go: sys.go:291 OnListFilesStart
     fn on_list_files_start(&self, w: &Writer) {
         write_str(w, &format!("{LIST_FILE_START}\n"));
     }
 
-    // Go: sys.go:281 OnListFilesEnd
+    // Go: sys.go:295 OnListFilesEnd
     fn on_list_files_end(&self, w: &Writer) {
         write_str(w, &format!("{LIST_FILE_END}\n"));
     }
 
-    // Go: sys.go:285 OnStatisticsStart
+    // Go: sys.go:299 OnStatisticsStart
     fn on_statistics_start(&self, w: &Writer) {
         write_str(w, &format!("{STATISTICS_START}\n"));
     }
 
-    // Go: sys.go:289 OnStatisticsEnd
+    // Go: sys.go:303 OnStatisticsEnd
     fn on_statistics_end(&self, w: &Writer) {
         write_str(w, &format!("{STATISTICS_END}\n"));
     }
 
-    // Go: sys.go:293 OnBuildStatusReportStart
+    // Go: sys.go:307 OnBuildStatusReportStart
     fn on_build_status_report_start(&self, w: &Writer) {
         write_str(w, &format!("{BUILD_STATUS_REPORT_START}\n"));
     }
 
-    // Go: sys.go:297 OnBuildStatusReportEnd
+    // Go: sys.go:311 OnBuildStatusReportEnd
     fn on_build_status_report_end(&self, w: &Writer) {
         write_str(w, &format!("{BUILD_STATUS_REPORT_END}\n"));
     }
 
-    // Go: sys.go:301 OnWatchStatusReportStart
+    // Go: sys.go:315 OnWatchStatusReportStart
     fn on_watch_status_report_start(&self) {
         write_str(&self.writer, &format!("{WATCH_STATUS_REPORT_START}\n"));
     }
 
-    // Go: sys.go:305 OnWatchStatusReportEnd
+    // Go: sys.go:319 OnWatchStatusReportEnd
     fn on_watch_status_report_end(&self) {
         write_str(&self.writer, &format!("{WATCH_STATUS_REPORT_END}\n"));
     }
 
-    // Go: sys.go:309 GetTrace
+    // Go: sys.go:323 GetTrace
     fn get_trace(&self, w: Writer, locale: Locale) -> TraceFn {
         let tracer = self.tracer.clone();
         // PORT: Go `w == s.Writer()` compares the interface values.
@@ -1109,7 +1109,7 @@ impl CommandLineTesting for TestSys {
         })
     }
 
-    // Go: sys.go:338 OnProgram
+    // Go: sys.go:353 OnProgram
     fn on_program(&self, program: &Program) {
         let parts = self.program_parts(program);
         self.append_program_parts(&parts);
@@ -1137,7 +1137,7 @@ const WATCH_STATUS_REPORT_END: &str = "!!! Watch Status Report End";
 const TRACE_START: &str = "!!! Trace start";
 const TRACE_END: &str = "!!! Trace end";
 
-// Go: sys.go:456 outputSanitizer
+// Go: sys.go:471 outputSanitizer
 struct OutputSanitizer<'a> {
     for_comparing: bool,
     lines: Vec<&'a str>,
@@ -1168,7 +1168,7 @@ static VERSION_STRINGS: LazyLock<VersionStrings> = LazyLock::new(|| {
 });
 
 impl OutputSanitizer<'_> {
-    // Go: sys.go:471 addOutputLine
+    // Go: sys.go:486 addOutputLine
     fn add_output_line(&mut self, s: &str) {
         let versions = &*VERSION_STRINGS;
         let s = s.replace(&format!("'{}'", version()), &format!("'{FAKE_TS_VERSION}'"));
@@ -1178,7 +1178,7 @@ impl OutputSanitizer<'_> {
         self.output_lines.push(s);
     }
 
-    // Go: sys.go:479 sanitizeBuildStatusTimeStamp
+    // Go: sys.go:494 sanitizeBuildStatusTimeStamp
     // PORT: Go slices the bytes of the line; this slices its Go bytes.
     fn sanitize_build_status_time_stamp(&self) -> String {
         let status_line = go_string_bytes(self.lines[self.index]);
@@ -1192,7 +1192,7 @@ impl OutputSanitizer<'_> {
         go_string_from_bytes(bytes)
     }
 
-    // Go: sys.go:488 transformLines
+    // Go: sys.go:503 transformLines
     fn transform_lines(&mut self) -> String {
         while self.index < self.lines.len() {
             let line = self.lines[self.index];
@@ -1238,7 +1238,7 @@ impl OutputSanitizer<'_> {
         self.output_lines.join("\n")
     }
 
-    // Go: sys.go:514 addOrSkipLinesForComparing
+    // Go: sys.go:529 addOrSkipLinesForComparing
     // PORT: Go `sanitizeFirstLine` is always `sanitizeBuildStatusTimeStamp`
     // or nil; this is a flag.
     fn add_or_skip_lines_for_comparing(

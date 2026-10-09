@@ -49,11 +49,11 @@ use crate::support::harnessutil::TracerForBaselining;
 use crate::support::vfstest::{self, MapFile, MapFs};
 use crate::tsoptions::tsoptionstest::type_script_submodule_path;
 
-// Go: harnessutil.go:39 testLibFolder
+// Go: harnessutil.go:41 testLibFolder
 // Posix-style path to additional test libraries
 const TEST_LIB_FOLDER: &str = "/.lib";
 
-// Go: harnessutil.go:55 TestConfiguration
+// Go: harnessutil.go:57 TestConfiguration
 // This maps a compiler setting to its string value, after splitting by commas,
 // handling inclusions and exclusions, and deduplicating.
 // For example, if a test file contains:
@@ -63,7 +63,7 @@ const TEST_LIB_FOLDER: &str = "/.lib";
 // Then the map will map "target" to "esnext", and another map will map "target" to "es2015".
 pub type TestConfiguration = BTreeMap<String, String>;
 
-// Go: harnessutil.go:57 NamedTestConfiguration
+// Go: harnessutil.go:59 NamedTestConfiguration
 #[derive(Clone, Debug)]
 pub struct NamedTestConfiguration {
     pub name: String,
@@ -140,7 +140,7 @@ impl<F: FnOnce()> Drop for Defer<F> {
     }
 }
 
-// Go: harnessutil.go:79 CompileFiles
+// Go: harnessutil.go:81 CompileFiles
 pub fn compile_files(
     input_files: &[TestFile],
     other_files: &[TestFile],
@@ -202,7 +202,7 @@ struct CompileInputs {
     tsconfig: Option<TsConfigPart>,
 }
 
-// Go: harnessutil.go:113 CompileFilesEx
+// Go: harnessutil.go:115 CompileFilesEx
 pub fn compile_files_ex(
     input_files: &[TestFile],
     other_files: &[TestFile],
@@ -374,7 +374,7 @@ pub fn compile_files_ex(
     result
 }
 
-// Go: harnessutil.go:241 testLibFolderMap
+// Go: harnessutil.go:238 testLibFolderMap
 // The lib dir is `testdata/tests/lib` at the merged layout, the submodule's
 // `tests/lib` before.
 fn test_lib_folder_map() -> &'static BTreeMap<String, MapFile> {
@@ -415,7 +415,7 @@ fn test_lib_folder_map() -> &'static BTreeMap<String, MapFile> {
     })
 }
 
-// Go: harnessutil.go:266 SetOptionsFromTestConfig
+// Go: harnessutil.go:263 SetOptionsFromTestConfig
 pub fn set_options_from_test_config(
     test_config: &TestConfiguration,
     compiler_options: &mut CompilerOptions,
@@ -455,7 +455,7 @@ fn leak_option(name: &'static str, kind: CommandLineOptionKind) -> &'static Comm
     }))
 }
 
-// Go: harnessutil.go:293 compilerOptions
+// Go: harnessutil.go:287 compilerOptions
 fn compiler_options_declarations() -> &'static [&'static CommandLineOption] {
     static DECLS: OnceLock<Vec<&'static CommandLineOption>> = OnceLock::new();
     DECLS.get_or_init(|| {
@@ -477,7 +477,7 @@ fn compiler_options_declarations() -> &'static [&'static CommandLineOption] {
     })
 }
 
-// Go: harnessutil.go:315 harnessCommandLineOptions
+// Go: harnessutil.go:309 harnessCommandLineOptions
 fn harness_command_line_options() -> &'static [&'static CommandLineOption] {
     static DECLS: OnceLock<Vec<&'static CommandLineOption>> = OnceLock::new();
     DECLS.get_or_init(|| {
@@ -502,7 +502,7 @@ fn harness_command_line_options() -> &'static [&'static CommandLineOption] {
     })
 }
 
-// Go: harnessutil.go:373 getHarnessOption
+// Go: harnessutil.go:367 getHarnessOption
 fn get_harness_option(name: &str) -> Option<&'static CommandLineOption> {
     harness_command_line_options()
         .iter()
@@ -510,7 +510,7 @@ fn get_harness_option(name: &str) -> Option<&'static CommandLineOption> {
         .find(|option| option.name.eq_ignore_ascii_case(name))
 }
 
-// Go: harnessutil.go:379 parseHarnessOption
+// Go: harnessutil.go:373 parseHarnessOption
 fn parse_harness_option(
     key: &str,
     value: CompilerOptionsValue,
@@ -554,7 +554,7 @@ fn parse_harness_option(
     }
 }
 
-// Go: harnessutil.go:417 getOptionValue
+// Go: harnessutil.go:415 getOptionValue
 fn get_option_value(
     option: &'static CommandLineOption,
     value: &str,
@@ -643,7 +643,7 @@ fn go_atoi(value: &str) -> Option<i64> {
     value.parse::<i64>().ok()
 }
 
-// Go: harnessutil.go:462 cachedCompilerHost
+// Go: harnessutil.go:460 cachedCompilerHost
 // PORT: Go keeps a process-wide parse cache (`sourceFileCache`) so the
 // programs of all tests share lib files. A test process here runs one
 // configuration, so the host parses each file (Go `compiler.NewCompilerHost`).
@@ -687,7 +687,7 @@ impl ProgramLike {
     }
 }
 
-// Go: harnessutil.go:601 compileFilesWithHost
+// Go: harnessutil.go:602 compileFilesWithHost
 fn compile_files_with_host(
     host: Rc<dyn CompilerHost>,
     config: Rc<ParsedCommandLine>,
@@ -850,7 +850,7 @@ fn extend_declaration_and_suggestion_diagnostics(
     }
 }
 
-// Go: diagnostics/diagnostics.go:152 NewAdHocMessage, used as
+// Go: diagnostics/diagnostics.go:164 NewAdHocMessage, used as
 // `ast.NewCompilerDiagnostic(diagnostics.NewAdHocMessage(message))`.
 // PORT: `ts_goport::diagnostics::Message` has a `u32` code, so the Go code -1 is set
 // on the diagnostic (`Diagnostic.code`, which the baselines print). A
@@ -1092,7 +1092,7 @@ impl CompilationResult {
             .collect()
     }
 
-    // Go: compiler/program.go:497 (*Program).GetContentMapper (tsgo#4712)
+    // Go: compiler/program.go:538 (*Program).GetContentMapper (tsgo#4712)
     // PORT: in Go only the compiler runner and the content mapper baseline
     // call it, so the port keeps it with them. `p.opts.Config` is the
     // command line that the program was made with.
@@ -1192,7 +1192,7 @@ impl CompilationResult {
         )
     }
 
-    // Go: harnessutil.go:822 GetNumberOfJSFiles
+    // Go: harnessutil.go:857 GetNumberOfJSFiles
     pub fn get_number_of_js_files(&self, include_json: bool) -> usize {
         if include_json {
             return self.js.len();
@@ -1203,24 +1203,24 @@ impl CompilationResult {
             .count()
     }
 
-    // Go: harnessutil.go:835 Inputs
+    // Go: harnessutil.go:870 Inputs
     pub fn inputs(&self) -> &[TestFile] {
         &self.inputs
     }
 
-    // Go: harnessutil.go:839 Outputs
+    // Go: harnessutil.go:874 Outputs
     pub fn outputs(&self) -> &[TestFile] {
         &self.outputs
     }
 }
 
-// Go: harnessutil.go:907 testBuildInfoReader
+// Go: harnessutil.go:950 testBuildInfoReader
 struct TestBuildInfoReader {
     inner: Rc<dyn BuildInfoReader>,
 }
 
 impl BuildInfoReader for TestBuildInfoReader {
-    // Go: harnessutil.go:911 ReadBuildInfo
+    // Go: harnessutil.go:954 ReadBuildInfo
     fn read_build_info(&self, config: &ParsedCommandLine) -> Option<BuildInfo> {
         let mut r = self.inner.read_build_info(config)?;
         r.version = version().to_string();
@@ -1228,7 +1228,7 @@ impl BuildInfoReader for TestBuildInfoReader {
     }
 }
 
-// Go: harnessutil.go:924 createProgram
+// Go: harnessutil.go:967 createProgram
 fn create_program(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) -> ProgramLike {
     // Go: testutil.TestProgramIsSingleThreaded() is true unless
     // TS_TEST_PROGRAM_SINGLE_THREADED says otherwise or the race detector runs.
@@ -1268,7 +1268,7 @@ fn create_program(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) -> 
     ProgramLike::Program(program)
 }
 
-// Go: testutil.go:37 testProgramIsSingleThreaded
+// Go: testutil.go:40 testProgramIsSingleThreaded
 fn test_program_is_single_threaded() -> bool {
     // Leave Program in SingleThreaded mode unless explicitly configured or in race mode.
     if let Ok(v) = std::env::var("TS_TEST_PROGRAM_SINGLE_THREADED")
@@ -1283,7 +1283,7 @@ fn test_program_is_single_threaded() -> bool {
     true
 }
 
-// Go: harnessutil.go:944 EnumerateFiles
+// Go: harnessutil.go:987 EnumerateFiles
 pub fn enumerate_files(
     folder: &str,
     test_regex: fn(&str) -> bool,
@@ -1293,7 +1293,7 @@ pub fn enumerate_files(
     Ok(files.iter().map(|path| normalize_slashes(path)).collect())
 }
 
-// Go: harnessutil.go:956 listFilesWorker
+// Go: harnessutil.go:996 listFilesWorker
 fn list_files_worker(
     spec: fn(&str) -> bool,
     recursive: bool,
@@ -1322,7 +1322,7 @@ fn list_files_worker(
     Ok(paths)
 }
 
-// Go: harnessutil.go:980 getFileBasedTestConfigurationDescription
+// Go: harnessutil.go:1022 getFileBasedTestConfigurationDescription
 fn get_file_based_test_configuration_description(config: &TestConfiguration) -> String {
     let mut output = String::new();
     // Go sorts the keys by bytes; `BTreeMap` keys are in that order.
@@ -1335,7 +1335,7 @@ fn get_file_based_test_configuration_description(config: &TestConfiguration) -> 
     output
 }
 
-// Go: harnessutil.go:992 GetFileBasedTestConfigurations
+// Go: harnessutil.go:1034 GetFileBasedTestConfigurations
 // PORT: Go walks the settings map in random order; the configurations
 // (and their names) do not depend on it. This walks in key order.
 pub fn get_file_based_test_configurations(
@@ -1391,7 +1391,7 @@ pub fn get_file_based_test_configurations(
     configurations
 }
 
-// Go: harnessutil.go:1039 splitOptionValues
+// Go: harnessutil.go:1081 splitOptionValues
 // Splits a string value into an array of strings, each corresponding to a unique value for the given option.
 // Also handles the `*` value, which includes all possible values for the option, and exclusions using `-` or `!`.
 // PORT: Go collects the map values in random order; only the set matters.
@@ -1460,7 +1460,7 @@ fn split_option_values(value: &str, option: &str) -> Vec<String> {
     variations.into_iter().map(|(_, include)| include).collect()
 }
 
-// Go: harnessutil.go:1104 getValueOfOptionString
+// Go: harnessutil.go:1146 getValueOfOptionString
 fn get_value_of_option_string(option: &str, value: &str) -> CompilerOptionsValue {
     match try_get_value_of_option_string(option, value) {
         Some(result) => result,
@@ -1468,7 +1468,7 @@ fn get_value_of_option_string(option: &str, value: &str) -> CompilerOptionsValue
     }
 }
 
-// Go: harnessutil.go:1112 tryGetValueOfOptionString
+// Go: harnessutil.go:1154 tryGetValueOfOptionString
 fn try_get_value_of_option_string(option: &str, value: &str) -> Option<CompilerOptionsValue> {
     let option_decl = get_command_line_option(option)?;
     match option_decl.kind {
@@ -1485,7 +1485,7 @@ fn try_get_value_of_option_string(option: &str, value: &str) -> Option<CompilerO
     }
 }
 
-// Go: harnessutil.go:1136 getCommandLineOption
+// Go: harnessutil.go:1178 getCommandLineOption
 fn get_command_line_option(option: &str) -> Option<&'static CommandLineOption> {
     compiler_options_declarations()
         .iter()
@@ -1493,7 +1493,7 @@ fn get_command_line_option(option: &str) -> Option<&'static CommandLineOption> {
         .find(|option_decl| option_decl.name.eq_ignore_ascii_case(option))
 }
 
-// Go: harnessutil.go:1142 getAllValuesForOption
+// Go: harnessutil.go:1184 getAllValuesForOption
 fn get_all_values_for_option(option: &str) -> Vec<String> {
     let Some(option_decl) = get_command_line_option(option) else {
         return Vec::new();
@@ -1508,7 +1508,7 @@ fn get_all_values_for_option(option: &str) -> Vec<String> {
     }
 }
 
-// Go: harnessutil.go:1156 computeFileBasedTestConfigurationVariations
+// Go: harnessutil.go:1198 computeFileBasedTestConfigurationVariations
 fn compute_file_based_test_configuration_variations(
     variation_count: usize,
     option_entries: &[Vec<String>],
@@ -1523,7 +1523,7 @@ fn compute_file_based_test_configuration_variations(
     configurations
 }
 
-// Go: harnessutil.go:1162 computeFileBasedTestConfigurationVariationsWorker
+// Go: harnessutil.go:1204 computeFileBasedTestConfigurationVariationsWorker
 fn compute_file_based_test_configuration_variations_worker(
     configurations: &mut Vec<TestConfiguration>,
     option_entries: &[Vec<String>],
@@ -1549,7 +1549,7 @@ fn compute_file_based_test_configuration_variations_worker(
     }
 }
 
-// Go: harnessutil.go:1182 GetConfigNameFromFileName
+// Go: harnessutil.go:1224 GetConfigNameFromFileName
 pub fn get_config_name_from_file_name(filename: &str) -> String {
     let basename_lower = get_base_file_name(filename).to_lowercase();
     if basename_lower == "tsconfig.json" || basename_lower == "jsconfig.json" {
@@ -1567,7 +1567,7 @@ pub enum UnsupportedCompilerOptions {
     Skip(String),
 }
 
-// Go: harnessutil.go:1236 SkipUnsupportedCompilerOptions
+// Go: harnessutil.go:1232 SkipUnsupportedCompilerOptions
 // PORT: returns the Go `t.Fatalf` or `t.Skipf` message instead of failing
 // or skipping.
 pub fn skip_unsupported_compiler_options(
@@ -1607,7 +1607,7 @@ pub fn skip_unsupported_compiler_options(
     None
 }
 
-// Go: harnessutil.go:1265 failOnUnsupportedCompilerOptions (ts#64122)
+// Go: harnessutil.go:1261 failOnUnsupportedCompilerOptions (ts#64122)
 fn fail_on_unsupported_compiler_options(options: &CompilerOptions) -> Option<String> {
     if options.module == ModuleKind::AMD {
         return Some(format!("unsupported module kind {}", options.module));
@@ -1656,7 +1656,7 @@ fn install_global_fs(fs: &MapFs, current_directory: &str, use_case_sensitive_fil
     global_fs().import_state(fs.export_state());
 }
 
-// Go: recorderfs.go:10 OutputRecorderFS
+// Go: recorderfs.go:11 OutputRecorderFS
 // PORT: emit writes through the `WriteFile` callback (see
 // `create_compiler_host`). The callback runs on the checker threads, so it
 // writes through `osvfs_fs()`, which the override makes a view of
@@ -1673,7 +1673,7 @@ struct RecordedOutputs {
 }
 
 impl OutputRecorder {
-    // Go: recorderfs.go:21 WriteFile
+    // Go: recorderfs.go:27 WriteFile
     fn write_file(&self) -> WriteFile {
         let inner = self.inner.clone();
         Arc::new(
@@ -1701,7 +1701,7 @@ impl OutputRecorder {
         )
     }
 
-    // Go: recorderfs.go:41 Outputs
+    // Go: recorderfs.go:41 Outputs (at 673a5f17d713; ts#64159 makes it recordedOutputs, recorderfs.go:48)
     fn outputs(&self) -> Vec<TestFile> {
         self.inner
             .lock()

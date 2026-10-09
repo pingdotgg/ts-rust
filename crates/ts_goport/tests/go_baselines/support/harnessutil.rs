@@ -8,10 +8,10 @@ use ts_goport::diagnostics_loc::message_localize;
 use ts_goport::execute::tsc::compile::{Writer, write_str};
 use ts_goport::frontend::tspath::{ComparePathsOptions, Path, to_path};
 
-// Go: harnessutil.go:41 FakeTSVersion
+// Go: harnessutil.go:43 FakeTSVersion
 pub const FAKE_TS_VERSION: &str = "FakeTSVersion";
 
-// Go: harnessutil.go:505 TracerForBaselining
+// Go: harnessutil.go:503 TracerForBaselining
 // PORT: Go `builder *strings.Builder` is the shared output buffer of the
 // test system (`Writer`). The methods that change the package.json cache
 // take `&mut self`; the test system keeps the tracer in a `RefCell`.
@@ -24,7 +24,7 @@ pub struct TracerForBaselining {
 }
 
 impl TracerForBaselining {
-    // Go: harnessutil.go:511 NewTracerForBaselining
+    // Go: harnessutil.go:510 NewTracerForBaselining
     // PORT: `builder_bytes` is the buffer behind `builder` when the caller
     // has it, so `string` can read it back.
     pub fn new(

@@ -33,7 +33,7 @@ const DEFAULT_JOBS: usize = 4;
 /// Failures that the final panic lists.
 const MAX_LISTED_FAILURES: usize = 50;
 
-// Go: sys.go:33 FileMap
+// Go: sys.go:34 FileMap
 // PORT: Go `map[string]any`; each value is a `MapFile` (Go string, byte
 // slice or `*fstest.MapFile`).
 pub type FileMap = BTreeMap<String, MapFile>;
@@ -145,7 +145,7 @@ struct RunNotes {
 }
 
 impl TscInput {
-    // Go: runner.go:44 executeCommand
+    // Go: runner.go:45 executeCommand
     // PORT: the command runs in a child process. An `Err` is a child that
     // ended without a result (see child.rs). Go passes the subtest context
     // (`t.Context()`, tsgo#4712), whose end closes a content mapper host
@@ -176,7 +176,7 @@ impl TscInput {
         format!("{}.js", self.sub_scenario.replace(' ', "-"))
     }
 
-    // Go: runner.go:66 run
+    // Go: runner.go:67 run
     // PORT: returns the failures in place of `t.Errorf`. A child without a
     // result stops the input; the baseline so far is still written when
     // local baselines are on, to show where it stopped.
@@ -334,7 +334,7 @@ impl TscInput {
         Ok(())
     }
 
-    // Go: runner.go:182 getBaselineSubFolder
+    // Go: runner.go:184 getBaselineSubFolder
     pub fn get_baseline_sub_folder(&self) -> String {
         let command_name = if self
             .command_line_args
@@ -363,7 +363,7 @@ impl TscInput {
     }
 }
 
-// Go: runner.go:148 getDiffForIncremental
+// Go: runner.go:149 getDiffForIncremental
 fn get_diff_for_incremental(incremental_sys: &TestSys, non_incremental_sys: &TestSys) -> String {
     let mut diff_builder = String::new();
 

@@ -39,23 +39,23 @@ use crate::tsoptions::tsoptionstest::{
 // util.go
 // ---------------------------------------------------------------------------
 
-// Go: util.go:22 libFolder, builtFolder
+// Go: util.go:19 libFolder, builtFolder
 const LIB_FOLDER: &str = "built/local/";
 const BUILT_FOLDER: &str = "/.ts";
 
-// Go: util.go:59 isBuiltFile
+// Go: util.go:56 isBuiltFile
 fn is_built_file(file_path: &str) -> bool {
     file_path.starts_with(LIB_FOLDER)
         || file_path.starts_with(&ensure_trailing_directory_separator(BUILT_FOLDER))
 }
 
-// Go: util.go:63 isTsConfigFile
+// Go: util.go:60 isTsConfigFile
 fn is_ts_config_file(path: &str) -> bool {
     // !!! fix to check for just prefixes/suffixes
     path.contains("tsconfig") && path.contains("json")
 }
 
-// Go: util.go:68 sanitizeTestFilePath
+// Go: util.go:65 sanitizeTestFilePath
 fn sanitize_test_file_path(name: &str) -> String {
     let path = go_regex::replace_test_path_characters(name);
     let path = normalize_slashes(&path);
@@ -165,7 +165,7 @@ fn write_plain(output: &Writer, text: &str, _format_style: &str) {
     write_str(output, text);
 }
 
-// Go: error_baseline.go:261 formatLocation
+// Go: error_baseline.go:276 formatLocation
 fn format_location(file: Node, pos: i32, format_opts: &FormattingOptions) -> String {
     capture_writer(|w| write_location(w, file, pos, Some(format_opts), write_plain))
 }
@@ -190,7 +190,7 @@ fn wrapped_diagnostic_file_name(diagnostic: &Diagnostic) -> Option<&'static str>
         .then(|| ast_diagnostic_file_name(diagnostic.file))
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:57 ASTDiagnostic.File (ts#63936)
+// Go: diagnosticwriter/diagnosticwriter.go:64 ASTDiagnostic.File (ts#63936)
 // The file name of `File()`: the canonical source file's name for a
 // supplemental mapper output, else the file's own name.
 // PORT: the port writes diagnostics without the wrapper, so this is the part
@@ -476,7 +476,7 @@ fn iterate_error_baseline(
 // contentmapper_baseline.go (tsgo#4712)
 // ---------------------------------------------------------------------------
 
-// Go: contentmapper_baseline.go:18 contentMapperFormatOpts
+// Go: contentmapper_baseline.go:19 contentMapperFormatOpts
 fn content_mapper_format_opts() -> FormattingOptions {
     FormattingOptions {
         new_line: "\n".to_string(),
@@ -484,7 +484,7 @@ fn content_mapper_format_opts() -> FormattingOptions {
     }
 }
 
-// Go: contentmapper_baseline.go:26 DoContentMapperBaseline
+// Go: contentmapper_baseline.go:27 DoContentMapperBaseline
 // DoContentMapperBaseline writes a baseline for content-mapped files that shows the original source, the
 // transformed source the compiler actually checks, and the file's diagnostics. Diagnostics are rendered
 // with the standard diagnostic writer, which maps each one to the text it belongs to: mapper-produced
@@ -510,7 +510,7 @@ pub fn do_content_mapper_baseline(
     )
 }
 
-// Go: contentmapper_baseline.go:40 getContentMapperBaseline
+// Go: contentmapper_baseline.go:41 getContentMapperBaseline
 fn get_content_mapper_baseline(program: &CompilationResult, diagnostics: &[Diagnostic]) -> String {
     let files = program.content_mapped_source_files();
     if files.is_empty() {
@@ -567,7 +567,7 @@ fn get_content_mapper_baseline(program: &CompilationResult, diagnostics: &[Diagn
     b
 }
 
-// Go: contentmapper_baseline.go:87 ensureTrailingNewline
+// Go: contentmapper_baseline.go:88 ensureTrailingNewline
 fn ensure_trailing_newline(s: &str) -> String {
     if s.is_empty() || s.ends_with('\n') {
         return s.to_string();
@@ -579,7 +579,7 @@ fn ensure_trailing_newline(s: &str) -> String {
 // js_emit_baseline.go
 // ---------------------------------------------------------------------------
 
-// Go: js_emit_baseline.go:19 DoJSEmitBaseline
+// Go: js_emit_baseline.go:20 DoJSEmitBaseline
 #[allow(clippy::too_many_arguments)]
 pub fn do_js_emit_baseline(
     baseline_path: &str,
@@ -763,7 +763,7 @@ pub fn do_js_emit_baseline(
     finish_checks(result, checks)
 }
 
-// Go: js_emit_baseline.go:152 fileOutput
+// Go: js_emit_baseline.go:150 fileOutput
 fn file_output(file: &TestFile, settings: &HarnessOptions) -> String {
     let file_name = if settings.full_emit_paths {
         remove_test_path_prefixes(
@@ -776,7 +776,7 @@ fn file_output(file: &TestFile, settings: &HarnessOptions) -> String {
     format!("//// [{file_name}]\r\n{}", file.content)
 }
 
-// Go: js_emit_baseline.go:162 declarationCompilationContext
+// Go: js_emit_baseline.go:160 declarationCompilationContext
 struct DeclarationCompilationContext {
     decl_input_files: Vec<TestFile>,
     decl_other_files: Vec<TestFile>,
@@ -786,7 +786,7 @@ struct DeclarationCompilationContext {
     config: Rc<ParsedCommandLine>,
 }
 
-// Go: js_emit_baseline.go:171 prepareDeclarationCompilationContext
+// Go: js_emit_baseline.go:169 prepareDeclarationCompilationContext
 fn prepare_declaration_compilation_context(
     input_files: &[TestFile],
     other_files: &[TestFile],
@@ -914,14 +914,14 @@ fn prepare_declaration_compilation_context(
     None
 }
 
-// Go: js_emit_baseline.go:250 declarationCompilationResult
+// Go: js_emit_baseline.go:265 declarationCompilationResult
 struct DeclarationCompilationResult {
     decl_input_files: Vec<TestFile>,
     decl_other_files: Vec<TestFile>,
     decl_result: CompilationResult,
 }
 
-// Go: js_emit_baseline.go:256 compileDeclarationFiles
+// Go: js_emit_baseline.go:271 compileDeclarationFiles
 fn compile_declaration_files(
     context: Option<DeclarationCompilationContext>,
     symlinks: &BTreeMap<String, String>,
@@ -1020,7 +1020,7 @@ pub fn do_sourcemap_baseline(
     Ok(())
 }
 
-// Go: sourcemap_baseline.go:68 createSourceMapPreviewLink
+// Go: sourcemap_baseline.go:70 createSourceMapPreviewLink
 fn create_source_map_preview_link(source_map: &TestFile, result: &CompilationResult) -> String {
     let mut sourcemap_json = RawSourceMap::default();
     if let Err(err) = json_unmarshal(
@@ -1087,7 +1087,7 @@ fn create_source_map_preview_link(source_map: &TestFile, result: &CompilationRes
     hash
 }
 
-// Go: sourcemap_baseline.go:116 base64EncodeChunk
+// Go: sourcemap_baseline.go:123 base64EncodeChunk
 // PORT: Go `url.QueryUnescape(url.QueryEscape(s))` gives `s` back, so this
 // encodes the Go bytes of `s`.
 fn base64_encode_chunk(s: &str) -> String {
@@ -1284,7 +1284,7 @@ fn types_diff_fixup_old(s: &str) -> String {
     sb
 }
 
-// Go: type_symbol_baseline.go:117 isTypeBaselineNodeReuseLine
+// Go: type_symbol_baseline.go:107 isTypeBaselineNodeReuseLine
 fn is_type_baseline_node_reuse_line(line: &str) -> bool {
     let Some(line) = line.strip_prefix('>') else {
         return false;
@@ -1305,7 +1305,7 @@ fn is_type_baseline_node_reuse_line(line: &str) -> bool {
     line.chars().all(|c| matches!(c, ' ' | '^' | '\r'))
 }
 
-// Go: type_symbol_baseline.go:137 checkBaselines
+// Go: type_symbol_baseline.go:129 checkBaselines
 fn check_baselines(
     baseline_path: &str,
     all_files: &[TestFile],

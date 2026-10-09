@@ -536,7 +536,7 @@ pub fn for_each_ast_node(node: Node) -> Vec<Node> {
     result
 }
 
-// Go: type_symbol_baseline.go:459 isImportStatementName
+// Go: type_symbol_baseline.go:457 isImportStatementName
 pub fn is_import_statement_name(node: Node) -> bool {
     let parent = node.parent();
     if is_import_specifier(parent) && (node == parent.name() || node == parent.property_name()) {
@@ -551,7 +551,7 @@ pub fn is_import_statement_name(node: Node) -> bool {
     false
 }
 
-// Go: type_symbol_baseline.go:472 isExportStatementName
+// Go: type_symbol_baseline.go:470 isExportStatementName
 pub fn is_export_statement_name(node: Node) -> bool {
     let parent = node.parent();
     if is_export_assignment(parent) && node == parent.expression() {
@@ -563,7 +563,7 @@ pub fn is_export_statement_name(node: Node) -> bool {
     false
 }
 
-// Go: type_symbol_baseline.go:482 isIntrinsicJsxTag
+// Go: type_symbol_baseline.go:480 isIntrinsicJsxTag
 pub fn is_intrinsic_jsx_tag(node: Node, source_file: Node) -> bool {
     let parent = node.parent();
     if !(is_jsx_opening_element(parent)

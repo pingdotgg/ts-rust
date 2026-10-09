@@ -77,18 +77,18 @@ impl SourceMapDecoder {
         }
     }
 
-    // Go: sourcemap_recorder.go:69 hasCompletedDecoding
+    // Go: sourcemap_recorder.go:70 hasCompletedDecoding
     fn has_completed_decoding(&self) -> bool {
         self.mappings.pos() as usize == self.source_map_mappings.len()
     }
 
-    // Go: sourcemap_recorder.go:73 getRemainingDecodeString
+    // Go: sourcemap_recorder.go:74 getRemainingDecodeString
     fn get_remaining_decode_string(&self) -> &str {
         &self.source_map_mappings[self.mappings.pos() as usize..]
     }
 }
 
-// Go: sourcemap_recorder.go:77 sourceMapSpanWriter
+// Go: sourcemap_recorder.go:78 sourceMapSpanWriter
 struct SourceMapSpanWriter<'a> {
     source_map_recorder: &'a mut WriterAggregator,
     source_map_sources: Vec<String>,
@@ -105,7 +105,7 @@ struct SourceMapSpanWriter<'a> {
 }
 
 impl<'a> SourceMapSpanWriter<'a> {
-    // Go: sourcemap_recorder.go:92 newSourceMapSpanWriter
+    // Go: sourcemap_recorder.go:93 newSourceMapSpanWriter
     fn new(
         source_map_recorder: &'a mut WriterAggregator,
         source_map: &RawSourceMap,
@@ -158,7 +158,7 @@ impl<'a> SourceMapSpanWriter<'a> {
         }
     }
 
-    // Go: sourcemap_recorder.go:122 getSourceMapSpanString
+    // Go: sourcemap_recorder.go:123 getSourceMapSpanString
     fn get_source_map_span_string(
         &self,
         map_entry: &Mapping,
@@ -228,7 +228,7 @@ impl<'a> SourceMapSpanWriter<'a> {
             });
     }
 
-    // Go: sourcemap_recorder.go:170 recordNewSourceFileSpan
+    // Go: sourcemap_recorder.go:169 recordNewSourceFileSpan
     fn record_new_source_file_span(
         &mut self,
         source_map_span: Mapping,
@@ -282,7 +282,7 @@ impl<'a> SourceMapSpanWriter<'a> {
         self.prev_written_source_pos = 0;
     }
 
-    // Go: sourcemap_recorder.go:199 close
+    // Go: sourcemap_recorder.go:198 close
     fn close(&mut self) {
         // Write the lines pending on the single line
         self.write_recorded_spans();
@@ -302,7 +302,7 @@ impl<'a> SourceMapSpanWriter<'a> {
         self.write_js_file_lines(self.js_line_map.len() as i32);
     }
 
-    // Go: sourcemap_recorder.go:213 getTextOfLine
+    // Go: sourcemap_recorder.go:211 getTextOfLine
     fn get_text_of_line<'t>(line: i32, line_map: &[i32], code: &'t str) -> &'t str {
         let start_pos = line_map[line as usize] as usize;
         let end_pos = if ((line + 1) as usize) < line_map.len() {
@@ -319,7 +319,7 @@ impl<'a> SourceMapSpanWriter<'a> {
         text
     }
 
-    // Go: sourcemap_recorder.go:228 writeJsFileLines
+    // Go: sourcemap_recorder.go:227 writeJsFileLines
     fn write_js_file_lines(&mut self, end_js_line: i32) {
         while self.next_js_line_to_write < end_js_line {
             let text = Self::get_text_of_line(
@@ -343,14 +343,14 @@ impl<'a> SourceMapSpanWriter<'a> {
     }
 }
 
-// Go: sourcemap_recorder.go:239 recordedSpanWriter
+// Go: sourcemap_recorder.go:238 recordedSpanWriter
 struct RecordedSpanWriter {
     marker_ids: Vec<String>,
     prev_emitted_col: i32,
 }
 
 impl RecordedSpanWriter {
-    // Go: sourcemap_recorder.go:245 getMarkerId
+    // Go: sourcemap_recorder.go:244 getMarkerId
     fn get_marker_id(&self, w: &SourceMapSpanWriter<'_>, marker_index: usize) -> String {
         if w.span_marker_continues {
             if marker_index != 0 {
@@ -423,7 +423,7 @@ impl RecordedSpanWriter {
         w.span_marker_continues = end_continues;
     }
 
-    // Go: sourcemap_recorder.go:295 writeSourceMapSourceText
+    // Go: sourcemap_recorder.go:294 writeSourceMapSourceText
     fn write_source_map_source_text(&mut self, w: &mut SourceMapSpanWriter<'_>, index: usize) {
         let current_span = &w.spans_on_single_line[index];
         // Convert UTF-16 character offset from the source map to a byte position.
@@ -468,7 +468,7 @@ impl RecordedSpanWriter {
         w.prev_written_source_pos = source_pos;
     }
 
-    // Go: sourcemap_recorder.go:333 writeSpanDetails
+    // Go: sourcemap_recorder.go:331 writeSpanDetails
     fn write_span_details(&mut self, w: &mut SourceMapSpanWriter<'_>, index: usize) {
         let details = w.get_source_map_span_string(
             &w.spans_on_single_line[index].source_map_span,
@@ -517,7 +517,7 @@ impl RecordedSpanWriter {
     }
 }
 
-// Go: scanner/scanner.go:2755 ComputePositionOfLineAndUTF16Character
+// Go: scanner/scanner.go:2742 ComputePositionOfLineAndUTF16Character
 // PORT: the port's copy is private to `sourcemap::source_mapper`; this is
 // the same Go function.
 fn compute_position_of_line_and_utf16_character(

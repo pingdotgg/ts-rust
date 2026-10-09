@@ -28,14 +28,14 @@ use super::test_case_parser::{
 use super::tsbaseline;
 use crate::support::baseline::{self, Options};
 
-// Go: compiler_runner.go:33 srcFolder
+// Go: compiler_runner.go:35 srcFolder
 // Posix-style path to sources under test
 pub const SRC_FOLDER: &str = "/.src";
 
 // Go: compiler_runner.go:30 requireStr
 const REQUIRE_STR: &str = "require(";
 
-// Go: compiler_runner.go:35 CompilerTestType
+// Go: compiler_runner.go:37 CompilerTestType
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompilerTestType {
     Conformance,
@@ -43,7 +43,7 @@ pub enum CompilerTestType {
 }
 
 impl CompilerTestType {
-    // Go: compiler_runner.go:42 String
+    // Go: compiler_runner.go:44 String
     pub fn string(self) -> &'static str {
         if self == CompilerTestType::Regression {
             return "compiler";
@@ -52,7 +52,7 @@ impl CompilerTestType {
     }
 }
 
-// Go: compiler_runner.go:49 CompilerBaselineRunner
+// Go: compiler_runner.go:51 CompilerBaselineRunner
 pub struct CompilerBaselineRunner {
     pub is_submodule: bool,
     test_files: OnceLock<Vec<String>>,
@@ -60,7 +60,7 @@ pub struct CompilerBaselineRunner {
     pub test_suit_name: &'static str,
 }
 
-// Go: compiler_runner.go:58 NewCompilerBaselineRunner
+// Go: compiler_runner.go:59 NewCompilerBaselineRunner
 pub fn new_compiler_baseline_runner(
     test_type: CompilerTestType,
     is_submodule: bool,
@@ -80,7 +80,7 @@ pub fn new_compiler_baseline_runner(
 }
 
 impl CompilerBaselineRunner {
-    // Go: compiler_runner.go:73 EnumerateTestFiles
+    // Go: compiler_runner.go:67 EnumerateTestFiles
     pub fn enumerate_test_files(&self) -> &[String] {
         self.test_files.get_or_init(|| {
             enumerate_files(
@@ -93,7 +93,7 @@ impl CompilerBaselineRunner {
     }
 }
 
-// Go: compiler_runner.go:78 skippedTests
+// Go: compiler_runner.go:79 skippedTests
 pub const SKIPPED_TESTS: &[&str] = &[
     // Tests that depended on typescript.d.ts in built.
     "APILibCheck.ts",
@@ -247,7 +247,7 @@ pub fn compiler_vary_by() -> &'static HashSet<String> {
     SET.get_or_init(|| COMPILER_VARY_BY.iter().map(ToString::to_string).collect())
 }
 
-// Go: compiler_runner.go:210 compilerFileBasedTest
+// Go: compiler_runner.go:189 compilerFileBasedTest
 pub struct CompilerFileBasedTest {
     pub filename: String,
     pub content: String,
@@ -265,7 +265,7 @@ pub fn read_test_file(filename: &str) -> String {
     content
 }
 
-// Go: compiler_runner.go:216 getCompilerFileBasedTest
+// Go: compiler_runner.go:195 getCompilerFileBasedTest
 pub fn get_compiler_file_based_test(filename: &str) -> CompilerFileBasedTest {
     let content = read_test_file(filename);
     let settings: RawCompilerSettings = extract_compiler_settings(&content);
@@ -277,7 +277,7 @@ pub fn get_compiler_file_based_test(filename: &str) -> CompilerFileBasedTest {
     }
 }
 
-// Go: compiler_runner.go:229 compilerTest
+// Go: compiler_runner.go:209 compilerTest
 pub struct CompilerTest {
     pub test_name: String,
     pub filename: String,
@@ -320,7 +320,7 @@ pub struct CompilerTestInputs {
     pub symlinks: BTreeMap<String, String>,
 }
 
-// Go: compiler_runner.go:248 newCompilerTest (the part before CompileFiles)
+// Go: compiler_runner.go:229 newCompilerTest (the part before CompileFiles)
 pub fn new_compiler_test_inputs(
     test_content: TestCaseContent,
     named_configuration: Option<&NamedTestConfiguration>,
@@ -445,7 +445,7 @@ pub fn precompute_compiler_options(inputs: &CompilerTestInputs) -> CompilerOptio
     compiler_options
 }
 
-// Go: compiler_runner.go:248 newCompilerTest (CompileFiles and the result)
+// Go: compiler_runner.go:229 newCompilerTest (CompileFiles and the result)
 pub fn new_compiler_test(
     test_name: &str,
     filename: &str,
@@ -630,7 +630,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:416 verifyContentMapper
+    // Go: compiler_runner.go:382 verifyContentMapper
     pub fn verify_content_mapper(&self, report: Report<'_>, suite_name: &str, is_submodule: bool) {
         run_subtest(
             report,
@@ -655,7 +655,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:427 contentMappedFileNames
+    // Go: compiler_runner.go:392 contentMappedFileNames
     // contentMappedFileNames returns the set of absolute file names that were produced by a content mapper.
     // PORT: Go returns a nil map when there are none; that is an empty set.
     fn content_mapped_file_names(&self) -> HashSet<String> {
@@ -666,7 +666,7 @@ impl CompilerTest {
             .collect()
     }
 
-    // Go: compiler_runner.go:373 skippedEmitTests
+    // Go: compiler_runner.go:406 skippedEmitTests
     fn skipped_emit_test(&self) -> Option<&'static str> {
         match self.basename.as_str() {
             "filesEmittingIntoSameOutput.ts" => Some(
@@ -691,7 +691,7 @@ impl CompilerTest {
         }
     }
 
-    // Go: compiler_runner.go:384 verifyJavaScriptOutput
+    // Go: compiler_runner.go:417 verifyJavaScriptOutput
     pub fn verify_java_script_output(
         &self,
         report: Report<'_>,
@@ -732,7 +732,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:415 verifySourceMapOutput
+    // Go: compiler_runner.go:445 verifySourceMapOutput
     pub fn verify_source_map_output(
         &self,
         report: Report<'_>,
@@ -765,7 +765,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:436 verifySourceMapRecord
+    // Go: compiler_runner.go:462 verifySourceMapRecord
     pub fn verify_source_map_record(
         &self,
         report: Report<'_>,
@@ -798,7 +798,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:457 verifyTypesAndSymbols
+    // Go: compiler_runner.go:479 verifyTypesAndSymbols
     pub fn verify_types_and_symbols(
         &self,
         report: Report<'_>,
@@ -849,7 +849,7 @@ impl CompilerTest {
         }
     }
 
-    // Go: compiler_runner.go:494 verifyModuleResolution
+    // Go: compiler_runner.go:507 verifyModuleResolution
     pub fn verify_module_resolution(
         &self,
         report: Report<'_>,
@@ -1100,7 +1100,7 @@ impl ConfigCase {
     }
 }
 
-// Go: compiler_runner.go:190 runTest (the subtest names)
+// Go: compiler_runner.go:153 runTest (the subtest names)
 // PORT: returns the cases; child.rs runs them. A test file whose
 // configurations cannot be computed is an `Err` with the Go failure.
 pub fn enumerate_config_cases(
@@ -1159,7 +1159,7 @@ pub fn enumerate_config_cases(
     (cases, errors)
 }
 
-// Go: compiler_runner.go:195 runSingleConfigTest
+// Go: compiler_runner.go:169 runSingleConfigTest
 // PORT: the child side of one case. Each Go subtest reports through
 // `report`; `compile` is the Go test itself (its `RecoverAndFail` covers
 // `newCompilerTest`), and `config` reports a skipped configuration.

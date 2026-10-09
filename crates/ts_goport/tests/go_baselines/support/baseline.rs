@@ -97,7 +97,7 @@ pub fn test_data_path() -> PathBuf {
     go_repo().join("testdata")
 }
 
-// Go: testutil/baseline/baseline.go:248 referenceRoot
+// Go: testutil/baseline/baseline.go:84 referenceRoot
 pub fn reference_root() -> PathBuf {
     test_data_path().join("baselines").join("reference")
 }
@@ -113,7 +113,7 @@ pub fn submodule_reference_root() -> PathBuf {
         .join("reference")
 }
 
-// Go: testutil/baseline/baseline.go:247 localRoot
+// Go: testutil/baseline/baseline.go:83 localRoot
 /// The local baseline root, or `None` when local baselines are off.
 // PORT: Go always writes changed baselines to `testdata/baselines/local`.
 // The port writes only when `TS_GOPORT_BASELINE_LOCAL` is set.

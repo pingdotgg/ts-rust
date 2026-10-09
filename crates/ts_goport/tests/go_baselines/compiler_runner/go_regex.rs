@@ -211,7 +211,7 @@ pub fn has_transpile_test_suffix(s: &str) -> bool {
     s.ends_with('.')
 }
 
-// Go: tsbaseline/contentmapper_baseline.go:16 ansiEscape (tsgo#4712)
+// Go: tsbaseline/contentmapper_baseline.go:17 ansiEscape (tsgo#4712)
 /// Go `ansiEscape.ReplaceAllString(s, "")` with `\x1b\[[0-9;]*m`: removes
 /// each ANSI color sequence.
 pub fn replace_ansi_escapes(s: &str) -> String {

@@ -36,12 +36,12 @@ pub struct TestCaseContent {
     pub symlinks: BTreeMap<String, String>,
 }
 
-// Go: test_case_parser.go:46 fourslashDirectives
+// Go: test_case_parser.go:47 fourslashDirectives
 // File-specific directives used by fourslash tests
 // tsgo#4712 adds "noopen".
 const FOURSLASH_DIRECTIVES: &[&str] = &["emitthisfile", "noopen"];
 
-// Go: test_case_parser.go:50 makeUnitsFromTest
+// Go: test_case_parser.go:51 makeUnitsFromTest
 // Given a test file containing // @FileName directives,
 // return an array of named units of code to be added to an existing compiler instance.
 pub fn make_units_from_test(code: &str, file_name: &str) -> TestCaseContent {
@@ -132,7 +132,7 @@ pub fn make_units_from_test(code: &str, file_name: &str) -> TestCaseContent {
     }
 }
 
-// Go: test_case_parser.go:113 ParseTestFilesOptions
+// Go: test_case_parser.go:120 ParseTestFilesOptions
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ParseTestFilesOptions {
     /// If true, allows test content to appear before the first @Filename directive.
@@ -151,7 +151,7 @@ pub type ParsedTestFiles<T> = (
     Option<String>,
 );
 
-// Go: test_case_parser.go:123 ParseTestFilesAndSymlinks
+// Go: test_case_parser.go:130 ParseTestFilesAndSymlinks
 // Given a test file containing // @FileName and // @symlink directives,
 // return an array of named units of code to be added to an existing compiler instance,
 // along with a map of symlinks and the current directory.
@@ -168,7 +168,7 @@ pub fn parse_test_files_and_symlinks<T>(
     )
 }
 
-// Go: test_case_parser.go:131 ParseTestFilesAndSymlinksWithOptions
+// Go: test_case_parser.go:138 ParseTestFilesAndSymlinksWithOptions
 pub fn parse_test_files_and_symlinks_with_options<T>(
     code: &str,
     file_name: &str,
@@ -335,7 +335,7 @@ pub fn parse_test_files_and_symlinks_with_options<T>(
     )
 }
 
-// Go: test_case_parser.go:264 extractCompilerSettings
+// Go: test_case_parser.go:281 extractCompilerSettings
 pub fn extract_compiler_settings(content: &str) -> RawCompilerSettings {
     let mut opts = RawCompilerSettings::new();
 
@@ -350,7 +350,7 @@ pub fn extract_compiler_settings(content: &str) -> RawCompilerSettings {
     opts
 }
 
-// Go: test_case_parser.go:274 parseSymlinkFromTest
+// Go: test_case_parser.go:291 parseSymlinkFromTest
 fn parse_symlink_from_test(line: &str, symlinks: &mut BTreeMap<String, String>) -> bool {
     let Some((target, link)) = go_regex::match_link_line(line) else {
         return false;
