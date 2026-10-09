@@ -857,12 +857,17 @@ fn extend_declaration_and_suggestion_diagnostics(
 // diagnostic holds a `&'static Message`, so the message is leaked. Decision
 // (bump A queue #78): this test helper stays out of the shared
 // `ts_goport::diagnostics` module.
+// PORT: the key is "", not the Go "-1", as the port's ad hoc messages
+// (`ast::new_diagnostic_from_text`): a message with code 0 and a key is the
+// Go nil message of a serialized diagnostic (`ast::is_nil_message`), and
+// `Localize` would look "-1" up in the catalog and panic. With "" the
+// baseline prints the text, as Go does.
 fn new_ad_hoc_compiler_diagnostic(message: String) -> Diagnostic {
     let text: &'static str = Box::leak(message.into_boxed_str());
     let message: &'static Message = Box::leak(Box::new(Message::new(
         0,
         ts_goport::diagnostics::Category::Error,
-        "-1",
+        "",
         text,
         false,
         false,
