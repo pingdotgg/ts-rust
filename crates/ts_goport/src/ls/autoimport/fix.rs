@@ -1263,6 +1263,10 @@ impl View {
                 continue;
             }
             let import_clause = import_clause_node;
+            // ts#63915: no auto-import into a source phase import (fix.go:751).
+            if import_clause.phase_modifier() == SyntaxKind::SourceKeyword {
+                continue;
+            }
 
             let named_bindings = import_clause.named_bindings();
             // A type-only import may not have both a default and named imports, so the only way a name can
