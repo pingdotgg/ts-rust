@@ -265,13 +265,17 @@ fn organize_imports_worker(
                 change_tracker,
             );
             if should_sort {
-                crate::gostd::slices::sort_func(&mut coalesced, |a: &Node, b: &Node| -> i32 {
-                    lsutil::compare_imports_or_require_statements(
-                        *a,
-                        *b,
-                        &module_specifier_comparer,
-                    )
-                });
+                // ts#63915: a stable sort (Go slices.SortStableFunc).
+                crate::gostd::slices::sort_stable_func(
+                    &mut coalesced,
+                    |a: &Node, b: &Node| -> i32 {
+                        lsutil::compare_imports_or_require_statements(
+                            *a,
+                            *b,
+                            &module_specifier_comparer,
+                        )
+                    },
+                );
             }
             new_import_decls.extend(coalesced);
         }
@@ -637,6 +641,25 @@ fn coalesce_imports_worker(
         if categorized.import_without_clause.is_some() {
             coalesced_imports.push(categorized.import_without_clause);
         }
+        // ts#63915: source phase imports are not coalesced. Default-named
+        // ones sort by name and come before the others (Go N'
+        // organizeimports.go:476-490).
+        let mut source_phase_imports = categorized.source_phase_imports;
+        crate::gostd::slices::sort_stable_func(&mut source_phase_imports, |a: &Node, b: &Node| {
+            let a = a.import_clause();
+            let b = b.import_clause();
+            if a.name().is_nil() && b.name().is_nil() {
+                return 0;
+            }
+            if a.name().is_nil() {
+                return 1;
+            }
+            if b.name().is_nil() {
+                return -1;
+            }
+            specifier_comparer(a, b)
+        });
+        coalesced_imports.extend(source_phase_imports);
 
         let factory = NodeFactory::new();
 
@@ -848,6 +871,7 @@ fn coalesce_imports_worker(
 // Go: ls/organizeimports.go:635 categorizedImports
 struct CategorizedImports {
     import_without_clause: Node,
+    source_phase_imports: Vec<Node>,
     type_only_imports: ImportGroup,
     regular_imports: ImportGroup,
 }
@@ -872,6 +896,7 @@ impl ImportGroup {
 // Go: ls/organizeimports.go:651 getCategorizedImports
 fn get_categorized_imports(import_decls: &[Node]) -> CategorizedImports {
     let mut import_without_clause = Node::NIL;
+    let mut source_phase_imports: Vec<Node> = Vec::new();
     let mut type_only_imports = ImportGroup::default();
     let mut regular_imports = ImportGroup::default();
 
@@ -884,6 +909,11 @@ fn get_categorized_imports(import_decls: &[Node]) -> CategorizedImports {
         }
 
         let clause = import_decl.import_clause();
+        // ts#63915
+        if clause.phase_modifier() == SyntaxKind::SourceKeyword {
+            source_phase_imports.push(import_decl);
+            continue;
+        }
         let group = if clause.is_type_only() {
             &mut type_only_imports
         } else {
@@ -912,6 +942,7 @@ fn get_categorized_imports(import_decls: &[Node]) -> CategorizedImports {
 
     CategorizedImports {
         import_without_clause,
+        source_phase_imports,
         type_only_imports,
         regular_imports,
     }

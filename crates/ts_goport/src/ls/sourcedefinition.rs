@@ -84,9 +84,22 @@ impl LanguageService {
 
         let (origin_selection_range, _) = self.create_lsp_range_from_node(node, file);
 
+        // ts#63915: a source phase import gives the plain definition.
+        let containing_module_specifier = find_containing_module_specifier(node);
+        if containing_module_specifier.is_some()
+            && is_source_phase_import(containing_module_specifier.parent())
+        {
+            return Ok(self.provide_definition_at_position(
+                ctx,
+                program,
+                file,
+                text_pos,
+                client_supports_link,
+            ));
+        }
+
         // If the cursor is directly on a module specifier string, resolve to the
         // implementation file's entry point.
-        let containing_module_specifier = find_containing_module_specifier(node);
         if node == containing_module_specifier {
             // PORT: Go passes the file as an `ast.HasFileName`.
             let specifier_mode = program.get_mode_for_usage_location(
