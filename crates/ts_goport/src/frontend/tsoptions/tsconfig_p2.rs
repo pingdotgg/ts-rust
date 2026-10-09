@@ -1310,19 +1310,15 @@ pub fn for_each_tsconfig_prop_array<T>(
 }
 
 // Go: tsoptions/tsconfigparsing.go:1529 CreateDiagnosticAtReferenceSyntax
-// PORT: Go returns a nilable `*ast.Diagnostic`; that is `Option`. Go reads
-// `config.ConfigFile.SourceFile`, which panics for a nil `ConfigFile`.
+// PORT: Go returns a nilable `*ast.Diagnostic`; that is `Option`.
+// ts#64637: a command line with no config file has no reference syntax.
 pub fn create_diagnostic_at_reference_syntax(
     config: &ParsedCommandLine,
     index: usize,
     message: &'static Message,
     args: Vec<String>,
 ) -> Option<Diagnostic> {
-    let source_file = config
-        .config_file
-        .as_ref()
-        .expect("nil pointer dereference: config.ConfigFile")
-        .source_file;
+    let source_file = config.config_file.as_ref()?.source_file;
     for_each_tsconfig_prop_array(source_file, "references", |property| {
         if is_array_literal_expression(property.initializer()) {
             let value = property.initializer().elements();
