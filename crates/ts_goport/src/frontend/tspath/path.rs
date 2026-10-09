@@ -1149,6 +1149,128 @@ pub fn get_relative_path_from_file(from: &str, to: &str, options: &ComparePathsO
     ))
 }
 
+// Go: tspath/relative_path.go:76 CaseSensitivity.RelativePathFromDirectory,
+// :82 RelativePathFromPath and rooted_path.go:607 relativePathFromNormalizedPaths (ts#64159)
+/// The path from `directory` to `path`, both rooted and normalized, without
+/// reducing "." or "..". `None` when the roots differ (R4: the caller then
+/// uses the absolute name). Dynamic roots compare exactly, the rest case
+/// sensitively.
+pub fn relative_path_from_directory(
+    directory: &str,
+    path: &str,
+    use_case_sensitive_file_names: bool,
+) -> Option<String> {
+    // Go: tspath/path.go:138 pathComponents
+    fn components(path: &str) -> Vec<&str> {
+        let root_length = get_root_length(path);
+        let mut components = vec![&path[..root_length]];
+        components.extend(path[root_length..].split('/'));
+        if components.len() > 1 && components.last().is_some_and(|c| c.is_empty()) {
+            components.pop();
+        }
+        components
+    }
+    let mut from_components = components(directory);
+    let mut to_components = components(path);
+    let mut equaler = get_string_equality_comparer(!use_case_sensitive_file_names);
+    if is_encoded_dynamic_file_name(directory) || is_encoded_dynamic_file_name(path) {
+        from_components[0] = from_components[0].trim_end_matches('/');
+        to_components[0] = to_components[0].trim_end_matches('/');
+        if from_components[0] != to_components[0] {
+            return None;
+        }
+        equaler = get_string_equality_comparer(false);
+    }
+    // Go: tspath/path.go:754 getPathComponentsRelativeTo
+    let max_common_components = from_components.len().min(to_components.len());
+    let mut start = 0;
+    while start < max_common_components {
+        let equal = if start == 0 {
+            equate_string_case_insensitive(from_components[0], to_components[0])
+        } else {
+            equaler(from_components[start], to_components[start])
+        };
+        if !equal {
+            break;
+        }
+        start += 1;
+    }
+    if start == 0 {
+        return None;
+    }
+    let mut relative = String::new();
+    for _ in start..from_components.len() {
+        if !relative.is_empty() {
+            relative.push('/');
+        }
+        relative.push_str("..");
+    }
+    for component in &to_components[start..] {
+        if !relative.is_empty() {
+            relative.push('/');
+        }
+        relative.push_str(component);
+    }
+    // Go RelativePathFromPath: a result that reads as rooted is not relative.
+    if get_encoded_root_length(&relative) != 0 {
+        return None;
+    }
+    Some(relative)
+}
+
+// Go: tspath/rooted_path.go:575 CaseSensitivity.trimContainedPath (ts#64159)
+/// The rest of `child` below `parent` (both rooted and normalized), with no
+/// leading separator; `Some("")` when they are the same path. `None` when
+/// `child` is not `parent` or below it. Roots compare without case, dynamic
+/// roots exactly; the rest by the file system's case sensitivity. Go
+/// `CaseSensitivity.ContainsPath` is `is_some()`, `StartsWithDirectory` is a
+/// non-empty result, `RelativePathWithinDirectory` the result.
+pub fn relative_path_within_directory<'a>(
+    parent: &str,
+    child: &'a str,
+    use_case_sensitive_file_names: bool,
+) -> Option<Cow<'a, str>> {
+    if parent.is_empty() || child.is_empty() {
+        return None;
+    }
+    let parent_root_length = get_root_length(parent);
+    let child_root_length = get_root_length(child);
+    let mut parent_root = &parent[..parent_root_length];
+    let mut child_root = &child[..child_root_length];
+    let mut case_sensitive = use_case_sensitive_file_names;
+    let roots_equal = if is_encoded_dynamic_file_name(parent) || is_encoded_dynamic_file_name(child)
+    {
+        parent_root = parent_root.strip_suffix('/').unwrap_or(parent_root);
+        child_root = child_root.strip_suffix('/').unwrap_or(child_root);
+        case_sensitive = true;
+        parent_root == child_root
+    } else {
+        equate_string_case_insensitive(parent_root, child_root)
+    };
+    if !roots_equal {
+        return None;
+    }
+    let relative = match trim_file_path_prefix(
+        &child[child_root_length..],
+        &parent[parent_root_length..],
+        case_sensitive,
+    ) {
+        Some(relative) => relative,
+        None => return None,
+    };
+    if !relative.is_empty()
+        && !has_trailing_directory_separator(parent)
+        && parent.len() != parent_root_length
+        && !relative.starts_with('/')
+    {
+        return None;
+    }
+    Some(match relative {
+        Cow::Borrowed(r) => Cow::Borrowed(r.strip_prefix('/').unwrap_or(r)),
+        Cow::Owned(r) => Cow::Owned(r.strip_prefix('/').unwrap_or(&r).to_string()),
+    })
+}
+
 // Go: tspath/path.go:815 ConvertToRelativePath
 pub fn convert_to_relative_path(
     absolute_or_relative_path: &str,

@@ -277,10 +277,18 @@ fn get_all_module_paths_worker(
     let mut sorted_paths: Vec<ModulePath> = Vec::with_capacity(paths.len());
     let mut directory = info.source_directory.clone();
     while !all_file_names.is_empty() {
-        let directory_start = tspath::ensure_trailing_directory_separator(&directory);
         let mut paths_in_directory: Vec<ModulePath> = Vec::new();
         all_file_names.retain(|file_name, p| {
-            if file_name.starts_with(&directory_start) {
+            // ts#64159 (specifiers.go:225): CaseSensitivity.StartsWithDirectory,
+            // without case on a case-insensitive file system (N: a
+            // case-sensitive text prefix).
+            if tspath::relative_path_within_directory(
+                &directory,
+                file_name,
+                use_case_sensitive_file_names,
+            )
+            .is_some_and(|relative| !relative.is_empty())
+            {
                 paths_in_directory.push(p.clone());
                 return false;
             }
@@ -670,8 +678,11 @@ fn get_local_module_specifier(
         return relative_path;
     }
 
-    let root = compiler_options.get_paths_base_path(&host.get_current_directory());
-    let base_directory = tspath::get_normalized_absolute_path(&root, &host.get_current_directory());
+    // ts#64159 (specifiers.go:524, R1): the host's base directory, not its
+    // current directory.
+    let host_base_directory = host.base_directory();
+    let root = compiler_options.get_paths_base_path(&host_base_directory);
+    let base_directory = tspath::get_normalized_absolute_path(&root, &host_base_directory);
     let relative_to_base_url = get_relative_path_if_in_same_volume(
         module_file_name,
         &base_directory,
@@ -752,7 +763,8 @@ fn get_local_module_specifier(
                 case,
             )
         } else {
-            tspath::to_path(&cwd, &cwd, case)
+            // ts#64159 (specifiers.go:593, R1): the host's base directory.
+            tspath::to_path(&host.base_directory(), &cwd, case)
         };
         let canonical_source_directory = tspath::to_path(source_directory, &cwd, case);
         let module_path = tspath::to_path(module_file_name, &project_directory, case);
@@ -1378,10 +1390,9 @@ fn try_get_module_name_from_exports(
         // * pattern mappings (contains a *)
         // * exact mappings (no *, does not end with /)
         for (k, subk) in exports.as_object() {
-            let sub_package_name = tspath::get_normalized_absolute_path(
-                &tspath::combine_paths(package_name, &[k]),
-                "",
-            );
+            // ts#64159 (specifiers.go:1019): ResolvePathWithoutTrailingDirectorySeparator.
+            let sub_package_name =
+                tspath::resolve_path_without_trailing_directory_separator(package_name, &[k]);
             let mut mode = MatchingMode::Exact;
             if k.ends_with('/') {
                 mode = MatchingMode::Directory;
@@ -1649,10 +1660,6 @@ fn try_get_module_name_from_exports_or_imports(
                 );
             }
 
-            let path_or_pattern = tspath::get_normalized_absolute_path(
-                &tspath::combine_paths(package_directory, &[str_value]),
-                "",
-            );
             let mut extension_swapped_target = String::new();
             if tspath::has_ts_file_extension(target_file_path) {
                 extension_swapped_target = format!(
@@ -1664,42 +1671,50 @@ fn try_get_module_name_from_exports_or_imports(
             let can_try_ts_extension = prefer_ts_extension
                 && tspath::has_implementation_ts_file_extension(target_file_path);
 
+            let case_sensitive = host.use_case_sensitive_file_names();
             let compare_opts = tspath::ComparePathsOptions {
-                use_case_sensitive_file_names: host.use_case_sensitive_file_names(),
+                use_case_sensitive_file_names: case_sensitive,
                 current_directory: host.get_current_directory(),
             };
 
             match mode {
                 MatchingMode::Exact => {
-                    if !extension_swapped_target.is_empty()
-                        && tspath::compare_paths(
-                            &extension_swapped_target,
-                            &path_or_pattern,
-                            &compare_opts,
-                        ) == 0
-                        || tspath::compare_paths(target_file_path, &path_or_pattern, &compare_opts)
-                            == 0
-                        || !output_file.is_empty()
-                            && tspath::compare_paths(&output_file, &path_or_pattern, &compare_opts)
-                                == 0
-                        || !declaration_file.is_empty()
-                            && tspath::compare_paths(
-                                &declaration_file,
-                                &path_or_pattern,
-                                &compare_opts,
-                            ) == 0
+                    // ts#64159 (specifiers.go:1267): an exact target with a
+                    // trailing separator names a directory, never this file.
+                    if tspath::has_trailing_directory_separator(str_value) {
+                        return String::new();
+                    }
+                    // Go: packageDirectory.ResolveFile(strValue), compared as
+                    // rooted text (CaseSensitivity.CompareFilePaths, R3).
+                    let resolved_target = tspath::get_normalized_absolute_path(
+                        &tspath::combine_paths(package_directory, &[str_value]),
+                        "",
+                    );
+                    let same = |file: &str| {
+                        tspath::compare_rooted_text(file, &resolved_target, case_sensitive) == 0
+                    };
+                    if !extension_swapped_target.is_empty() && same(&extension_swapped_target)
+                        || same(target_file_path)
+                        || !output_file.is_empty() && same(&output_file)
+                        || !declaration_file.is_empty() && same(&declaration_file)
                     {
                         return package_name.to_string();
                     }
                 }
                 MatchingMode::Directory => {
+                    // Go: packageDirectory.ResolveDirectory(RemoveTrailingDirectorySeparator(strValue)).
+                    let path_or_pattern = tspath::get_normalized_absolute_path(
+                        &tspath::combine_paths(
+                            package_directory,
+                            &[tspath::remove_trailing_directory_separator(str_value)],
+                        ),
+                        "",
+                    );
+                    // Go: packageSpecifier.Resolve(strValue, fragment) (ts#64159).
                     let from_fragment = |fragment: &str| {
-                        tspath::get_normalized_absolute_path(
-                            &tspath::combine_paths(
-                                &tspath::combine_paths(package_name, &[str_value]),
-                                &[fragment],
-                            ),
-                            "",
+                        tspath::resolve_path_without_trailing_directory_separator(
+                            package_name,
+                            &[str_value, fragment],
                         )
                     };
                     // PORT: Go passes the arguments in this order
@@ -1763,10 +1778,12 @@ fn try_get_module_name_from_exports_or_imports(
                     }
                 }
                 MatchingMode::Pattern => {
+                    // ts#64159 (specifiers.go:1306): ResolvePath keeps a
+                    // trailing separator of the pattern.
+                    let path_or_pattern = tspath::resolve_path(package_directory, &[str_value]);
                     let (leading_slice, trailing_slice) = path_or_pattern
                         .split_once('*')
                         .unwrap_or((path_or_pattern.as_str(), ""));
-                    let case_sensitive = host.use_case_sensitive_file_names();
                     // PORT: Go slices bytes (see `scanner_util::go_slice`).
                     fn star_replacement<'s>(
                         s: &'s str,

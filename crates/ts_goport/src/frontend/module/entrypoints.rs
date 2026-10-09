@@ -142,35 +142,36 @@ impl DefaultResolver {
                 crate::frontend::vfs::vfsmatch::UNLIMITED_DEPTH,
             );
 
-            let compare_paths_options = ComparePathsOptions {
-                use_case_sensitive_file_names: self.host.fs().use_case_sensitive_file_names(),
-                ..Default::default()
-            };
+            let use_case_sensitive_file_names = self.host.fs().use_case_sensitive_file_names();
             for file in &other_files {
+                // ts#64159 (resolver.go:2454): CaseSensitivity.CompareFilePaths,
+                // so dynamic names that differ only in case are two files.
                 if is_resolved(&main_resolution)
-                    && compare_paths(
+                    && compare_rooted_text(
                         file,
                         &main_resolution.as_ref().unwrap().path,
-                        &compare_paths_options,
+                        use_case_sensitive_file_names,
                     ) == 0
                 {
                     continue;
                 }
 
-                let mut relative = get_relative_path_from_directory(
+                // ts#64159 (resolver.go:2458): RelativeFilePathFromDirectory,
+                // joined to the package name with "/".
+                let relative = relative_path_within_directory(
                     &package_json_entry.package_directory,
                     file,
-                    &compare_paths_options,
-                );
-                if dynamic_package {
-                    relative = dynamic_uri_path_to_module_specifier(&relative);
-                }
+                    use_case_sensitive_file_names,
+                )
+                .unwrap_or_default();
+                let relative_specifier = if dynamic_package {
+                    dynamic_uri_path_to_module_specifier(&relative)
+                } else {
+                    relative.into_owned()
+                };
                 result.push(self.create_resolved_entrypoint_handling_symlink(
                     file,
-                    &crate::frontend::tspath::resolve_path(
-                        &source_package_name,
-                        &[relative.as_str()],
-                    ),
+                    &format!("{source_package_name}/{relative_specifier}"),
                     None,
                     None,
                     Ending::CHANGEABLE,

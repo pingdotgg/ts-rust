@@ -103,7 +103,6 @@ fn get_base_paths(
             current_directory: path.to_string(),
             use_case_sensitive_file_names,
         };
-        let string_comparer = compare_paths_options.get_comparer();
 
         // Storage for literal base paths amongst the include patterns.
         let mut include_base_paths: Vec<String> = Vec::new();
@@ -126,9 +125,11 @@ fn get_base_paths(
         }
 
         // Sort the offsets array using either the literal or canonical path representations.
-        // Go: vfs/vfsmatch/vfsmatch.go:82 slices.SortStableFunc(includeBasePaths, stringComparer)
+        // Go: vfs/vfsmatch/vfsmatch.go:82 slices.SortStableFunc(includeBasePaths,
+        // caseSensitivity.ComparePaths) (ts#64159): the root compares without
+        // case, the rest by the file system's case sensitivity (R3).
         crate::gostd::slices::sort_stable_func(&mut include_base_paths, |a, b| {
-            string_comparer(a, b)
+            crate::frontend::tspath::compare_rooted_text(a, b, use_case_sensitive_file_names)
         });
 
         // Iterate over each include base path and include unique base paths that are not a

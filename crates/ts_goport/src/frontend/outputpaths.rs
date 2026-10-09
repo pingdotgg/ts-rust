@@ -352,6 +352,11 @@ pub fn get_source_file_path_in_new_dir_worker(
     use_case_sensitive_file_names: bool,
 ) -> String {
     let source_file_path = get_normalized_absolute_path(file_name, current_directory);
+    // ts#64159 (outputpaths.go:179): a file name equal to the common source
+    // directory stays as it is.
+    if source_file_path == common_source_directory {
+        return source_file_path;
+    }
     match trim_file_path_prefix(
         &source_file_path,
         common_source_directory,
@@ -395,6 +400,10 @@ pub fn get_source_map_file_path(js_file_path: &str, options: &CompilerOptions) -
 }
 
 // Go: outputpaths/outputpaths.go:210 GetBuildInfoFileName
+// ts#64159: the output name comes from the config file name, and the
+// extension goes last, so an empty or dot stem ("c:/src/p/.json") keeps its
+// directory. A config file on another root than rootDir keeps its own name
+// (R4).
 pub fn get_build_info_file_name(options: &CompilerOptions, opts: &ComparePathsOptions) -> String {
     if !options.is_incremental() && !options.build.is_true() {
         return String::new();
@@ -405,27 +414,26 @@ pub fn get_build_info_file_name(options: &CompilerOptions, opts: &ComparePathsOp
     if options.config_file_path.is_empty() {
         return String::new();
     }
-    let config_file_extension_less = remove_file_extension(&options.config_file_path);
-    let build_info_extension_less = if !options.out_dir.is_empty() {
+    let config_file_name = options.config_file_path.as_str();
+    let build_info_file_name = if !options.out_dir.is_empty() {
         if !options.root_dir.is_empty() {
-            resolve_path(
-                &options.out_dir,
-                &[&get_relative_path_from_directory(
-                    &options.root_dir,
-                    config_file_extension_less,
-                    opts,
-                )],
-            )
+            match relative_path_from_directory(
+                &options.root_dir,
+                config_file_name,
+                opts.use_case_sensitive_file_names,
+            ) {
+                // Go: options.OutDir.ResolveRelativeFile(relativePath)
+                Some(relative_path) => resolve_path(&options.out_dir, &[&relative_path]),
+                None => config_file_name.to_string(),
+            }
         } else {
-            combine_paths(
-                &options.out_dir,
-                &[&get_base_file_name(config_file_extension_less)],
-            )
+            // Go: options.OutDir.ResolveFile(configFileName.BaseName())
+            combine_paths(&options.out_dir, &[&get_base_file_name(config_file_name)])
         }
     } else {
-        config_file_extension_less.to_string()
+        config_file_name.to_string()
     };
-    build_info_extension_less + EXTENSION_TS_BUILD_INFO
+    remove_file_extension(&build_info_file_name).to_string() + EXTENSION_TS_BUILD_INFO
 }
 
 // Go: outputpaths/commonsourcedirectory.go:8 computeCommonSourceDirectoryOfFilenames
