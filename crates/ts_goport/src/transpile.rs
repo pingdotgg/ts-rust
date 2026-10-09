@@ -20,7 +20,8 @@ use crate::frontend::compiler::{NewProgram, ProgramOptions, new_compiler_host};
 use crate::frontend::tsoptions::{get_default_lib_file_name, new_parsed_command_line};
 use crate::frontend::tspath::{
     ComparePathsOptions, combine_paths, file_extension_is, get_encoded_root_length,
-    get_normalized_absolute_path, get_root_length, has_trailing_directory_separator,
+    get_normalized_absolute_path, get_root_length, has_rooted_url_suffix,
+    has_trailing_directory_separator, has_url_root,
 };
 use crate::frontend::vfs::{Entries, FileInfo, Fs, FsError};
 use crate::gostd::Context;
@@ -309,9 +310,7 @@ fn transpile_worker(
 // PORT: Go `tspath.RootedFilePath` is a `String`. Go N' normalizes with
 // `getNormalizedAbsolutePathFromDirectory`; for a rooted, normalized current
 // directory it gives the same text as `GetNormalizedAbsolutePath`. Lane-local
-// (with `has_rooted_url_suffix` and `has_url_root`, also in
-// `contentmapper/hostimpl.rs`) until `tspath` has the rooted path helpers of
-// ts#64159.
+// until `tspath` has the rooted path types of ts#64159.
 fn to_rooted_file_path(file_name: &str, current_directory: &str) -> String {
     if file_name.is_empty() {
         go_panic("path must not be empty".to_string());
@@ -336,20 +335,6 @@ fn to_rooted_file_path(file_name: &str, current_directory: &str) -> String {
         normalized.push('/');
     }
     normalized
-}
-
-// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
-fn has_rooted_url_suffix(path: &str) -> bool {
-    if !has_url_root(path) {
-        return false;
-    }
-    let after_scheme = path.split_once("://").map_or("", |(_, after)| after);
-    after_scheme.contains(['?', '#'])
-}
-
-// Go: tspath/rooted_path.go:114 hasURLRoot (ts#64159)
-fn has_url_root(path: &str) -> bool {
-    get_encoded_root_length(path) < 0 && path.contains("://")
 }
 
 // Go: transpile/options_generated.go:7 setOptionsForTranspile (ts#64457)

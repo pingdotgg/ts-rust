@@ -56,11 +56,10 @@ fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 // including converting platform directory separators to '/', then gives it
 // file intent.
 // PORT: Go `tspath.RootedFilePath` is a `String`; `None` is Go `ok == false`.
-// Lane-local (with `has_rooted_url_suffix`, also in `transpile.rs`) until
-// `tspath` has the rooted path helpers of ts#64159.
+// Lane-local until `tspath` has the rooted path types of ts#64159.
 fn try_rooted_file_path_from_absolute(file_name: &str) -> Option<String> {
     // Go: tspath/rooted_path.go:58 TryRootedPathFromAbsolute
-    if has_rooted_url_suffix(file_name) || !tspath::path_is_absolute(file_name) {
+    if tspath::has_rooted_url_suffix(file_name) || !tspath::path_is_absolute(file_name) {
         return None;
     }
     let mut path = tspath::get_normalized_absolute_path(file_name, "");
@@ -71,17 +70,6 @@ fn try_rooted_file_path_from_absolute(file_name: &str) -> Option<String> {
         path.push('/');
     }
     Some(path)
-}
-
-// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
-fn has_rooted_url_suffix(path: &str) -> bool {
-    // Go: tspath/rooted_path.go:114 hasURLRoot
-    let has_url_root = tspath::get_encoded_root_length(path) < 0 && path.contains("://");
-    if !has_url_root {
-        return false;
-    }
-    let after_scheme = path.split_once("://").map_or("", |(_, after)| after);
-    after_scheme.contains(['?', '#'])
 }
 
 // Go: contentmapper/hostimpl.go:30 initializeTimeoutSeconds

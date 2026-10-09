@@ -1211,6 +1211,25 @@ fn relative_path_from_normalized_paths(
     ))
 }
 
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+/// A URL root with a query or a fragment after its scheme.
+// PORT: private in Go tspath. The Rust ports of the rooted path
+// constructors that use it are outside tspath (`transpile.rs`,
+// `contentmapper/hostimpl.rs`).
+pub fn has_rooted_url_suffix(path: &str) -> bool {
+    if !has_url_root(path) {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, after)| after);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/rooted_path.go:114 hasURLRoot (ts#64159)
+// PORT: private in Go tspath (see `has_rooted_url_suffix`).
+pub fn has_url_root(path: &str) -> bool {
+    get_encoded_root_length(path) < 0 && path.contains("://")
+}
+
 // Go: tspath/rooted_path.go:575 CaseSensitivity.trimContainedPath (ts#64159)
 /// The rest of `child` below `parent` (both rooted and normalized), with no
 /// leading separator; `Some("")` when they are the same path. `None` when
