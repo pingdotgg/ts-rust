@@ -69,7 +69,9 @@ impl LanguageService {
             for ext in &original_extensions {
                 let old_original_path = tspath::change_full_extension(&old_path, ext);
                 if self.host.file_exists(&old_original_path) {
-                    let new_dts_ext = tspath::get_declaration_file_extension(&old_path);
+                    // ts#64159: the new file's declaration extension (Go N'
+                    // file_rename.go:56; N read the old file's).
+                    let new_dts_ext = tspath::get_declaration_file_extension(&new_path);
                     let new_original_extensions =
                         tspath::get_possible_original_input_extension_for_extension(&new_dts_ext);
                     if new_original_extensions.contains(ext) {
@@ -184,14 +186,17 @@ impl LanguageService {
                             let elements = property.initializer().elements();
                             if !elements.is_empty() {
                                 let last_element = elements.get(elements.len() - 1);
-                                let new_node = change_tracker.node_factory().new_string_literal(
-                                    relative_path_from_directory(
-                                        &config_dir,
-                                        new_path,
-                                        self.use_case_sensitive_file_names(),
-                                    ),
-                                    TokenFlags::NONE,
-                                );
+                                // ts#64159 (Go N' file_rename.go:130-133): the
+                                // absolute name when the roots differ (R4).
+                                let new_path_text = tspath::relative_path_from_directory(
+                                    &config_dir,
+                                    new_path,
+                                    self.use_case_sensitive_file_names(),
+                                )
+                                .unwrap_or_else(|| new_path.to_string());
+                                let new_node = change_tracker
+                                    .node_factory()
+                                    .new_string_literal(new_path_text, TokenFlags::NONE);
                                 change_tracker.insert_node_after(
                                     config_file,
                                     last_element,
@@ -307,8 +312,8 @@ pub fn try_update_config_string(
         return false;
     }
 
-    let element_file_name =
-        tspath::normalize_path(&tspath::combine_paths(config_dir, &[element.text()]));
+    // Go: configDir.ResolveFile(element.Text()) (ts#64159)
+    let element_file_name = resolve_file(config_dir, element.text());
     let (updated, ok) = old_to_new(&element_file_name);
     if !ok {
         return false;
@@ -331,41 +336,57 @@ pub fn try_update_config_string(
     true
 }
 
-// Go: ls/file_rename.go:89 createPathUpdater (the body, see
+// Go: ls/file_rename.go:90 createPathUpdater (the body, see
 // `LanguageService::create_path_updater`)
+// ts#64159: the file names are rooted and normalized, so they compare as
+// rooted text (`CaseSensitivity.CompareFilePaths`, rooted_path.go:508), and a
+// file below the old directory keeps its path relative to it
+// (`RelativeFilePathFromDirectory`, :563). The relative path is trimmed by
+// rune count (tsgo#4900, the Kelvin sign test).
 fn new_path_updater(
     use_case_sensitive_file_names: bool,
     old_path: &str,
     new_path: &str,
 ) -> Box<PathUpdater<'static>> {
-    let compare_options = tspath::ComparePathsOptions {
-        use_case_sensitive_file_names,
-        ..Default::default()
-    };
-    let trimmed_old_path = tspath::remove_trailing_directory_separator(old_path).to_string();
     let old_path = old_path.to_string();
     let new_path = new_path.to_string();
     Box::new(move |path: &str| -> (String, bool) {
-        if tspath::compare_paths(path, &old_path, &compare_options) == 0 {
+        if tspath::compare_rooted_text(path, &old_path, use_case_sensitive_file_names) == 0 {
             return (new_path.clone(), true);
         }
-        // Trim the directory prefix ourselves (rather than using
-        // tspath.StartsWithDirectory followed by a separate slice on
-        // len(oldPath)) so the containment check and the suffix we return can
-        // never disagree, and so we don't slice path by a byte count derived
-        // from a canonicalized/differently-cased string: case-folding can
-        // change a path's UTF-8 byte length without changing its rune count
-        // (e.g. the Kelvin sign '\u212A' folds to the single-byte 'k'), which
-        // could otherwise put len(oldPath) out of range of path.
-        // (tsgo#4900)
-        if let Some(suffix) =
-            tspath::trim_file_path_prefix(path, &trimmed_old_path, use_case_sensitive_file_names)
-            && (suffix.starts_with('/') || suffix.starts_with('\\'))
+        if let Some(relative_path) =
+            tspath::relative_path_within_directory(&old_path, path, use_case_sensitive_file_names)
         {
-            return (format!("{new_path}{suffix}"), true);
+            return (resolve_relative_file(&new_path, &relative_path), true);
         }
         (String::new(), false)
     })
+}
+
+// Go: tspath/rooted_path.go:727 RootedDirectoryPath.ResolveFile (ts#64159)
+// PORT: the ls lane's copy until tspath has the rooted path helpers. Go
+// ToRootedFilePath normalizes `path` against `directory` (and panics for an
+// empty directory, or a URL query or fragment).
+fn resolve_file(directory: &str, path: &str) -> String {
+    if path.is_empty() {
+        return directory.to_string();
+    }
+    tspath::get_normalized_absolute_path(path, directory)
+}
+
+// Go: tspath/rooted_path.go:746 RootedDirectoryPath.ResolveRelativeFile (ts#64159)
+fn resolve_relative_file(directory: &str, path: &str) -> String {
+    if path.is_empty() {
+        return directory.to_string();
+    }
+    if path == ".." || path.starts_with("../") || tspath::has_trailing_directory_separator(path) {
+        return tspath::get_normalized_absolute_path(path, directory);
+    }
+    if tspath::has_trailing_directory_separator(directory) {
+        format!("{directory}{path}")
+    } else {
+        format!("{directory}/{path}")
+    }
 }
 
 impl LanguageService {
@@ -377,10 +398,11 @@ impl LanguageService {
         new_import_from_path: &str,
         relative_specifier: &str,
     ) -> String {
-        let old_absolute = tspath::normalize_path(&tspath::combine_paths(
+        // Go: oldImportFromPath.Directory().ResolveFile(relativeSpecifier) (ts#64159)
+        let old_absolute = resolve_file(
             &tspath::get_directory_path(old_import_from_path),
-            &[relative_specifier],
-        ));
+            relative_specifier,
+        );
         let (mut new_absolute, ok) = old_to_new(&old_absolute);
         if !ok {
             new_absolute = old_absolute;
@@ -664,33 +686,29 @@ pub fn for_each_object_property(object_literal: Node, cb: &mut dyn FnMut(Node, &
     }
 }
 
-// Go: ls/file_rename.go:390 relativePathFromDirectory
+// Go: ls/file_rename.go:385 relativePathFromDirectory
+// ts#64159: the absolute name when the roots differ (R4).
 pub fn relative_path_from_directory(
     from_directory: &str,
     to: &str,
     use_case_sensitive_file_names: bool,
 ) -> String {
-    tspath::get_relative_path_from_directory(
-        from_directory,
-        to,
-        &tspath::ComparePathsOptions {
-            use_case_sensitive_file_names,
-            ..Default::default()
-        },
-    )
+    tspath::relative_path_from_directory(from_directory, to, use_case_sensitive_file_names)
+        .unwrap_or_else(|| to.to_string())
 }
 
-// Go: ls/file_rename.go:394 relativeImportPathFromDirectory
+// Go: ls/file_rename.go:392 relativeImportPathFromDirectory
+// ts#64159: a relative path gets "./" (`RelativePath.AsModuleSpecifier`,
+// relative_path.go:31); the absolute name when the roots differ (R4).
 pub fn relative_import_path_from_directory(
     from_directory: &str,
     to: &str,
     use_case_sensitive_file_names: bool,
 ) -> String {
-    tspath::ensure_path_is_non_module_name(&relative_path_from_directory(
-        from_directory,
-        to,
-        use_case_sensitive_file_names,
-    ))
+    match tspath::relative_path_from_directory(from_directory, to, use_case_sensitive_file_names) {
+        Some(relative_path) => tspath::ensure_path_is_non_module_name(&relative_path),
+        None => to.to_string(),
+    }
 }
 
 // Go: ls/file_rename.go:398 isAmbientModuleSymbol
@@ -711,18 +729,22 @@ pub fn is_ambient_module_symbol(symbols: &SymbolArena, symbol: SymbolId) -> bool
 #[cfg(test)]
 mod tests {
     use super::new_path_updater;
+    use crate::ls::rename::try_remove_index_file_name;
 
-    // Go: ls/file_rename_test.go:45 TestCreatePathUpdaterCaseFoldingShrinksOldPath
-    // TestCreatePathUpdaterCaseFoldingShrinksOldPath reproduces a panic that used to occur when
-    // createPathUpdater confirmed a case-insensitive directory match via tspath.StartsWithDirectory,
-    // then sliced the raw (non-canonicalized) file path using the raw byte length of oldPath. Each
-    // Kelvin sign '\u212A' below case-folds to the single-byte 'k', so the raw oldPath is longer in
-    // bytes (15) than path (12), even though path's canonical form is case-insensitively prefixed by
-    // oldPath's canonical form. Slicing path[len(oldPath):] used to panic with "slice bounds out of
-    // range [15:12]"; createPathUpdater must instead trim by rune count via
-    // tspath.TrimFilePathPrefix.
+    // Go: ls/file_rename_test.go:46 TestTryRemoveIndexFileName (ts#64159)
+    #[test]
+    fn test_try_remove_index_file_name() {
+        assert_eq!(try_remove_index_file_name("/project/index.ts"), "/project");
+        assert_eq!(try_remove_index_file_name("/index.ts"), "");
+        assert_eq!(try_remove_index_file_name("c:/index.ts"), "c:/");
+        assert_eq!(try_remove_index_file_name("^/index.ts"), "");
+    }
+
+    // Go: ls/file_rename_test.go:57 TestCreatePathUpdaterCaseFoldingShrinksOldPath
+    // TestCreatePathUpdaterCaseFoldingShrinksOldPath verifies that a case-insensitive
+    // descendant update does not depend on the byte lengths of differently-cased paths.
     // PORT: Go builds `&LanguageService{host: caseInsensitiveHost{}}`, whose
-    // only used method is `UseCaseSensitiveFileNames() == false`. A Rust
+    // only used method is `CaseSensitivity() == CaseInsensitive`. A Rust
     // LanguageService needs a program, so the test calls the updater body
     // with that value.
     #[test]

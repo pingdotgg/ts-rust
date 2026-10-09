@@ -949,7 +949,9 @@ impl LanguageService {
         }
 
         let script_path = tspath::Path(source_file_info(file).path.clone());
-        let script_directory = script_path.get_directory_path();
+        // ts#64159: the directory of the file name, not of the path key
+        // (Go N' string_completions.go:676).
+        let script_directory = tspath::get_directory_path(source_file_file_name(file));
         let options = program.options();
         let extension_options = self.get_extension_options(
             options,
@@ -965,7 +967,7 @@ impl LanguageService {
         {
             self.get_completion_entries_for_relative_modules(
                 &literal_value,
-                script_directory.as_str(),
+                &script_directory,
                 program,
                 &script_path,
                 &extension_options,
@@ -973,7 +975,7 @@ impl LanguageService {
         } else {
             self.get_completion_entries_for_non_relative_modules(
                 &literal_value,
-                script_directory.as_str(),
+                &script_directory,
                 mode,
                 program,
                 checker,
@@ -1012,7 +1014,9 @@ impl LanguageService {
         if let Some(paths) = paths
             && !paths.is_empty()
         {
-            let absolute = compiler_options.get_paths_base_path(&program.get_current_directory());
+            // ts#64159 (R1): the program's base directory (Go N'
+            // string_completions.go:722).
+            let absolute = compiler_options.get_paths_base_path(&program.base_directory());
             self.add_completion_entries_from_paths(
                 &mut result,
                 program,
@@ -1344,7 +1348,9 @@ impl LanguageService {
         let options = program.options();
         let mut seen: FxHashMap<String, bool> = FxHashMap::default();
 
-        let (type_roots, _) = options.get_effective_type_roots(&program.get_current_directory());
+        // ts#64159 (R1): the program's base directory (Go N'
+        // string_completions.go:945).
+        let (type_roots, _) = options.get_effective_type_roots(&program.base_directory());
 
         for root in &type_roots {
             self.get_completion_entries_from_typings_directories(
@@ -1570,11 +1576,8 @@ impl LanguageService {
         extension_options: &ExtensionOptions,
     ) -> Vec<ModuleCompletionNameAndKind> {
         let options = program.options();
-        if let Some(root_dirs) = &options.root_dirs
-            && !root_dirs.is_empty()
-        {
+        if options.root_dirs.as_ref().is_some_and(|r| !r.is_empty()) {
             self.get_completion_entries_for_directory_fragment_with_root_dirs(
-                root_dirs,
                 literal_value,
                 script_directory,
                 program,
@@ -1597,10 +1600,16 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/string_completions.go:1115 getCompletionEntriesForDirectoryFragmentWithRootDirs
+    // Go: ls/string_completions.go:1118 getCompletionEntriesForDirectoryFragmentWithRootDirs
+    // ts#64159: the root directories are the rooted option values
+    // (`CompilerOptions.GetEffectiveRootDirs`, core/compileroptions.go:193),
+    // not names joined to `options.Project` or the current directory.
+    // PORT: Go N' types make every rootDirs entry rooted; the API and
+    // inferred project options are rooted against the base directory
+    // (`RawCompilerOptions.Finalize`). An entry that is not rooted here is
+    // rooted against the program's base directory in the same way.
     fn get_completion_entries_for_directory_fragment_with_root_dirs(
         &self,
-        root_dirs: &[String],
         fragment: &str,
         script_directory: &str,
         program: &compiler::NewProgram,
@@ -1608,17 +1617,19 @@ impl LanguageService {
         extension_options: &ExtensionOptions,
     ) -> Vec<ModuleCompletionNameAndKind> {
         let options = program.options();
-        let base_path = if !options.project.is_empty() {
-            options.project.clone()
-        } else {
-            program.get_current_directory()
-        };
-        let ignore_case = !program.use_case_sensitive_file_names();
+        let base_directory = program.base_directory();
+        let root_dirs: Vec<String> = options
+            .root_dirs
+            .iter()
+            .flatten()
+            .map(|root_directory| {
+                tspath::get_normalized_absolute_path(root_directory, &base_directory)
+            })
+            .collect();
         let base_directories = get_base_directories_from_root_dirs(
-            root_dirs,
-            &base_path,
+            &root_dirs,
             script_directory,
-            ignore_case,
+            program.use_case_sensitive_file_names(),
         );
 
         let mut all_completions = Vec::new();
@@ -1644,66 +1655,54 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:1155 getBaseDirectoriesFromRootDirs
+// Go: ls/string_completions.go:1154 getBaseDirectoriesFromRootDirs
 // getBaseDirectoriesFromRootDirs takes a script path and returns paths for all potential folders
 // that could be merged with its containing folder via the "rootDirs" compiler option.
+// ts#64159: the root directories are rooted and normalized; the script
+// directory's path within a root directory is found by rune count
+// (`CaseSensitivity.RelativePathWithinDirectory`, rooted_path.go:567).
 fn get_base_directories_from_root_dirs(
     root_dirs: &[String],
-    base_path: &str,
     script_directory: &str,
-    ignore_case: bool,
+    use_case_sensitive_file_names: bool,
 ) -> Vec<String> {
-    // Make all paths absolute/normalized if they are not already
-    let normalized_root_dirs: Vec<String> = root_dirs
-        .iter()
-        .map(|root_directory| {
-            let normalized_path = if tspath::is_rooted_disk_path(root_directory) {
-                root_directory.clone()
-            } else {
-                tspath::combine_paths(base_path, &[root_directory])
-            };
-            tspath::ensure_trailing_directory_separator(&tspath::normalize_path(&normalized_path))
-        })
-        .collect();
-
     // Determine the path to the directory containing the script relative to the root directory it is contained within
     let mut relative_directory = String::new();
-    let compare_paths_options = tspath::ComparePathsOptions {
-        use_case_sensitive_file_names: !ignore_case,
-        current_directory: base_path.to_string(),
-    };
-    for root_directory in &normalized_root_dirs {
-        if tspath::contains_path(root_directory, script_directory, &compare_paths_options) {
-            if root_directory.len() > script_directory.len() {
-                relative_directory = String::new();
-            } else {
-                // PORT: Go `scriptDirectory[len(rootDirectory):]` cuts bytes; see the file header.
-                relative_directory =
-                    String::from_utf8_lossy(&script_directory.as_bytes()[root_directory.len()..])
-                        .into_owned();
-            }
+    for root_directory in root_dirs {
+        if let Some(relative) = tspath::relative_path_within_directory(
+            root_directory,
+            script_directory,
+            use_case_sensitive_file_names,
+        ) {
+            relative_directory = relative.into_owned();
             break;
         }
     }
 
     // Now find a path for each potential directory that is to be merged with the one containing the script
     let mut directories = Vec::new();
-    for root_directory in &normalized_root_dirs {
-        directories.push(
-            tspath::remove_trailing_directory_separator(&tspath::combine_paths(
-                root_directory,
-                &[&relative_directory],
-            ))
-            .to_string(),
-        );
+    for root_directory in root_dirs {
+        if relative_directory.is_empty() {
+            directories.push(root_directory.clone());
+        } else {
+            // Go: rootDirectory.ResolveRelativeDirectory(relativeDirectory)
+            directories.push(
+                if tspath::has_trailing_directory_separator(root_directory) {
+                    format!("{root_directory}{relative_directory}")
+                } else {
+                    format!("{root_directory}/{relative_directory}")
+                },
+            );
+        }
     }
-    directories.push(tspath::remove_trailing_directory_separator(script_directory).to_string());
+    directories.push(script_directory.to_string());
 
-    deduplicate_strings(directories)
+    deduplicate_directory_names(directories)
 }
 
-// Go: ls/string_completions.go:1195 deduplicateStrings
-fn deduplicate_strings(slice: Vec<String>) -> Vec<String> {
+// Go: ls/string_completions.go:1178 deduplicateDirectoryNames
+// (ts#64159 renames deduplicateStrings, at 673a5f17d713 :1195)
+fn deduplicate_directory_names(slice: Vec<String>) -> Vec<String> {
     if slice.len() <= 1 {
         return slice;
     }
@@ -1824,7 +1823,9 @@ impl LanguageService {
 
         fragment = tspath::ensure_trailing_directory_separator(&fragment);
 
-        let base_directory = tspath::resolve_path(script_directory, &[&fragment]);
+        // ts#64159: `scriptDirectory.ResolveDirectory(fragment)` (Go N'
+        // string_completions.go:1278): normalized, with no trailing separator.
+        let base_directory = tspath::get_normalized_absolute_path(&fragment, script_directory);
         if !module_specifier_is_relative {
             // Check for a version redirect.
             let package_json_directory =
@@ -1843,15 +1844,24 @@ impl LanguageService {
                     if let Some(paths) = paths
                         && !paths.is_empty()
                     {
-                        // PORT: Go `baseDirectory[len(...):]` cuts bytes; see the file header.
-                        let path_in_package = String::from_utf8_lossy(
-                            &base_directory.as_bytes()
-                                [tspath::ensure_trailing_directory_separator(
-                                    &package_json_directory,
-                                )
-                                .len()..],
-                        )
-                        .into_owned();
+                        // ts#64159: `baseDirectory.RelativeTo(packageJsonDirectory)`
+                        // (Go N' string_completions.go:1290), case-sensitive.
+                        let Some(path_in_package) = tspath::relative_path_within_directory(
+                            &package_json_directory,
+                            &base_directory,
+                            true, /*useCaseSensitiveFileNames*/
+                        ) else {
+                            crate::core::go_panic(
+                                "package json directory must be an ancestor of the completion directory"
+                                    .to_string(),
+                            );
+                        };
+                        let mut path_in_package = path_in_package.into_owned();
+                        if !path_in_package.is_empty() {
+                            path_in_package =
+                                tspath::ensure_trailing_directory_separator(&path_in_package);
+                        }
+                        // Go: addCompletionEntriesFromRelativePathPatterns (:1359)
                         if self.add_completion_entries_from_paths(
                             result,
                             program,
@@ -2272,10 +2282,13 @@ impl LanguageService {
             normalized_prefix_directory.clone()
         };
         // Need to normalize after combining: If we combinePaths("a", "../b"), we want "b" and not "a/../b".
-        let base_directory = tspath::normalize_path(&tspath::combine_paths(
-            package_directory,
-            &[&expanded_prefix_directory],
-        ));
+        // ts#64159: `packageDirectory.ResolveDirectory(expandedPrefixDirectory)`
+        // (Go N' string_completions.go:1667), with no trailing separator.
+        let base_directory = if expanded_prefix_directory.is_empty() {
+            package_directory.to_string()
+        } else {
+            tspath::get_normalized_absolute_path(&expanded_prefix_directory, package_directory)
+        };
 
         let mut possible_input_base_directory_for_out_dir = String::new();
         let mut possible_input_base_directory_for_declaration_dir = String::new();
@@ -2475,7 +2488,10 @@ fn remove_leading_directory_separator(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-// Go: ls/string_completions.go:1838 getPossibleOriginalInputPathWithoutChangingExt
+// Go: ls/string_completions.go:1841 getPossibleOriginalInputPathWithoutChangingExt
+// ts#64159: `filePath` itself when the output directory is on another root
+// (`CaseSensitivity.RelativePathFromPath`, R4); otherwise the relative path
+// resolved against the common source directory.
 fn get_possible_original_input_path_without_changing_ext(
     file_path: &str,
     ignore_case: bool,
@@ -2483,17 +2499,17 @@ fn get_possible_original_input_path_without_changing_ext(
     get_common_source_directory: &dyn Fn() -> String,
 ) -> String {
     if !output_dir.is_empty() {
-        return tspath::resolve_path(
-            &get_common_source_directory(),
-            &[&tspath::get_relative_path_from_directory(
-                output_dir,
-                file_path,
-                &tspath::ComparePathsOptions {
-                    use_case_sensitive_file_names: !ignore_case,
-                    ..Default::default()
-                },
-            )],
-        );
+        let Some(relative_path) =
+            tspath::relative_path_from_directory(output_dir, file_path, !ignore_case)
+        else {
+            return file_path.to_string();
+        };
+        let common_source_directory = get_common_source_directory();
+        // Go: RootedDirectoryPath.ResolveRelativeDirectory (rooted_path.go:780)
+        if relative_path.is_empty() {
+            return common_source_directory;
+        }
+        return tspath::get_normalized_absolute_path(&relative_path, &common_source_directory);
     }
     file_path.to_string()
 }
@@ -2980,7 +2996,9 @@ impl LanguageService {
             return None;
         }
 
-        let script_path = tspath::get_directory_path(&source_file_info(file).path);
+        // ts#64159: the directory of the file name, not of the path key (Go
+        // N' string_completions.go:2222).
+        let script_path = tspath::get_directory_path(source_file_file_name(file));
 
         // PORT: Go `var names` is nil unless `kind` matches; `kind` is always
         // "path" or "types" here.

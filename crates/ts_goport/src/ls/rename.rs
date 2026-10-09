@@ -497,6 +497,23 @@ pub fn client_supports_rename_resource_operations(ctx: &Context) -> bool {
         .contains(&lsproto::ResourceOperationKind::RENAME)
 }
 
+// Go: ls/rename.go:346 tryRemoveIndexFileName (ts#64159)
+// The directory of an index file, or "" when the file is not an index file
+// or is the index file in the root of the file system or of a dynamic name.
+pub fn try_remove_index_file_name(file_name: &str) -> String {
+    if tspath::remove_file_extension(&tspath::get_base_file_name(file_name)) == "index" {
+        let root_length = tspath::get_root_length(file_name);
+        let (root, relative) = file_name.split_at(root_length);
+        if (root == "/" || tspath::is_dynamic_file_name(root))
+            && tspath::remove_file_extension(relative) == "index"
+        {
+            return String::new();
+        }
+        return tspath::get_directory_path(file_name);
+    }
+    String::new()
+}
+
 impl<P: ProgramView> LanguageService<P> {
     // Go: ls/rename.go:303 getRenameInfoForModule
     // getRenameInfoForModule handles rename validation for module specifiers.
@@ -540,10 +557,7 @@ impl<P: ProgramView> LanguageService<P> {
         let file_name = source_file_file_name(module_source_file);
         let mut without_index = String::new();
         if !specifier.text().ends_with("/index") && !specifier.text().ends_with("/index.js") {
-            let candidate = tspath::remove_file_extension(file_name);
-            if let Some(trimmed) = candidate.strip_suffix("/index") {
-                without_index = trimmed.to_string();
-            }
+            without_index = try_remove_index_file_name(file_name);
         }
 
         let mut display_name = file_name.to_string();
@@ -580,7 +594,7 @@ impl<P: ProgramView> LanguageService<P> {
         )
     }
 
-    // Go: ls/rename.go:351 getNewFileNameForModuleRename
+    // Go: ls/rename.go:359 getNewFileNameForModuleRename
     // Adjust the new name based on the old path that an import specifier resolves to.
     // For example, if specifier "a.js" resolves to file a.ts, renaming "a.js" -> "b.js" should mean file rename a.ts -> b.ts.
     pub fn get_new_file_name_for_module_rename(
@@ -589,8 +603,14 @@ impl<P: ProgramView> LanguageService<P> {
         specifier_text: &str,
         new_name: &str,
     ) -> String {
-        let mut new_path =
-            tspath::combine_paths(&tspath::get_directory_path(old_path), &[new_name]);
+        // ts#64159: `oldPath.Directory().ResolveFile(newName)` (Go N'
+        // rename.go:361), so the new name is normalized.
+        let directory = tspath::get_directory_path(old_path);
+        let mut new_path = if new_name.is_empty() {
+            directory
+        } else {
+            tspath::get_normalized_absolute_path(new_name, &directory)
+        };
         let ignore_case = !self.host.use_case_sensitive_file_names();
         let old_ext = if tspath::is_declaration_file_name(old_path) {
             tspath::get_declaration_file_extension(old_path)
@@ -618,7 +638,7 @@ impl<P: ProgramView> LanguageService<P> {
         new_path
     }
 
-    // Go: ls/rename.go:368 getTextForRename
+    // Go: ls/rename.go:377 getTextForRename
     // PORT: Go `entry *ReferenceEntry` is the shared entry handle.
     pub fn get_text_for_rename(
         &self,

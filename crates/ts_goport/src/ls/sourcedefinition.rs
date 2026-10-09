@@ -245,12 +245,18 @@ impl LanguageService {
         let options = program.options();
         let mut no_dts_options = options.clone();
         no_dts_options.no_dts_resolution = Tristate::True;
-        // PORT: Go passes the program's `CompilerHost` where a
-        // `module.ResolutionHost` is expected; `CompilerResolutionHost` is
-        // that view of the host (as the file loader uses it).
-        let resolution_host: Rc<dyn module::ResolutionHost> = Rc::new(
-            compiler::CompilerResolutionHost::new(program.host().clone()),
-        );
+        // ts#64159: the resolution host is the program's file system with the
+        // program's base directory (Go N' `sourceDefResolutionHost`,
+        // sourcedefinition.go:145, :172; R1).
+        // PORT: `CompilerResolutionHost` with that current directory is Go's
+        // `sourceDefResolutionHost`.
+        let host = program.host().clone();
+        let resolution_host: Rc<dyn module::ResolutionHost> =
+            Rc::new(compiler::CompilerResolutionHost {
+                fs: host.fs(),
+                host,
+                current_directory: program.base_directory(),
+            });
         SourceDefResolver {
             ls: self,
             fs: program.host().fs(),
@@ -574,6 +580,13 @@ impl SourceDefResolver<'_> {
             .rfind("/node_modules/")
             .map_or(-1, |i| i as isize);
         if last_node_modules_index != parts.top_level_node_modules_index {
+            return String::new();
+        }
+        // ts#64159: a file directly in node_modules (or in a scope directory)
+        // has no package root, so it has no implementation file (Go N'
+        // `parts.IsDirectNodeModulesFile`, sourcedefinition.go:401). N sliced
+        // with a package root index of -1 and panicked.
+        if parts.package_root_index == -1 {
             return String::new();
         }
 
