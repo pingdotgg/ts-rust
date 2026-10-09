@@ -589,9 +589,11 @@ fn type_parsers(t: FieldType) -> Option<fn(&LspAny) -> FieldValue> {
             }
             FieldValue::JsxAttributeCompletionStyle(JsxAttributeCompletionStyle::AUTO)
         }),
+        // Go: ls/lsutil/userpreferences_generated.go:179 parsePreferenceIncludeInlayParameterNameHints
+        // (ts#64554): case-insensitive.
         FieldType::IncludeInlayParameterNameHints => Some(|val: &LspAny| -> FieldValue {
             if let LspAny::String(s) = val {
-                match s.as_str() {
+                match strings_to_lower(s).as_str() {
                     "all" => {
                         return FieldValue::IncludeInlayParameterNameHints(
                             IncludeInlayParameterNameHints::ALL,
