@@ -168,8 +168,9 @@ pub struct NewProgram {
     pub hosts: ProgramHosts,
     // ts#64299, ts#64519
     pub module_resolution_error: Option<GoError>,
-    // Go never sets this field in `NewProgram`; it keeps the zero value.
-    pub compare_paths_options: ComparePathsOptions,
+    // Go `caseSensitivity` (program.go:110, ts#64159) has no field here:
+    // `case_sensitivity()` reads the host file system's. It replaces the N
+    // zero-value `comparePathsOptions` (case-insensitive compares).
     pub processed_files: ProcessedFiles,
     // Go never sets this field in `NewProgram`; it keeps the zero value.
     pub uses_uri_style_node_core_modules: Tristate,
@@ -397,6 +398,17 @@ impl NewProgram {
             .range_resolved_project_reference_in_child_config(child_config, f)
     }
 
+    // Go: program.go:260 (*Program).CaseSensitivity (ts#64159)
+    // PORT: the Rust tspath helpers take `ComparePathsOptions` for Go
+    // `CaseSensitivity`. The current directory is empty, as in the N zero
+    // value: the Go callers pass rooted paths.
+    pub fn case_sensitivity(&self) -> ComparePathsOptions {
+        ComparePathsOptions {
+            use_case_sensitive_file_names: self.use_case_sensitive_file_names(),
+            current_directory: String::new(),
+        }
+    }
+
     // Go: program.go:264 (*Program).UseCaseSensitiveFileNames
     pub fn use_case_sensitive_file_names(&self) -> bool {
         self.host().fs().use_case_sensitive_file_names()
@@ -418,7 +430,12 @@ impl NewProgram {
         // rather than redoing the logic approximately here, since most of the related logic now lives in module.Resolver
         // Still, without the failed lookup reporting that only the loader does, this isn't terribly complicated
 
-        let file_name = resolve_path(&get_directory_path(origin.file_name()), &[&r.file_name]);
+        // ts#64159 (program.go:280): Go `ResolveFile` drops a trailing
+        // separator (N: `ResolvePath` kept it).
+        let file_name = resolve_path_without_trailing_directory_separator(
+            &get_directory_path(origin.file_name()),
+            &[&r.file_name],
+        );
         let supported_extensions_base = get_supported_extensions(
             self.options(),
             &self.command_line().content_mapper_extensions(),
@@ -504,7 +521,6 @@ fn new_program_of_parts(
         opts: config,
         hosts,
         module_resolution_error,
-        compare_paths_options: ComparePathsOptions::default(),
         processed_files,
         uses_uri_style_node_core_modules: Tristate::default(),
         common_source_directory: OnceCell::new(),
@@ -684,7 +700,6 @@ impl NewProgram {
             opts: self.opts.clone(),
             hosts: ProgramHosts { host: new_host },
             module_resolution_error: None,
-            compare_paths_options: self.compare_paths_options.clone(),
             processed_files: self.processed_files.clone(),
             uses_uri_style_node_core_modules: self.uses_uri_style_node_core_modules,
             common_source_directory: OnceCell::new(),

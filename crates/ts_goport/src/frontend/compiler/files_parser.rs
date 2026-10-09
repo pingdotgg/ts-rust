@@ -2402,15 +2402,12 @@ impl PrefetchShared {
         let config = &self.config;
         let mut names = Vec::new();
         for reference in &refs.referenced_files {
-            let name = if is_rooted_disk_path(&reference.file_name) {
-                reference.file_name.clone()
-            } else {
-                combine_paths(
-                    &get_directory_path(&refs.file_name),
-                    &[&reference.file_name],
-                )
-            };
-            names.push(normalize_path(&name));
+            // The name that `resolve_tripleslash_path_reference` reads first
+            // (ts#64159: no trailing separator).
+            names.push(resolve_path_without_trailing_directory_separator(
+                &get_directory_path(&refs.file_name),
+                &[&reference.file_name],
+            ));
         }
         if !config.default_library_path.is_empty() {
             for lib in &refs.lib_reference_directives {

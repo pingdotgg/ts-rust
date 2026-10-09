@@ -1090,8 +1090,11 @@ impl NewProgram {
         root_directory: &str,
     ) -> bool {
         let mut all_files_belong_to_path = true;
+        // ts#64159 (program.go:1844): the file system's case sensitivity (N:
+        // the zero-value `comparePathsOptions`, case-insensitive).
+        let case_sensitivity = self.case_sensitivity();
         for file in source_files {
-            if !contains_path(root_directory, file, &self.compare_paths_options) {
+            if !contains_path(root_directory, file, &case_sensitivity) {
                 let absolute_source_file_path = get_canonical_file_name(
                     &get_normalized_absolute_path(file, &self.get_current_directory()),
                     self.use_case_sensitive_file_names(),

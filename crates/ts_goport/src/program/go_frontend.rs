@@ -1771,7 +1771,6 @@ mod tests {
             opts: np.opts.clone(),
             hosts: np.hosts.clone(),
             module_resolution_error: np.module_resolution_error.clone(),
-            compare_paths_options: np.compare_paths_options.clone(),
             processed_files,
             uses_uri_style_node_core_modules: np.uses_uri_style_node_core_modules,
             common_source_directory: std::cell::OnceCell::new(),

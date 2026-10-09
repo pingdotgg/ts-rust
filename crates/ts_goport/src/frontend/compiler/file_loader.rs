@@ -1476,13 +1476,14 @@ impl FileLoader {
         containing_file: &str,
         index: i32,
     ) -> (Option<ResolvedRef>, Option<Rc<ProcessingDiagnostic>>) {
-        let base_path = get_directory_path(containing_file);
-        let mut referenced_file_name = module_name.to_string();
-
-        if !is_rooted_disk_path(module_name) {
-            referenced_file_name = combine_paths(&base_path, &[module_name]);
-        }
-        let normalized_file_name = normalize_path(&referenced_file_name);
+        // ts#64159 (fileloader.go:724): Go
+        // `containingFile.Directory().ResolveFile(moduleName)` normalizes the
+        // name and drops a trailing separator, so `/// <reference
+        // path="other/" />` finds other.ts. N kept the separator.
+        let normalized_file_name = resolve_path_without_trailing_directory_separator(
+            &get_directory_path(containing_file),
+            &[module_name],
+        );
         let containing_path = self.to_path(containing_file);
         let include_reason = new_file_include_reason(
             FileIncludeKind::REFERENCE_FILE,
@@ -4388,6 +4389,172 @@ export const a: T | Dep | number = x + (h as never);
         assert_eq!(codes("a.ts"), [1006]);
         assert_eq!(codes("b.ts"), [1006]);
         assert_eq!(codes("c.ts"), [6053]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ts#64159 (fileloader.go:724): a triple-slash path reference resolves
+    // like Go `ResolveFile`, which drops a trailing separator. So "other/"
+    // finds other.ts, and "h/" in h.ts is a self reference (TS1006). N gave
+    // TS6231 and TS6054 here.
+    #[test]
+    fn triple_slash_reference_drops_a_trailing_separator() {
+        let (dir, cwd, config) = ts64519_project(
+            "trailing_separator",
+            r#"{"compilerOptions":{"noLib":true},"files":["main.ts","h.ts"]}"#,
+            &[
+                (
+                    "main.ts",
+                    concat!(
+                        "/// <reference path=\"other/\" />\n",
+                        "/// <reference path=\"./third//\" />\n",
+                        "/// <reference path=\"dir/\" />\n",
+                        "/// <reference path=\"dir/inner/\" />\n",
+                        "/// <reference path=\"fourth.ts/\" />\n",
+                        "export {};\n",
+                    ),
+                ),
+                ("other.ts", "declare const otherValue: number;\n"),
+                ("third.ts", "declare const thirdValue: number;\n"),
+                ("dir.ts", "declare const dirValue: number;\n"),
+                ("dir/inner.ts", "declare const innerValue: number;\n"),
+                ("fourth.ts", "declare const fourthValue: number;\n"),
+                (
+                    "h.ts",
+                    "/// <reference path=\"h/\" />\nexport const h = 1;\n",
+                ),
+            ],
+        );
+        let _scope = crate::core::enter_program(None);
+        let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+        let codes = |name: &str| {
+            let file = program.get_source_file(&format!("{cwd}/{name}")).unwrap();
+            program
+                .include_processor
+                .get_diagnostics(&program)
+                .borrow_mut()
+                .get_diagnostics_for_file(file.root)
+                .iter()
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(codes("main.ts"), [] as [i32; 0]);
+        assert_eq!(codes("h.ts"), [1006]);
+        // program.go:280 `GetSourceFileFromReference` resolves the same way.
+        let main = program.get_source_file(&format!("{cwd}/main.ts")).unwrap();
+        let referenced: Vec<_> = main
+            .referenced_files
+            .iter()
+            .map(|r| {
+                program
+                    .get_source_file_from_reference(&main, r)
+                    .map(|file| file.file_name().to_string())
+            })
+            .collect();
+        let expected: Vec<_> = [
+            "other.ts",
+            "third.ts",
+            "dir.ts",
+            "dir/inner.ts",
+            "fourth.ts",
+        ]
+        .iter()
+        .map(|name| Some(format!("{cwd}/{name}")))
+        .collect();
+        assert_eq!(referenced, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ts#64159: the program compares paths with the file system's case
+    // sensitivity (Go `p.caseSensitivity`), not the N zero value, which
+    // compared case-insensitively. On a case-sensitive file system "Proj"
+    // and "proj" are different directories:
+    // - program.go:1844: the files under proj/src are not under the default
+    //   rootDir Proj (TS6059);
+    // - program.go:1261: the TS5011 common source directory is "../proj/src"
+    //   (N: "./src");
+    // - program.go:1006: the baseUrl suggestion is "../proj/src/*" (N:
+    //   "./src/*").
+    #[test]
+    fn program_paths_use_the_file_system_case_sensitivity() {
+        if !osvfs_fs().use_case_sensitive_file_names() {
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("ts_goport_ts64159_case_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, text) in [
+            ("proj/src/a/x.ts", "export const x = 1;\n"),
+            ("proj/src/b/y.ts", "export const y = 1;\n"),
+            (
+                "Proj/tsconfig.json",
+                r#"{"compilerOptions":{"outDir":"../out","noLib":true},"include":["../proj/src"]}"#,
+            ),
+            (
+                "Proj/baseurl.json",
+                r#"{"compilerOptions":{"noEmit":true,"noLib":true,"baseUrl":"../proj/src"},"include":["../proj/src"]}"#,
+            ),
+        ] {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let cwd = dir.to_string_lossy().replace('\\', "/");
+        let sys = System {
+            fs: bundled::wrap_fs(osvfs_fs()),
+            current_directory: cwd.clone(),
+        };
+        let _scope = crate::core::enter_program(None);
+        let program_diagnostics = |config_name: &str| {
+            let (config, errors) = get_parsed_command_line_of_config_file(
+                &format!("{cwd}/Proj/{config_name}"),
+                None,
+                None,
+                &sys,
+                None,
+            );
+            assert!(errors.is_empty());
+            let config = Rc::new(config.unwrap());
+            let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+            let mut diagnostics = program.program_diagnostics.clone();
+            diagnostics.extend(
+                program
+                    .include_processor
+                    .get_diagnostics(&program)
+                    .borrow_mut()
+                    .get_global_diagnostics(),
+            );
+            diagnostics
+        };
+
+        let diagnostics = program_diagnostics("tsconfig.json");
+        let not_under_root_dir: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.code == 6059)
+            .map(|d| d.message_args.clone())
+            .collect();
+        assert_eq!(
+            not_under_root_dir,
+            [
+                vec![format!("{cwd}/proj/src/a/x.ts"), format!("{cwd}/Proj")],
+                vec![format!("{cwd}/proj/src/b/y.ts"), format!("{cwd}/Proj")],
+            ]
+        );
+        let common_source_directory: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.code == 5011)
+            .map(|d| d.message_args.clone())
+            .collect();
+        assert_eq!(
+            common_source_directory,
+            [vec!["tsconfig.json".to_string(), "../proj/src".to_string()]]
+        );
+
+        let diagnostics = program_diagnostics("baseurl.json");
+        let base_url = diagnostics.iter().find(|d| d.code == 5102).unwrap();
+        assert_eq!(
+            base_url.message_chain[0].message_args,
+            [r#""paths": {"*": ["../proj/src/*"]}"#]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

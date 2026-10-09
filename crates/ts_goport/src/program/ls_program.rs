@@ -1784,9 +1784,11 @@ pub fn is_global_typings_file(p: &NewProgram, file_name: &str) -> bool {
     if !tspath::is_declaration_file_name(file_name) {
         return false;
     }
+    // ts#64159 (program.go:1813): the file system's case sensitivity (N: the
+    // zero-value `comparePathsOptions`).
     tspath::contains_path(
         &p.get_global_typings_cache_location(),
         file_name,
-        &p.compare_paths_options,
+        &p.case_sensitivity(),
     )
 }

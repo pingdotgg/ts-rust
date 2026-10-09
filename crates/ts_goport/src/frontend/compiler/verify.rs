@@ -300,10 +300,12 @@ impl NewProgram {
             // BaseUrl will have been turned absolute by this point.
             let mut use_instead = String::new();
             if !syntax.config_file_path.is_empty() {
+                // ts#64159 (program.go:1006): the file system's case
+                // sensitivity (N: the zero-value `comparePathsOptions`).
                 let mut relative = get_relative_path_from_file(
                     &syntax.config_file_path,
                     &options.base_url,
-                    &self.compare_paths_options,
+                    &self.case_sensitivity(),
                 );
                 if !(relative.starts_with("./") || relative.starts_with("../")) {
                     relative = format!("./{relative}");
@@ -714,10 +716,11 @@ impl NewProgram {
                     diag::The_common_source_directory_of_0_is_1_The_rootDir_setting_must_be_explicitly_set_to_this_or_another_path_to_adjust_your_output_s_file_layout,
                     &args![
                         get_base_file_name(&options.config_file_path),
-                        // ts#64159 (program.go:1249): the relative path, or the
-                        // absolute one on another root (rule R4), which
+                        // ts#64159 (program.go:1261): the relative path with the
+                        // file system's case sensitivity, or the absolute one on
+                        // another root (rule R4), which
                         // `get_relative_path_from_file` already gives.
-                        get_relative_path_from_file(&options.config_file_path, &dir59, &self.compare_paths_options)
+                        get_relative_path_from_file(&options.config_file_path, &dir59, &self.case_sensitivity())
                     ],
                 );
                 self.program_diagnostics[diag].add_message_chain(Some(new_compiler_diagnostic(
