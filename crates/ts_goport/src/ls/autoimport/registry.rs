@@ -734,12 +734,15 @@ impl Registry {
     }
 }
 
-// Go: ls/autoimport/registry.go:487 RegistryChange
+// Go: ls/autoimport/registry.go:486 RegistryChange
 // PORT: Go `collections.Set[lsproto.DocumentUri]` values are `FxHashSet`;
 // Go `*lsutil.UserPreferences` is `Option` (nil is `None`).
 #[derive(Clone, Debug, Default)]
 pub struct RegistryChange {
     pub requested_file: tspath::Path,
+    // ts#64554: the file name of `requested_file`; its directories are needed
+    // (registry.go:488, :590).
+    pub requested_file_name: String,
     pub open_files: FxHashMap<tspath::Path, String>,
     pub changed: FxHashSet<lsproto::DocumentUri>,
     pub created: FxHashSet<lsproto::DocumentUri>,
@@ -870,14 +873,14 @@ impl RegistryBuilder {
         let start = Instant::now();
         let mut needed_projects: FxHashMap<ProjectID, ()> = FxHashMap::default();
         let mut needed_directories: FxHashMap<tspath::Path, String> = FxHashMap::default();
-        for (path, file_name) in &change.open_files {
-            if let (Some(project_id), _) = self.host.get_default_project(path) {
-                needed_projects.insert(project_id, ());
-            }
+        // Go: ls/autoimport/registry.go:558 addNeededDirectories (ts#64554)
+        let add_needed_directories = |needed_directories: &mut FxHashMap<tspath::Path, String>,
+                                      path: &tspath::Path,
+                                      file_name: &str| {
             if tspath::is_dynamic_file_name(file_name) {
-                continue;
+                return;
             }
-            let mut dir = file_name.clone();
+            let mut dir = file_name.to_string();
             let mut dir_path = path.clone();
             loop {
                 dir = tspath::get_directory_path(&dir);
@@ -891,6 +894,15 @@ impl RegistryBuilder {
                 }
                 needed_directories.insert(dir_path.clone(), dir.clone());
             }
+        };
+        for (path, file_name) in &change.open_files {
+            if let (Some(project_id), _) = self.host.get_default_project(path) {
+                needed_projects.insert(project_id, ());
+            }
+            if tspath::is_dynamic_file_name(file_name) {
+                continue;
+            }
+            add_needed_directories(&mut needed_directories, path, file_name);
 
             if !self.specifier_cache.has(path) {
                 self.specifier_cache
@@ -899,6 +911,12 @@ impl RegistryBuilder {
         }
 
         if !change.requested_file.is_empty() {
+            // ts#64554: registry.go:590
+            add_needed_directories(
+                &mut needed_directories,
+                &change.requested_file,
+                &change.requested_file_name,
+            );
             if let (Some(project_id), _) = self.host.get_default_project(&change.requested_file) {
                 needed_projects.insert(project_id, ());
             }
