@@ -412,7 +412,7 @@ child_test! {
                 &CheckerSymbolParams {
                     snapshot: api.snapshot,
                     project: api.project.clone(),
-                    symbol: a.id,
+                    symbol: a.reference.clone(),
                 },
             )
         });

@@ -112,7 +112,7 @@ child_test! {
                 &GetTypeOfSymbolParams {
                     snapshot: snapshot_resp.snapshot,
                     project: proj.id.clone(),
-                    symbol: symbol.id,
+                    symbol: symbol.reference.clone(),
                 },
             ));
             assert!(

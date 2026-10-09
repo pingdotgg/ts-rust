@@ -106,27 +106,114 @@ impl Session {
         Ok(sd.new_symbol_response(&checker, result, &params.project))
     }
 
-    // Go: api/session.go:3036 resolveSymbolPropertyOfSymbol
+    // Go: api/session.go:405 resolveSymbolReference (ts#64518)
+    // resolveSymbolReference resolves a symbol without a semantic context. A file reference holds the
+    // exact cached AST until the returned release function is called; a snapshot reference also returns
+    // the snapshot and canonical project that own the symbol.
+    // PORT: the Go release function is the lease guard in the result; it
+    // releases when the result drops. A file symbol is read from a copy of
+    // the binder lineage (`program::lineage_for_checker`), which holds every
+    // live bound file; Go reads the `*ast.Symbol` with no checker.
+    pub fn resolve_symbol_reference(
+        &self,
+        reference: &SymbolReference,
+    ) -> Result<ResolvedSymbolReference, GoError> {
+        let client_error = |text: String| {
+            Err(errors::errorf(
+                format!("{}: {text}", *ERR_CLIENT_ERROR),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ))
+        };
+        if reference.kind == SymbolOwnerKind::FILE {
+            let Some(file) = reference
+                .file
+                .as_ref()
+                .filter(|_| reference.snapshot.0 == 0 && reference.project.0.is_empty())
+            else {
+                return client_error("invalid file symbol reference".to_string());
+            };
+            let lease = LeaseGuard(Some(self.acquire_cached_source_file(file)?));
+            let symbols = crate::program::lineage_for_checker();
+            let root = lease
+                .0
+                .as_ref()
+                .map_or(Node::NIL, |lease| lease.source_file());
+            let symbol = get_source_file_symbol_index(&symbols, root)
+                .get(&reference.id)
+                .copied();
+            let Some(symbol) = symbol else {
+                // Go: lease.Release() (the guard drops here).
+                return client_error(format!(
+                    "symbol {} not found in source file",
+                    reference.id.0
+                ));
+            };
+            Ok(ResolvedSymbolReference::File {
+                symbols,
+                symbol,
+                _lease: lease,
+            })
+        } else if reference.kind == SymbolOwnerKind::SNAPSHOT {
+            if reference.file.is_some()
+                || reference.snapshot.0 == 0
+                || reference.project.0.is_empty()
+            {
+                return client_error("invalid snapshot symbol reference".to_string());
+            }
+            let sd = self.get_snapshot_data(reference.snapshot)?;
+            let (checker, symbol) = sd.resolve_symbol_handle(reference.id)?;
+            Ok(ResolvedSymbolReference::Snapshot {
+                sd,
+                project: reference.project.clone(),
+                checker,
+                symbol,
+            })
+        } else {
+            client_error(format!(
+                "invalid symbol reference kind {}",
+                reference.kind.0
+            ))
+        }
+    }
+
+    // Go: api/session.go:3318 resolveSymbolPropertyOfSymbol
     // resolveSymbolTablePropertyOfSymbol resolves a symbol property of type `Symbol` and returns a symbol response.
+    // ts#64518: the symbol comes from its reference, and a file-owned answer
+    // needs no snapshot.
     pub fn resolve_symbol_property_of_symbol(
         &self,
         params: &GetSymbolPropertyParams,
-        getter: &dyn Fn(&Checker, SymbolId) -> SymbolId,
+        getter: &dyn Fn(&SymbolArena, SymbolId) -> SymbolId,
     ) -> Result<Option<SymbolResponse>, GoError> {
-        let sd = self.get_snapshot_data(params.snapshot)?;
-
-        let (checker, symbol) = sd.resolve_symbol_handle(params.symbol)?;
-        // Node handles in the answer read lazy JSDoc (session_p1.rs header).
-        let _program = ls_program::enter_version(checker.borrow().program);
-
-        let result = getter(&checker.borrow(), symbol);
-        if result.is_nil() {
-            return Ok(None);
+        let resolved = self.resolve_symbol_reference(&params.symbol)?;
+        match &resolved {
+            ResolvedSymbolReference::File {
+                symbols, symbol, ..
+            } => {
+                let result = getter(symbols, *symbol);
+                if result.is_nil() {
+                    return Ok(None);
+                }
+                Ok(Some(new_file_symbol_response(symbols, result)))
+            }
+            ResolvedSymbolReference::Snapshot {
+                sd,
+                project,
+                checker,
+                symbol,
+            } => {
+                // Node handles in the answer read lazy JSDoc (session_p1.rs header).
+                let _program = ls_program::enter_version(checker.borrow().program);
+                let result = getter(&checker.borrow().symbols, *symbol);
+                if result.is_nil() {
+                    return Ok(None);
+                }
+                Ok(sd.new_symbol_response(checker, result, project))
+            }
         }
-        Ok(sd.new_symbol_response(&checker, result, &params.project))
     }
 
-    // Go: api/session.go:3057 resolveSymbolTablePropertyOfSymbol
+    // Go: api/session.go:3337 resolveSymbolTablePropertyOfSymbol
     // resolveSymbolTablePropertyOfSymbol resolves a symbol property of type `SymbolTable` and returns an array of symbol responses.
     // Results are sorted using the checker's canonical symbol ordering so that API consumers receive
     // a stable, deterministic order instead of Go's randomized map iteration order.
@@ -134,39 +221,82 @@ impl Session {
         &self,
         ctx: &Context,
         params: &GetSymbolPropertyParams,
-        getter: &dyn Fn(&Checker, SymbolId) -> SymbolTable,
+        getter: &dyn Fn(&SymbolArena, SymbolId) -> SymbolTable,
     ) -> Result<Vec<Option<SymbolResponse>>, GoError> {
-        let sd = self.get_snapshot_data(params.snapshot)?;
-
-        let (checker, symbol) = sd.resolve_symbol_handle(params.symbol)?;
+        let resolved = self.resolve_symbol_reference(&params.symbol)?;
+        let (sd, project, checker, symbol) = match &resolved {
+            ResolvedSymbolReference::File {
+                symbols, symbol, ..
+            } => {
+                let symbol_table = getter(symbols, *symbol);
+                if symbol_table.is_nil() || symbols.len(symbol_table) == 0 {
+                    return Ok(Vec::new());
+                }
+                let mut subs = symbols.values(symbol_table);
+                if subs.len() > 1 {
+                    // Binder tables of a file-owned symbol only contain symbols from the same file, so they
+                    // can be ordered by declaration position without a checker.
+                    let file = get_source_file_of_symbol(symbols, *symbol);
+                    crate::gostd::slices::sort_func(&mut subs, |&left, &right| {
+                        go_assert!(get_source_file_of_symbol(symbols, left) == file);
+                        go_assert!(get_source_file_of_symbol(symbols, right) == file);
+                        let (l, r) = (symbols.sym(left), symbols.sym(right));
+                        let left_has_declaration = !l.declarations.is_empty();
+                        let right_has_declaration = !r.declarations.is_empty();
+                        if left_has_declaration != right_has_declaration {
+                            return if left_has_declaration { -1 } else { 1 };
+                        }
+                        let order = if left_has_declaration {
+                            l.declarations[0].pos().cmp(&r.declarations[0].pos())
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
+                        .then_with(|| {
+                            go_symbol_name(symbols, left).cmp(&go_symbol_name(symbols, right))
+                        })
+                        .then_with(|| {
+                            get_symbol_id(symbols, left).cmp(&get_symbol_id(symbols, right))
+                        });
+                        order as i32
+                    });
+                }
+                return Ok(subs
+                    .into_iter()
+                    .map(|sub| Some(new_file_symbol_response(symbols, sub)))
+                    .collect());
+            }
+            ResolvedSymbolReference::Snapshot {
+                sd,
+                project,
+                checker,
+                symbol,
+            } => (sd, project, checker, *symbol),
+        };
         // Node handles in the answer read lazy JSDoc (session_p1.rs header).
         let _program = ls_program::enter_version(checker.borrow().program);
 
-        let symbol_table = getter(&checker.borrow(), symbol);
+        let symbol_table = getter(&checker.borrow().symbols, symbol);
         let table_len = checker.borrow().symbols.len(symbol_table);
         if symbol_table.is_nil() || table_len == 0 {
             return Ok(Vec::new());
         }
         let subs = checker.borrow().symbols.values(symbol_table);
         if table_len == 1 {
-            return Ok(vec![sd.new_symbol_response(
-                &checker,
-                subs[0],
-                &params.project,
-            )]);
+            return Ok(vec![sd.new_symbol_response(checker, subs[0], project)]);
         }
 
-        // More than one symbol, need a checker to sort
-        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+        // Tables of snapshot-owned symbols may contain symbols from several files, so they use the
+        // checker's ordering.
+        let setup = self.setup_checker(ctx, params.symbol.snapshot, &params.symbol.project)?;
 
         // PORT: the setup checker only sorts. Each entry keeps the symbol of
         // `checker` for its answer, which Go reads with no checker, as the
         // one-entry answer above does.
         let mut symbols: Vec<(SymbolId, SymbolId)> = Vec::with_capacity(table_len);
         for sub in subs {
-            symbols.push((checker_symbol(&setup.checker, &checker, sub), sub));
+            symbols.push((checker_symbol(&setup.checker, checker, sub), sub));
         }
-        // Go: api/session.go:2196 slices.SortFunc(symbols, setup.checker.CompareSymbols)
+        // Go: api/session.go:3402 slices.SortFunc(symbols, setup.checker.CompareSymbols)
         // PORT: `CompareSymbols` is not a total order (see
         // `sort_symbol_sort_keys`), so this is Go's pdqsort, not std `sort_by`,
         // which can panic.
@@ -179,7 +309,7 @@ impl Session {
 
         let mut results = Vec::with_capacity(symbols.len());
         for (_, sub) in symbols {
-            results.push(sd.new_symbol_response(&checker, sub, &setup.project_id));
+            results.push(sd.new_symbol_response(checker, sub, &setup.project_id));
         }
         Ok(results)
     }
@@ -549,7 +679,7 @@ impl Session {
     ) -> Result<Option<TypeResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let node = setup
@@ -978,6 +1108,13 @@ impl Session {
                 c.get_arguments_symbol(),
             )
         };
+        // ts#64518
+        {
+            let c = setup.checker.borrow();
+            for symbol in [unknown, undefined, arguments] {
+                go_assert!(c.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT));
+            }
+        }
         let (unknown, _) = setup
             .sd
             .register_symbol(&setup.checker, unknown, &setup.project_id);
@@ -1303,7 +1440,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
         let export_symbol = setup.checker.borrow().get_export_symbol_of_symbol(symbol);
         Ok(setup.new_symbol_response(export_symbol))
@@ -1318,7 +1455,7 @@ impl Session {
     ) -> Result<bool, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let result = setup
@@ -1670,7 +1807,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let aliased = setup.checker.borrow_mut().get_aliased_symbol(symbol);
@@ -1687,7 +1824,7 @@ impl Session {
     ) -> Result<String, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(String::new());
         }
@@ -1710,7 +1847,7 @@ impl Session {
     ) -> Result<Vec<Option<SymbolResponse>>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(Vec::new());
         }
@@ -1748,7 +1885,7 @@ impl Session {
     ) -> Result<Vec<JSDocTagInfo>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(Vec::new());
         }
@@ -1778,7 +1915,7 @@ impl Session {
     ) -> Result<String, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(String::new());
         }
@@ -1826,7 +1963,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(None);
         }
@@ -1866,7 +2003,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let target = setup
@@ -1885,7 +2022,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(None);
         }
@@ -2513,7 +2650,7 @@ impl Session {
     ) -> Result<Vec<NodeHandle>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(Vec::new());
         }
@@ -3168,6 +3305,38 @@ fn past_text_reads_jsdoc_snippet(file: Node, trigger: Option<&str>, jsdoc_on: bo
             let (_, previous_token) = ls::completions_p2::get_relevant_tokens(i32::MAX, file);
             ls::completions_p2::is_valid_trigger(file, trigger, previous_token, i32::MAX)
                 && jsdoc_on
+        }
+    }
+}
+
+/// What Go `resolveSymbolReference` returns (ts#64518): the symbol, the
+/// snapshot data and canonical project of a snapshot-owned symbol, and the
+/// release function of a file-owned one.
+pub enum ResolvedSymbolReference {
+    /// A file-owned symbol. `symbols` (a binder lineage copy) holds it; the
+    /// lease holds its file until this value drops.
+    File {
+        symbols: SymbolArena,
+        symbol: SymbolId,
+        _lease: LeaseGuard,
+    },
+    /// A snapshot-owned symbol and the checker whose arena holds it.
+    Snapshot {
+        sd: Rc<SnapshotData>,
+        project: project::ID,
+        checker: Rc<RefCell<Checker>>,
+        symbol: SymbolId,
+    },
+}
+
+/// Go `defer lease.Release()`: releases the lease when it drops.
+pub struct LeaseGuard(Option<Rc<project::SourceFileLease>>);
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        if let Some(lease) = self.0.take() {
+            lease.release();
+            project::drop_released_lease(lease);
         }
     }
 }

@@ -60,8 +60,93 @@ use crate::transpile;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// Go: api/session.go:47 sessionIDCounter
+// Go: api/session.go:51 sessionIDCounter
 pub static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// Go: api/session.go:52 sourceFileSymbolIndexKey (ts#64518)
+static SOURCE_FILE_SYMBOL_INDEX_KEY: std::sync::LazyLock<
+    crate::ast::source_file_ls::SourceFileDataKey<Rc<FxHashMap<SymbolID, SymbolId>>>,
+> = std::sync::LazyLock::new(crate::ast::source_file_ls::new_source_file_data_key);
+
+// Go: api/session.go:55 getSourceFileSymbolIndex (ts#64518)
+// The binder symbols that a source file owns, by handle.
+// PORT: `symbols` is an arena that holds the binder symbols of `file` (a
+// checker of a program that has the file, or a binder lineage copy). The
+// binder gives each lineage symbol the same index in every such arena, so
+// one index per file serves them all.
+pub fn get_source_file_symbol_index(
+    symbols: &SymbolArena,
+    source_file: Node,
+) -> Rc<FxHashMap<SymbolID, SymbolId>> {
+    crate::ast::source_file_ls::source_file_get_or_compute_data(
+        source_file,
+        &*SOURCE_FILE_SYMBOL_INDEX_KEY,
+        |file: Node| {
+            let mut index: FxHashMap<SymbolID, SymbolId> = FxHashMap::default();
+            // PORT: Go's recursive addSymbol; a work list here (parents and
+            // members form long chains).
+            let mut work: Vec<SymbolId> = Vec::new();
+            let mut add_symbols = |work: &mut Vec<SymbolId>| {
+                while let Some(symbol) = work.pop() {
+                    if symbol.is_nil()
+                        || symbols.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT)
+                    {
+                        continue;
+                    }
+                    go_assert!(get_source_file_of_symbol(symbols, symbol) == file);
+                    let id = symbol_handle(symbols, symbol);
+                    if let Some(&existing) = index.get(&id) {
+                        go_assert!(symbols.id_slot(existing) == symbols.id_slot(symbol));
+                        continue;
+                    }
+                    index.insert(id, symbol);
+                    let sym = symbols.sym(symbol);
+                    let (parent, export_symbol, members, exports) =
+                        (sym.parent, sym.export_symbol, sym.members, sym.exports);
+                    // Go visits the parent, the export symbol, then the
+                    // members and exports; the stack pops them in that order.
+                    let mut children: Vec<SymbolId> = Vec::new();
+                    for table in [members, exports] {
+                        if !table.is_nil() {
+                            children.extend(symbols.values(table));
+                        }
+                    }
+                    work.extend(children.into_iter().rev());
+                    work.push(export_symbol);
+                    work.push(parent);
+                }
+            };
+            for &node in encoder::get_node_index_table(file).nodes.iter() {
+                if node.is_nil() {
+                    continue;
+                }
+                work.push(node.symbol());
+                add_symbols(&mut work);
+                work.push(node.local_symbol());
+                add_symbols(&mut work);
+                let locals = node.locals();
+                if !locals.is_nil() {
+                    for symbol in symbols.values(locals) {
+                        work.push(symbol);
+                        add_symbols(&mut work);
+                    }
+                }
+            }
+            let bind = crate::ast::file_bind_data(file);
+            if !bind.global_exports.is_nil() {
+                for symbol in symbols.values(bind.global_exports) {
+                    work.push(symbol);
+                    add_symbols(&mut work);
+                }
+            }
+            for module in bind.pattern_ambient_modules.iter() {
+                work.push(module.symbol);
+                add_symbols(&mut work);
+            }
+            Rc::new(index)
+        },
+    )
+}
 
 // Go: api/session.go:53 snapshotData
 // snapshotData holds the per-snapshot state including the snapshot itself
@@ -70,6 +155,8 @@ pub static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 // the registries are cleaned up when refCount reaches zero.
 // PORT: registry values keep the checker that owns the handle (file header).
 pub struct SnapshotData {
+    // ts#64518
+    pub handle: SnapshotID,
     pub snapshot: Rc<project::Snapshot>,
     // ts#64115: the request file system the snapshot was made with (Go nil
     // is `None`).
@@ -148,15 +235,11 @@ impl SnapshotData {
         Ok(proj)
     }
 
-    // Go: api/session.go:125 nodeHandleFrom
+    // Go: api/session.go:175 snapshotData.nodeHandleFrom
     // nodeHandleFrom creates an index-based node handle (index.kind.path), building a node index table
     // for the file on-demand if needed.
     pub fn node_handle_from(&self, node: Node) -> NodeHandle {
-        let source_file = get_source_file_of_node(node);
-        let path = source_file_info(source_file).path.clone();
-        let table = encoder::get_node_index_table(source_file);
-        let idx = table.get_index(node);
-        NodeHandle(format!("{}.{}.{}", idx, node.kind() as i16, path))
+        node_handle_from(node)
     }
 
     // Go: api/session.go:134 getOrCreateProjectRegistry
@@ -180,11 +263,10 @@ impl SnapshotData {
             .clone()
     }
 
-    // Go: api/session.go:135 newSymbolResponse
-    // newSymbolResponse registers a symbol in the snapshot's registry and returns the response.
-    // canonicalProject is the project the symbol was observed in and must be non-empty; it is recorded
-    // as the symbol's canonical project (first writer wins) and returned to the client so it can default
-    // project-scoped follow-up lookups (members/exports, node resolution) to it.
+    // Go: api/session.go:222 snapshotData.newSymbolResponse
+    // newSymbolResponse classifies a symbol's ownership before exposing its identity to a client.
+    // Only snapshot-owned symbols are registered in the snapshot; file-owned symbols are resolved
+    // through their source file.
     // PORT: `checker` owns `symbol`; its arena holds the symbol data.
     pub fn new_symbol_response(
         &self,
@@ -195,42 +277,24 @@ impl SnapshotData {
         if symbol.is_nil() {
             return None;
         }
-
+        // ts#64518
+        if symbol_owner_file(&checker.borrow().symbols, symbol).is_some() {
+            return Some(new_file_symbol_response(&checker.borrow().symbols, symbol));
+        }
         let (id, project) = self.register_symbol(checker, symbol, canonical_project);
-        let c = checker.borrow();
-        let sym = c.sym(symbol);
-        let mut resp = SymbolResponse {
+        let reference = SymbolReference {
             id,
+            kind: SymbolOwnerKind::SNAPSHOT,
+            snapshot: self.handle,
             project,
-            // PORT: Go `ast.EscapeSymbolName(symbol.Name)`. A private name
-            // first gets the Go class id (`go_symbol_name`).
-            name: escape_symbol_name(&go_symbol_name(&c.symbols, symbol)),
-            flags: sym.flags.0,
-            check_flags: sym.check_flags.0,
-            ..Default::default()
+            file: None,
         };
-
-        if !sym.declarations.is_empty() {
-            let mut declarations = Vec::with_capacity(sym.declarations.len());
-            for &decl in sym.declarations.iter() {
-                declarations.push(self.node_handle_from(decl));
-            }
-            resp.declarations = declarations;
-        }
-
-        if sym.value_declaration.is_some() {
-            resp.value_declaration = self.node_handle_from(sym.value_declaration);
-        }
-
-        if sym.parent.is_some() {
-            resp.parent = symbol_handle(&c.symbols, sym.parent);
-        }
-
-        if sym.export_symbol.is_some() {
-            resp.export_symbol = symbol_handle(&c.symbols, sym.export_symbol);
-        }
-
-        Some(resp)
+        Some(build_symbol_response(
+            &checker.borrow().symbols,
+            symbol,
+            reference,
+            Node::NIL,
+        ))
     }
 
     // Go: api/session.go:202 registerSymbol
@@ -290,6 +354,14 @@ impl SnapshotData {
         }
         let id = self.register_type(project_id, checker, t);
         let mut resp = new_type_response(&checker.borrow(), t, id);
+        // ts#64518
+        {
+            let c = checker.borrow();
+            resp.symbol = new_symbol_reference(&c.symbols, c.ty(t).symbol());
+            if let Some(alias) = c.ty(t).alias() {
+                resp.alias_symbol = new_symbol_reference(&c.symbols, alias.symbol());
+            }
+        }
         // ts#64397
         let is_mapped = checker
             .borrow()
@@ -537,12 +609,17 @@ impl SnapshotData {
             resp.type_parameters = type_handles(s.type_parameters());
         }
 
+        // ts#64518
         if !s.parameters().is_empty() {
-            resp.parameters = symbol_handles(&c.symbols, s.parameters());
+            resp.parameters = s
+                .parameters()
+                .iter()
+                .filter_map(|&parameter| new_symbol_reference(&c.symbols, parameter))
+                .collect();
         }
 
         if s.this_parameter().is_some() {
-            resp.this_parameter = symbol_handle(&c.symbols, s.this_parameter());
+            resp.this_parameter = new_symbol_reference(&c.symbols, s.this_parameter());
         }
 
         if s.target().is_some() {
@@ -577,6 +654,285 @@ impl SnapshotData {
         }
         registry.insert(id, (checker.clone(), sig));
         id
+    }
+}
+
+/// Go `checkerSetup.resolveSymbolHandle` (api/session.go:777, ts#64518)
+/// with the setup fields that it reads. `handleGetImportAdderEdits` calls
+/// it with a setup literal that has no checker lease.
+pub fn resolve_symbol_reference_for_checker(
+    sd: &SnapshotData,
+    snapshot: SnapshotID,
+    program: &compiler::NewProgram,
+    checker: &Rc<RefCell<Checker>>,
+    reference: &SymbolReference,
+) -> Result<(Rc<RefCell<Checker>>, SymbolId), GoError> {
+    let client_error = |text: String| {
+        Err(errors::errorf(
+            format!("{}: {text}", *ERR_CLIENT_ERROR),
+            vec![ERR_CLIENT_ERROR.clone()],
+        ))
+    };
+    if reference.kind == SymbolOwnerKind::SNAPSHOT {
+        if reference.snapshot != snapshot || reference.file.is_some() {
+            return client_error(
+                "snapshot symbol reference does not match the requested checker".to_string(),
+            );
+        }
+        sd.resolve_symbol_handle(reference.id)
+    } else if reference.kind == SymbolOwnerKind::FILE {
+        let Some(file) = reference
+            .file
+            .as_ref()
+            .filter(|_| reference.snapshot.0 == 0 && reference.project.0.is_empty())
+        else {
+            return client_error("invalid file symbol reference".to_string());
+        };
+        let source_file = program.get_source_file_by_path(&tspath::Path(file.path.clone()));
+        let Some(source_file) =
+            source_file.filter(|parsed| new_parsed_source_file_descriptor(parsed) == *file)
+        else {
+            return client_error("source file is not part of the requested program".to_string());
+        };
+        let symbol = {
+            let c = checker.borrow();
+            get_source_file_symbol_index(&c.symbols, source_file.root)
+                .get(&reference.id)
+                .copied()
+        };
+        let Some(symbol) = symbol else {
+            return client_error(format!(
+                "symbol handle {} not found in source file",
+                reference.id.0
+            ));
+        };
+        Ok((checker.clone(), symbol))
+    } else {
+        client_error(format!(
+            "invalid symbol reference kind {}",
+            reference.kind.0
+        ))
+    }
+}
+
+// Go: api/session.go:206 symbolOwnerFile (ts#64518)
+// symbolOwnerFile returns the source file that owns a symbol's client identity, or nil when the
+// symbol is owned by its snapshot. Content-mapped outputs live in a cache that cannot yet be
+// addressed by file key, so their binder symbols remain snapshot-owned.
+// PORT: `symbols` is the arena that holds `symbol`; nil is `Node::NIL`.
+pub fn symbol_owner_file(symbols: &SymbolArena, symbol: SymbolId) -> Option<Node> {
+    if symbols.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT) {
+        return None;
+    }
+    let file = get_source_file_of_symbol(symbols, symbol);
+    if crate::ast::source_file_is_content_mapped(file) {
+        return None;
+    }
+    Some(file)
+}
+
+// Go: api/session.go:241 newFileSymbolResponse (ts#64518)
+pub fn new_file_symbol_response(symbols: &SymbolArena, symbol: SymbolId) -> SymbolResponse {
+    let file = symbol_owner_file(symbols, symbol);
+    go_assert!(file.is_some(), "Expected a file-owned symbol");
+    let file = file.unwrap_or(Node::NIL);
+    let descriptor = new_source_file_descriptor(file);
+    let reference = SymbolReference {
+        id: symbol_handle(symbols, symbol),
+        kind: SymbolOwnerKind::FILE,
+        file: Some(descriptor),
+        ..Default::default()
+    };
+    build_symbol_response(symbols, symbol, reference, file)
+}
+
+// Go: api/session.go:253 buildSymbolResponse (ts#64518)
+// PORT: Go nil `owner` is `Node::NIL`.
+pub fn build_symbol_response(
+    symbols: &SymbolArena,
+    symbol: SymbolId,
+    reference: SymbolReference,
+    owner: Node,
+) -> SymbolResponse {
+    let sym = symbols.sym(symbol);
+    let mut resp = SymbolResponse {
+        reference,
+        // PORT: Go `ast.EscapeSymbolName(symbol.Name)`. A private name
+        // first gets the Go class id (`go_symbol_name`).
+        name: escape_symbol_name(&go_symbol_name(symbols, symbol)),
+        flags: sym.flags.0,
+        check_flags: sym.check_flags.0,
+        parent: new_symbol_reference(symbols, sym.parent),
+        export_symbol: new_symbol_reference(symbols, sym.export_symbol),
+        ..Default::default()
+    };
+    if owner.is_some() {
+        // A client resolves a file-owned symbol's relationships through its own source file.
+        go_assert!(
+            sym.parent.is_nil() || symbol_owner_file(symbols, sym.parent) == Some(owner),
+            "File-owned symbol parent belongs to another owner"
+        );
+        go_assert!(
+            sym.export_symbol.is_nil()
+                || symbol_owner_file(symbols, sym.export_symbol) == Some(owner),
+            "File-owned export symbol belongs to another owner"
+        );
+    }
+    if !sym.declarations.is_empty() {
+        resp.declarations = sym
+            .declarations
+            .iter()
+            .map(|&decl| symbol_node_handle_from(decl, owner))
+            .collect();
+    }
+    if sym.value_declaration.is_some() {
+        resp.value_declaration = symbol_node_handle_from(sym.value_declaration, owner);
+    }
+    resp
+}
+
+// Go: api/session.go:279 newSymbolReference (ts#64518)
+// newSymbolReference creates a compact reference to a symbol without registering it. Clients resolve
+// it from their caches or fetch the full response through the corresponding property method.
+pub fn new_symbol_reference(
+    symbols: &SymbolArena,
+    symbol: SymbolId,
+) -> Option<CompactSymbolReference> {
+    if symbol.is_nil() {
+        return None;
+    }
+    let mut reference = CompactSymbolReference {
+        id: symbol_handle(symbols, symbol),
+        file: String::new(),
+    };
+    if let Some(file) = symbol_owner_file(symbols, symbol) {
+        reference.file = source_file_node_id(file).to_string();
+    }
+    Some(reference)
+}
+
+// Go: api/session.go:291 symbolNodeHandleFrom (ts#64518)
+pub fn symbol_node_handle_from(node: Node, owner: Node) -> NodeHandle {
+    if owner.is_some() {
+        go_assert!(
+            get_source_file_of_node(node) == owner,
+            "File-owned symbol declaration belongs to another source file"
+        );
+    }
+    node_handle_from(node)
+}
+
+// Go: api/session.go:298 nodeHandleFrom (ts#64518)
+pub fn node_handle_from(node: Node) -> NodeHandle {
+    let source_file = get_source_file_of_node(node);
+    let table = encoder::get_node_index_table(source_file);
+    let idx = table.get_index(node);
+    let path = source_file_info(source_file).path.clone();
+    NodeHandle(format!("{}.{}.{}", idx, node.kind() as i16, path))
+}
+
+// Go: api/session.go:2180 newSourceFileDescriptor (ts#64518)
+// PORT: Go reads `ParseOptions()` and `ScriptKind` from the
+// `*ast.SourceFile`; here they come from its parsed-file record.
+pub fn new_source_file_descriptor(source_file: Node) -> SourceFileDescriptor {
+    let parsed = ls_program::parsed_source_file(source_file)
+        .unwrap_or_else(|| unported!("newSourceFileDescriptor of a file with no parse record"));
+    new_parsed_source_file_descriptor(&parsed)
+}
+
+/// `new_source_file_descriptor` of the file of a parse record that the
+/// caller holds (a lease).
+pub fn new_parsed_source_file_descriptor(
+    parsed: &crate::frontend::parser::ParsedSourceFile,
+) -> SourceFileDescriptor {
+    let parse_options = &parsed.parse_options;
+    let mut parse_options_key: u32 = 0;
+    if parse_options.external_module_indicator_options.jsx {
+        parse_options_key |= 1;
+    }
+    if parse_options.external_module_indicator_options.force {
+        parse_options_key |= 2;
+    }
+    SourceFileDescriptor {
+        file_name: parse_options.file_name.clone(),
+        path: parse_options.path.0.clone(),
+        content_hash: encoder::parsed_source_file_hash(parsed),
+        parse_options_key: parse_options_key.to_string(),
+        script_kind: parsed.script_kind,
+        node_id: source_file_node_id(parsed.root).to_string(),
+    }
+}
+
+// Go: api/session.go:2201 sourceFileNodeID (ts#64518)
+// sourceFileNodeID is stable for one Go AST and changes when an equal parse-cache key is
+// recreated, making it suitable for validating remote references without introducing another
+// source-file identity or ownership registry.
+pub fn source_file_node_id(source_file: Node) -> u64 {
+    crate::ast::get_node_id(source_file)
+}
+
+// Go `strconv.ParseUint(s, base, bitSize)` for base 10 or 16: no sign, no
+// prefix, no underscores. The errors are Go's `*strconv.NumError` texts.
+fn parse_uint(s: &str, base: u32, bit_size: u32) -> Result<u64, GoError> {
+    let num_error = |reason: &str| {
+        errors::new(format!(
+            "strconv.ParseUint: parsing {}: {reason}",
+            gostd::strconv::quote(s)
+        ))
+    };
+    if s.is_empty() || !s.chars().all(|c| c.is_digit(base)) {
+        return Err(num_error("invalid syntax"));
+    }
+    match u64::from_str_radix(s, base) {
+        Ok(n) if bit_size >= 64 || n >> bit_size == 0 => Ok(n),
+        _ => Err(num_error("value out of range")),
+    }
+}
+
+// Go: api/session.go:2205 SourceFileDescriptor.parseCacheKey (ts#64518)
+impl SourceFileDescriptor {
+    pub fn parse_cache_key(&self) -> Result<project::ParseCacheKey, GoError> {
+        if self.content_hash.len() != 32 {
+            return Err(errors::new(
+                "content hash must contain 32 hexadecimal digits",
+            ));
+        }
+        let parse_hex = |digits: &str| {
+            parse_uint(digits, 16, 64)
+                .map_err(|err| errors::errorf(format!("invalid content hash: {err}"), vec![err]))
+        };
+        let hi = parse_hex(self.content_hash.get(..16).unwrap_or(""))?;
+        let lo = parse_hex(self.content_hash.get(16..).unwrap_or(""))?;
+        let parse_options_key = parse_uint(&self.parse_options_key, 10, 32);
+        let parse_options_key = match parse_options_key {
+            Ok(key) if key & !3 == 0 => key,
+            _ => {
+                return Err(errors::new(format!(
+                    "invalid parse options key {:?}",
+                    self.parse_options_key
+                )));
+            }
+        };
+        if !is_valid_create_source_file_script_kind(self.script_kind) {
+            return Err(errors::new(format!(
+                "invalid script kind {}",
+                self.script_kind.0
+            )));
+        }
+        let options = crate::frontend::parser::SourceFileParseOptions {
+            file_name: self.file_name.clone(),
+            path: tspath::Path(self.path.clone()),
+            external_module_indicator_options:
+                crate::frontend::parser::ExternalModuleIndicatorOptions {
+                    jsx: parse_options_key & 1 != 0,
+                    force: parse_options_key & 2 != 0,
+                },
+        };
+        Ok(project::new_parse_cache_key(
+            &options,
+            (u128::from(hi) << 64) | u128::from(lo),
+            self.script_kind,
+        ))
     }
 }
 
@@ -930,6 +1286,8 @@ pub fn snapshot_handle(snapshot: &project::Snapshot) -> SnapshotID {
 // PORT: Go `done func()` is the `Release` guard; it runs when the setup drops.
 pub struct CheckerSetup {
     pub sd: Rc<SnapshotData>,
+    // ts#64518
+    pub snapshot: SnapshotID,
     pub program: Rc<compiler::NewProgram>,
     pub checker: Rc<RefCell<Checker>>,
     pub done: ls_program::Release,
@@ -995,12 +1353,22 @@ impl CheckerSetup {
         self.sd.resolve_type_handle(&self.project_id, id)
     }
 
-    // Go: api/session.go:627 checkerSetup.resolveSymbolHandle
+    // Go: api/session.go:777 checkerSetup.resolveSymbolHandle
+    // ts#64518: a snapshot reference must name this checker's snapshot; a
+    // file reference must name a source file of this program.
+    // PORT: a file-owned symbol is returned with the setup checker, whose
+    // arena holds the binder symbols of its program's files.
     pub fn resolve_symbol_handle(
         &self,
-        id: SymbolID,
+        reference: &SymbolReference,
     ) -> Result<(Rc<RefCell<Checker>>, SymbolId), GoError> {
-        self.sd.resolve_symbol_handle(id)
+        resolve_symbol_reference_for_checker(
+            &self.sd,
+            self.snapshot,
+            &self.program,
+            &self.checker,
+            reference,
+        )
     }
 
     // Go: api/session.go:631 checkerSetup.resolveSignatureHandle
@@ -1168,6 +1536,7 @@ impl Session {
         );
         Ok(CheckerSetup {
             sd,
+            snapshot,
             program,
             checker: c,
             done,
@@ -1264,6 +1633,13 @@ impl ipc::Handler for Session {
             // ts#64434
             m if m == Method::RELEASE_SOURCE_FILE.0 => {
                 self.handle_release_source_file(Some(assert_params(&parsed)))
+            }
+            // ts#64518
+            m if m == Method::RETAIN_SOURCE_FILE.0 => self
+                .handle_retain_source_file(assert_params(&parsed))
+                .map(to_any),
+            m if m == Method::GET_CACHED_SOURCE_FILE.0 => {
+                self.handle_get_cached_source_file(assert_params(&parsed))
             }
             m if m == Method::INITIALIZE.0 => self.handle_initialize(ctx).map(to_any),
             // ts#64204
@@ -1946,6 +2322,8 @@ pub fn is_source_file_response_method(method: &Method) -> bool {
     *method == Method::CREATE_SOURCE_FILE
         || *method == Method::CREATE_SOURCE_FILE_FROM_FILE
         || *method == Method::GET_SOURCE_FILE
+        // ts#64518
+        || *method == Method::GET_CACHED_SOURCE_FILE
         || *method == Method::GET_CONFIG_SOURCE_FILE
         || *method == Method::TYPE_TO_TYPE_NODE
         || *method == Method::SIGNATURE_TO_SIGNATURE_DECLARATION
@@ -2501,6 +2879,7 @@ impl Session {
             sd.ref_count.set(sd.ref_count.get() + 1);
         } else {
             let sd = Rc::new(SnapshotData {
+                handle,
                 snapshot,
                 file_system,
                 ref_count: Cell::new(1),
@@ -3012,17 +3391,128 @@ impl Session {
                 ));
             }
         };
-        self.next_source_file_lease_id
-            .set(self.next_source_file_lease_id.get() + 1);
-        let id = SourceFileLeaseID(self.next_source_file_lease_id.get());
+        // ts#64518
+        encoder::set_source_file_id(&mut data, source_file_node_id(lease.source_file()));
+        let id = self.register_source_file_lease(lease);
         encoder::set_source_file_lease(&mut data, id.0);
-        self.source_file_leases.borrow_mut().insert(id, lease);
         if self.use_binary_responses {
             return Ok(to_any(RawBinary(data)));
         }
         Ok(to_any(SourceFileResponse {
             data: base64_std_encoding_encode_to_string(&data),
         }))
+    }
+
+    // Go: api/session.go:2069 handleRetainSourceFile (ts#64518)
+    pub fn handle_retain_source_file(
+        &self,
+        params: &RetainSourceFileParams,
+    ) -> Result<RetainSourceFileResponse, GoError> {
+        let lease = self.acquire_cached_source_file(&params.file)?;
+        Ok(RetainSourceFileResponse {
+            lease: self.register_source_file_lease(lease),
+        })
+    }
+
+    // Go: api/session.go:2080 handleGetCachedSourceFile (ts#64518)
+    // @gen-proto-result: SourceFileResponse
+    // PORT: Go encodes `lease.SourceFile()`. The lease's file may be in no
+    // program, so the encoder reads the lease's parse record
+    // (`encode_parsed_source_file`, as `encode_leased_source_file`).
+    pub fn handle_get_cached_source_file(
+        &self,
+        params: &GetCachedSourceFileParams,
+    ) -> Result<Option<Box<dyn AnyValue>>, GoError> {
+        let lease = self.acquire_cached_source_file(&params.file)?;
+        // Go: defer lease.Release()
+        let result = match encoder::encode_parsed_source_file(lease.parsed_source_file()) {
+            Ok((mut data, _)) => {
+                encoder::set_source_file_id(&mut data, source_file_node_id(lease.source_file()));
+                Ok(self.source_file_data_response(data))
+            }
+            Err(err) => Err(errors::errorf(
+                format!("failed to encode source file: {err}"),
+                vec![err],
+            )),
+        };
+        lease.release();
+        project::drop_released_lease(lease);
+        result
+    }
+
+    // Go: api/session.go:2091 acquireCachedSourceFile (ts#64518)
+    // acquireCachedSourceFile holds a reference to the exact ordinary cached AST identified by a
+    // descriptor. It never parses; the caller must release the returned lease.
+    // PORT: Go calls `SnapshotHost.AcquireExistingSourceFile(key)`
+    // (project/snapshothost.go:65, ts#64518), which the server lane ports
+    // in step 2. Until then this looks up the live entry of `key` in the
+    // parse cache (Go `RefCountCache.AcquireExisting`,
+    // project/refcountcache.go:64) and acquires it through
+    // `acquire_source_file` with the entry's own text: that text has the
+    // key's hash, so the acquire finds the same entry and does not parse.
+    // PORT: the key hash is the descriptor's content hash, as in Go. For a
+    // text with a Go string marker the port's content hash is the hash of
+    // Go's bytes (`encoder::go_content_hash`), not the cache key's, so such
+    // a file is "not available".
+    pub fn acquire_cached_source_file(
+        &self,
+        descriptor: &SourceFileDescriptor,
+    ) -> Result<Rc<project::SourceFileLease>, GoError> {
+        let key = match descriptor.parse_cache_key() {
+            Ok(key) => key,
+            Err(err) => {
+                return Err(errors::errorf(
+                    format!(
+                        "{}: invalid source file descriptor: {err}",
+                        *ERR_CLIENT_ERROR
+                    ),
+                    vec![ERR_CLIENT_ERROR.clone(), err],
+                ));
+            }
+        };
+        let cache = &self.snapshot_host.parse_cache;
+        let existing = cache.entries.borrow().get(&key).cloned().and_then(|entry| {
+            let live = entry.ref_count.get() > 0 || cache.options.disable_deletion;
+            live.then(|| entry.value.borrow().clone()).flatten()
+        });
+        let Some(existing) = existing else {
+            return Err(errors::errorf(
+                format!("{}: source file is not available", *ERR_CLIENT_ERROR),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ));
+        };
+        let lease = self.snapshot_host.acquire_source_file(
+            key.source_file_parse_options(),
+            &existing.file.text,
+            key.script_kind,
+        );
+        // The parse-cache key addresses a live ordinary file, but an equal key can identify a new
+        // AST after the original entry is evicted. The node ID verifies that this is the exact AST
+        // observed by the client; it is not used to address or retain the file.
+        if new_parsed_source_file_descriptor(lease.parsed_source_file()) != *descriptor {
+            lease.release();
+            project::drop_released_lease(lease);
+            return Err(errors::errorf(
+                format!(
+                    "{}: source file descriptor no longer identifies the cached source file",
+                    *ERR_CLIENT_ERROR
+                ),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ));
+        }
+        Ok(lease)
+    }
+
+    // Go: api/session.go:2110 registerSourceFileLease (ts#64518)
+    pub fn register_source_file_lease(
+        &self,
+        lease: Rc<project::SourceFileLease>,
+    ) -> SourceFileLeaseID {
+        self.next_source_file_lease_id
+            .set(self.next_source_file_lease_id.get() + 1);
+        let id = SourceFileLeaseID(self.next_source_file_lease_id.get());
+        self.source_file_leases.borrow_mut().insert(id, lease);
+        id
     }
 
     // Go: api/session.go handleReleaseSourceFile (ts#64434)
@@ -3334,7 +3824,7 @@ impl Session {
         }
 
         // Encode the full source file.
-        let data = match encoder::encode_source_file(source_file) {
+        let mut data = match encoder::encode_source_file(source_file) {
             Ok((data, _)) => data,
             Err(err) => {
                 return Err(errors::errorf(
@@ -3343,13 +3833,21 @@ impl Session {
                 ));
             }
         };
+        // ts#64518
+        encoder::set_source_file_id(&mut data, source_file_node_id(source_file));
 
+        Ok(self.source_file_data_response(data))
+    }
+
+    /// The tail of Go `encodeSourceFileResponse`: the encoded file as raw
+    /// binary or base64 JSON.
+    fn source_file_data_response(&self, data: Vec<u8>) -> Option<Box<dyn AnyValue>> {
         if self.use_binary_responses {
-            return Ok(to_any(RawBinary(data)));
+            return to_any(RawBinary(data));
         }
-        Ok(to_any(SourceFileResponse {
+        to_any(SourceFileResponse {
             data: base64_std_encoding_encode_to_string(&data),
-        }))
+        })
     }
 
     // Go: api/session.go:2075 handleGetSourceFileNames
@@ -3823,7 +4321,7 @@ impl Session {
     ) -> Result<Option<TypeResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let t = setup
@@ -3846,8 +4344,8 @@ impl Session {
 
         let mut results: Vec<Option<TypeResponse>> =
             (0..params.symbols.len()).map(|_| None).collect();
-        for (i, &sym_handle) in params.symbols.iter().enumerate() {
-            let (owner, symbol) = setup.resolve_symbol_handle(sym_handle)?;
+        for (i, symbol_reference) in params.symbols.iter().enumerate() {
+            let (owner, symbol) = setup.resolve_symbol_handle(symbol_reference)?;
             let symbol = checker_symbol(&setup.checker, &owner, symbol);
             // resolveSymbolHandle errors on an unresolvable handle and GetTypeOfSymbol
             // never returns nil, so every element resolves to a type (error type at worst).
@@ -3872,7 +4370,7 @@ impl Session {
     ) -> Result<Option<TypeResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let t = setup
@@ -3893,7 +4391,7 @@ impl Session {
     ) -> Result<Option<TypeResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let t = setup
@@ -4148,8 +4646,8 @@ impl Session {
         _ctx: &Context,
         params: &GetSymbolPropertyParams,
     ) -> Result<Option<SymbolResponse>, GoError> {
-        self.resolve_symbol_property_of_symbol(params, &|c: &Checker, sym: SymbolId| {
-            c.sym(sym).parent
+        self.resolve_symbol_property_of_symbol(params, &|symbols: &SymbolArena, sym: SymbolId| {
+            symbols.sym(sym).parent
         })
     }
 
@@ -4162,7 +4660,7 @@ impl Session {
         self.resolve_symbol_table_property_of_symbol(
             ctx,
             params,
-            &|c: &Checker, symbol: SymbolId| c.sym(symbol).members,
+            &|symbols: &SymbolArena, symbol: SymbolId| symbols.sym(symbol).members,
         )
     }
 
@@ -4175,7 +4673,7 @@ impl Session {
         self.resolve_symbol_table_property_of_symbol(
             ctx,
             params,
-            &|c: &Checker, symbol: SymbolId| c.sym(symbol).exports,
+            &|symbols: &SymbolArena, symbol: SymbolId| symbols.sym(symbol).exports,
         )
     }
 
@@ -4185,8 +4683,8 @@ impl Session {
         _ctx: &Context,
         params: &GetSymbolPropertyParams,
     ) -> Result<Option<SymbolResponse>, GoError> {
-        self.resolve_symbol_property_of_symbol(params, &|c: &Checker, sym: SymbolId| {
-            c.sym(sym).export_symbol
+        self.resolve_symbol_property_of_symbol(params, &|symbols: &SymbolArena, sym: SymbolId| {
+            symbols.sym(sym).export_symbol
         })
     }
 
@@ -4598,7 +5096,8 @@ impl Session {
         for (i, action) in params.actions.iter().enumerate() {
             match action.kind.0.as_str() {
                 IMPORT_ADDER_ACTION_KIND_IMPORT_SYMBOL => {
-                    if action.symbol.0 == 0 {
+                    // ts#64518
+                    let Some(action_symbol) = &action.symbol else {
                         return Err(errors::errorf(
                             format!(
                                 "{}: import adder action {} missing symbol",
@@ -4606,8 +5105,14 @@ impl Session {
                             ),
                             vec![ERR_CLIENT_ERROR.clone()],
                         ));
-                    }
-                    let (owner, symbol) = sd.resolve_symbol_handle(action.symbol)?;
+                    };
+                    let (owner, symbol) = resolve_symbol_reference_for_checker(
+                        &sd,
+                        params.snapshot,
+                        &program,
+                        &ch,
+                        action_symbol,
+                    )?;
                     let symbol = checker_symbol(&ch, &owner, symbol);
                     let mut is_valid_type_only_use_site = true;
                     if let Some(value) = action.is_valid_type_only_use_site {

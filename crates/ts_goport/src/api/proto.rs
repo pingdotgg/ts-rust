@@ -302,6 +302,9 @@ impl Method {
     pub const RELEASE: Method = Method(Cow::Borrowed("release"));
     // ts#64434
     pub const RELEASE_SOURCE_FILE: Method = Method(Cow::Borrowed("releaseSourceFile"));
+    // ts#64518
+    pub const RETAIN_SOURCE_FILE: Method = Method(Cow::Borrowed("retainSourceFile"));
+    pub const GET_CACHED_SOURCE_FILE: Method = Method(Cow::Borrowed("getCachedSourceFile"));
 
     // ts#63937
     pub const BATCH_REQUESTS: Method = Method(Cow::Borrowed("batchRequests"));
@@ -1673,6 +1676,15 @@ pub static UNMARSHALERS: LazyLock<FxHashMap<Method, Unmarshaler>> = LazyLock::ne
         Method::RELEASE_SOURCE_FILE,
         unmarshaller_for::<ReleaseSourceFileParams>,
     );
+    // ts#64518
+    m.insert(
+        Method::RETAIN_SOURCE_FILE,
+        unmarshaller_for::<RetainSourceFileParams>,
+    );
+    m.insert(
+        Method::GET_CACHED_SOURCE_FILE,
+        unmarshaller_for::<GetCachedSourceFileParams>,
+    );
     m.insert(Method::INITIALIZE, no_params);
     // ts#64204
     m.insert(
@@ -2869,6 +2881,62 @@ proto_json!(both ReleaseSourceFileParams {
     lease: "lease" plain,
 });
 
+// Go: proto.go:930 SourceFileDescriptor (ts#64518)
+// The complete identity of an ordinary cached source file: its parse cache
+// key and the node ID of the exact AST that the client saw.
+// PORT: ts#64159 types FileName and Path (`tspath.RootedFilePath`,
+// `tspath.PathKey`); the port keeps strings.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceFileDescriptor {
+    pub file_name: String,
+    pub path: String,
+    pub content_hash: String,
+    pub parse_options_key: String,
+    pub script_kind: ScriptKind,
+    pub node_id: String,
+}
+
+proto_json!(both SourceFileDescriptor {
+    file_name: "fileName" plain,
+    path: "path" plain,
+    content_hash: "contentHash" plain,
+    parse_options_key: "parseOptionsKey" plain,
+    script_kind: "scriptKind" plain,
+    node_id: "nodeId" plain,
+});
+
+// Go: proto.go:939 RetainSourceFileParams (ts#64518)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RetainSourceFileParams {
+    pub file: SourceFileDescriptor,
+}
+
+proto_json!(both RetainSourceFileParams {
+    file: "file" plain,
+});
+
+// Go: proto.go:943 RetainSourceFileResponse (ts#64518)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RetainSourceFileResponse {
+    pub lease: SourceFileLeaseID,
+}
+
+proto_json!(marshal RetainSourceFileResponse {
+    lease: "lease" plain,
+});
+
+// Go: proto.go:949 GetCachedSourceFileParams (ts#64518)
+// GetCachedSourceFileParams address an ordinary cached source file by its complete identity,
+// independent of any snapshot or lease.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GetCachedSourceFileParams {
+    pub file: SourceFileDescriptor,
+}
+
+proto_json!(both GetCachedSourceFileParams {
+    file: "file" plain,
+});
+
 // Go: proto.go:897 ProfileParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProfileParams {
@@ -3190,52 +3258,91 @@ proto_json!(both GetSymbolsAtLocationsParams {
     locations: "locations" plain,
 });
 
-// Go: proto.go:1093 SymbolResponse
+// Go: proto.go:1130 SymbolResponse
+// ts#64518: `reference` names the symbol and its owner; `parent` and
+// `exportSymbol` are compact references.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SymbolResponse {
-    pub id: SymbolID,
-    // Project is the project in which the symbol was first observed. It is the
-    // default project for follow-up lookups whose results can vary by project.
-    pub project: project::ID,
+    pub reference: SymbolReference,
     pub name: String,
     pub flags: u32,
     pub check_flags: u32,
     pub declarations: Vec<NodeHandle>,
     pub value_declaration: NodeHandle,
-    pub parent: SymbolID,
-    pub export_symbol: SymbolID,
+    pub parent: Option<CompactSymbolReference>,
+    pub export_symbol: Option<CompactSymbolReference>,
 }
 
 proto_json!(marshal SymbolResponse {
-    id: "id" plain,
-    project: "project" plain,
+    reference: "reference" plain,
     name: "name" plain,
     flags: "flags" plain,
     check_flags: "checkFlags" plain,
     declarations: "declarations" omitempty,
     value_declaration: "valueDeclaration" omitempty,
-    parent: "parent" omitzero,
-    export_symbol: "exportSymbol" omitzero,
+    parent: "parent" omitempty,
+    export_symbol: "exportSymbol" omitempty,
 });
 
-// Go: proto.go:1107 symbolHandles
-pub fn symbol_handles(symbols: &SymbolArena, symbol_list: &[SymbolId]) -> Vec<SymbolID> {
-    if symbol_list.is_empty() {
-        return Vec::new();
-    }
-    let mut handles = Vec::with_capacity(symbol_list.len());
-    for &t in symbol_list {
-        handles.push(symbol_handle(symbols, t));
-    }
-    handles
+// Go: proto.go:1141 SymbolOwnerKind (ts#64518)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SymbolOwnerKind(pub u32);
+
+impl SymbolOwnerKind {
+    // Go: proto.go:1143
+    pub const FILE: SymbolOwnerKind = SymbolOwnerKind(0);
+    pub const SNAPSHOT: SymbolOwnerKind = SymbolOwnerKind(1);
 }
 
-// Go: proto.go:1118 GetTypeOfSymbolParams
+handle_json!(uint: SymbolOwnerKind);
+
+// Go: proto.go:1148 SymbolOwner and proto.go:1156 SymbolReference (ts#64518)
+// SymbolReference identifies a symbol and its server-resolvable owner.
+// PORT: Go `SymbolReference` embeds `SymbolOwner`, whose fields JSON v2
+// inlines (`kind`, `file`, `snapshot`, `project`, then `id`). Nothing else
+// uses `SymbolOwner`, so the port has one flat struct.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SymbolReference {
+    pub kind: SymbolOwnerKind,
+    pub file: Option<SourceFileDescriptor>,
+    pub snapshot: SnapshotID,
+    pub project: project::ID,
+    pub id: SymbolID,
+}
+
+proto_json!(both SymbolReference {
+    kind: "kind" plain,
+    file: "file" omitempty,
+    snapshot: "snapshot" omitzero,
+    project: "project" omitempty,
+    id: "id" plain,
+});
+
+// Go: proto.go:1165 CompactSymbolReference (ts#64518)
+// CompactSymbolReference is embedded in other responses. It identifies a cached
+// symbol without repeating its owning file's full descriptor: File is the owning source file's
+// node ID, or empty for a symbol owned by the response's snapshot. When the client has not cached
+// the symbol, it fetches a full SymbolResponse through the corresponding property method.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CompactSymbolReference {
+    pub id: SymbolID,
+    pub file: String,
+}
+
+proto_json!(marshal CompactSymbolReference {
+    id: "id" plain,
+    file: "file" omitempty,
+});
+
+// Go: proto.go:1107 symbolHandles (at 673a5f17d713; removed by ts#64518)
+
+// Go: proto.go:1170 GetTypeOfSymbolParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetTypeOfSymbolParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    // ts#64518
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both GetTypeOfSymbolParams {
@@ -3244,12 +3351,13 @@ proto_json!(both GetTypeOfSymbolParams {
     symbol: "symbol" plain,
 });
 
-// Go: proto.go:1124 GetTypesOfSymbolsParams
+// Go: proto.go:1176 GetTypesOfSymbolsParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetTypesOfSymbolsParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbols: Vec<SymbolID>,
+    // ts#64518
+    pub symbols: Vec<SymbolReference>,
 }
 
 proto_json!(both GetTypesOfSymbolsParams {
@@ -3258,7 +3366,7 @@ proto_json!(both GetTypesOfSymbolsParams {
     symbols: "symbols" plain,
 });
 
-// Go: proto.go:1130 TypeResponse
+// Go: proto.go:1182 TypeResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TypeResponse {
     pub id: TypeID,
@@ -3322,10 +3430,11 @@ pub struct TypeResponse {
 
     // TypeAlias data
     pub alias_type_arguments: Vec<TypeID>,
-    pub alias_symbol: SymbolID,
+    // ts#64518
+    pub alias_symbol: Option<CompactSymbolReference>,
 
     // Symbol associated with structured types
-    pub symbol: SymbolID,
+    pub symbol: Option<CompactSymbolReference>,
 }
 
 impl MarshalerTo for TypeResponse {
@@ -3384,14 +3493,14 @@ impl MarshalerTo for TypeResponse {
             "aliasTypeArguments",
             &self.alias_type_arguments,
         )?;
-        marshal_field_omitzero(enc, &mut first, "aliasSymbol", &self.alias_symbol)?;
-        marshal_field_omitzero(enc, &mut first, "symbol", &self.symbol)?;
+        marshal_field_omitempty(enc, &mut first, "aliasSymbol", &self.alias_symbol)?;
+        marshal_field_omitempty(enc, &mut first, "symbol", &self.symbol)?;
         write_object_end(enc);
         Ok(())
     }
 }
 
-// Go: proto.go:1196 newTypeResponse
+// Go: proto.go:1248 newTypeResponse
 // PORT: Go reads the type through its pointer; the port reads it from the
 // checker arena that owns `t`.
 pub fn new_type_response(c: &Checker, t: TypeId, id: TypeID) -> TypeResponse {
@@ -3402,15 +3511,10 @@ pub fn new_type_response(c: &Checker, t: TypeId, id: TypeID) -> TypeResponse {
         ..TypeResponse::default()
     };
 
-    if ty.symbol().is_some() {
-        resp.symbol = symbol_handle(&c.symbols, ty.symbol());
-    }
-
+    // ts#64518: the symbol and alias symbol references are set by
+    // `SnapshotData::new_type_response`.
     if let Some(alias) = ty.alias() {
         resp.alias_type_arguments = type_handles(alias.type_arguments());
-        if alias.symbol().is_some() {
-            resp.alias_symbol = symbol_handle(&c.symbols, alias.symbol());
-        }
     }
 
     let flags = ty.flags();
@@ -3540,15 +3644,16 @@ proto_json!(marshal ConstantValueResponse {
     value: "value" plain,
 });
 
-// Go: proto.go:1325 SignatureResponse
+// Go: proto.go:1370 SignatureResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SignatureResponse {
     pub id: SignatureID,
     pub flags: u32,
     pub declaration: NodeHandle,
     pub type_parameters: Vec<TypeID>,
-    pub parameters: Vec<SymbolID>,
-    pub this_parameter: SymbolID,
+    // ts#64518
+    pub parameters: Vec<CompactSymbolReference>,
+    pub this_parameter: Option<CompactSymbolReference>,
     pub target: SignatureID,
 }
 
@@ -3558,7 +3663,7 @@ proto_json!(marshal SignatureResponse {
     declaration: "declaration" omitempty,
     type_parameters: "typeParameters" omitempty,
     parameters: "parameters" omitempty,
-    this_parameter: "thisParameter" omitzero,
+    this_parameter: "thisParameter" omitempty,
     target: "target" omitzero,
 });
 
@@ -3883,18 +3988,15 @@ proto_json!(both GetTypePropertyParams {
 });
 
 // GetSymbolPropertyParams is used for all symbol sub-property endpoints.
-// Go: proto.go:1468 GetSymbolPropertyParams
+// Go: proto.go:1513 GetSymbolPropertyParams
 #[derive(Clone, Debug, Default, PartialEq)]
+// ts#64518: only the symbol reference, which names its snapshot and project.
 pub struct GetSymbolPropertyParams {
-    pub snapshot: SnapshotID,
-    pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both GetSymbolPropertyParams {
-    snapshot: "snapshot" plain,
-    project: "project" plain,
-    symbol: "objectId" plain,
+    symbol: "symbol" plain,
 });
 
 // GetSignaturePropertyParams is used for all signature sub-property endpoints.
@@ -3944,12 +4046,12 @@ proto_json!(both GetContextualTypeForArgumentParams {
 });
 
 // GetTypeOfSymbolAtLocationParams returns the narrowed type of a symbol at a specific location.
-// Go: proto.go:1496 GetTypeOfSymbolAtLocationParams
+// Go: proto.go:1539 GetTypeOfSymbolAtLocationParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetTypeOfSymbolAtLocationParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
     pub location: NodeHandle,
 }
 
@@ -3961,13 +4063,13 @@ proto_json!(both GetTypeOfSymbolAtLocationParams {
 });
 
 // GetReferencesToSymbolInFileParams are the parameters for the getReferencesToSymbolInFile method.
-// Go: proto.go:1504 GetReferencesToSymbolInFileParams
+// Go: proto.go:1547 GetReferencesToSymbolInFileParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetReferencesToSymbolInFileParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
     pub file: DocumentIdentifier,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both GetReferencesToSymbolInFileParams {
@@ -4361,11 +4463,12 @@ handle_json!(string: ImportAdderActionKind);
 // Go: proto.go:1688 ImportAdderActionKindImportSymbol (tsgo#3881)
 pub const IMPORT_ADDER_ACTION_KIND_IMPORT_SYMBOL: &str = "importSymbol";
 
-// Go: proto.go:1691 ImportAdderAction (tsgo#3881)
+// Go: proto.go:1734 ImportAdderAction (tsgo#3881)
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportAdderAction {
     pub kind: ImportAdderActionKind,
-    pub symbol: SymbolID,
+    // ts#64518
+    pub symbol: Option<SymbolReference>,
     pub is_valid_type_only_use_site: Option<bool>,
 }
 
@@ -4623,12 +4726,12 @@ proto_json!(both CheckerNodeParams {
 });
 
 // GetMemberInModuleExportsParams are parameters for getMemberInModuleExports.
-// Go: proto.go:1802 GetMemberInModuleExportsParams
+// Go: proto.go:1845 GetMemberInModuleExportsParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetMemberInModuleExportsParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
     pub name: String,
 }
 
@@ -4640,12 +4743,12 @@ proto_json!(both GetMemberInModuleExportsParams {
 });
 
 // CheckerSymbolParams are parameters for checker methods that operate on a symbol.
-// Go: proto.go:1817 CheckerSymbolParams
+// Go: proto.go:1860 CheckerSymbolParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CheckerSymbolParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both CheckerSymbolParams {

@@ -1,5 +1,5 @@
 //! Port of Go `internal/api/session_createsourcefile_test.go` (ts#64216,
-//! ts#64434).
+//! ts#64434, ts#64518).
 //!
 //! PORT: the tests are in `project_lsp` because they use `projecttestutil`
 //! and `child_test!`. Each Go subtest is one `#[test]`, so each one sets up
@@ -10,12 +10,17 @@
 //! `*ast.SourceFile` fields and methods are the `ast::source_file_*` reads
 //! of that node. Go compares `*ast.SourceFile` pointers; the port compares
 //! the root nodes.
+//!
+//! PORT (ts#64518): Go `newSourceFileDescriptor(lease.SourceFile())` reads
+//! the leased `*ast.SourceFile`. A leased file can be in no program, so the
+//! tests build the descriptor from the lease's parse record
+//! (`new_parsed_source_file_descriptor`), as the session does.
 
 use std::rc::Rc;
 
 use ts_goport::api::{
     self, CreateSourceFileFromFileParams, CreateSourceFileOptions, CreateSourceFileParams,
-    ReleaseSourceFileParams, SourceFileLeaseID,
+    ReleaseSourceFileParams, RetainSourceFileParams, SourceFileDescriptor, SourceFileLeaseID,
 };
 use ts_goport::ast;
 use ts_goport::flags::ScriptKind;
@@ -34,7 +39,7 @@ fn setup() -> (Rc<project::Session>, Rc<api::Session>) {
     (project_session, session)
 }
 
-// Go: session_createsourcefile_test.go:24 TestCreateSourceFile/text
+// Go: session_createsourcefile_test.go:26 TestCreateSourceFile/text
 child_test! {
     fn text() {
         let (project_session, session) = setup();
@@ -60,7 +65,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:43 TestCreateSourceFile/script kind override
+// Go: session_createsourcefile_test.go:45 TestCreateSourceFile/script kind override
 child_test! {
     fn script_kind_override() {
         let (project_session, session) = setup();
@@ -81,7 +86,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:58 TestCreateSourceFile/shares parse cache with programs
+// Go: session_createsourcefile_test.go:60 TestCreateSourceFile/shares parse cache with programs
 child_test! {
     fn shares_parse_cache_with_programs() {
         let (project_session, session) = setup();
@@ -116,7 +121,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:79 TestCreateSourceFile/lease release
+// Go: session_createsourcefile_test.go:81 TestCreateSourceFile/lease release
 child_test! {
     fn lease_release() {
         let (project_session, session) = setup();
@@ -175,7 +180,122 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:123 TestCreateSourceFile/unknown extension defaults to TypeScript
+// Go: session_createsourcefile_test.go:125 TestCreateSourceFile/retain by descriptor (ts#64518)
+// PORT: Go checks the parse cache with `SnapshotHost.AcquireExistingSourceFile`
+// (project/snapshothost.go:65), which the server lane ports in step 2; the
+// port checks it with the session's `acquire_cached_source_file`, which
+// acquires only an existing entry.
+child_test! {
+    fn retain_by_descriptor() {
+        let (project_session, session) = setup();
+        let file_name = "/src/retained.ts";
+        let source_text = "export const retained = true;";
+        let created = nil_error(session.create_source_file(
+            file_name,
+            source_text,
+            &CreateSourceFileOptions::default(),
+        ));
+        let source_file = created.source_file();
+        let descriptor = api::new_parsed_source_file_descriptor(created.parsed_source_file());
+
+        let result = nil_error(session.handle_retain_source_file(&RetainSourceFileParams {
+            file: descriptor.clone(),
+        }));
+        assert!(result.lease != SourceFileLeaseID(0));
+        let retained_source_file = session.source_file_leases.borrow()[&result.lease].source_file();
+        assert!(retained_source_file == source_file);
+
+        created.release();
+        nil_error(descriptor.parse_cache_key());
+        let acquired = nil_error(session.acquire_cached_source_file(&descriptor));
+        acquired.release();
+
+        nil_error(session.handle_release_source_file(Some(&ReleaseSourceFileParams {
+            lease: result.lease,
+        })));
+        assert!(session.acquire_cached_source_file(&descriptor).is_err());
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createsourcefile_test.go:155 TestCreateSourceFile/retain cache miss (ts#64518)
+child_test! {
+    fn retain_cache_miss() {
+        let (project_session, session) = setup();
+        let descriptor = SourceFileDescriptor {
+            file_name: "/src/missing.ts".to_string(),
+            path: "/src/missing.ts".to_string(),
+            content_hash: "00000000000000000000000000000000".to_string(),
+            parse_options_key: "0".to_string(),
+            script_kind: ScriptKind::TS,
+            node_id: "1".to_string(),
+        };
+        error_contains(
+            session.handle_retain_source_file(&RetainSourceFileParams { file: descriptor }),
+            "source file is not available",
+        );
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createsourcefile_test.go:201 TestCreateSourceFile/rejects stale node ID (ts#64518)
+child_test! {
+    fn rejects_stale_node_id() {
+        let (project_session, session) = setup();
+        let created = nil_error(session.create_source_file(
+            "/src/stale.ts",
+            "export {};",
+            &CreateSourceFileOptions::default(),
+        ));
+        let mut descriptor = api::new_parsed_source_file_descriptor(created.parsed_source_file());
+        descriptor.node_id = "0".to_string();
+
+        error_contains(
+            session.handle_retain_source_file(&RetainSourceFileParams { file: descriptor }),
+            "cached source file",
+        );
+        created.release();
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createsourcefile_test.go:214 TestCreateSourceFile/rejects an evicted file after equal-key recreation (ts#64518)
+child_test! {
+    fn rejects_an_evicted_file_after_equal_key_recreation() {
+        let (project_session, session) = setup();
+        let file_name = "/src/recreated.ts";
+        let source_text = "export {};";
+        let first = nil_error(session.create_source_file(
+            file_name,
+            source_text,
+            &CreateSourceFileOptions::default(),
+        ));
+        let stale_descriptor = api::new_parsed_source_file_descriptor(first.parsed_source_file());
+        first.release();
+
+        let second = nil_error(session.create_source_file(
+            file_name,
+            source_text,
+            &CreateSourceFileOptions::default(),
+        ));
+        assert!(api::new_parsed_source_file_descriptor(second.parsed_source_file()).node_id != stale_descriptor.node_id);
+
+        error_contains(
+            session.handle_retain_source_file(&RetainSourceFileParams {
+                file: stale_descriptor,
+            }),
+            "cached source file",
+        );
+        second.release();
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createsourcefile_test.go:233 TestCreateSourceFile/unknown extension defaults to TypeScript
 child_test! {
     fn unknown_extension_defaults_to_type_script() {
         let (project_session, session) = setup();
@@ -194,7 +314,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:138 TestCreateSourceFile/from file
+// Go: session_createsourcefile_test.go:248 TestCreateSourceFile/from file
 child_test! {
     fn from_file() {
         let (project_session, session) = setup();
@@ -212,7 +332,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:148 TestCreateSourceFile/invalid script kind
+// Go: session_createsourcefile_test.go:258 TestCreateSourceFile/invalid script kind
 child_test! {
     fn invalid_script_kind() {
         let (project_session, session) = setup();
@@ -231,7 +351,7 @@ child_test! {
     }
 }
 
-// Go: session_createsourcefile_test.go:159 TestCreateSourceFile/missing file
+// Go: session_createsourcefile_test.go:269 TestCreateSourceFile/missing file
 child_test! {
     fn missing_file() {
         let (project_session, session) = setup();
