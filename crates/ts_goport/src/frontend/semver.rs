@@ -909,7 +909,7 @@ fn parse_comparator(op: &str, text: &str) -> Option<Vec<VersionComparator>> {
                 } else {
                     comparators_result = vec![VersionComparator {
                         operator,
-                        operand: result.version.clone(),
+                        operand: result.version,
                     }];
                 }
             }

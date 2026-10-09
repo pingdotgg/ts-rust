@@ -237,7 +237,7 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
         max_node_module_js_depth =
             i32::try_from(p).unwrap_or(if p < 0 { i32::MIN } else { i32::MAX });
     }
-    let current_directory = opts.host.get_current_directory().to_string();
+    let current_directory = opts.host.get_current_directory();
     let mut loader = FileLoader {
         default_library_path: get_normalized_absolute_path(
             &opts.host.default_library_path(),
@@ -853,7 +853,7 @@ impl FileLoader {
         lib_file: Option<Rc<LibFile>>,
         include_reason: Rc<FileIncludeReason>,
     ) {
-        let curr_dir = self.opts.host.get_current_directory().to_string();
+        let curr_dir = self.opts.host.get_current_directory();
         let abs_path = get_normalized_absolute_path(file_name, &curr_dir);
         let mut containing_file = curr_dir.clone();
         if let Some(config_file) = &self.opts.config.config_file {
@@ -890,7 +890,7 @@ impl FileLoader {
         if !compiler_options.config_file_path.is_empty() {
             containing_directory = get_directory_path(&compiler_options.config_file_path);
         } else {
-            containing_directory = self.opts.host.get_current_directory().to_string();
+            containing_directory = self.opts.host.get_current_directory();
         }
         let containing_file_name =
             combine_paths(&containing_directory, &[INFERRED_TYPES_CONTAINING_FILE]);
@@ -3523,10 +3523,29 @@ export const a: T | Dep | number = x + (h as never);
         use crate::gostd::GoError;
         use crate::ipc::{self, Message, Protocol as _, ReadWriteCloser};
         use std::io::{Read, Write};
-        use std::os::unix::net::UnixStream;
         use std::sync::{Arc, Condvar, Mutex};
 
-        struct End(UnixStream);
+        #[cfg(unix)]
+        type Stream = std::os::unix::net::UnixStream;
+        // Windows has no socket pair in std: a connected loopback TCP pair
+        // gives the same two-ended byte stream.
+        #[cfg(windows)]
+        type Stream = std::net::TcpStream;
+
+        #[cfg(unix)]
+        fn stream_pair() -> std::io::Result<(Stream, Stream)> {
+            Stream::pair()
+        }
+
+        #[cfg(windows)]
+        fn stream_pair() -> std::io::Result<(Stream, Stream)> {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+            let client = Stream::connect(listener.local_addr()?)?;
+            let (server, _) = listener.accept()?;
+            Ok((client, server))
+        }
+
+        struct End(Stream);
 
         impl ReadWriteCloser for End {
             fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -3555,7 +3574,7 @@ export const a: T | Dep | number = x + (h as never);
             transforms: Arc<Mutex<Vec<String>>>,
             exit_after: Option<usize>,
         ) -> Arc<dyn ProcessExitState> {
-            let (client, server) = UnixStream::pair().expect("socket pair");
+            let (client, server) = stream_pair().expect("socket pair");
             let server: Arc<dyn ReadWriteCloser> = Arc::new(End(server));
             let write = Arc::new(Mutex::new(()));
             let queue: Queue = Arc::default();
@@ -3568,7 +3587,7 @@ export const a: T | Dep | number = x + (h as never);
                 }
             };
             {
-                let (server, write, queue) = (server.clone(), write.clone(), queue.clone());
+                let (server, write, queue) = (server.clone(), write, queue.clone());
                 std::thread::spawn(move || {
                     loop {
                         let msg = {

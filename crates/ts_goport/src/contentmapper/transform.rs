@@ -422,7 +422,7 @@ mod tests {
                 supplemental: vec![MappedResult {
                     text: "export const value = 1;".to_string(),
                     virtual_extension: ".mts".to_string(),
-                    mappings: mappings.clone(),
+                    mappings: mappings,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -458,7 +458,7 @@ mod tests {
                 supplemental: vec![MappedResult {
                     text: "const supplemental = 1;".to_string(),
                     virtual_extension: ".ts".to_string(),
-                    mappings: mappings.clone(),
+                    mappings: mappings,
                     ..Default::default()
                 }],
                 ..Default::default()

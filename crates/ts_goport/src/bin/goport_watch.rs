@@ -79,7 +79,7 @@ fn main() {
     let output = Arc::new(Mutex::new(Vec::new()));
     let watches = Arc::new(Watches::default());
     let work = {
-        let (output, watches) = (output.clone(), watches.clone());
+        let (output, watches) = (output.clone(), watches);
         std::thread::Builder::new()
             .stack_size(ts_goport::gostd::stack::max_stack_size())
             .spawn(move || run(&tsc_args, output, watches, edits))

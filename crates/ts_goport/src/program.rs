@@ -4399,7 +4399,7 @@ fn get_declaration_diagnostics_worker(host: Rc<EmitHost>, file: Node) -> Vec<Dia
     // needs `&'static`, so read the program options directly.
     let options = options();
     let mut transform =
-        crate::declarations::new_declaration_transformer(host.clone(), None, options, "", "");
+        crate::declarations::new_declaration_transformer(host, None, options, "", "");
     transform.transform_source_file_root(file);
     transform.get_diagnostics()
 }

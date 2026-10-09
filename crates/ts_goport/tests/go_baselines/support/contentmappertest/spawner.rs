@@ -2,7 +2,12 @@
 
 use std::io::{Read as _, Write};
 use std::net::Shutdown;
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream as Stream;
+// Windows has no socket pair in std: a connected loopback TCP pair gives the
+// same two-ended byte stream.
+#[cfg(windows)]
+use std::net::TcpStream as Stream;
 use std::rc::Rc;
 
 use ts_goport::contentmapper::ProcessExitState;
@@ -72,7 +77,7 @@ impl contentmapper::Spawner for Spawner {
 /// One end of Go `net.Pipe`.
 /// PORT: a Unix socket pair. Closing one end ends the reads of the other.
 pub(super) struct PipeEnd {
-    stream: UnixStream,
+    stream: Stream,
 }
 
 impl ipc::ReadWriteCloser for PipeEnd {
@@ -100,9 +105,22 @@ impl ProcessExitState for PipeEnd {}
 
 /// Go `net.Pipe()`: the client end and the server end.
 fn net_pipe() -> (Arc<PipeEnd>, Arc<PipeEnd>) {
-    let (client, server) = UnixStream::pair().expect("contentmappertest: socket pair");
+    let (client, server) = stream_pair().expect("contentmappertest: socket pair");
     (
         Arc::new(PipeEnd { stream: client }),
         Arc::new(PipeEnd { stream: server }),
     )
+}
+
+#[cfg(unix)]
+fn stream_pair() -> std::io::Result<(Stream, Stream)> {
+    Stream::pair()
+}
+
+#[cfg(windows)]
+fn stream_pair() -> std::io::Result<(Stream, Stream)> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let client = Stream::connect(listener.local_addr()?)?;
+    let (server, _) = listener.accept()?;
+    Ok((client, server))
 }

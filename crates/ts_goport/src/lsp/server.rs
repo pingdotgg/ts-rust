@@ -1317,7 +1317,7 @@ impl project::Client for Server {
                 register_options: Some(lsproto::RegisterOptions {
                     text_document_prepare_call_hierarchy: Some(
                         lsproto::CallHierarchyRegistrationOptions {
-                            document_selector: selector.clone(),
+                            document_selector: selector,
                             ..Default::default()
                         },
                     ),
@@ -2901,7 +2901,7 @@ pub fn register_notification_handler<
     fn_: fn(&Rc<Server>, &Context, Option<&Req>) -> Result<(), GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -2938,7 +2938,7 @@ pub fn register_request_handler<
     ) -> Result<Resp, GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -2973,7 +2973,7 @@ pub fn register_language_service_document_request_handler<
     fn_: fn(&Rc<Server>, &Context, &ls::LanguageService, &Req) -> Result<Resp, GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -3020,7 +3020,7 @@ pub fn register_language_service_with_auto_imports_request_handler<
 ) {
     let method = info.method.clone();
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -3095,7 +3095,7 @@ pub fn register_multi_project_reference_request_handler<
     ) -> Result<Resp, GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,

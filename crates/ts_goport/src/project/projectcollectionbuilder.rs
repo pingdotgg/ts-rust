@@ -1095,7 +1095,7 @@ impl ProjectCollectionBuilder {
                     if has_changes {
                         self.cleanup_inferred_project(logger.clone());
                         if self.inferred_project.value().is_some() {
-                            self.update_program(&*self.inferred_project, logger.clone());
+                            self.update_program(&*self.inferred_project, logger);
                         }
                     }
                     return;
@@ -1934,7 +1934,7 @@ impl ProjectCollectionBuilder {
             // If we found a project that contains the file, but it is a source from
             // a project reference, record it as a fallback.
             fallback = Some(SearchResult {
-                project: project.clone(),
+                project: project,
                 retain: retain.clone(),
             });
         }

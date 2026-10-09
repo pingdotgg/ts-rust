@@ -480,7 +480,7 @@ impl Checker {
             // Return a deferred type for a check that is neither definitely true nor definitely false
             result = self.new_conditional_type(root.clone(), mapper, combined_mapper);
             if alias.is_some() {
-                self.ty_mut(result).alias = alias.clone();
+                self.ty_mut(result).alias = alias;
             } else {
                 let root_alias = root.borrow().alias.clone();
                 let instantiated_alias = self.instantiate_type_alias(root_alias, mapper);

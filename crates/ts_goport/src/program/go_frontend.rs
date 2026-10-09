@@ -2151,7 +2151,7 @@ mod tests {
         let later = format!("{dir}/later.ts");
         assert!(!probe(later.clone()));
         std::fs::write(&later, "").unwrap();
-        let after_write = probe(later.clone());
+        let after_write = probe(later);
         let index = probe(format!("{dir}/index.ts"));
         crate::program::release_program(program);
         let _ = std::fs::remove_dir_all(&dir);

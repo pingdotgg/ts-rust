@@ -30,7 +30,6 @@
 //! and names it in the message.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -229,7 +228,7 @@ fn run_cycles(test: &str, count: usize, env: &[(&str, &str)]) -> (usize, usize) 
     let run = Command::new(env!("CARGO_BIN_EXE_goport_multiprog"))
         .arg("cycles")
         .arg("tsconfig.json")
-        .arg(&changed)
+        .arg(norm(&changed))
         .arg(count.to_string())
         .env_remove("GOPORT_FREE_FILE_VERSIONS")
         .envs(env.iter().copied())
@@ -261,6 +260,8 @@ fn run_cycles(test: &str, count: usize, env: &[(&str, &str)]) -> (usize, usize) 
 /// The `emit` and `linked` lines are `import(...)` types, so the checkers
 /// on the shared thread make module specifiers. The `linked` one needs the
 /// symlink cache of its own program (see `link_shelf`).
+// Only the Unix-only test `three_live_projects_report_like_fresh_runs` uses this.
+#[cfg(unix)]
 const LIVE_PROJECTS: [(&str, &str, &str); 3] = [
     ("basic", "check", "side: \"left\" | \"right\""),
     ("emit", "emit", "b: import(\"./shapes\").Box"),
@@ -457,9 +458,9 @@ fn watch_builds_report_like_fresh_runs() {
     ];
     let out = root.join("watch.txt");
     let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
-        .arg(&out)
+        .arg(norm(&out))
         .arg(CHANGED)
-        .args(&edits)
+        .args(edits.iter().map(|edit| norm(edit)))
         .args(["--", "--watch", "-p", "tsconfig.json", "--noEmit"])
         .current_dir(&project)
         .output()
@@ -541,17 +542,17 @@ fn watch_frees_file_versions() {
     assert_ne!(new_config, original_config);
     let new_config_file = root.join("tsconfig.json");
     write(&new_config_file, &new_config);
-    let config_edit = format!("{}={}", config.display(), new_config_file.display());
+    let config_edit = format!("{}={}", norm(&config), norm(&new_config_file));
     let edits = [
-        project.join("edits/a.ts").into_os_string(),
-        project.join("edits/a.ts").into_os_string(),
-        project.join("edits/a-imports.ts").into_os_string(),
-        config_edit.into(),
-        original_file.into_os_string(),
+        norm(&project.join("edits/a.ts")),
+        norm(&project.join("edits/a.ts")),
+        norm(&project.join("edits/a-imports.ts")),
+        config_edit,
+        norm(&original_file),
     ];
     let out = root.join("watch.txt");
     let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
-        .arg(&out)
+        .arg(norm(&out))
         .arg(CHANGED)
         .args(&edits)
         .args(["--", "--watch", "-p", "tsconfig.json", "--noEmit"])
@@ -641,7 +642,7 @@ fn watch_copied_errors_read_their_file_versions() {
     copy_dir(Path::new(WATCH_HELD_FIXTURE), &project);
     let out = root.join("watch.txt");
     let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
-        .arg(&out)
+        .arg(norm(&out))
         .arg(CHANGED)
         .args([
             "edits/a-y.ts",
@@ -743,7 +744,7 @@ fn watch_build_frees_file_versions() {
     copy_dir(Path::new(WATCH_BUILD_FIXTURE), &project);
     let out = root.join("watch.txt");
     let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
-        .arg(&out)
+        .arg(norm(&out))
         .arg("core/src/a.ts")
         .args([
             "edits/a-y.ts",
@@ -862,7 +863,7 @@ fn build_watch_keeps_the_first_dts_parse_of_a_cycle() {
     }
     let out = root.join("watch.txt");
     let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
-        .arg(&out)
+        .arg(norm(&out))
         .arg("tsconfig.base.json")
         .arg("edits/tsconfig.base.json")
         .args(["--", "-b", "--watch", "tsconfig.json", "--pretty", "false"])
@@ -903,7 +904,7 @@ fn watch_config_edits(test: &str, tsc_args: &[&str], expected: &str) {
     copy_dir(Path::new(WATCH_CONFIG_FIXTURE), &project);
     let out = root.join("watch.txt");
     let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
-        .arg(&out)
+        .arg(norm(&out))
         .arg("src/a.ts")
         .args([
             "tsconfig.json=edits/tsconfig-comments.json",
@@ -1076,7 +1077,7 @@ fn a_serial_bind_with_a_lib_snapshot_in_the_new_lineage_equals_the_parallel_bind
             let out = dir.join(side);
             let typesyms = Command::new(env!("CARGO_BIN_EXE_goport_typesyms"))
                 .args(["-p", "tsconfig.json", "-o"])
-                .arg(&out)
+                .arg(norm(&out))
                 .envs(env)
                 .current_dir(&dir)
                 .output()
@@ -1155,6 +1156,8 @@ fn run_live_programs(cwd: &Path, args: &[&str]) {
 }
 
 /// Runs a fresh `goport_emit -p <config> --outDir <out_dir>` in `cwd`.
+// Only the Unix-only test `three_live_projects_report_like_fresh_runs` uses this.
+#[cfg(unix)]
 fn goport_emit(cwd: &Path, config: &str, out_dir: &str) -> Report {
     let run = Command::new(env!("CARGO_BIN_EXE_goport_emit"))
         .args(["-p", config, "--outDir", out_dir])
@@ -1241,12 +1244,12 @@ fn check_pair_with_env(
 
     let fresh_a = goport(&project, Path::new("tsconfig.json"));
 
-    let mut args: Vec<OsString> = vec![
+    let mut args: Vec<String> = vec![
         "pair".into(),
         "tsconfig.json".into(),
-        changed.clone().into(),
-        new_text_file.into(),
-        out.clone().into(),
+        norm(&changed),
+        norm(&new_text_file),
+        norm(&out),
     ];
     let first_config = with_first.then(|| {
         let other = root.join("other");
@@ -1255,7 +1258,7 @@ fn check_pair_with_env(
     });
     if let Some(config) = &first_config {
         args.push("--first".into());
-        args.push(config.into());
+        args.push(norm(config));
     }
     let run = Command::new(env!("CARGO_BIN_EXE_goport_multiprog"))
         .args(&args)
@@ -1327,7 +1330,7 @@ fn assert_new_c_error(pair: &Pair) {
 fn goport(cwd: &Path, config: &Path) -> Report {
     let run = Command::new(env!("CARGO_BIN_EXE_goport"))
         .arg("-p")
-        .arg(config)
+        .arg(norm(config))
         .current_dir(cwd)
         .output()
         .expect("run goport");
@@ -1370,7 +1373,32 @@ fn scratch_dir(test: &str) -> PathBuf {
     fs::create_dir(&dir).unwrap_or_else(|error| panic!("create {}: {error}", dir.display()));
     // The programs see the real current directory, so the paths given to
     // `pair` must use the real path too.
-    fs::canonicalize(&dir).expect("canonical scratch dir")
+    let real = fs::canonicalize(&dir).expect("canonical scratch dir");
+    // On Windows the real path is verbatim (`\\?\C:\...`), which the programs
+    // do not take as a cwd or in an argument.
+    #[cfg(windows)]
+    let real = PathBuf::from(unverbatim(&real.to_string_lossy()));
+    real
+}
+
+/// `text` without the Windows verbatim prefix: `\\?\C:\x` is `C:\x`, and
+/// `\\?\UNC\server\share\x` is `\\server\share\x` (the root stays).
+#[cfg(windows)]
+fn unverbatim(text: &str) -> String {
+    if let Some(unc) = text.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{unc}")
+    } else {
+        text.strip_prefix("\\\\?\\").unwrap_or(text).to_owned()
+    }
+}
+
+/// `path` as the programs name it: absolute with `/` separators
+/// (`C:/Users/x/y` on Windows). The identity on Unix.
+fn norm(path: &Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    let text = unverbatim(&text).replace('\\', "/");
+    text
 }
 
 fn copy_dir(from: &Path, to: &Path) {

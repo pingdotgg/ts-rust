@@ -12,8 +12,16 @@
 use ts_goport::frontend::compiler::{PrefetchCounts, prefetch_counts};
 use ts_goport::lsp::lsproto;
 
-use super::resolveahead_test::{file_uri, os_session, write};
+use super::resolveahead_test::{os_session, write};
 use super::util::{edit, open, open_kind};
+
+/// The `file:` URI of `name` in `root`. A Windows root (`C:/a/b`) has no
+/// leading slash, so the URI needs the third one (Go lsp.go:57
+/// fixWindowsURIPath strips it).
+fn file_uri(root: &str, name: &str) -> String {
+    let slash = if root.starts_with('/') { "" } else { "/" };
+    format!("file://{slash}{root}/{name}")
+}
 
 /// A test in a child process with no OS override and two parse workers.
 macro_rules! os_child_test {
@@ -79,7 +87,7 @@ os_child_test! {
         for (name, text) in FILES {
             write(&root.to_string_lossy(), name, text);
         }
-        let root = std::fs::canonicalize(&root)
+        let root = crate::support::eval_symlinks(&root)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
@@ -153,7 +161,7 @@ fn counts_of_opens(
     for (file, text) in files {
         write(&dir.to_string_lossy(), file, text);
     }
-    let root = std::fs::canonicalize(&dir)
+    let root = crate::support::eval_symlinks(&dir)
         .unwrap()
         .to_string_lossy()
         .replace('\\', "/");

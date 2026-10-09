@@ -527,7 +527,7 @@ mod tests {
             ProgramHost.get_nearest_ancestor_directory_with_package_json(&format!("{dir}/src")),
             has_imports(ProgramHost.get_package_json_info(&package_json)),
         );
-        let thread_package_json = package_json.clone();
+        let thread_package_json = package_json;
         let other = std::thread::spawn(move || {
             crate::core::set_thread_program(Some(program));
             has_imports(ProgramHost.get_package_json_info(&thread_package_json))
