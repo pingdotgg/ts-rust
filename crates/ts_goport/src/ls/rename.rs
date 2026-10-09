@@ -724,7 +724,7 @@ impl<P: ProgramView> LanguageService<P> {
     }
 }
 
-// Go: ls/rename.go:423 getQuoteFromPreference
+// Go: ls/rename.go:432 getQuoteFromPreference
 pub fn get_quote_from_preference(quote_preference: lsutil::QuotePreference) -> &'static str {
     if quote_preference == lsutil::QuotePreference::SINGLE {
         return "'";
@@ -732,7 +732,7 @@ pub fn get_quote_from_preference(quote_preference: lsutil::QuotePreference) -> &
     "\""
 }
 
-// Go: ls/rename.go:430 getRenameInfoError
+// Go: ls/rename.go:439 getRenameInfoError
 pub fn get_rename_info_error(ctx: &Context, message: &'static Message) -> RenameInfo {
     RenameInfo {
         can_rename: false,
@@ -745,7 +745,7 @@ pub fn get_rename_info_error(ctx: &Context, message: &'static Message) -> Rename
     }
 }
 
-// Go: ls/rename.go:437 getRenameInfoSuccess
+// Go: ls/rename.go:446 getRenameInfoSuccess
 pub fn get_rename_info_success(
     node: Node,
     source_file: Node,

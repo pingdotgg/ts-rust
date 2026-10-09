@@ -2,7 +2,7 @@
 
 use crate::ls::prelude::*;
 
-// Go: ls/host.go:10 Host
+// Go: ls/host.go:11 Host
 // PORT: Go `*lsconv.Converters` is shared (`Rc`). Go `*sourcemap.ECMALineInfo`
 // and `*autoimport.Registry` can be nil, so they are `Option<Rc<..>>`.
 // `[]string` params are `&[String]`; a Go `nil` slice is `&[]`. The

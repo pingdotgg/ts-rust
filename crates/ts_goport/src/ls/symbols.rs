@@ -19,7 +19,7 @@ use crate::gostd::unicode;
 use crate::spanmap::Feature;
 
 impl LanguageService {
-    // Go: ls/symbols.go:25 ProvideDocumentSymbols
+    // Go: ls/symbols.go:26 ProvideDocumentSymbols
     pub fn provide_document_symbols(
         &self,
         ctx: &Context,
@@ -63,7 +63,7 @@ impl LanguageService {
         })
     }
 
-    // Go: ls/symbols.go:59 getDocumentSymbolInformations
+    // Go: ls/symbols.go:60 getDocumentSymbolInformations
     // getDocumentSymbolInformations converts hierarchical DocumentSymbols to a flat SymbolInformation array
     pub fn get_document_symbol_informations(
         &self,
@@ -77,7 +77,7 @@ impl LanguageService {
         flatten_document_symbols(&doc_symbols, document_uri)
     }
 
-    // Go: ls/symbols.go:94 getDocumentSymbolsForChildren
+    // Go: ls/symbols.go:95 getDocumentSymbolsForChildren
     fn get_document_symbols_for_children(
         &self,
         ctx: &Context,
@@ -99,7 +99,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/symbols.go:65 flattenDocumentSymbols
+// Go: ls/symbols.go:66 flattenDocumentSymbols
 pub fn flatten_document_symbols(
     doc_symbols: &[lsproto::DocumentSymbol],
     document_uri: &lsproto::DocumentUri,
@@ -469,7 +469,7 @@ impl DocumentSymbolsVisitor<'_> {
     }
 }
 
-// Go: ls/symbols.go:282 isPrototypeExpando
+// Go: ls/symbols.go:286 isPrototypeExpando
 // Target is `f.prototype`.
 pub fn is_prototype_expando(target: Node) -> bool {
     if is_access_expression(target) {
@@ -479,11 +479,11 @@ pub fn is_prototype_expando(target: Node) -> bool {
     false
 }
 
-// Go: ls/symbols.go:290 maxLength
+// Go: ls/symbols.go:294 maxLength
 const MAX_LENGTH: i32 = 150;
 
 impl LanguageService {
-    // Go: ls/symbols.go:292 newDocumentSymbol
+    // Go: ls/symbols.go:296 newDocumentSymbol
     // PORT: Go returns a nil `*lsproto.DocumentSymbol` as `None`.
     fn new_document_symbol(
         &self,
@@ -563,7 +563,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/symbols.go:351 mergeExpandos
+// Go: ls/symbols.go:355 mergeExpandos
 // Merges expando symbols into their target symbols, and namespaces of same name.
 // Modifies the input slice.
 // PORT: Go sets merged entries of the input slice to nil; here the input is
@@ -657,7 +657,7 @@ fn merge_expandos(symbols: Vec<DocSymbol>) -> Vec<DocSymbol> {
     merged_symbols
 }
 
-// Go: ls/symbols.go:410 mergeChildren
+// Go: ls/symbols.go:414 mergeChildren
 fn merge_children(target: &DocSymbol, source: &DocSymbol) {
     // PORT: copy the child lists out so no `RefCell` borrow is held while
     // `merge_expandos` borrows the children.
@@ -680,7 +680,7 @@ fn merge_children(target: &DocSymbol, source: &DocSymbol) {
     }
 }
 
-// Go: ls/symbols.go:424 isAnonymousName
+// Go: ls/symbols.go:428 isAnonymousName
 // See `getUnnamedNodeLabel`.
 pub fn is_anonymous_name(name: &str) -> bool {
     name == "<function>"
@@ -694,7 +694,7 @@ pub fn is_anonymous_name(name: &str) -> bool {
         || name.ends_with(") callback")
 }
 
-// Go: ls/symbols.go:429 getTextOfName
+// Go: ls/symbols.go:433 getTextOfName
 pub fn get_text_of_name(node: Node) -> String {
     match node.kind() {
         SyntaxKind::Identifier | SyntaxKind::PrivateIdentifier | SyntaxKind::NumericLiteral => {
@@ -716,7 +716,7 @@ pub fn get_text_of_name(node: Node) -> String {
     get_text_of_node(node)
 }
 
-// Go: ls/symbols.go:445 getUnnamedNodeLabel
+// Go: ls/symbols.go:449 getUnnamedNodeLabel
 pub fn get_unnamed_node_label(node: Node) -> String {
     let parent = walk_up_parenthesized_expressions(node.parent());
     if parent.is_some() && is_export_assignment(parent) {
@@ -760,7 +760,7 @@ pub fn get_unnamed_node_label(node: Node) -> String {
     }
 }
 
-// Go: ls/symbols.go:486 getCallExpressionName
+// Go: ls/symbols.go:490 getCallExpressionName
 pub fn get_call_expression_name(node: Node) -> String {
     match node.kind() {
         SyntaxKind::Identifier | SyntaxKind::PrivateIdentifier => {
@@ -779,7 +779,7 @@ pub fn get_call_expression_name(node: Node) -> String {
     String::new()
 }
 
-// Go: ls/symbols.go:501 getCallExpressionLiteralArgs
+// Go: ls/symbols.go:505 getCallExpressionLiteralArgs
 pub fn get_call_expression_literal_args(call_expr: Node) -> String {
     let mut parts: Vec<String> = Vec::new();
     for arg in call_expr.arguments() {
@@ -790,7 +790,7 @@ pub fn get_call_expression_literal_args(call_expr: Node) -> String {
     parts.join(", ")
 }
 
-// Go: ls/symbols.go:511 cleanCallbackText
+// Go: ls/symbols.go:515 cleanCallbackText
 pub fn clean_callback_text(text: &str) -> String {
     let mut text = text.to_string();
     let truncated = stringutil_ls::truncate_by_runes(&text, MAX_LENGTH);
@@ -801,7 +801,7 @@ pub fn clean_callback_text(text: &str) -> String {
     text.chars().filter(|&r| !is_line_break(r)).collect()
 }
 
-// Go: ls/symbols.go:524 getInteriorModule
+// Go: ls/symbols.go:528 getInteriorModule
 pub fn get_interior_module(node: Node) -> Node {
     let mut node = node;
     while node.body().is_some() && is_module_declaration(node.body()) {
@@ -810,7 +810,7 @@ pub fn get_interior_module(node: Node) -> Node {
     node
 }
 
-// Go: ls/symbols.go:531 getModuleName
+// Go: ls/symbols.go:535 getModuleName
 pub fn get_module_name(node: Node) -> String {
     let mut node = node;
     let mut result = node.name().text().to_string();
@@ -821,7 +821,7 @@ pub fn get_module_name(node: Node) -> String {
     result
 }
 
-// Go: ls/symbols.go:540 DeclarationInfo
+// Go: ls/symbols.go:544 DeclarationInfo
 #[derive(Clone, Debug)]
 pub struct DeclarationInfo {
     pub name: String,
@@ -829,7 +829,7 @@ pub struct DeclarationInfo {
     pub match_score: i32,
 }
 
-// Go: ls/symbols.go:546 ProvideWorkspaceSymbols
+// Go: ls/symbols.go:550 ProvideWorkspaceSymbols
 // PORT: Go `[]*compiler.Program` is `&[Rc<compiler::NewProgram>]`, Go
 // `*lsconv.Converters` is `&lsconv::Converters`, and the preferences are
 // passed by reference.
@@ -920,7 +920,7 @@ pub fn provide_workspace_symbols(
     })
 }
 
-// Go: ls/symbols.go:615 shouldExcludeFile
+// Go: ls/symbols.go:619 shouldExcludeFile
 // PORT: Go takes the `*ast.SourceFile`; `NewProgram::is_lib_file` takes the
 // parsed file, so this does too.
 pub fn should_exclude_file(
@@ -932,12 +932,12 @@ pub fn should_exclude_file(
         && (is_inside_node_modules(file.file_name()) || program.is_lib_file(file))
 }
 
-// Go: ls/symbols.go:619 isInsideNodeModules
+// Go: ls/symbols.go:623 isInsideNodeModules
 pub fn is_inside_node_modules(file_name: &str) -> bool {
     file_name.contains("/node_modules/")
 }
 
-// Go: ls/symbols.go:628 getMatchScore
+// Go: ls/symbols.go:632 getMatchScore
 // Return a score for matching `s` against `pattern`. In order to match, `s` must contain each of the characters in
 // `pattern` in the same order. Upper case characters in `pattern` must match exactly, whereas lower case characters
 // in `pattern` match either case in `s`. If `s` doesn't match, -1 is returned. Otherwise, the returned score is the
@@ -978,7 +978,7 @@ fn unicode_is_upper(c: char) -> bool {
     )
 }
 
-// Go: ls/symbols.go:649 compareDeclarationInfos
+// Go: ls/symbols.go:653 compareDeclarationInfos
 // Sort DeclarationInfos by ascending match score, then ascending case insensitive name, then
 // ascending case sensitive name, and finally by source file name and position.
 pub fn compare_declaration_infos(d1: &DeclarationInfo, d2: &DeclarationInfo) -> i32 {
@@ -1004,7 +1004,7 @@ pub fn compare_declaration_infos(d1: &DeclarationInfo, d2: &DeclarationInfo) -> 
     d1.declaration.pos() - d2.declaration.pos()
 }
 
-// Go: ls/symbols.go:669 getSymbolKindFromNode
+// Go: ls/symbols.go:673 getSymbolKindFromNode
 // getSymbolKindFromNode converts an AST node to an LSP SymbolKind.
 // Combines getNodeKind with VS Code's fromProtocolScriptElementKind.
 pub fn get_symbol_kind_from_node(node: Node) -> lsproto::SymbolKind {

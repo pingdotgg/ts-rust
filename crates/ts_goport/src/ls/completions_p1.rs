@@ -483,7 +483,7 @@ impl SymbolOriginInfoData {
 }
 
 impl SymbolOriginInfo {
-    // Go: ls/completions.go:242 (*symbolOriginInfo).symbolName
+    // Go: ls/completions.go:315 (*symbolOriginInfo).symbolName
     pub fn symbol_name(&self) -> String {
         match &self.data {
             SymbolOriginInfoData::ComputedPropertyName(data) => data.symbol_name.clone(),
@@ -494,7 +494,7 @@ impl SymbolOriginInfo {
         }
     }
 
-    // Go: ls/completions.go:257 (*symbolOriginInfo).asObjectLiteralMethod
+    // Go: ls/completions.go:330 (*symbolOriginInfo).asObjectLiteralMethod
     // PORT: a failed Go type assertion panics; the text follows the Go runtime.
     pub fn as_object_literal_method(&self) -> &SymbolOriginInfoObjectLiteralMethod {
         match &self.data {
@@ -507,7 +507,7 @@ impl SymbolOriginInfo {
     }
 }
 
-// Go: ls/completions.go:325 symbolOriginInfoObjectLiteralMethod
+// Go: ls/completions.go:324 symbolOriginInfoObjectLiteralMethod
 #[derive(Clone, Debug, Default)]
 pub struct SymbolOriginInfoObjectLiteralMethod {
     pub insert_text: String,
@@ -515,19 +515,19 @@ pub struct SymbolOriginInfoObjectLiteralMethod {
     pub is_snippet: bool,
 }
 
-// Go: ls/completions.go:335 symbolOriginInfoTypeOnlyAlias
+// Go: ls/completions.go:334 symbolOriginInfoTypeOnlyAlias
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SymbolOriginInfoTypeOnlyAlias {
     pub declaration: Node,
 }
 
-// Go: ls/completions.go:339 symbolOriginInfoComputedPropertyName
+// Go: ls/completions.go:338 symbolOriginInfoComputedPropertyName
 #[derive(Clone, Debug, Default)]
 pub struct SymbolOriginInfoComputedPropertyName {
     pub symbol_name: String,
 }
 
-// Go: ls/completions.go:352 completionSource
+// Go: ls/completions.go:351 completionSource
 // Special values for `CompletionInfo['source']` used to disambiguate
 // completion items with the same `name`. (Each completion item must
 // have a unique name/source combination, because those two fields
@@ -554,7 +554,7 @@ pub const COMPLETION_SOURCE_SWITCH_CASES: CompletionSource = "SwitchCases/";
 pub const COMPLETION_SOURCE_OBJECT_LITERAL_MEMBER_WITH_COMMA: CompletionSource =
     "ObjectLiteralMemberWithComma/";
 
-// Go: ls/completions.go:371 uniqueNamesMap
+// Go: ls/completions.go:370 uniqueNamesMap
 // Value is set to false for global variables or completions from external module exports,
 // true otherwise.
 pub type UniqueNamesMap = FxHashMap<String, bool>;
@@ -571,7 +571,7 @@ go_enum!(GlobalsSearch, i32 {
 });
 
 impl CompletionList {
-    // Go: ls/completions.go:310 (*CompletionList).toLSP
+    // Go: ls/completions.go:383 (*CompletionList).toLSP
     // PORT: a nil receiver is `None` (the lsproto `resolve` rule). Go shares
     // the item pointers; the items are cloned.
     pub fn to_lsp(l: Option<&CompletionList>) -> Option<lsproto::CompletionList> {
@@ -594,7 +594,7 @@ impl CompletionList {
 }
 
 impl LanguageService {
-    // Go: ls/completions.go:402 getCompletionsAtPosition
+    // Go: ls/completions.go:401 getCompletionsAtPosition
     pub fn get_completions_at_position(
         &self,
         ctx: &Context,
@@ -749,7 +749,7 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/completions.go:528 getCompletionData
+    // Go: ls/completions.go:527 getCompletionData
     pub fn get_completion_data(
         &self,
         ctx: &Context,

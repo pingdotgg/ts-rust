@@ -139,7 +139,7 @@ impl Script for Node {
         source_file_file_name(*self)
     }
 
-    // Go: ast/ast.go:2556 (*SourceFile).OriginalFileName
+    // Go: ast/ast.go:2553 (*SourceFile).OriginalFileName
     fn original_file_name(&self) -> &str {
         source_file_original_file_name(*self)
     }
@@ -148,12 +148,12 @@ impl Script for Node {
         ScriptText::File(source_file_text(*self))
     }
 
-    // Go: ast/ast.go:2566 (*SourceFile).SpanMap
+    // Go: ast/ast.go:2563 (*SourceFile).SpanMap
     fn span_map(&self) -> Option<&SpanMap> {
         source_file_span_map(*self)
     }
 
-    // Go: ast/ast.go:2548 (*SourceFile).OriginalText
+    // Go: ast/ast.go:2545 (*SourceFile).OriginalText
     fn original_text(&self) -> ScriptText<'_> {
         ScriptText::File(source_file_original_text(*self))
     }
@@ -664,7 +664,7 @@ fn virtual_position_to_original(
     )
 }
 
-// Go: ls/lsconv/converters.go:596 originalTextScript
+// Go: ls/lsconv/converters.go:590 originalTextScript
 // originalTextScript presents a content-mapped file's original (untransformed) text as a Script, so that
 // ranges already mapped into that text convert to the correct line/character positions.
 // PORT: Go copies the two strings; here the script borrows them.
@@ -674,27 +674,27 @@ struct OriginalTextScript<'a> {
 }
 
 impl Script for OriginalTextScript<'_> {
-    // Go: ls/lsconv/converters.go:601 originalTextScript.FileName
+    // Go: ls/lsconv/converters.go:595 originalTextScript.FileName
     fn file_name(&self) -> &str {
         self.file_name
     }
 
-    // Go: ls/lsconv/converters.go:602 originalTextScript.OriginalFileName
+    // Go: ls/lsconv/converters.go:596 originalTextScript.OriginalFileName
     fn original_file_name(&self) -> &str {
         self.file_name
     }
 
-    // Go: ls/lsconv/converters.go:603 originalTextScript.Text
+    // Go: ls/lsconv/converters.go:597 originalTextScript.Text
     fn text(&self) -> ScriptText<'_> {
         ScriptText::Borrowed(&self.text)
     }
 
-    // Go: ls/lsconv/converters.go:604 originalTextScript.OriginalText
+    // Go: ls/lsconv/converters.go:598 originalTextScript.OriginalText
     fn original_text(&self) -> ScriptText<'_> {
         ScriptText::Borrowed(&self.text)
     }
 
-    // Go: ls/lsconv/converters.go:605 originalTextScript.SpanMap
+    // Go: ls/lsconv/converters.go:599 originalTextScript.SpanMap
     fn span_map(&self) -> Option<&SpanMap> {
         None
     }
@@ -855,7 +855,7 @@ fn utf16_rune_len(r: i32) -> i32 {
 // line (`port_byte_offset`, `go_byte_offset`). Otherwise the decoder follows
 // Go `utf8.DecodeRuneInString`, also at a position inside a character.
 impl Converters {
-    // Go: ls/lsconv/converters.go:366 lineAndCharacterToPosition
+    // Go: ls/lsconv/converters.go:360 lineAndCharacterToPosition
     // PORT: Go passes the position by value; here by reference.
     // Private as in Go since tsgo#4712: the LS uses `from_lsp_position`,
     // `from_lsp_range` and their SourceFile forms.
@@ -936,7 +936,7 @@ impl Converters {
         pos as i32
     }
 
-    // Go: ls/lsconv/converters.go:417 positionToLineAndCharacter
+    // Go: ls/lsconv/converters.go:411 positionToLineAndCharacter
     // Private as in Go since tsgo#4712: the LS uses `to_lsp_position`.
     fn position_to_line_and_character(
         &self,
@@ -1014,7 +1014,7 @@ impl Converters {
     }
 }
 
-// Go: ls/lsconv/converters.go:451 diagnosticOptions
+// Go: ls/lsconv/converters.go:445 diagnosticOptions
 struct DiagnosticOptions {
     report_style_checks_as_warnings: bool,
     related_information: bool,
@@ -1022,7 +1022,7 @@ struct DiagnosticOptions {
     visual_studio: bool,
 }
 
-// Go: ls/lsconv/converters.go:459 DiagnosticToLSPPull
+// Go: ls/lsconv/converters.go:453 DiagnosticToLSPPull
 // DiagnosticToLSPPull converts a diagnostic for pull diagnostics (textDocument/diagnostic)
 pub fn diagnostic_to_lsp_pull(
     ctx: &Context,
@@ -1045,7 +1045,7 @@ pub fn diagnostic_to_lsp_pull(
     )
 }
 
-// Go: ls/lsconv/converters.go:471 DiagnosticToLSPPush
+// Go: ls/lsconv/converters.go:465 DiagnosticToLSPPush
 // DiagnosticToLSPPush converts a diagnostic for push diagnostics (textDocument/publishDiagnostics)
 pub fn diagnostic_to_lsp_push(
     ctx: &Context,
@@ -1067,7 +1067,7 @@ pub fn diagnostic_to_lsp_push(
     )
 }
 
-// Go: ls/lsconv/converters.go:482 styleCheckDiagnostics
+// Go: ls/lsconv/converters.go:476 styleCheckDiagnostics
 // https://github.com/microsoft/vscode/blob/93e08afe0469712706ca4e268f778cfadf1a43ef/extensions/typescript-language-features/src/typeScriptServiceClientHost.ts#L40C7-L40C29
 static STYLE_CHECK_DIAGNOSTICS: LazyLock<FxHashSet<i32>> = LazyLock::new(|| {
     [
@@ -1084,7 +1084,7 @@ static STYLE_CHECK_DIAGNOSTICS: LazyLock<FxHashSet<i32>> = LazyLock::new(|| {
     .collect()
 });
 
-// Go: ls/lsconv/converters.go:493 diagnosticToLSP
+// Go: ls/lsconv/converters.go:487 diagnosticToLSP
 fn diagnostic_to_lsp(
     ctx: &Context,
     converters: &Converters,
@@ -1192,7 +1192,7 @@ fn diagnostic_to_lsp(
     }
 }
 
-// Go: ls/lsconv/converters.go:577 diagnosticScriptAndRange
+// Go: ls/lsconv/converters.go:571 diagnosticScriptAndRange
 // diagnosticScriptAndRange resolves the text basis and range to report a diagnostic against. For a
 // content-mapped file it maps the diagnostic's virtual range back to the original text so
 // the range lines up with what the editor shows; the original text's line map is already what
@@ -1227,7 +1227,7 @@ fn diagnostic_script_and_range<'a>(
     (ScriptOrOriginal::Original(original), mapped)
 }
 
-// Go: ls/lsconv/converters.go:608 diagnosticSeverity
+// Go: ls/lsconv/converters.go:602 diagnosticSeverity
 // diagnosticSeverity maps a diagnostic category to its LSP severity.
 fn diagnostic_severity(category: crate::diagnostics::Category) -> lsproto::DiagnosticSeverity {
     match category {
@@ -1238,7 +1238,7 @@ fn diagnostic_severity(category: crate::diagnostics::Category) -> lsproto::Diagn
     }
 }
 
-// Go: ls/lsconv/converters.go:621 messageChainToString
+// Go: ls/lsconv/converters.go:615 messageChainToString
 fn message_chain_to_string(diagnostic: &Diagnostic, locale: &locale::Locale) -> String {
     if diagnostic.message_chain().is_empty() {
         return diagnostic.localize(locale);
@@ -1248,7 +1248,7 @@ fn message_chain_to_string(diagnostic: &Diagnostic, locale: &locale::Locale) -> 
     b
 }
 
-// Go: ls/lsconv/converters.go:630 ptrToSliceIfNonEmpty
+// Go: ls/lsconv/converters.go:624 ptrToSliceIfNonEmpty
 fn ptr_to_slice_if_non_empty<T>(s: Vec<T>) -> Option<Vec<T>> {
     if s.is_empty() {
         return None;
@@ -1256,7 +1256,7 @@ fn ptr_to_slice_if_non_empty<T>(s: Vec<T>) -> Option<Vec<T>> {
     Some(s)
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:354 WriteFlattenedASTDiagnosticMessage
+// Go: diagnosticwriter/diagnosticwriter.go:362 WriteFlattenedASTDiagnosticMessage
 // PORT: Go package `diagnosticwriter`. The `String` writer version in
 // program.rs is private, and the execute/tsc version writes to its own
 // `Writer`, so the three Go functions are ported here for a `String`.
@@ -1272,7 +1272,7 @@ fn write_flattened_ast_diagnostic_message(
     write_flattened_diagnostic_message(writer, diagnostic, newline, locale);
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:358 WriteFlattenedDiagnosticMessage
+// Go: diagnosticwriter/diagnosticwriter.go:366 WriteFlattenedDiagnosticMessage
 fn write_flattened_diagnostic_message(
     writer: &mut String,
     diagnostic: &Diagnostic,
@@ -1286,7 +1286,7 @@ fn write_flattened_diagnostic_message(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:366 flattenDiagnosticMessageChain
+// Go: diagnosticwriter/diagnosticwriter.go:374 flattenDiagnosticMessageChain
 fn flatten_diagnostic_message_chain(
     writer: &mut String,
     chain: &Diagnostic,
@@ -1361,7 +1361,7 @@ mod tests {
         }
     }
 
-    // Go: ls/lsconv/converters_test.go:121 TestConvertersSourceFileProjectionExpansion
+    // Go: ls/lsconv/converters_test.go:241 TestConvertersSourceFileProjectionExpansion
     // PORT: Go links the two `*ast.SourceFile` values by pointer; here the
     // parsed files are `Rc`, as `set_content_mapper_info` takes them.
     #[test]

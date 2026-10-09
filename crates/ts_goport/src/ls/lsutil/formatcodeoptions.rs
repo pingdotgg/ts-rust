@@ -12,7 +12,7 @@ go_enum!(IndentStyle, i32 {
     SMART = 2;
 });
 
-// Go: ls/lsutil/formatcodeoptions.go:19 parseIndentStyle
+// Go: ls/lsutil/formatcodeoptions.go:19 parseIndentStyle (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:193 parsePreferenceIndentStyle)
 // PORT: Go `v any` is an `LspAny`. Go also accepts a Go `int`; an `LspAny`
 // number is always the Go `float64` case. Go `int(float64)` keeps 64 bits;
 // the Rust field is `i32` (PORTING `int` -> `i32`), so a value outside the
@@ -31,7 +31,7 @@ pub fn parse_indent_style(v: &LspAny) -> IndentStyle {
     IndentStyle::SMART
 }
 
-// Go: ls/lsutil/formatcodeoptions.go:38 SemicolonPreference
+// Go: ls/lsutil/formatcodeoptions.go:17 SemicolonPreference
 // PORT: a Go string type. The value is always one of the Go constants or the
 // zero value "", so a `&'static str` holds it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -43,7 +43,7 @@ impl SemicolonPreference {
     pub const REMOVE: SemicolonPreference = SemicolonPreference("remove");
 }
 
-// Go: ls/lsutil/formatcodeoptions.go:46 parseSemicolonPreference
+// Go: ls/lsutil/formatcodeoptions.go:46 parseSemicolonPreference (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:357 parsePreferenceSemicolonPreference)
 pub fn parse_semicolon_preference(v: &LspAny) -> SemicolonPreference {
     if let LspAny::String(s) = v {
         match strings_to_lower(s).as_str() {
@@ -56,7 +56,7 @@ pub fn parse_semicolon_preference(v: &LspAny) -> SemicolonPreference {
     SemicolonPreference::IGNORE
 }
 
-// Go: ls/lsutil/formatcodeoptions.go:60 EditorSettings
+// Go: ls/lsutil/formatcodeoptions.go:60 EditorSettings (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:43 EditorSettings)
 // PORT: the Go `raw` and `config` tags are in the field table in
 // userpreferences.rs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub struct EditorSettings {
     pub trim_trailing_whitespace: Tristate,
 }
 
-// Go: ls/lsutil/formatcodeoptions.go:70 FormatCodeSettings
+// Go: ls/lsutil/formatcodeoptions.go:70 FormatCodeSettings (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:53 FormatCodeSettings)
 // PORT: Go embeds `EditorSettings`. It is the nested field `editor_settings`
 // (Go `opts.IndentSize` is `opts.editor_settings.indent_size`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub struct FormatCodeSettings {
     pub indent_switch_case: Tristate,
 }
 
-// Go: ls/lsutil/formatcodeoptions.go:94 FromLSFormatOptions
+// Go: ls/lsutil/formatcodeoptions.go:25 FromLSFormatOptions
 // PORT: Go takes `f` by value; this clones it. Go `int(uint32)` keeps every
 // value; the Rust `i32` field wraps above `i32::MAX`.
 pub fn from_ls_format_options(
@@ -117,7 +117,7 @@ pub fn from_ls_format_options(
 }
 
 impl FormatCodeSettings {
-    // Go: ls/lsutil/formatcodeoptions.go:105 (FormatCodeSettings).ToLSFormatOptions
+    // Go: ls/lsutil/formatcodeoptions.go:36 (FormatCodeSettings).ToLSFormatOptions
     // PORT: Go returns a new `*lsproto.FormattingOptions`; this returns the
     // value. Go `uint32(int)` wraps like `as u32`.
     pub fn to_ls_format_options(&self) -> crate::lsp::lsproto::FormattingOptions {
@@ -131,7 +131,7 @@ impl FormatCodeSettings {
     }
 }
 
-// Go: ls/lsutil/formatcodeoptions.go:114 GetDefaultFormatCodeSettings
+// Go: ls/lsutil/formatcodeoptions.go:45 GetDefaultFormatCodeSettings
 pub fn get_default_format_code_settings() -> FormatCodeSettings {
     FormatCodeSettings {
         editor_settings: EditorSettings {

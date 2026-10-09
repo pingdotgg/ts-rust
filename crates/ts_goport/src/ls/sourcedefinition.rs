@@ -10,7 +10,7 @@ use crate::ls::prelude::*;
 use crate::spanmap::Feature;
 
 impl LanguageService {
-    // Go: ls/sourcedefinition.go:25 ProvideSourceDefinition
+    // Go: ls/sourcedefinition.go:24 ProvideSourceDefinition
     pub fn provide_source_definition(
         &self,
         ctx: &Context,
@@ -45,7 +45,7 @@ impl LanguageService {
         ))
     }
 
-    // Go: ls/sourcedefinition.go:45 provideSourceDefinitionAtPosition
+    // Go: ls/sourcedefinition.go:44 provideSourceDefinitionAtPosition
     // PORT: Go `core.TextPos` is `i32`.
     pub fn provide_source_definition_at_position(
         &self,
@@ -216,7 +216,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/sourcedefinition.go:132 sourceDefResolver
+// Go: ls/sourcedefinition.go:135 sourceDefResolver
 // sourceDefResolver resolves source definitions by mapping .d.ts declarations
 // to their implementation files (.js/.ts). It uses the NoDts module resolver
 // and file parsing for resolution, but never acquires the type checker or
@@ -236,7 +236,7 @@ pub struct SourceDefResolver<'a> {
 }
 
 impl LanguageService {
-    // Go: ls/sourcedefinition.go:142 newSourceDefResolver
+    // Go: ls/sourcedefinition.go:158 newSourceDefResolver
     pub fn new_source_def_resolver<'a>(
         &'a self,
         program: &'a compiler::NewProgram,
@@ -282,7 +282,7 @@ impl LanguageService {
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:167 resolveFromCheckerInfo
+    // Go: ls/sourcedefinition.go:183 resolveFromCheckerInfo
     // resolveFromCheckerInfo maps type-checker declarations to source
     // implementations. It uses only the NoDts module resolver and file parsing;
     // the type checker and original request file are not needed.
@@ -330,7 +330,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:203 getSourceDefCheckerInfo
+// Go: ls/sourcedefinition.go:219 getSourceDefCheckerInfo
 // getSourceDefCheckerInfo acquires the type checker for the given file and
 // returns the definition declarations for node along with the module specifier
 // of the import that brought the symbol into scope (empty if not applicable).
@@ -405,7 +405,7 @@ pub fn get_source_def_checker_info(
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:259 resolveTripleSlashReference
+    // Go: ls/sourcedefinition.go:275 resolveTripleSlashReference
     // resolveTripleSlashReference handles /// <reference path/types="..."/> directives.
     // For path references to .js files, it returns the entry declarations directly.
     // For path references to .d.ts files or type references, it uses the NoDts
@@ -452,7 +452,7 @@ impl SourceDefResolver<'_> {
         )
     }
 
-    // Go: ls/sourcedefinition.go:289 searchImplementationFile
+    // Go: ls/sourcedefinition.go:305 searchImplementationFile
     // searchImplementationFile searches an implementation file for declarations
     // matching the given names. Returns nil when no declarations matched; callers
     // fall through to the checker path or to the standard definition provider.
@@ -491,7 +491,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:317 isDefaultImportName
+// Go: ls/sourcedefinition.go:333 isDefaultImportName
 pub fn is_default_import_name(node: Node) -> bool {
     if node.is_nil()
         || node.parent().is_nil()
@@ -504,7 +504,7 @@ pub fn is_default_import_name(node: Node) -> bool {
     is_default_import(node.parent().parent())
 }
 
-// Go: ls/sourcedefinition.go:324 getSourceDefinitionEntryNode
+// Go: ls/sourcedefinition.go:340 getSourceDefinitionEntryNode
 pub fn get_source_definition_entry_node(source_file: Node) -> Node {
     let statements = source_file.statements();
     if !statements.is_empty() {
@@ -513,13 +513,13 @@ pub fn get_source_definition_entry_node(source_file: Node) -> Node {
     source_file
 }
 
-// Go: ls/sourcedefinition.go:331 getSourceDefinitionEntryDeclarations
+// Go: ls/sourcedefinition.go:347 getSourceDefinitionEntryDeclarations
 pub fn get_source_definition_entry_declarations(source_file: Node) -> Vec<Node> {
     vec![get_source_definition_entry_node(source_file)]
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:335 mapDeclarationToSource
+    // Go: ls/sourcedefinition.go:351 mapDeclarationToSource
     pub fn map_declaration_to_source(
         &mut self,
         original_node: Node,
@@ -555,7 +555,7 @@ impl SourceDefResolver<'_> {
         self.search_implementation_file(original_node, &implementation_file, &names)
     }
 
-    // Go: ls/sourcedefinition.go:366 findImplementationFileFromDtsFileName
+    // Go: ls/sourcedefinition.go:382 findImplementationFileFromDtsFileName
     pub fn find_implementation_file_from_dts_file_name(
         &self,
         dts_file_name: &str,
@@ -619,7 +619,7 @@ impl SourceDefResolver<'_> {
         self.resolve_implementation(&package_name, preferred_mode)
     }
 
-    // Go: ls/sourcedefinition.go:409 resolveImplementation
+    // Go: ls/sourcedefinition.go:423 resolveImplementation
     pub fn resolve_implementation(
         &self,
         module_name: &str,
@@ -628,7 +628,7 @@ impl SourceDefResolver<'_> {
         self.resolve_implementation_from(module_name, &self.resolve_from, preferred_mode)
     }
 
-    // Go: ls/sourcedefinition.go:416 resolveImplementationFrom
+    // Go: ls/sourcedefinition.go:430 resolveImplementationFrom
     pub fn resolve_implementation_from(
         &self,
         module_name: &str,
@@ -658,7 +658,7 @@ impl SourceDefResolver<'_> {
         String::new()
     }
 
-    // Go: ls/sourcedefinition.go:438 getOrParseSourceFile
+    // Go: ls/sourcedefinition.go:452 getOrParseSourceFile
     // PORT: the parsed file is published with no program
     // (`program::publish_parsed_files`), then bound into the binder lineage
     // (`program::bind_file_outside_program`), which is Go `BindSourceFile`.
@@ -704,7 +704,7 @@ impl SourceDefResolver<'_> {
         source_file
     }
 
-    // Go: ls/sourcedefinition.go:465 inferImpliedNodeFormat
+    // Go: ls/sourcedefinition.go:479 inferImpliedNodeFormat
     // inferImpliedNodeFormat determines the module format for a source file that may not be
     // in the program, using the file extension and nearest package.json "type" field.
     pub fn infer_implied_node_format(&self, file_name: &str) -> ResolutionMode {
@@ -729,7 +729,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:475 findContainingModuleSpecifier
+// Go: ls/sourcedefinition.go:489 findContainingModuleSpecifier
 pub fn find_containing_module_specifier(node: Node) -> Node {
     let mut current = node;
     while current.is_some() {
@@ -750,7 +750,7 @@ pub fn find_containing_module_specifier(node: Node) -> Node {
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:486 findDeclarationsInFile
+    // Go: ls/sourcedefinition.go:500 findDeclarationsInFile
     // PORT: Go `seen *collections.Set[string]` is `&mut FxHashSet<String>`.
     pub fn find_declarations_in_file(
         &mut self,
@@ -790,7 +790,7 @@ impl SourceDefResolver<'_> {
         declarations
     }
 
-    // Go: ls/sourcedefinition.go:521 getForwardedImplementationFiles
+    // Go: ls/sourcedefinition.go:535 getForwardedImplementationFiles
     pub fn get_forwarded_implementation_files(&self, source_file: Node) -> Vec<String> {
         let preferred_mode = self.infer_implied_node_format(source_file_file_name(source_file));
 
@@ -810,7 +810,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:534 getCandidateSourceDeclarationNames
+// Go: ls/sourcedefinition.go:548 getCandidateSourceDeclarationNames
 pub fn get_candidate_source_declaration_names(
     original_node: Node,
     declaration: Node,
@@ -862,7 +862,7 @@ pub fn get_candidate_source_declaration_names(
     names
 }
 
-// Go: ls/sourcedefinition.go:572 findDeclarationNodesByName
+// Go: ls/sourcedefinition.go:586 findDeclarationNodesByName
 pub fn find_declaration_nodes_by_name(source_file: Node, names: &[String]) -> Vec<Node> {
     let names: Vec<String> = deduplicate(
         names
@@ -949,7 +949,7 @@ pub fn find_declaration_nodes_by_name(source_file: Node, names: &[String]) -> Ve
     unique_declaration_nodes(&declarations)
 }
 
-// Go: ls/sourcedefinition.go:634 getContainerDepth
+// Go: ls/sourcedefinition.go:648 getContainerDepth
 // getContainerDepth counts the number of container nodes above a declaration,
 // matching the behavior of getDepth in getTopMostDeclarationNamesInFile.
 pub fn get_container_depth(node: Node) -> i32 {
@@ -962,7 +962,7 @@ pub fn get_container_depth(node: Node) -> i32 {
     depth
 }
 
-// Go: ls/sourcedefinition.go:644 filterPreferredSourceDeclarations
+// Go: ls/sourcedefinition.go:658 filterPreferredSourceDeclarations
 pub fn filter_preferred_source_declarations(
     original_node: Node,
     declarations: Vec<Node>,
@@ -985,7 +985,7 @@ pub fn filter_preferred_source_declarations(
     declarations
 }
 
-// Go: ls/sourcedefinition.go:657 getPropertyLikeSourceDeclarations
+// Go: ls/sourcedefinition.go:671 getPropertyLikeSourceDeclarations
 pub fn get_property_like_source_declarations(
     original_node: Node,
     declarations: &[Node],
@@ -1016,14 +1016,14 @@ pub fn get_property_like_source_declarations(
         .collect()
 }
 
-// Go: ls/sourcedefinition.go:679 hasConcreteSourceDeclarations
+// Go: ls/sourcedefinition.go:693 hasConcreteSourceDeclarations
 pub fn has_concrete_source_declarations(declarations: &[Node]) -> bool {
     declarations
         .iter()
         .any(|&node| is_concrete_source_declaration(node))
 }
 
-// Go: ls/sourcedefinition.go:683 isConcreteSourceDeclaration
+// Go: ls/sourcedefinition.go:697 isConcreteSourceDeclaration
 pub fn is_concrete_source_declaration(node: Node) -> bool {
     if !is_declaration(node) || node.kind() == SyntaxKind::ExportAssignment {
         return false;
@@ -1047,7 +1047,7 @@ pub fn is_concrete_source_declaration(node: Node) -> bool {
     )
 }
 
-// Go: ls/sourcedefinition.go:706 uniqueDeclarationNodes
+// Go: ls/sourcedefinition.go:720 uniqueDeclarationNodes
 pub fn unique_declaration_nodes(nodes: &[Node]) -> Vec<Node> {
     #[derive(PartialEq, Eq, Hash)]
     struct DeclarationKey {
@@ -1073,7 +1073,7 @@ pub fn unique_declaration_nodes(nodes: &[Node]) -> Vec<Node> {
     result
 }
 
-// Go: ls/sourcedefinition.go:727 findClosestDeclarationNode
+// Go: ls/sourcedefinition.go:741 findClosestDeclarationNode
 pub fn find_closest_declaration_node(source_file: Node, pos: i32) -> Node {
     let node = astnav::get_touching_property_name(source_file, pos);
     let mut current = node;

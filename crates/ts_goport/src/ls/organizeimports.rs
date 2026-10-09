@@ -20,7 +20,7 @@ use crate::frontend::scanner::{Scanner, new_scanner};
 use crate::frontend::stringutil_ls;
 
 impl LanguageService {
-    // Go: ls/organizeimports.go:24 OrganizeImports
+    // Go: ls/organizeimports.go:25 OrganizeImports
     // OrganizeImports organizes imports by:
     //  1. Removing unused imports
     //  2. Coalescing imports from the same module
@@ -176,7 +176,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/organizeimports.go:120 organizeImportsComparerSettings
+// Go: ls/organizeimports.go:121 organizeImportsComparerSettings
 // PORT: a nil Go comparer func is `None`.
 #[derive(Clone)]
 struct OrganizeImportsComparerSettings {
@@ -193,7 +193,7 @@ fn call_string_comparer(comparer: &Option<lsutil::StringComparer>, a: &str, b: &
         .unwrap_or_else(|| crate::core::go_nil_dereference()))(a, b)
 }
 
-// Go: ls/organizeimports.go:126 organizeImportsWorker
+// Go: ls/organizeimports.go:127 organizeImportsWorker
 fn organize_imports_worker(
     old_import_decls: &[Node],
     comparer: &OrganizeImportsComparerSettings,
@@ -327,7 +327,7 @@ fn organize_imports_worker(
     }
 }
 
-// Go: ls/organizeimports.go:220 groupByModuleSpecifier
+// Go: ls/organizeimports.go:221 groupByModuleSpecifier
 fn group_by_module_specifier(imports: &[Node]) -> Vec<Vec<Node>> {
     let mut groups: FxHashMap<String, Vec<Node>> = FxHashMap::default();
     let mut order: Vec<String> = Vec::new();
@@ -347,7 +347,7 @@ fn group_by_module_specifier(imports: &[Node]) -> Vec<Vec<Node>> {
     result
 }
 
-// Go: ls/organizeimports.go:239 removeUnusedImports
+// Go: ls/organizeimports.go:240 removeUnusedImports
 fn remove_unused_imports(
     old_imports: &[Node],
     source_file: Node,
@@ -467,7 +467,7 @@ fn remove_unused_imports(
     used_imports
 }
 
-// Go: ls/organizeimports.go:320 filterUsedImportSpecifiers
+// Go: ls/organizeimports.go:321 filterUsedImportSpecifiers
 fn filter_used_import_specifiers(
     elements: &[Node],
     type_checker: &mut Checker,
@@ -490,7 +490,7 @@ fn filter_used_import_specifiers(
     result
 }
 
-// Go: ls/organizeimports.go:337 hasModuleDeclarationMatchingSpecifier
+// Go: ls/organizeimports.go:338 hasModuleDeclarationMatchingSpecifier
 fn has_module_declaration_matching_specifier(source_file: Node, module_specifier: Node) -> bool {
     if module_specifier.is_nil() || !is_string_literal(module_specifier) {
         return false;
@@ -506,7 +506,7 @@ fn has_module_declaration_matching_specifier(source_file: Node, module_specifier
     false
 }
 
-// Go: ls/organizeimports.go:353 getImportAttributesKey
+// Go: ls/organizeimports.go:354 getImportAttributesKey
 // getImportAttributesKey returns a key for grouping imports by their attributes.
 fn get_import_attributes_key(attributes: Node) -> String {
     if attributes.is_nil() {
@@ -544,7 +544,7 @@ fn get_import_attributes_key(attributes: Node) -> String {
     key
 }
 
-// Go: ls/organizeimports.go:389 groupByNewlineContiguous
+// Go: ls/organizeimports.go:390 groupByNewlineContiguous
 // groupByNewlineContiguous groups declarations by blank lines between them.
 fn group_by_newline_contiguous(source_file: Node, decls: &[Node]) -> Vec<Vec<Node>> {
     let text = source_file_text(source_file);
@@ -568,7 +568,7 @@ fn group_by_newline_contiguous(source_file: Node, decls: &[Node]) -> Vec<Vec<Nod
     groups
 }
 
-// Go: ls/organizeimports.go:410 isNewGroup
+// Go: ls/organizeimports.go:411 isNewGroup
 // PORT: Go takes the source file; the caller passes its text, which the
 // scanner borrows.
 fn is_new_group<'a>(text: &'a str, decl: Node, s: &mut Scanner<'a>) -> bool {
@@ -606,7 +606,7 @@ fn is_new_group<'a>(text: &'a str, decl: Node, s: &mut Scanner<'a>) -> bool {
     false
 }
 
-// Go: ls/organizeimports.go:445 coalesceImportsWorker
+// Go: ls/organizeimports.go:446 coalesceImportsWorker
 fn coalesce_imports_worker(
     import_decls: &[Node],
     comparer: &dyn Fn(&str, &str) -> i32,
@@ -868,7 +868,7 @@ fn coalesce_imports_worker(
     coalesced_imports
 }
 
-// Go: ls/organizeimports.go:635 categorizedImports
+// Go: ls/organizeimports.go:651 categorizedImports
 struct CategorizedImports {
     import_without_clause: Node,
     source_phase_imports: Vec<Node>,
@@ -876,7 +876,7 @@ struct CategorizedImports {
     regular_imports: ImportGroup,
 }
 
-// Go: ls/organizeimports.go:641 importGroup
+// Go: ls/organizeimports.go:658 importGroup
 #[derive(Clone, Default)]
 struct ImportGroup {
     default_imports: Vec<Node>,
@@ -885,7 +885,7 @@ struct ImportGroup {
 }
 
 impl ImportGroup {
-    // Go: ls/organizeimports.go:643 (importGroup).isEmpty
+    // Go: ls/organizeimports.go:664 (importGroup).isEmpty
     fn is_empty(&self) -> bool {
         self.default_imports.is_empty()
             && self.namespace_imports.is_empty()
@@ -893,7 +893,7 @@ impl ImportGroup {
     }
 }
 
-// Go: ls/organizeimports.go:651 getCategorizedImports
+// Go: ls/organizeimports.go:668 getCategorizedImports
 fn get_categorized_imports(import_decls: &[Node]) -> CategorizedImports {
     let mut import_without_clause = Node::NIL;
     let mut source_phase_imports: Vec<Node> = Vec::new();
@@ -948,7 +948,7 @@ fn get_categorized_imports(import_decls: &[Node]) -> CategorizedImports {
     }
 }
 
-// Go: ls/organizeimports.go:693 getNewImportSpecifiers
+// Go: ls/organizeimports.go:716 getNewImportSpecifiers
 fn get_new_import_specifiers(named_imports: &[Node], factory: &NodeFactory) -> Vec<Node> {
     let mut result: Vec<Node> = Vec::new();
 
@@ -983,7 +983,7 @@ fn get_new_import_specifiers(named_imports: &[Node], factory: &NodeFactory) -> V
     result
 }
 
-// Go: ls/organizeimports.go:723 tryGetNamedBindingElements
+// Go: ls/organizeimports.go:746 tryGetNamedBindingElements
 // PORT: a Go nil slice is `None`.
 fn try_get_named_binding_elements(named_import: Node) -> Option<Vec<Node>> {
     if named_import.kind() != SyntaxKind::ImportDeclaration {
@@ -1006,7 +1006,7 @@ fn try_get_named_binding_elements(named_import: Node) -> Option<Vec<Node>> {
     None
 }
 
-// Go: ls/organizeimports.go:744 getTopLevelExportGroups
+// Go: ls/organizeimports.go:767 getTopLevelExportGroups
 fn get_top_level_export_groups(source_file: Node) -> Vec<Vec<Node>> {
     let mut top_level_export_groups: Vec<Vec<Node>> = Vec::new();
     let statements = source_file.statements().to_vec();
@@ -1049,7 +1049,7 @@ fn get_top_level_export_groups(source_file: Node) -> Vec<Vec<Node>> {
     result
 }
 
-// Go: ls/organizeimports.go:784 organizeExportsWorker
+// Go: ls/organizeimports.go:807 organizeExportsWorker
 fn organize_exports_worker(
     old_export_decls: &[Node],
     comparer: &OrganizeImportsComparerSettings,
@@ -1120,7 +1120,7 @@ fn organize_exports_worker(
     }
 }
 
-// Go: ls/organizeimports.go:833 coalesceExportsWorker
+// Go: ls/organizeimports.go:856 coalesceExportsWorker
 fn coalesce_exports_worker(
     export_group: &[Node],
     specifier_comparer: &dyn Fn(Node, Node) -> i32,
@@ -1232,14 +1232,14 @@ fn coalesce_exports_worker(
     coalesced_exports
 }
 
-// Go: ls/organizeimports.go:929 categorizedExports
+// Go: ls/organizeimports.go:952 categorizedExports
 struct CategorizedExports {
     export_without_clause: Node,
     named_exports: Vec<Node>,
     type_only_exports: Vec<Node>,
 }
 
-// Go: ls/organizeimports.go:935 getCategorizedExports
+// Go: ls/organizeimports.go:958 getCategorizedExports
 fn get_categorized_exports(export_group: &[Node]) -> CategorizedExports {
     let mut export_without_clause = Node::NIL;
     let mut named_exports: Vec<Node> = Vec::new();

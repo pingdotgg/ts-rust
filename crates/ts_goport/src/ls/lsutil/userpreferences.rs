@@ -49,7 +49,7 @@ pub fn new_default_user_preferences() -> UserPreferences {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:47 UserPreferences
+// Go: ls/lsutil/userpreferences.go:47 UserPreferences (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:89 UserPreferences)
 // UserPreferences represents TypeScript language service preferences.
 //
 // Fields are populated using two tags:
@@ -204,7 +204,7 @@ pub struct UserPreferences {
 }
 
 impl UserPreferences {
-    // Go: ls/lsutil/userpreferences.go:189 (UserPreferences).IsATADisabled
+    // Go: ls/lsutil/userpreferences.go:196 (UserPreferences).IsATADisabled
     // IsATADisabled returns whether Automatic Type Acquisition is disabled based on user preferences.
     // It checks the unified setting (tsserver.automaticTypeAcquisition.enabled) first,
     // then falls back to the deprecated setting (disableAutomaticTypeAcquisition).
@@ -216,7 +216,7 @@ impl UserPreferences {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:209 InlayHintsPreferences
+// Go: ls/lsutil/userpreferences.go:209 InlayHintsPreferences (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:77 InlayHintsPreferences)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InlayHintsPreferences {
     pub include_inlay_parameter_name_hints: IncludeInlayParameterNameHints,
@@ -229,7 +229,7 @@ pub struct InlayHintsPreferences {
     pub include_inlay_enum_member_value_hints: Tristate,
 }
 
-// Go: ls/lsutil/userpreferences.go:220 CodeLensUserPreferences
+// Go: ls/lsutil/userpreferences.go:220 CodeLensUserPreferences (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:14 CodeLensUserPreferences)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CodeLensUserPreferences {
     pub references_code_lens_enabled: Tristate,
@@ -241,7 +241,7 @@ pub struct CodeLensUserPreferences {
 
 // --- Enum Types ---
 
-// Go: ls/lsutil/userpreferences.go:230 QuotePreference
+// Go: ls/lsutil/userpreferences.go:40 QuotePreference
 // PORT: a Go string type. The value is always one of the Go constants, so a
 // `&'static str` holds it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -254,7 +254,7 @@ impl QuotePreference {
     pub const SINGLE: QuotePreference = QuotePreference("single");
 }
 
-// Go: ls/lsutil/userpreferences.go:232 WorkspaceSymbolsScope
+// Go: ls/lsutil/userpreferences.go:49 WorkspaceSymbolsScope
 // PORT: a Go string type. Since ts#64554 it has a parser
 // (`parsePreferenceWorkspaceSymbolsScope`), so the value is one of the
 // constants or "" (an unknown value). It stays a `Cow`.
@@ -268,7 +268,7 @@ impl WorkspaceSymbolsScope {
         WorkspaceSymbolsScope(Cow::Borrowed("currentProject"));
 }
 
-// Go: ls/lsutil/userpreferences.go:246 JsxAttributeCompletionStyle
+// Go: ls/lsutil/userpreferences.go:56 JsxAttributeCompletionStyle
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct JsxAttributeCompletionStyle(pub &'static str);
 
@@ -279,7 +279,7 @@ impl JsxAttributeCompletionStyle {
     pub const NONE: JsxAttributeCompletionStyle = JsxAttributeCompletionStyle("none");
 }
 
-// Go: ls/lsutil/userpreferences.go:255 IncludeInlayParameterNameHints
+// Go: ls/lsutil/userpreferences.go:65 IncludeInlayParameterNameHints
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct IncludeInlayParameterNameHints(pub &'static str);
 
@@ -298,7 +298,7 @@ go_enum!(OrganizeImportsSort, i32 {
     NATURAL_IGNORE_CASE = 4;
 });
 
-// Go: ls/lsutil/userpreferences.go:273 OrganizeImportsCollation
+// Go: ls/lsutil/userpreferences.go:83 OrganizeImportsCollation
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct OrganizeImportsCollation(pub bool);
 
@@ -520,7 +520,7 @@ impl FieldValue {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:300 typeParsers
+// Go: ls/lsutil/userpreferences.go:300 typeParsers (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // typeParsers maps reflect.Type to a function that parses a value into that type.
 // PORT: the Go map is a match on the field type.
 fn type_parsers(t: FieldType) -> Option<fn(&LspAny) -> FieldValue> {
@@ -736,7 +736,7 @@ fn type_parsers(t: FieldType) -> Option<fn(&LspAny) -> FieldValue> {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:426 typeSerializers
+// Go: ls/lsutil/userpreferences.go:426 typeSerializers (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // typeSerializers maps reflect.Type to a function that serializes a value of that type.
 // For types which do not serialize as-is (tristate, enums, etc).
 // PORT: the Go map is a match on the field type. The Go type assertion
@@ -868,7 +868,7 @@ fn type_serializers(t: FieldType) -> Option<fn(&FieldValue) -> LspAny> {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:525 configPathParsers
+// Go: ls/lsutil/userpreferences.go:525 configPathParsers (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // configPathParsers provides field-specific config value parsers that override the default
 // type-based parser when the VS Code config value format differs from the Go field type.
 // PORT: the Go map is a match on the config path.
@@ -1531,7 +1531,7 @@ static USER_PREFERENCES_FIELDS: &[StructField] = &[
     ),
 ];
 
-// Go: ls/lsutil/userpreferences.go:547 fieldInfo
+// Go: ls/lsutil/userpreferences.go:547 fieldInfo (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 #[derive(Clone)]
 struct FieldInfo {
     raw_name: &'static str, // raw name for unstable section lookup (e.g., "quotePreference")
@@ -1545,18 +1545,18 @@ struct FieldInfo {
     config_invert: bool, // whether to invert boolean values for config path
 }
 
-// Go: ls/lsutil/userpreferences.go:556 configPathInfo
+// Go: ls/lsutil/userpreferences.go:556 configPathInfo (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 #[derive(Clone, Copy)]
 struct ConfigPathInfo {
     path: &'static str,
     invert: bool,
 }
 
-// Go: ls/lsutil/userpreferences.go:561 fieldInfoCache
+// Go: ls/lsutil/userpreferences.go:561 fieldInfoCache (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 static FIELD_INFO_CACHE: LazyLock<Vec<FieldInfo>> =
     LazyLock::new(|| collect_field_infos(USER_PREFERENCES_FIELDS));
 
-// Go: ls/lsutil/userpreferences.go:566 unstableNameIndex
+// Go: ls/lsutil/userpreferences.go:566 unstableNameIndex (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // unstableNameIndex maps raw names to fieldInfo index for unstable section lookup.
 static UNSTABLE_NAME_INDEX: LazyLock<FxHashMap<&'static str, usize>> = LazyLock::new(|| {
     let infos = &*FIELD_INFO_CACHE;
@@ -1569,7 +1569,7 @@ static UNSTABLE_NAME_INDEX: LazyLock<FxHashMap<&'static str, usize>> = LazyLock:
     index
 });
 
-// Go: ls/lsutil/userpreferences.go:577 collectFieldInfos
+// Go: ls/lsutil/userpreferences.go:577 collectFieldInfos (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // PORT: Go takes a `reflect.Type` and an index path and recurses into
 // untagged struct fields. The field table is already flat, so every entry
 // is a tagged field; the Go panic for an untagged non-struct field stays.
@@ -1626,7 +1626,7 @@ fn collect_field_infos(fields: &'static [StructField]) -> Vec<FieldInfo> {
     infos
 }
 
-// Go: ls/lsutil/userpreferences.go:628 parseConfigPathTag
+// Go: ls/lsutil/userpreferences.go:628 parseConfigPathTag (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 fn parse_config_path_tag(tag: &'static str) -> ConfigPathInfo {
     let mut parts = tag.split(',');
     let mut info = ConfigPathInfo {
@@ -1641,7 +1641,7 @@ fn parse_config_path_tag(tag: &'static str) -> ConfigPathInfo {
     info
 }
 
-// Go: ls/lsutil/userpreferences.go:639 getNestedValue
+// Go: ls/lsutil/userpreferences.go:147 getNestedValue
 // PORT: Go starts from `any(config)`. `current` is `None` only for that root
 // map, before the first part is read.
 fn get_nested_value(config: &IndexMap<String, LspAny>, path: &str) -> (LspAny, bool) {
@@ -1661,7 +1661,7 @@ fn get_nested_value(config: &IndexMap<String, LspAny>, path: &str) -> (LspAny, b
     (current.cloned().unwrap_or(LspAny::Null), true)
 }
 
-// Go: ls/lsutil/userpreferences.go:655 setNestedValue
+// Go: ls/lsutil/userpreferences.go:162 setNestedValue
 fn set_nested_value(config: &mut IndexMap<String, LspAny>, path: &str, value: LspAny) {
     let parts: Vec<&str> = path.split('.').collect();
     let mut current = config;
@@ -1677,7 +1677,7 @@ fn set_nested_value(config: &mut IndexMap<String, LspAny>, path: &str, value: Ls
     current.insert(parts[parts.len() - 1].to_string(), value);
 }
 
-// Go: ls/lsutil/userpreferences.go:669 setRawFieldsFromConfig
+// Go: ls/lsutil/userpreferences.go:669 setRawFieldsFromConfig (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // PORT: Go takes the struct as a `reflect.Value`; here it is `p`.
 fn set_raw_fields_from_config(
     p: &mut UserPreferences,
@@ -1702,7 +1702,7 @@ fn set_raw_fields_from_config(
 }
 
 impl UserPreferences {
-    // Go: ls/lsutil/userpreferences.go:674 (UserPreferences).withConfig
+    // Go: ls/lsutil/userpreferences.go:674 (UserPreferences).withConfig (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:637 UserPreferences.withConfig)
     // PORT: Go has a value receiver; this works on a copy of `self`.
     pub(crate) fn with_config(&self, config: &IndexMap<String, LspAny>) -> UserPreferences {
         let mut p = self.clone();
@@ -1770,11 +1770,11 @@ impl UserPreferences {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:746 getFieldByPath
+// Go: ls/lsutil/userpreferences.go:746 getFieldByPath (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // PORT: not ported. `FieldInfo.get` and `FieldInfo.set` stand for the field
 // that Go finds by its index path.
 
-// Go: ls/lsutil/userpreferences.go:753 setFieldFromValue
+// Go: ls/lsutil/userpreferences.go:753 setFieldFromValue (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // PORT: Go takes the field as a `reflect.Value`. Here the field is `info` on
 // `p`. Go also accepts a Go `int` for an int field; an `LspAny` number is
 // always the Go `float64` case. Go `int64(float64)` keeps 64 bits; the Rust
@@ -1825,7 +1825,7 @@ fn set_field_from_value(p: &mut UserPreferences, info: &FieldInfo, val: &LspAny)
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:656 (*UserPreferences).MarshalJSONTo
+// Go: ls/lsutil/userpreferences.go:656 (*UserPreferences).MarshalJSONTo (at 673a5f17d713; ts#64554 generates it: ls/lsutil/userpreferences_generated.go:1053 UserPreferences.MarshalJSONTo)
 impl MarshalerTo for UserPreferences {
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         let mut config: IndexMap<String, LspAny> = IndexMap::new();
@@ -1884,7 +1884,7 @@ fn sort_any_keys_deterministic(v: &mut LspAny) {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:826 serializeField
+// Go: ls/lsutil/userpreferences.go:826 serializeField (at 673a5f17d713; removed by ts#64554, which generates the per-field code in ls/lsutil/userpreferences_generated.go)
 // PORT: Go `nil` is `LspAny::Null`. A Go `int` is written as a JSON number;
 // `LspAny::Number` is an `f64`, which holds every `i32` exactly.
 fn serialize_field(field: &FieldValue) -> LspAny {
@@ -1933,7 +1933,7 @@ fn serialize_field(field: &FieldValue) -> LspAny {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:716 (*UserPreferences).UnmarshalJSONFrom
+// Go: ls/lsutil/userpreferences.go:184 (*UserPreferences).UnmarshalJSONFrom
 impl UnmarshalerFrom for UserPreferences {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         let mut config: IndexMap<String, LspAny> = IndexMap::new();
@@ -1947,7 +1947,7 @@ impl UnmarshalerFrom for UserPreferences {
 // --- Helper methods ---
 
 impl UserPreferences {
-    // Go: ls/lsutil/userpreferences.go:866 (UserPreferences).ModuleSpecifierPreferences
+    // Go: ls/lsutil/userpreferences.go:203 (UserPreferences).ModuleSpecifierPreferences
     pub fn module_specifier_preferences(&self) -> crate::modulespecifiers::UserPreferences {
         crate::modulespecifiers::UserPreferences {
             import_module_specifier_preference: self.import_module_specifier_preference,
@@ -1958,7 +1958,7 @@ impl UserPreferences {
         }
     }
 
-    // Go: ls/lsutil/userpreferences.go:758 (UserPreferences).ParsedAutoImportFileExcludePatterns
+    // Go: ls/lsutil/userpreferences.go:211 (UserPreferences).ParsedAutoImportFileExcludePatterns
     // PORT: Go returns a nil `*SpecMatcher` for no patterns; that is `None`.
     pub fn parsed_auto_import_file_exclude_patterns(
         &self,
@@ -1972,7 +1972,7 @@ impl UserPreferences {
         )
     }
 
-    // Go: ls/lsutil/userpreferences.go:762 (UserPreferences).IsModuleSpecifierExcluded
+    // Go: ls/lsutil/userpreferences.go:215 (UserPreferences).IsModuleSpecifierExcluded
     pub fn is_module_specifier_excluded(&self, module_specifier: &str) -> bool {
         crate::modulespecifiers::is_excluded_by_regex(
             module_specifier,
@@ -1981,7 +1981,7 @@ impl UserPreferences {
     }
 }
 
-// Go: ls/lsutil/userpreferences.go:893 ParseUserPreferences
+// Go: ls/lsutil/userpreferences.go:219 ParseUserPreferences
 pub fn parse_user_preferences(items: &IndexMap<String, LspAny>) -> UserPreferences {
     let mut prefs = new_default_user_preferences();
     // Apply editor settings first (tabSize, indentSize, etc.) as raw-name defaults,

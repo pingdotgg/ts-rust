@@ -2,7 +2,7 @@ use crate::ls::prelude::*;
 
 use crate::spanmap::{Feature, Fidelity};
 
-// Go: ls/hover.go:20 symbolFormatFlags
+// Go: ls/hover.go:23 symbolFormatFlags
 pub const SYMBOL_FORMAT_FLAGS: SymbolFormatFlags =
     SymbolFormatFlags::WRITE_TYPE_PARAMETERS_OR_ARGUMENTS
         .union(SymbolFormatFlags::USE_ONLY_EXTERNAL_ALIASING)
@@ -291,7 +291,7 @@ pub type DocumentationLocationMapper<'a> =
     &'a dyn Fn(Node, TextRange) -> (lsproto::Location, Fidelity);
 
 impl<P: ProgramView> LanguageService<P> {
-    // Go: ls/hover.go:202 documentationLocationMapper
+    // Go: ls/hover.go:200 documentationLocationMapper
     pub fn documentation_location_mapper(
         &self,
         feature: Feature,
@@ -1636,7 +1636,7 @@ pub fn get_quick_info_and_declaration_at_location(
     }
 }
 
-// Go: ls/hover.go:951 typeParameterToString
+// Go: ls/hover.go:960 typeParameterToString
 // typeParameterToString renders a type parameter declaration (e.g., "T extends FooType").
 pub fn type_parameter_to_string(
     c: &mut Checker,
@@ -1647,7 +1647,7 @@ pub fn type_parameter_to_string(
     c.type_parameter_to_string_ex(t, enclosing_declaration, vc)
 }
 
-// Go: ls/hover.go:955 getNodeForQuickInfo
+// Go: ls/hover.go:964 getNodeForQuickInfo
 pub fn get_node_for_quick_info(node: Node) -> Node {
     if node.parent().is_nil() {
         return node;
@@ -1667,7 +1667,7 @@ pub fn get_node_for_quick_info(node: Node) -> Node {
     node
 }
 
-// Go: ls/hover.go:974 getSymbolAtLocationForQuickInfo
+// Go: ls/hover.go:983 getSymbolAtLocationForQuickInfo
 pub fn get_symbol_at_location_for_quick_info(c: &mut Checker, node: Node) -> SymbolId {
     let object_element = get_containing_object_literal_element(node);
     if object_element.is_some() {
@@ -1687,7 +1687,7 @@ pub fn get_symbol_at_location_for_quick_info(c: &mut Checker, node: Node) -> Sym
     c.get_symbol_at_location_exported(node)
 }
 
-// Go: ls/hover.go:985 getSignaturesAtLocation
+// Go: ls/hover.go:994 getSignaturesAtLocation
 pub fn get_signatures_at_location(
     c: &mut Checker,
     symbol: SymbolId,
@@ -1709,7 +1709,7 @@ pub fn get_signatures_at_location(
     signatures
 }
 
-// Go: ls/hover.go:996 getCallOrNewExpression
+// Go: ls/hover.go:1005 getCallOrNewExpression
 pub fn get_call_or_new_expression(node: Node) -> Node {
     if is_source_file(node) {
         return Node::NIL;
@@ -1726,7 +1726,7 @@ pub fn get_call_or_new_expression(node: Node) -> Node {
     Node::NIL
 }
 
-// Go: ls/hover.go:1009 containsTypedefTag
+// Go: ls/hover.go:1018 containsTypedefTag
 pub fn contains_typedef_tag(jsdoc: Node) -> bool {
     if jsdoc.kind() == SyntaxKind::JsDoc {
         let tags = jsdoc.tags();
@@ -1743,7 +1743,7 @@ pub fn contains_typedef_tag(jsdoc: Node) -> bool {
     false
 }
 
-// Go: ls/hover.go:1022 writeCode
+// Go: ls/hover.go:1031 writeCode
 pub fn write_code(b: &mut String, lang: &str, code: &str) {
     if code.is_empty() {
         return;
@@ -1765,7 +1765,7 @@ pub fn write_code(b: &mut String, lang: &str, code: &str) {
     b.push('\n');
 }
 
-// Go: ls/hover.go:1043 writeComments
+// Go: ls/hover.go:1052 writeComments
 pub fn write_comments(
     get_mapped_location: DocumentationLocationMapper<'_>,
     b: &mut String,
@@ -1803,7 +1803,7 @@ pub fn write_comments(
     }
 }
 
-// Go: ls/hover.go:1056 writeJSDocLink
+// Go: ls/hover.go:1065 writeJSDocLink
 pub fn write_js_doc_link(
     get_mapped_location: DocumentationLocationMapper<'_>,
     b: &mut String,
@@ -1846,7 +1846,7 @@ pub fn write_js_doc_link(
     write_name_link(get_mapped_location, b, c, name, text, quote, is_markdown);
 }
 
-// Go: ls/hover.go:1088 writeNameLink
+// Go: ls/hover.go:1097 writeNameLink
 pub fn write_name_link(
     get_mapped_location: DocumentationLocationMapper<'_>,
     b: &mut String,
@@ -1895,14 +1895,14 @@ pub fn write_name_link(
     );
 }
 
-// Go: ls/hover.go:1111 trimCommentPrefix
+// Go: ls/hover.go:1120 trimCommentPrefix
 pub fn trim_comment_prefix(text: &str) -> &str {
     let text = text.trim_start_matches(' ');
     let text = text.strip_prefix('|').unwrap_or(text);
     text.trim_start_matches(' ')
 }
 
-// Go: ls/hover.go:1115 writeMarkdownLink
+// Go: ls/hover.go:1124 writeMarkdownLink
 pub fn write_markdown_link(b: &mut String, text: &str, uri: &str, quote: bool) {
     b.push('[');
     write_quoted_string(b, text, quote);
@@ -1911,7 +1911,7 @@ pub fn write_markdown_link(b: &mut String, text: &str, uri: &str, quote: bool) {
     b.push(')');
 }
 
-// Go: ls/hover.go:1123 writeOptionalEntityName
+// Go: ls/hover.go:1132 writeOptionalEntityName
 pub fn write_optional_entity_name(b: &mut String, name: Node) {
     if name.is_some() {
         b.push(' ');
@@ -1919,7 +1919,7 @@ pub fn write_optional_entity_name(b: &mut String, name: Node) {
     }
 }
 
-// Go: ls/hover.go:1130 writeQuotedString
+// Go: ls/hover.go:1139 writeQuotedString
 pub fn write_quoted_string(b: &mut String, str: &str, quote: bool) {
     if quote && !str.contains('`') {
         b.push('`');
@@ -1930,14 +1930,14 @@ pub fn write_quoted_string(b: &mut String, str: &str, quote: bool) {
     }
 }
 
-// Go: ls/hover.go:1140 getEntityNameString
+// Go: ls/hover.go:1149 getEntityNameString
 pub fn get_entity_name_string(name: Node) -> String {
     let mut b = String::new();
     write_entity_name_parts(&mut b, name);
     b
 }
 
-// Go: ls/hover.go:1146 writeEntityNameParts
+// Go: ls/hover.go:1155 writeEntityNameParts
 pub fn write_entity_name_parts(b: &mut String, node: Node) {
     match node.kind() {
         SyntaxKind::Identifier => {

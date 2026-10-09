@@ -9,7 +9,7 @@ use crate::ls::prelude::*;
 use crate::spanmap::Feature;
 
 impl LanguageService {
-    // Go: ls/documenthighlights.go:20 ProvideDocumentHighlights
+    // Go: ls/documenthighlights.go:21 ProvideDocumentHighlights
     pub fn provide_document_highlights(
         &self,
         ctx: &Context,
@@ -32,7 +32,7 @@ impl LanguageService {
         })
     }
 
-    // Go: ls/documenthighlights.go:37 ProvideMultiDocumentHighlights
+    // Go: ls/documenthighlights.go:38 ProvideMultiDocumentHighlights
     pub fn provide_multi_document_highlights(
         &self,
         ctx: &Context,
@@ -48,7 +48,7 @@ impl LanguageService {
         )
     }
 
-    // Go: ls/documenthighlights.go:41 provideDocumentHighlightsWorker
+    // Go: ls/documenthighlights.go:42 provideDocumentHighlightsWorker
     pub fn provide_document_highlights_worker(
         &self,
         ctx: &Context,
@@ -80,7 +80,7 @@ impl LanguageService {
         Ok(combine_multi_document_highlights(results))
     }
 
-    // Go: ls/documenthighlights.go:53 provideDocumentHighlightsAtPosition
+    // Go: ls/documenthighlights.go:54 provideDocumentHighlightsAtPosition
     pub fn provide_document_highlights_at_position(
         &self,
         ctx: &Context,
@@ -178,7 +178,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/documenthighlights.go:112 combineMultiDocumentHighlights
+// Go: ls/documenthighlights.go:113 combineMultiDocumentHighlights
 // PORT: Go keeps pointers to the combined documents in `byURI` and appends
 // through them; here `by_uri` holds the index into `combined_documents`.
 // Go map order is not used for output.
@@ -218,7 +218,7 @@ pub fn combine_multi_document_highlights(
 }
 
 impl LanguageService {
-    // Go: ls/documenthighlights.go:139 getSemanticDocumentHighlights
+    // Go: ls/documenthighlights.go:140 getSemanticDocumentHighlights
     pub fn get_semantic_document_highlights(
         &self,
         ctx: &Context,
@@ -275,7 +275,7 @@ impl LanguageService {
         result
     }
 
-    // Go: ls/documenthighlights.go:171 toDocumentHighlight
+    // Go: ls/documenthighlights.go:172 toDocumentHighlight
     // PORT: Go returns `*lsproto.DocumentHighlight`; nil is `None`.
     pub fn to_document_highlight(
         &self,
@@ -318,7 +318,7 @@ impl LanguageService {
         (file_name, Some(dh))
     }
 
-    // Go: ls/documenthighlights.go:200 getSyntacticDocumentHighlights
+    // Go: ls/documenthighlights.go:201 getSyntacticDocumentHighlights
     pub fn get_syntactic_document_highlights(
         &self,
         node: Node,
@@ -426,7 +426,7 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/documenthighlights.go:252 useParent
+    // Go: ls/documenthighlights.go:253 useParent
     pub fn use_parent(
         &self,
         node: Node,
@@ -440,7 +440,7 @@ impl LanguageService {
         Vec::new()
     }
 
-    // Go: ls/documenthighlights.go:259 highlightSpans
+    // Go: ls/documenthighlights.go:260 highlightSpans
     pub fn highlight_spans(
         &self,
         nodes: &[Node],
@@ -469,7 +469,7 @@ impl LanguageService {
         highlights
     }
 
-    // Go: ls/documenthighlights.go:275 getFromAllDeclarations
+    // Go: ls/documenthighlights.go:276 getFromAllDeclarations
     pub fn get_from_all_declarations(
         &self,
         node_test: &dyn Fn(Node) -> bool,
@@ -510,7 +510,7 @@ impl LanguageService {
         )
     }
 
-    // Go: ls/documenthighlights.go:299 getIfElseOccurrences
+    // Go: ls/documenthighlights.go:300 getIfElseOccurrences
     // PORT: Go takes `*ast.IfStatement`; here the IfStatement node.
     pub fn get_if_else_occurrences(
         &self,
@@ -581,7 +581,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/documenthighlights.go:340 getIfElseKeywords
+// Go: ls/documenthighlights.go:341 getIfElseKeywords
 // PORT: Go takes `*ast.IfStatement`; here the IfStatement node.
 pub fn get_if_else_keywords(if_statement: Node, source_file: Node) -> Vec<Node> {
     let mut if_statement = if_statement;
@@ -627,7 +627,7 @@ pub fn get_if_else_keywords(if_statement: Node, source_file: Node) -> Vec<Node> 
     keywords
 }
 
-// Go: ls/documenthighlights.go:383 getReturnOccurrences
+// Go: ls/documenthighlights.go:384 getReturnOccurrences
 pub fn get_return_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let func_node = find_ancestor(node.parent(), is_function_like);
     if func_node.is_nil() {
@@ -657,7 +657,7 @@ pub fn get_return_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     keywords
 }
 
-// Go: ls/documenthighlights.go:412 aggregateOwnedThrowStatements
+// Go: ls/documenthighlights.go:413 aggregateOwnedThrowStatements
 pub fn aggregate_owned_throw_statements(node: Node, source_file: Node) -> Vec<Node> {
     if is_throw_statement(node) {
         return vec![node];
@@ -687,7 +687,7 @@ pub fn aggregate_owned_throw_statements(node: Node, source_file: Node) -> Vec<No
     flat_map_children(node, source_file, &aggregate_owned_throw_statements)
 }
 
-// Go: ls/documenthighlights.go:441 flatMapChildren
+// Go: ls/documenthighlights.go:442 flatMapChildren
 pub fn flat_map_children<T>(
     node: Node,
     source_file: Node,
@@ -703,7 +703,7 @@ pub fn flat_map_children<T>(
     result
 }
 
-// Go: ls/documenthighlights.go:454 getThrowOccurrences
+// Go: ls/documenthighlights.go:455 getThrowOccurrences
 pub fn get_throw_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let owner = get_throw_statement_owner(node);
     if owner.is_nil() {
@@ -736,7 +736,7 @@ pub fn get_throw_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     keywords
 }
 
-// Go: ls/documenthighlights.go:489 getThrowStatementOwner
+// Go: ls/documenthighlights.go:490 getThrowStatementOwner
 // For lack of a better name, this function takes a throw statement and returns the
 // nearest ancestor that is a try-block (whose try statement has a catch clause),
 // function-block, or source file.
@@ -763,7 +763,7 @@ pub fn get_throw_statement_owner(throw_statement: Node) -> Node {
     Node::NIL
 }
 
-// Go: ls/documenthighlights.go:512 getTryCatchFinallyOccurrences
+// Go: ls/documenthighlights.go:513 getTryCatchFinallyOccurrences
 pub fn get_try_catch_finally_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let try_statement = node;
 
@@ -791,7 +791,7 @@ pub fn get_try_catch_finally_occurrences(node: Node, source_file: Node) -> Vec<N
     keywords
 }
 
-// Go: ls/documenthighlights.go:536 getSwitchCaseDefaultOccurrences
+// Go: ls/documenthighlights.go:537 getSwitchCaseDefaultOccurrences
 pub fn get_switch_case_default_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let switch_statement = node;
 
@@ -824,7 +824,7 @@ pub fn get_switch_case_default_occurrences(node: Node, source_file: Node) -> Vec
     keywords
 }
 
-// Go: ls/documenthighlights.go:563 aggregateAllBreakAndContinueStatements
+// Go: ls/documenthighlights.go:564 aggregateAllBreakAndContinueStatements
 pub fn aggregate_all_break_and_continue_statements(node: Node, source_file: Node) -> Vec<Node> {
     if is_break_or_continue_statement(node) {
         return vec![node];
@@ -839,7 +839,7 @@ pub fn aggregate_all_break_and_continue_statements(node: Node, source_file: Node
     )
 }
 
-// Go: ls/documenthighlights.go:573 ownsBreakOrContinueStatement
+// Go: ls/documenthighlights.go:574 ownsBreakOrContinueStatement
 pub fn owns_break_or_continue_statement(owner: Node, statement: Node) -> bool {
     let actual_owner = get_break_or_continue_owner(statement);
     if actual_owner.is_nil() {
@@ -848,7 +848,7 @@ pub fn owns_break_or_continue_statement(owner: Node, statement: Node) -> bool {
     actual_owner == owner
 }
 
-// Go: ls/documenthighlights.go:581 getBreakOrContinueOwner
+// Go: ls/documenthighlights.go:582 getBreakOrContinueOwner
 pub fn get_break_or_continue_owner(statement: Node) -> Node {
     find_ancestor_or_quit(statement, |node| match node.kind() {
         SyntaxKind::SwitchStatement
@@ -880,7 +880,7 @@ pub fn get_break_or_continue_owner(statement: Node) -> Node {
     })
 }
 
-// Go: ls/documenthighlights.go:611 isLabeledBy
+// Go: ls/documenthighlights.go:612 isLabeledBy
 // Whether or not a 'node' is preceded by a label of the given string.
 // Note: 'node' cannot be a SourceFile.
 pub fn is_labeled_by(node: Node, label_name: &str) -> bool {
@@ -896,7 +896,7 @@ pub fn is_labeled_by(node: Node, label_name: &str) -> bool {
     .is_some()
 }
 
-// Go: ls/documenthighlights.go:623 getBreakOrContinueStatementOccurrences
+// Go: ls/documenthighlights.go:624 getBreakOrContinueStatementOccurrences
 pub fn get_break_or_continue_statement_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let owner = get_break_or_continue_owner(node);
     if owner.is_some() {
@@ -917,7 +917,7 @@ pub fn get_break_or_continue_statement_occurrences(node: Node, source_file: Node
     Vec::new()
 }
 
-// Go: ls/documenthighlights.go:635 getLoopBreakContinueOccurrences
+// Go: ls/documenthighlights.go:636 getLoopBreakContinueOccurrences
 pub fn get_loop_break_continue_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let mut keywords: Vec<Node> = Vec::new();
 
@@ -953,7 +953,7 @@ pub fn get_loop_break_continue_occurrences(node: Node, source_file: Node) -> Vec
     keywords
 }
 
-// Go: ls/documenthighlights.go:663 getAsyncAndAwaitOccurrences
+// Go: ls/documenthighlights.go:664 getAsyncAndAwaitOccurrences
 pub fn get_async_and_await_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let fun = get_containing_function(node);
     if fun.is_nil() {
@@ -983,7 +983,7 @@ pub fn get_async_and_await_occurrences(node: Node, source_file: Node) -> Vec<Nod
     keywords
 }
 
-// Go: ls/documenthighlights.go:692 getYieldOccurrences
+// Go: ls/documenthighlights.go:693 getYieldOccurrences
 pub fn get_yield_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     let parent_func = find_ancestor(node.parent(), is_function_like);
     if parent_func.is_nil() {
@@ -1007,7 +1007,7 @@ pub fn get_yield_occurrences(node: Node, source_file: Node) -> Vec<Node> {
     keywords
 }
 
-// Go: ls/documenthighlights.go:715 traverseWithoutCrossingFunction
+// Go: ls/documenthighlights.go:716 traverseWithoutCrossingFunction
 pub fn traverse_without_crossing_function(node: Node, source_file: Node, cb: &mut dyn FnMut(Node)) {
     cb(node);
     if !is_function_like(node)
@@ -1024,7 +1024,7 @@ pub fn traverse_without_crossing_function(node: Node, source_file: Node, cb: &mu
     }
 }
 
-// Go: ls/documenthighlights.go:725 getModifierOccurrences
+// Go: ls/documenthighlights.go:726 getModifierOccurrences
 pub fn get_modifier_occurrences(kind: SyntaxKind, node: Node, source_file: Node) -> Vec<Node> {
     let mut result: Vec<Node> = Vec::new();
 
@@ -1038,7 +1038,7 @@ pub fn get_modifier_occurrences(kind: SyntaxKind, node: Node, source_file: Node)
     result
 }
 
-// Go: ls/documenthighlights.go:738 getNodesToSearchForModifier
+// Go: ls/documenthighlights.go:739 getNodesToSearchForModifier
 pub fn get_nodes_to_search_for_modifier(
     declaration: Node,
     modifier_flag: ModifierFlags,
@@ -1113,7 +1113,7 @@ pub fn get_nodes_to_search_for_modifier(
     }
 }
 
-// Go: ls/documenthighlights.go:789 findModifier
+// Go: ls/documenthighlights.go:790 findModifier
 pub fn find_modifier(node: Node, kind: SyntaxKind) -> Node {
     for modifier in node.modifier_nodes() {
         if modifier.kind() == kind {

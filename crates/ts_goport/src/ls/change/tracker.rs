@@ -5,7 +5,7 @@ use crate::ls::change::prelude::*;
 use crate::flags_macros::go_enum;
 use crate::spanmap::{self, Feature, SpanMap};
 
-// Go: ls/change/tracker.go:21 NodeOptions
+// Go: ls/change/tracker.go:22 NodeOptions
 // PORT: Go `indentation *int` and `delta *int` are `Option<i32>`. The
 // embedded `LeadingTriviaOption` and `TrailingTriviaOption` are the fields
 // `leading_trivia_option` and `trailing_trivia_option`. Go unexported fields
@@ -54,7 +54,7 @@ go_enum!(TrackerEditKind, i32 {
     REPLACE_WITH_MULTIPLE_NODES = 4; // trackerEditKindReplaceWithMultipleNodes
 });
 
-// Go: ls/change/tracker.go:67 trackerEdit
+// Go: ls/change/tracker.go:68 trackerEdit
 // PORT: Go embeds `core.TextRange` and `*ast.Node`; they are the fields
 // `text_range` and `node`. Go stores `*trackerEdit` in the change map; here
 // the map owns the edits.
@@ -70,14 +70,14 @@ pub struct TrackerEdit {
     pub options: NodeOptions,
 }
 
-// Go: ls/change/tracker.go:78 nodesInsertedAtStartState
+// Go: ls/change/tracker.go:79 nodesInsertedAtStartState
 #[derive(Clone, Copy, Debug)]
 pub struct NodesInsertedAtStartState {
     pub node: Node,
     pub source_file: Node,
 }
 
-// Go: ls/change/tracker.go:83 Tracker
+// Go: ls/change/tracker.go:84 Tracker
 // PORT: Go embeds `*printer.EmitContext` and `*ast.NodeFactory`. The context
 // is the field `emit_context`; the factory (Go
 // `&emitContext.Factory.NodeFactory`) is the method `node_factory()`. Go
@@ -116,14 +116,14 @@ pub struct Tracker {
     // printer
 }
 
-// Go: ls/change/tracker.go:107 deletedNode
+// Go: ls/change/tracker.go:108 deletedNode
 #[derive(Clone, Copy, Debug)]
 pub struct DeletedNode {
     pub source_file: Node,
     pub node: Node,
 }
 
-// Go: ls/change/tracker.go:112 NewTracker
+// Go: ls/change/tracker.go:113 NewTracker
 pub fn new_tracker(
     ctx: &Context,
     compiler_options: &CompilerOptions,
@@ -159,7 +159,7 @@ impl Tracker {
         &self.emit_context.factory().ast
     }
 
-    // Go: ls/change/tracker.go:134 GetChanges
+    // Go: ls/change/tracker.go:135 GetChanges
     /// GetChanges returns the accumulated text edits grouped by file name. Any file whose edits could not be
     /// faithfully mapped back onto content-mapped original text is omitted from the returned map, and its name
     /// is included in the returned slice. Dropping the whole file (rather than the individual edit) keeps a
@@ -187,7 +187,7 @@ impl Tracker {
         (changes, unmappable)
     }
 
-    // Go: ls/change/tracker.go:154 fromLSPEditRange
+    // Go: ls/change/tracker.go:155 fromLSPEditRange
     /// fromLSPEditRange converts an LSP range to a source file range. For a content-mapped file, an original
     /// range may have several projections; this selects the one belonging to sourceFile. A range with no exact
     /// projection cannot be written back and marks the file unmappable.
@@ -215,7 +215,7 @@ impl Tracker {
         TextRange::new(0, 0)
     }
 
-    // Go: ls/change/tracker.go:172 toLSPEditRange
+    // Go: ls/change/tracker.go:173 toLSPEditRange
     /// toLSPEditRange converts a source file range to an LSP range. For a content-mapped file, the range is
     /// mapped back to the original document. If it does not fall entirely within a single verbatim span, the
     /// edit cannot be represented safely: the file is recorded so GetChanges drops its edits, and a best-effort
@@ -236,7 +236,7 @@ impl Tracker {
         r
     }
 
-    // Go: ls/change/tracker.go:183 ReplaceNode
+    // Go: ls/change/tracker.go:184 ReplaceNode
     // PORT: Go `options *NodeOptions` is `Option<&NodeOptions>`.
     pub fn replace_node(
         &mut self,
@@ -266,7 +266,7 @@ impl Tracker {
         self.replace_range(source_file, range, new_node, options);
     }
 
-    // Go: ls/change/tracker.go:194 ReplaceNodeWithNodes
+    // Go: ls/change/tracker.go:195 ReplaceNodeWithNodes
     pub fn replace_node_with_nodes(
         &mut self,
         source_file: Node,
@@ -292,7 +292,7 @@ impl Tracker {
         self.replace_range_with_nodes(source_file, range, new_nodes, options);
     }
 
-    // Go: ls/change/tracker.go:205 ReplaceRange
+    // Go: ls/change/tracker.go:206 ReplaceRange
     /// ReplaceRange replaces textRange in sourceFile with newNode.
     pub fn replace_range(
         &mut self,
@@ -313,7 +313,7 @@ impl Tracker {
             });
     }
 
-    // Go: ls/change/tracker.go:211 ReplaceRangeWithText
+    // Go: ls/change/tracker.go:212 ReplaceRangeWithText
     /// ReplaceRangeWithText replaces an LSP range with text. For a content-mapped file, the LSP range is in the
     /// original document; text may be placed at any exact projection because it does not need formatting context.
     pub fn replace_range_with_text(
@@ -326,7 +326,7 @@ impl Tracker {
         self.replace_text_range_with_text(source_file, text_range, text);
     }
 
-    // Go: ls/change/tracker.go:217 ReplaceTextRangeWithText
+    // Go: ls/change/tracker.go:218 ReplaceTextRangeWithText
     /// ReplaceTextRangeWithText replaces textRange in sourceFile with text. For a content-mapped file, GetChanges
     /// maps the range back to the original document and drops the file if the edit cannot be represented there.
     pub fn replace_text_range_with_text(
@@ -346,7 +346,7 @@ impl Tracker {
             });
     }
 
-    // Go: ls/change/tracker.go:222 ReplaceRangeWithNodes
+    // Go: ls/change/tracker.go:223 ReplaceRangeWithNodes
     /// ReplaceRangeWithNodes replaces textRange in sourceFile with newNodes.
     pub fn replace_range_with_nodes(
         &mut self,
@@ -371,13 +371,13 @@ impl Tracker {
             });
     }
 
-    // Go: ls/change/tracker.go:231 insertTextAt
+    // Go: ls/change/tracker.go:232 insertTextAt
     /// insertTextAt inserts text at an offset in sourceFile.
     pub(crate) fn insert_text_at(&mut self, source_file: Node, pos: i32, text: &str) {
         self.replace_text_range_with_text(source_file, TextRange::new(pos, pos), text);
     }
 
-    // Go: ls/change/tracker.go:236 InsertText
+    // Go: ls/change/tracker.go:237 InsertText
     /// InsertText inserts text at an LSP position.
     pub fn insert_text(&mut self, source_file: Node, pos: lsproto::Position, text: &str) {
         self.replace_range_with_text(
@@ -390,7 +390,7 @@ impl Tracker {
         );
     }
 
-    // Go: ls/change/tracker.go:240 InsertNodeAt
+    // Go: ls/change/tracker.go:241 InsertNodeAt
     pub fn insert_node_at(
         &mut self,
         source_file: Node,
@@ -401,7 +401,7 @@ impl Tracker {
         self.replace_range(source_file, TextRange::new(pos, pos), new_node, options);
     }
 
-    // Go: ls/change/tracker.go:244 InsertNodesAt
+    // Go: ls/change/tracker.go:245 InsertNodesAt
     pub fn insert_nodes_at(
         &mut self,
         source_file: Node,
@@ -412,21 +412,21 @@ impl Tracker {
         self.replace_range_with_nodes(source_file, TextRange::new(pos, pos), new_nodes, options);
     }
 
-    // Go: ls/change/tracker.go:248 InsertNodeAfter
+    // Go: ls/change/tracker.go:249 InsertNodeAfter
     pub fn insert_node_after(&mut self, source_file: Node, after: Node, new_node: Node) {
         let end_position = self.end_pos_for_insert_node_after(source_file, after, new_node);
         let options = self.get_insert_node_after_options(source_file, after);
         self.insert_node_at(source_file, end_position, new_node, options);
     }
 
-    // Go: ls/change/tracker.go:253 InsertNodesAfter
+    // Go: ls/change/tracker.go:254 InsertNodesAfter
     pub fn insert_nodes_after(&mut self, source_file: Node, after: Node, new_nodes: &[Node]) {
         let end_position = self.end_pos_for_insert_node_after(source_file, after, new_nodes[0]);
         let options = self.get_insert_node_after_options(source_file, after);
         self.insert_nodes_at(source_file, end_position, new_nodes, options);
     }
 
-    // Go: ls/change/tracker.go:258 InsertNodeBefore
+    // Go: ls/change/tracker.go:259 InsertNodeBefore
     pub fn insert_node_before(
         &mut self,
         source_file: Node,
@@ -441,7 +441,7 @@ impl Tracker {
         self.insert_node_at(source_file, pos, new_node, options);
     }
 
-    // Go: ls/change/tracker.go:265 TryInsertTypeAnnotation
+    // Go: ls/change/tracker.go:266 TryInsertTypeAnnotation
     /// TryInsertTypeAnnotation inserts a type annotation after the appropriate position on a node
     /// (after the close paren for function-like, after the name/exclamation/question for variable-like).
     /// Returns true if successful.
@@ -500,7 +500,7 @@ impl Tracker {
         true
     }
 
-    // Go: ls/change/tracker.go:304 ParenthesizeArrowParameters
+    // Go: ls/change/tracker.go:305 ParenthesizeArrowParameters
     /// ParenthesizeArrowParameters wraps the parameters of a paren-less arrow function in `(` and `)`.
     /// This is a no-op if the arrow function already has parens.
     pub fn parenthesize_arrow_parameters(&mut self, source_file: Node, arrow_func: Node) {
@@ -520,7 +520,7 @@ impl Tracker {
         self.insert_text_at(source_file, last_param.end(), ")");
     }
 
-    // Go: ls/change/tracker.go:320 InsertModifierBefore
+    // Go: ls/change/tracker.go:321 InsertModifierBefore
     /// InsertModifierBefore inserts a modifier token (like 'type') before a node with a trailing space.
     pub fn insert_modifier_before(
         &mut self,
@@ -543,20 +543,20 @@ impl Tracker {
         );
     }
 
-    // Go: ls/change/tracker.go:330 Delete
+    // Go: ls/change/tracker.go:331 Delete
     /// Delete queues a node for deletion with smart handling of list items, imports, etc.
     /// The actual deletion happens in finishDeleteDeclarations during GetChanges.
     pub fn delete(&mut self, source_file: Node, node: Node) {
         self.deleted_nodes.push(DeletedNode { source_file, node });
     }
 
-    // Go: ls/change/tracker.go:335 DeleteRange
+    // Go: ls/change/tracker.go:336 DeleteRange
     /// DeleteRange deletes a text range from the source file.
     pub fn delete_range(&mut self, source_file: Node, text_range: TextRange) {
         self.replace_text_range_with_text(source_file, text_range, "");
     }
 
-    // Go: ls/change/tracker.go:341 DeleteNode
+    // Go: ls/change/tracker.go:342 DeleteNode
     /// DeleteNode deletes a node immediately with specified trivia options.
     /// Stop! Consider using Delete instead, which has logic for deleting nodes from delimited lists.
     pub fn delete_node(
@@ -570,7 +570,7 @@ impl Tracker {
         self.replace_text_range_with_text(source_file, rng, "");
     }
 
-    // Go: ls/change/tracker.go:346 DeleteNodeRange
+    // Go: ls/change/tracker.go:347 DeleteNodeRange
     /// DeleteNodeRange deletes a range of nodes with specified trivia options.
     pub fn delete_node_range(
         &mut self,
@@ -590,7 +590,7 @@ impl Tracker {
         );
     }
 
-    // Go: ls/change/tracker.go:353 finishDeleteDeclarations
+    // Go: ls/change/tracker.go:354 finishDeleteDeclarations
     /// finishDeleteDeclarations processes all queued deletions with smart handling for lists and trailing commas.
     fn finish_delete_declarations(&mut self) {
         // PORT: Go `map[*ast.Node]bool` that only ever holds `true`. Go map
@@ -654,7 +654,7 @@ impl Tracker {
         }
     }
 
-    // Go: ls/change/tracker.go:397 endPosForInsertNodeAfter
+    // Go: ls/change/tracker.go:398 endPosForInsertNodeAfter
     fn end_pos_for_insert_node_after(
         &mut self,
         source_file: Node,
@@ -877,7 +877,7 @@ impl Tracker {
         }
     }
 
-    // Go: ls/change/tracker.go:522 InsertImportSpecifierAtIndex
+    // Go: ls/change/tracker.go:523 InsertImportSpecifierAtIndex
     /// InsertImportSpecifierAtIndex inserts a new import specifier at the specified index in a NamedImports list
     pub fn insert_import_specifier_at_index(
         &mut self,
@@ -915,7 +915,7 @@ impl Tracker {
         }
     }
 
-    // Go: ls/change/tracker.go:543 InsertAtTopOfFile
+    // Go: ls/change/tracker.go:544 InsertAtTopOfFile
     pub fn insert_at_top_of_file(
         &mut self,
         source_file: Node,
@@ -963,12 +963,12 @@ impl Tracker {
         }
     }
 
-    // Go: ls/change/tracker.go:582 InsertMemberAtStart
+    // Go: ls/change/tracker.go:583 InsertMemberAtStart
     pub fn insert_member_at_start(&mut self, source_file: Node, node: Node, new_element: Node) {
         self.insert_node_at_start_worker(source_file, node, new_element);
     }
 
-    // Go: ls/change/tracker.go:586 insertNodeAtStartWorker
+    // Go: ls/change/tracker.go:587 insertNodeAtStartWorker
     fn insert_node_at_start_worker(&mut self, source_file: Node, node: Node, new_element: Node) {
         let mut indentation = self.try_compute_indentation_from_existing_members(source_file, node);
         if indentation < 0 {
@@ -984,7 +984,7 @@ impl Tracker {
         self.insert_node_at(source_file, members.pos(), new_element, options);
     }
 
-    // Go: ls/change/tracker.go:600 tryComputeIndentationForNewMember
+    // Go: ls/change/tracker.go:601 tryComputeIndentationForNewMember
     fn try_compute_indentation_for_new_member(&self, source_file: Node, node: Node) -> i32 {
         let node_start = astnav::get_start_of_node(node, source_file, false);
         let line_start = format::get_line_start_position_for_position(node_start, source_file);
@@ -1009,7 +1009,7 @@ impl Tracker {
         ) + indent_size
     }
 
-    // Go: ls/change/tracker.go:616 tryComputeIndentationFromExistingMembers
+    // Go: ls/change/tracker.go:617 tryComputeIndentationFromExistingMembers
     fn try_compute_indentation_from_existing_members(&self, source_file: Node, node: Node) -> i32 {
         let members = get_members_or_properties(node);
         if members.is_nil() {
@@ -1056,7 +1056,7 @@ impl Tracker {
         indentation
     }
 
-    // Go: ls/change/tracker.go:661 getInsertNodeAfterOptions
+    // Go: ls/change/tracker.go:662 getInsertNodeAfterOptions
     fn get_insert_node_after_options(&self, source_file: Node, node: Node) -> NodeOptions {
         let new_line_char = &self.new_line;
         let mut options: NodeOptions;
@@ -1117,7 +1117,7 @@ impl Tracker {
         options
     }
 
-    // Go: ls/change/tracker.go:694 getOptionsForInsertNodeBefore
+    // Go: ls/change/tracker.go:695 getOptionsForInsertNodeBefore
     fn get_options_for_insert_node_before(
         &self,
         before: Node,
@@ -1177,7 +1177,7 @@ impl Tracker {
         ));
     }
 
-    // Go: ls/change/tracker.go:723 getInsertNodeAtStartInsertOptions
+    // Go: ls/change/tracker.go:724 getInsertNodeAtStartInsertOptions
     fn get_insert_node_at_start_insert_options(
         &mut self,
         source_file: Node,
@@ -1220,7 +1220,7 @@ impl Tracker {
         }
     }
 
-    // Go: ls/change/tracker.go:758 finishNodesWithInsertionsAtStart
+    // Go: ls/change/tracker.go:759 finishNodesWithInsertionsAtStart
     fn finish_nodes_with_insertions_at_start(&mut self) {
         // PORT: Go map order is random; this walks the states in insertion
         // order. A copy, because the loop adds changes. Go also skips nil
@@ -1269,7 +1269,7 @@ impl Tracker {
     }
 }
 
-// Go: ls/change/tracker.go:788 getMembersOrProperties
+// Go: ls/change/tracker.go:789 getMembersOrProperties
 fn get_members_or_properties(node: Node) -> NodeList {
     if is_object_literal_expression(node) {
         return node.property_list();
@@ -1277,12 +1277,12 @@ fn get_members_or_properties(node: Node) -> NodeList {
     node.member_list()
 }
 
-// Go: ls/change/tracker.go:795 rangeContainsRangeExclusive
+// Go: ls/change/tracker.go:796 rangeContainsRangeExclusive
 fn range_contains_range_exclusive(outer: Node, inner: Node) -> bool {
     outer.pos() < inner.pos() && inner.end() < outer.end()
 }
 
-// Go: ls/change/tracker.go:799 isSeparator
+// Go: ls/change/tracker.go:800 isSeparator
 pub fn is_separator(node: Node, candidate: Node) -> bool {
     candidate.is_some()
         && node.parent().is_some()
@@ -1291,7 +1291,7 @@ pub fn is_separator(node: Node, candidate: Node) -> bool {
                 && node.parent().kind() == SyntaxKind::ObjectLiteralExpression))
 }
 
-// Go: ls/change/tracker.go:803 findIndentationColumn
+// Go: ls/change/tracker.go:804 findIndentationColumn
 fn find_indentation_column(text: &str, line_start: i32, member_start: i32, tab_size: i32) -> i32 {
     let mut column: i32 = 0;
 
@@ -1315,7 +1315,7 @@ fn find_indentation_column(text: &str, line_start: i32, member_start: i32, tab_s
     column
 }
 
-// Go: ls/change/tracker.go:822 advanceIndentationColumn
+// Go: ls/change/tracker.go:823 advanceIndentationColumn
 fn advance_indentation_column(column: i32, ch: char, tab_size: i32) -> i32 {
     if ch == '\t' {
         return column + tab_size - (column % tab_size);
