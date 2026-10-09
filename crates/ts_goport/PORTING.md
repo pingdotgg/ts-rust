@@ -1464,11 +1464,12 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
     before it. Go runs them at the same time.
   - The async connection reads its next message only after the running
     request. So the end of the input during a request does not cancel the
-    request's context: Go's read loop sees the end at once and cancels it
-    (`ipc/conn_async.go:68`), so a long check answers early with what it
-    has. The port answers in full and then ends, with Go's exit code. A
-    SIGINT or SIGTERM while a request waits for a client callback ends
-    that call in Go at once; the port ends it after the next message.
+    request's context: Go's read loop sees the end at once and returns
+    (`ipc/conn_async.go:89-91`), and its deferred `cancelHandlers` (`:73`)
+    cancels it, so a long check answers early with what it has. The port
+    answers in full and then ends, with Go's exit code. A SIGINT or
+    SIGTERM while a request waits for a client callback ends that call in
+    Go at once; the port ends it after the next message.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of

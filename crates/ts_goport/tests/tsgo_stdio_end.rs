@@ -17,7 +17,8 @@
 //!   is back in `requestQueue.Get`; the async part of a request
 //!   (server.go:1017) and an API session (server.go:2305) run on other
 //!   goroutines, and `main` exits while they run. The port runs that work on
-//!   the dispatch thread and waited for it.
+//!   the dispatch thread and waited for it. The sync part of a handler runs
+//!   on the dispatch loop (server.go:1014), so Go and the port wait for it.
 //!
 //! A request that the test holds open reads a file from a FIFO (a
 //! tsconfig.json, or the source map of a .d.ts): the read waits until the
@@ -39,6 +40,11 @@ use rustix::process::{Pid, Signal, kill_process};
 
 /// The longest wait for a step that ends in milliseconds when it works.
 const LIMIT: Duration = Duration::from_secs(20);
+
+/// The longest time from an event to the end of an LSP run that ends at
+/// once. Go and the port end in 3 to 34 ms on zbook; the rest is room for
+/// a loaded host.
+const AT_ONCE: Duration = Duration::from_secs(2);
 
 /// How an LSP run ends on each event while Go's goroutine work runs (Go
 /// cmd/tsc/lsp.go:69 prints the error of `Run` and returns 1): the signal
@@ -177,11 +183,7 @@ fn lsp_ends_at_once_while_the_async_part_of_a_request_runs() {
         );
         let map = dir.fifo("lib/b.d.ts.map");
         let mut tsgo = Tsgo::start_lsp(&dir.0);
-        let uri = format!("file://{}/src/a.ts", dir.0.display());
-        let text = a.replace('\n', "\\n");
-        tsgo.send(&frame(&format!(
-            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","languageId":"typescript","version":1,"text":"{text}"}}}}}}"#
-        )));
+        let uri = tsgo.did_open(&dir.0.join("src/a.ts"), a);
         tsgo.send(&frame(&format!(
             r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":25}}}}}}"#
         )));
@@ -190,6 +192,41 @@ fn lsp_ends_at_once_while_the_async_part_of_a_request_runs() {
         let writer = open_fifo_writer(&map);
         tsgo.end_lsp(signal, code, stderr, "the async part of the definition");
         drop(writer);
+    }
+}
+
+#[test]
+fn lsp_waits_for_the_sync_part_of_a_request() {
+    // Go's didOpen (lsp/server.go:1809) updates the snapshot in the sync
+    // part of the handler (project/session.go:335), which reads
+    // tsconfig.json. `Run` waits for the dispatch loop, which returns only
+    // at its next `requestQueue.Get` (server.go:972). After the read the
+    // handler returns the canceled context (server.go:1313): Go logs the
+    // method error (server.go:1162) and the notification error
+    // (server.go:1112), and the run then ends as in `LSP_ENDS`.
+    let failed = "error handling method 'textDocument/didOpen': context canceled\n\
+                  error handling notification: RequestCancelled\n";
+    let a = "export const a: number = 1;\n";
+    for (signal, code, stderr) in LSP_ENDS {
+        let dir = TempDir::new("lspsync");
+        dir.write("src/a.ts", a);
+        let config = dir.fifo("tsconfig.json");
+        let mut tsgo = Tsgo::start_lsp(&dir.0);
+        tsgo.did_open(&dir.0.join("src/a.ts"), a);
+        // The sync part of didOpen now waits in the read of tsconfig.json.
+        let mut writer = open_fifo_writer(&config);
+        tsgo.event(signal);
+        assert!(
+            tsgo.wait_exit(Duration::from_millis(500)).is_none(),
+            "{signal:?}: the LSP ended during the sync part of didOpen; Go waits for it"
+        );
+        let written = Instant::now();
+        writer
+            .write_all(br#"{"compilerOptions":{"strict":true},"include":["src"]}"#)
+            .unwrap();
+        drop(writer);
+        let stderr = format!("{failed}{stderr}");
+        tsgo.expect_end(written, signal, code, &stderr, "more than the sync part");
     }
 }
 
@@ -276,18 +313,55 @@ impl Tsgo {
         tsgo
     }
 
+    /// Opens the file `path` with the text `text` (no quotes or
+    /// backslashes) in the LSP, and returns its URI.
+    fn did_open(&self, path: &Path, text: &str) -> String {
+        let uri = format!("file://{}", path.display());
+        let text = text.replace('\n', "\\n");
+        self.send(&frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","languageId":"typescript","version":1,"text":"{text}"}}}}}}"#
+        )));
+        uri
+    }
+
     /// Ends an LSP run by `signal` (None: the end of stdin) while `work`
     /// runs, and checks that the run ends at once with `code` and `stderr`
     /// (`LSP_ENDS`). The run must not wait for `work`, which the test holds
     /// open.
     fn end_lsp(&mut self, signal: Option<Signal>, code: i32, stderr: &str, work: &str) {
+        let sent = self.event(signal);
+        self.expect_end(sent, signal, code, stderr, work);
+    }
+
+    /// Sends `signal`, or closes stdin for None, and returns the time.
+    fn event(&self, signal: Option<Signal>) -> Instant {
+        let sent = Instant::now();
         match signal {
             Some(signal) => self.signal(signal),
             None => self.close_stdin(),
         }
-        let (status, _) = self
+        sent
+    }
+
+    /// Checks that the run that `signal` (None: the end of stdin) ends
+    /// exits within `AT_ONCE` of `since` with `code` and `stderr`. `work`
+    /// names what the run must not wait for.
+    fn expect_end(
+        &mut self,
+        since: Instant,
+        signal: Option<Signal>,
+        code: i32,
+        stderr: &str,
+        work: &str,
+    ) {
+        let (status, exited) = self
             .wait_exit(LIMIT)
             .unwrap_or_else(|| panic!("{signal:?}: the LSP waited for {work}"));
+        assert!(
+            exited - since < AT_ONCE,
+            "{signal:?}: the LSP took {:?} to end; it waited for {work}",
+            exited - since
+        );
         assert_eq!(status.code(), Some(code), "{signal:?}: {status:?}");
         assert_eq!(self.stderr(), stderr, "{signal:?}");
     }
