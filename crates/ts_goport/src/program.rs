@@ -102,6 +102,9 @@ pub struct ResolvedModule {
     pub resolved_using_extra_extensions: bool,
     pub package_id: PackageId,
     pub is_external_library_import: bool,
+    // ts#64638 (Go N' module/types.go:96): the API's module resolver
+    // (static or callback) gave this resolution, not the disk layout.
+    pub is_custom_resolution: bool,
     pub alternate_result: String,
     pub resolution_diagnostics: Vec<Diagnostic>,
 }

@@ -278,6 +278,116 @@ child_test! {
     }
 }
 
+/// Go `callbackTestConn{responses: ...}` (callbackfs_test.go:16): each call
+/// answers the JSON value of its method.
+struct FixedResponseConn {
+    responses: Vec<(&'static str, String)>,
+}
+
+impl ipc::Conn for FixedResponseConn {
+    fn run(&self, _ctx: &Context) -> Result<(), GoError> {
+        Ok(())
+    }
+
+    fn call(
+        &self,
+        _ctx: &Context,
+        method: &str,
+        _params: Option<Box<dyn AnyValue>>,
+    ) -> Result<JsonValue, GoError> {
+        let response = self
+            .responses
+            .iter()
+            .find(|(name, _)| *name == method)
+            .map_or(String::new(), |(_, value)| value.clone());
+        Ok(JsonValue(response.into_bytes()))
+    }
+
+    fn notify(
+        &self,
+        _ctx: &Context,
+        _method: &str,
+        _params: Option<Box<dyn AnyValue>>,
+    ) -> Result<(), GoError> {
+        Ok(())
+    }
+}
+
+// Go: session_module_resolution_test.go:184 TestCustomModuleResolutionsSkipUnsafeRewriteDiagnostic (ts#64638)
+child_test! {
+    fn custom_module_resolutions_skip_unsafe_rewrite_diagnostic() {
+        const ROOT: &str = "/home/projects/p/src/a.ts";
+        const STATIC_TARGET: &str = "/home/projects/p/src/b.ts";
+        const CALLBACK_TARGET: &str = "/home/projects/p/src/c.ts";
+        let (project_session, _) = projecttestutil::setup(files(&[
+            (
+                ROOT,
+                r#"import { b } from "./b.ts"; import { c } from "./c.ts"; export const a = b + c;"#,
+            ),
+            (STATIC_TARGET, "export const b = 1;"),
+            (CALLBACK_TARGET, "export const c = 2;"),
+        ]));
+        let session = api::new_lsp_session(project_session.clone(), None);
+        *session.conn.borrow_mut() = Some(Rc::new(FixedResponseConn {
+            responses: vec![(
+                "resolveModuleName/1",
+                format!(r#"{{"resolvedFileName":"{CALLBACK_TARGET}"}}"#),
+            )],
+        }));
+        let compiler_options = || CompilerOptions {
+            no_lib: Tristate::True,
+            module: ModuleKind::NODE_NEXT,
+            module_resolution: ModuleResolutionKind::NODE_NEXT,
+            rewrite_relative_import_extensions: Tristate::True,
+            out_dir: "/home/projects/p/out".to_string(),
+            ..Default::default()
+        };
+        let resolver = nil_error(session.handle_create_module_resolver(&CreateModuleResolverParams {
+            compiler_options: compiler_options(),
+            module_resolutions: Some(ModuleResolutionSpec {
+                fallback: ModuleResolutionFallback::RESOLVE,
+                entries: vec![Some(static_resolution_entry("./b.ts", "", None, STATIC_TARGET))],
+            }),
+            resolve_module_name_callback: "resolveModuleName/1".to_string(),
+        }));
+
+        let response = nil_error(session.handle_create_snapshot(
+            &bg(),
+            &CreateSnapshotParams {
+                snapshot_request_changes_params: SnapshotRequestChangesParams {
+                    create_programs: Some(vec![Some(CreateSnapshotProgramParams {
+                        root_files: vec![doc(ROOT), doc(STATIC_TARGET), doc(CALLBACK_TARGET)],
+                        compiler_options: compiler_options(),
+                        options: Some(CreateProgramOptions {
+                            module_resolver: resolver,
+                            ..Default::default()
+                        }),
+                    })]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ));
+        let diagnostics = nil_error(session.handle_get_semantic_diagnostics(
+            &bg(),
+            &api::GetDiagnosticsParams {
+                snapshot: response.snapshot,
+                project: response.operation.as_ref().unwrap().created_programs.as_ref().unwrap()[0]
+                    .as_id(),
+                files: Some(vec![doc(ROOT)]),
+            },
+        ));
+        for diagnostic in &diagnostics {
+            panic!(
+                "handleGetSemanticDiagnostics({ROOT}) reported TS{} at {}: {}",
+                diagnostic.code, diagnostic.pos, diagnostic.text
+            );
+        }
+        session.close();
+        project_session.close();
+    }
+}
+
 // Go: session_module_resolution_test.go:181 TestStaticModuleResolutionPreservesStaticIdentity
 child_test! {
     fn static_module_resolution_preserves_static_identity() {

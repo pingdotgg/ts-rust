@@ -403,6 +403,8 @@ pub fn static_module_resolution_to_resolved_module(
             &resolved_file_name.to_file_name(current_directory),
             current_directory,
         ),
+        // ts#64638 (Go N' module_resolution.go:192)
+        is_custom_resolution: true,
         ..Default::default()
     };
     if let Some(original_path) = &static_resolution.original_path {

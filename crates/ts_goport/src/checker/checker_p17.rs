@@ -571,7 +571,9 @@ impl Checker {
                 );
             }
 
-            if error_node.is_some() {
+            // ts#64638 (Go N' checker.go:15540): no disk-layout import
+            // diagnostics for a custom (API) resolution.
+            if error_node.is_some() && !rm.is_custom_resolution {
                 if rm.resolved_using_ts_extension
                     && tspath_p17::is_declaration_file_name(module_reference)
                 {
