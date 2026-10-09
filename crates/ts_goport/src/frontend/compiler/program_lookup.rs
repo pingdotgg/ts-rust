@@ -21,10 +21,12 @@ pub type ResolutionCallback<'f, T> = dyn FnMut(&T, &str, ResolutionMode, &Path) 
 
 impl NewProgram {
     // Go: program.go:2067 (*Program).toPath (at 673a5f17d713; ts#64159 makes it PathKeyForFileName, compiler/program.go:2090)
+    // PORT: the host's current directory, as the loader's keys
+    // (`FileLoader::to_path`). Go N' keys a rooted name with no directory.
     pub fn to_path(&self, filename: &str) -> Path {
         to_path(
             filename,
-            &self.get_current_directory(),
+            &self.host().get_current_directory(),
             self.use_case_sensitive_file_names(),
         )
     }
@@ -457,9 +459,11 @@ impl NewProgram {
     /// The value that Go `GetSymlinkCache` computes on first use, without
     /// storing it in the program.
     // Go: program.go:2301 (the getValue callback)
+    // PORT: the host's current directory, as the program's path keys
+    // (`to_path`). Go N' KnownSymlinks has no directory (program.go:2333).
     pub fn build_symlink_cache(&self) -> KnownSymlinks {
         let mut known_symlinks = KnownSymlinks::new(
-            &self.get_current_directory(),
+            &self.host().get_current_directory(),
             self.use_case_sensitive_file_names(),
         );
 

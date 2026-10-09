@@ -243,15 +243,13 @@ impl NewProgram {
         base_directory.to_string()
     }
 
-    // Go: program.go:154 (*Program).GetCurrentDirectory (at 673a5f17d713;
-    // ts#64159 makes it return BaseDirectory, program.go:154)
-    // PORT: this stays the host's current directory. In tsc the two differ
-    // only for a config file outside the current directory; there the
-    // config parse has made the file names and path options absolute, so
-    // the program's reads give Go N' output (lane probes ts5011, explain).
-    // Use `base_directory` where Go N' calls BaseDirectory.
+    // Go: program.go:154 (*Program).GetCurrentDirectory (ts#64159)
+    // PORT: the path keys of the program's files are made against the
+    // host's current directory (`FileLoader::to_path`); Go N' keys rooted
+    // names with no directory. Sites that make such keys use
+    // `host().get_current_directory()`.
     pub fn get_current_directory(&self) -> String {
-        self.host().get_current_directory()
+        self.base_directory()
     }
 
     // Go: program.go:163 (*Program).GetGlobalTypingsCacheLocation
