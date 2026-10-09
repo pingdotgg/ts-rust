@@ -6,6 +6,8 @@ Each item: one line of goal, the files or worktree it owns, and what it waits fo
 
 ## Ready
 
+- **Windows support (Theo, 2026-10-09: "asap for next release"). Running: workflow win1.** One PR: a Windows CI job, win32-x64 tsc.exe (PGO) in the release and npm (@tsc-rs/win32-x64), dev docs, Go comparison and timing on Windows. Root merges when CI, Release and the skeptic pass. Theo runs `npm/trust-setup.sh` for @tsc-rs/win32-x64 (and linux-arm64) before the tag. Follow-ups: win32-arm64, fswatch walkdir_windows, the Windows allocator.
+
 - **Public issues first (Theo, 2026-10-07).** Check `scripts/goport/gh-inbox.py list` every 2 hours. A real incompatibility that a user reports goes before perf work. Upstream issues get the `upstream issue` label and wait for a pin bump.
 - **rr.py side order.** Interleave or shuffle the sides: on cup2 sys time grows with the run position after Go (int52 skeptic problem 2). The int53 prompt asks for interleaved sides; copy the fixed rr.py into `scripts/goport/` after int53.
 - **bump D landing on main: revert a41381218 first** (it reverts the accidental merge e35d95a13 of goport-bumpD-program; without the revert-of-revert, the bump D merge will not bring those commits back).
