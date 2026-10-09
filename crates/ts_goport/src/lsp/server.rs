@@ -112,7 +112,6 @@ use crate::gostd::errors;
 use crate::ipc;
 use crate::ipc::Protocol as _;
 use crate::lsp::lsproto::{ErrorCode, HasTextDocumentPosition, HasTextDocumentURI};
-use crate::lsp::run_end::DispatchPhase;
 use crate::program::ls_program;
 use crate::project::logging::{self, Logger as _};
 use crate::project::{Snapshot, ata};
@@ -218,7 +217,6 @@ pub fn new_server(opts: ServerOptions) -> Rc<Server> {
         start_watchdog: set_parent_process_id,
         flake_logging: OnceLock::new(),
         warm_auto_import_preempt: OnceLock::new(),
-        run_end: crate::lsp::run_end::RunEnd::default(),
     });
 
     Rc::new(Server {
@@ -246,8 +244,6 @@ pub fn new_server(opts: ServerOptions) -> Rc<Server> {
         cpu_profiler: crate::pprof::CpuProfiler::default(),
         dispatch_ctx: RefCell::new(None),
         free_since: Cell::new(Instant::now()),
-        dispatch_depth: Cell::new(0),
-        early_end: RefCell::new(None),
     })
 }
 
@@ -470,10 +466,6 @@ pub struct ServerShared {
     // `handle_initialized`. The reader thread queues each message through
     // it, and cancels the warm or makes it yield with it.
     pub warm_auto_import_preempt: OnceLock<project::WarmAutoImportPreempt>,
-
-    // PORT: where the dispatch thread is in Go's terms, for the end of
-    // `run` (`run_end.rs`).
-    pub run_end: crate::lsp::run_end::RunEnd,
 }
 
 // Go: server.go:171 Server (the dispatch-thread fields)
@@ -538,12 +530,6 @@ pub struct Server {
     // PORT: when the dispatch loop last finished a message (see
     // `IDLE_QUIET_PERIOD` and `gostd::local::note_message_gap`).
     pub free_since: Cell<Instant>,
-    // PORT: how many `dispatch_next` calls are on the stack. Only the
-    // outermost one is Go's dispatch loop (`run_end.rs`); an API
-    // connection runs the others while it waits.
-    pub dispatch_depth: Cell<u32>,
-    // PORT: set by `set_early_end`, taken by `run`.
-    pub early_end: RefCell<Option<crate::lsp::run_end::EarlyEnd>>,
     // PORT: Go `progressDelay` and `projectProgress` are in `ServerShared`,
     // `startWatchdog` is `ServerShared::start_watchdog`.
 }
@@ -1691,42 +1677,19 @@ pub fn panic_value_string(r: &(dyn Any + Send)) -> String {
 }
 
 impl Server {
-    /// PORT: not in Go. `early_end` ends the run when the context of `run`
-    /// is done while the dispatch thread runs work that Go runs on other
-    /// goroutines (`run_end.rs`). Call it before `run`.
-    pub fn set_early_end(&self, early_end: crate::lsp::run_end::EarlyEnd) {
-        *self.early_end.borrow_mut() = Some(early_end);
-    }
-
     // Go: server.go:859 Run
     // PORT: the dispatch loop runs on the calling thread, because it owns
     // the `!Send` state. Its result joins the group after it returns, so
-    // the group keeps the first error in the same order as Go. When the
-    // context is done while that thread runs Go's goroutine work, the run
-    // ends on a watcher thread, as Go's `Run` returns without that work
-    // (`set_early_end`, `run_end.rs`).
+    // the group keeps the first error in the same order as Go.
     pub fn run(self: &Rc<Self>, ctx: &Context) -> Result<(), GoError> {
         let (g, ctx) = gostd::errgroup::with_context(ctx);
         let _ = self.shared.background_ctx.set(ctx.clone());
-
-        if let Some(early_end) = self.early_end.borrow_mut().take() {
-            let shared = self.shared.clone();
-            let ctx = ctx.clone();
-            crate::core::GoThread::new()
-                .name("lsp-run-end".to_string())
-                .stack_size(256 * 1024)
-                .spawn(move || shared.run_end.watch(&ctx, early_end));
-        }
 
         let mut w = self.w.borrow_mut().take().expect("lsp: Run called twice");
         {
             let shared = self.shared.clone();
             let ctx = ctx.clone();
-            g.go(move || {
-                let result = shared.write_loop(&ctx, &mut *w);
-                shared.run_end.other_returned(&result);
-                result
-            });
+            g.go(move || shared.write_loop(&ctx, &mut *w));
         }
 
         // Don't run readLoop in the group, as it blocks on stdin read and cannot be cancelled.
@@ -1736,7 +1699,6 @@ impl Server {
         {
             let ctx = ctx.clone();
             let wake = read_loop_err_tx.clone();
-            let shared = self.shared.clone();
             g.go(move || {
                 // Go:
                 //	select {
@@ -1745,12 +1707,10 @@ impl Server {
                 //	case err := <-readLoopErr:
                 //		return err
                 //	}
-                let result = match recv_or_done(&ctx, &wake, &read_loop_err) {
+                match recv_or_done(&ctx, &wake, &read_loop_err) {
                     Ok(err) => err,
                     Err(err) => Err(err),
-                };
-                shared.run_end.other_returned(&result);
-                result
+                }
             });
         }
         let mut r = self.r.borrow_mut().take().expect("lsp: Run called twice");
@@ -1775,18 +1735,12 @@ impl Server {
         let dispatch_result = self.dispatch_loop(&ctx);
         g.go(move || dispatch_result);
 
-        let result = match g.wait() {
-            Err(err) if !errors::is(&err, &errors::EOF) && ctx.err().is_some() => Err(err),
-            _ => Ok(()),
-        };
-        if !self.shared.run_end.end_on_dispatch_thread() {
-            // The watcher thread ended the run: its `EarlyEnd` ends the
-            // process.
-            loop {
-                std::thread::park();
+        if let Err(err) = g.wait() {
+            if !errors::is(&err, &errors::EOF) && ctx.err().is_some() {
+                return Err(err);
             }
         }
-        result
+        Ok(())
     }
 }
 
@@ -2109,34 +2063,12 @@ impl Server {
         ctx: &Context,
         lsp_exit: &CancelCauseFunc,
     ) -> Result<(), GoError> {
-        // PORT: the phases of Go's dispatch goroutine (`run_end.rs`). A turn
-        // that an API connection runs while it waits is part of the work
-        // of the outer turn, so only the outermost turn sets `Get` and
-        // `Sync`.
-        struct Depth<'a>(&'a Cell<u32>);
-        impl Drop for Depth<'_> {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() - 1);
-            }
-        }
-        let outermost = self.dispatch_depth.get() == 0;
-        self.dispatch_depth.set(self.dispatch_depth.get() + 1);
-        let _depth = Depth(&self.dispatch_depth);
-        let phase = |phase| {
-            if outermost {
-                self.shared.run_end.set_phase(phase);
-            }
-        };
-
-        // Go runs the idle work on a goroutine.
-        phase(DispatchPhase::Work);
         run_idle_work(
             ctx,
             || self.shared.queued_requests.load(Ordering::SeqCst) != 0,
             |quiet| self.shared.wait_quiet(self.free_since.get() + quiet),
         );
 
-        phase(DispatchPhase::Get);
         let item = self.shared.request_queue.get(ctx)?;
         if matches!(item, QueuedRequest::Request(_)) {
             gostd::local::note_message_gap(self.free_since.get().elapsed());
@@ -2145,22 +2077,18 @@ impl Server {
         let req = match item {
             QueuedRequest::Request(req) => Rc::new(req),
             QueuedRequest::Wake => {
-                phase(DispatchPhase::Work);
                 gostd::local::run_pending();
                 return Ok(());
             }
             QueuedRequest::ApiAccepted(accepted) => {
-                phase(DispatchPhase::Work);
                 self.serve_api_connection(accepted);
                 gostd::local::run_pending();
                 return Ok(());
             }
         };
 
-        phase(DispatchPhase::Sync);
         self.dispatch_request(ctx, lsp_exit, &req);
 
-        phase(DispatchPhase::Work);
         gostd::local::run_pending();
         self.free_since.set(Instant::now());
         Ok(())
@@ -2229,10 +2157,6 @@ impl Server {
                 remove_request();
             }
             Ok(Some(do_async_work)) => {
-                // PORT: from here on the work is Go's goroutines' work
-                // (`run_end.rs`). In a turn that an API connection runs
-                // while it waits, the phase is `Work` already.
-                self.shared.run_end.set_phase(DispatchPhase::Work);
                 // PORT: Go starts the background tasks that the sync
                 // part queued (a snapshot update's logging, watch
                 // updates and publishDiagnostics) before this goroutine,

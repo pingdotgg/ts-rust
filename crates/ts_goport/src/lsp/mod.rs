@@ -5,7 +5,6 @@ pub mod logger;
 pub use goport_lsproto::lsp::lsproto;
 pub mod lspwatcher;
 pub mod progress;
-pub mod run_end;
 pub mod server;
 pub mod stack_sanitizer;
 

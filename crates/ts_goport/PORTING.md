@@ -1438,10 +1438,25 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   below also change which messages are answered and when.
 - The end of a run: when SIGINT, SIGTERM, the parent watchdog or the end
   of stdin ends the context while the dispatch thread runs work that Go
-  runs on a goroutine (the async part of a request, an API session), a
-  watcher thread ends the process with Go's result, as Go's `Run` returns
-  without that work (`lsp/run_end.rs`). PORT: with `--pprofDir` the run
-  waits for that work, so the profiles are written.
+  runs on a goroutine (the async part of a request, an API session), Go's
+  `Run` (`lsp/server.go:859`) returns without that work and the process
+  ends at once. The port waits until that work ends, then ends with Go's
+  exit code and message. A request that the end cancels can also log
+  "error handling method" on stderr. Go and the port both wait for the
+  sync part of a handler (`server.go:1013`).
+  - A fix ends the run from a watcher thread while the dispatch thread is
+    in Go's goroutine work. So it tracks the phase of Go's dispatch
+    goroutine: in `requestQueue.Get`, in the sync part of a handler, or in
+    goroutine work.
+  - Every dispatch level must set the phase of its own turn, and give the
+    outer phase back when it returns. This includes the inner
+    `dispatch_next` that an API connection's read runs while it waits, and
+    the `dispatch_request` that it runs while an API request waits for a
+    client call (`ApiConnProtocol::read_message`).
+  - The apisig1 lane (branch `goport-apisig1`, `lsp/run_end.rs`) set the
+    phase only at the outermost level. With an API session connection
+    open, the sync part of an LSP message ran in `Work`, so a signal or
+    the end of stdin ended the run at once, where Go waits.
 - API sessions of the LSP server (`custom/initializeAPISession`) are
   served on the dispatch thread too (`lsp/server.rs` `ApiConnProtocol`).
   LSP messages and API requests do not run at the same time. These
