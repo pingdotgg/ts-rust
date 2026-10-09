@@ -1672,7 +1672,7 @@ pub fn bind_all() {
                 bind_files_parallel(lineage);
             }
             for file in program.source_files() {
-                // Go: program.go:450 traces the files that are not bound yet.
+                // Go: program.go:601 traces the files that are not bound yet.
                 let _trace = if file.file_bind.get().is_none() {
                     trace_bind_source_file(file.root)
                 } else {
@@ -4449,7 +4449,7 @@ impl crate::declarations::DeclarationEmitHost for EmitHost {
             .get_effective_declaration_flags(node, flags)
     }
 
-    // Go: compiler/emitHost.go:124 emitHost.GetEmitResolver (at 673a5f17d713;
+    // Go: compiler/emitHost.go:128 emitHost.GetEmitResolver (at 673a5f17d713;
     // ts#64649 makes it NewEmitResolver, compiler/emitHost.go:130)
     fn get_emit_resolver(&self) -> Rc<dyn crate::printer::EmitResolver> {
         self.emit_resolver()
@@ -4500,7 +4500,7 @@ impl crate::printer::EmitHost for EmitHost {
         get_emit_module_format_of_file(crate::emitter::emitter::parsed_source_file(file))
     }
 
-    // Go: compiler/emitHost.go:124 emitHost.GetEmitResolver (at 673a5f17d713;
+    // Go: compiler/emitHost.go:128 emitHost.GetEmitResolver (at 673a5f17d713;
     // ts#64649 makes it NewEmitResolver, compiler/emitHost.go:130)
     fn get_emit_resolver(&self) -> Rc<dyn crate::printer::EmitResolver> {
         self.emit_resolver()
@@ -4752,7 +4752,7 @@ pub fn sort_and_deduplicate_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Dia
     let paths = DiagnosticPaths::new(&diagnostics);
     let len = u32::try_from(diagnostics.len()).expect("under 4G diagnostics");
     let mut order: Vec<u32> = (0..len).collect();
-    // Go: compiler/program.go:1653 slices.SortFunc(diagnostics, ast.CompareDiagnostics)
+    // Go: compiler/program.go:1677 slices.SortFunc(diagnostics, ast.CompareDiagnostics)
     crate::gostd::slices::sort_func(&mut order, |&a, &b| {
         let (a, b) = (a as usize, b as usize);
         if a == b {

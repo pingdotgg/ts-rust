@@ -407,7 +407,7 @@ impl NewProgram {
         self.uses_uri_style_node_core_modules
     }
 
-    // Go: program.go:242 (*Program).GetSourceFileFromReference
+    // Go: program.go:275 (*Program).GetSourceFileFromReference
     /** This should have similar behavior to 'processSourceFile' without diagnostics or mutation. */
     pub fn get_source_file_from_reference(
         &self,

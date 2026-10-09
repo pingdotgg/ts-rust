@@ -20,7 +20,7 @@ pub trait CompilerHost {
     // failure accounting), so implementations must use it as-is. It returns nil if the file cannot be read,
     // or an error if the transform fails or the mapper produces invalid position mappings. Implementations
     // may cache successful results.
-    // Go: host.go:26 CompilerHost.GetContentMappedSourceFiles (tsgo#4712)
+    // Go: host.go:25 CompilerHost.GetContentMappedSourceFiles (tsgo#4712)
     // PORT: Go returns `(contentmapper.SourceFiles, error)`; a file that
     // cannot be read is `Ok` with no canonical file.
     fn get_content_mapped_source_files(
@@ -30,7 +30,7 @@ pub trait CompilerHost {
     ) -> Result<SourceFiles, GoError>;
     // ContentMapperProject returns the project-scoped content mapper used by this host, or nil when the
     // command line has no content mappers. The project owns transform identity and lifecycle state.
-    // Go: host.go:29 CompilerHost.ContentMapperProject (tsgo#4712)
+    // Go: host.go:28 CompilerHost.ContentMapperProject (tsgo#4712)
     fn content_mapper_project(&self) -> Option<Rc<dyn Project>>;
     fn get_resolved_project_reference(
         &self,

@@ -943,7 +943,7 @@ impl FilesParser {
         }
 
         impl Collector<'_> {
-            // Go: filesparser.go:379 collectFiles
+            // Go: filesparser.go:386 collectFiles
             fn collect_files(&mut self, tasks: &[ParseTaskRef]) {
                 let loader = self.loader;
                 for task in tasks {
@@ -3178,7 +3178,7 @@ impl WorkerResolver {
             if shared.is_closed() {
                 return None;
             }
-            // Go: fileloader.go:1033 getModeForTypeReferenceDirectiveInFile
+            // Go: fileloader.go:1021 getModeForTypeReferenceDirectiveInFile
             let mode = if reference.resolution_mode != RESOLUTION_MODE_NONE {
                 reference.resolution_mode
             } else {

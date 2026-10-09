@@ -764,7 +764,7 @@ fn build_program(
             (tables, common_source_directory)
         }
     };
-    // Go: compiler/program.go:408 ReuseProgram keeps `processedFiles`, so
+    // Go: compiler/program.go:359 ReuseProgram keeps `processedFiles`, so
     // the new program keeps the resolver and the package.json lookups of
     // module specifier generation in its cache (program.go:147-169).
     if let Some(old) = &previous
@@ -919,7 +919,7 @@ fn full_tables(np: &NewProgram, previous: Option<(&NewProgram, &GoSharedState)>)
     for (slot, file) in files.iter().enumerate() {
         file_by_path.insert(file.path().0.clone(), slot);
     }
-    // Go: filesparser.go:425 `filesByPath[task.path] = packageIdFile`. A
+    // Go: filesparser.go:480 `filesByPath[task.path] = packageIdFile`. A
     // package dedup redirect path maps to the first file with the same
     // package id, so `GetSourceFileByPath` finds that file.
     // PERF: copies the path only when it adds an entry (`entry` needs an
@@ -1074,7 +1074,7 @@ fn common_source_directory_of(p: &NewProgram) -> String {
 // Go: compiler/program.go:852 collectContentMapperOptionDiagnostics (#4712)
 // PORT: returns the list; Go sets `p.contentMapperOptionDiagnostics`.
 fn collect_content_mapper_option_diagnostics(p: &NewProgram) -> Vec<Diagnostic> {
-    // Go: compiler/program.go:138 ContentMapperProject
+    // Go: compiler/program.go:158 ContentMapperProject
     let Some(project) = p.host().content_mapper_project() else {
         return Vec::new();
     };

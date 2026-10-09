@@ -262,7 +262,7 @@ impl IncludeProcessor {
             .clone()
     }
 
-    // Go: processingDiagnostic.go:106 the `explainRedirectAndImpliedFormat`
+    // Go: processingDiagnostic.go:107 the `explainRedirectAndImpliedFormat`
     // call of the diagnostics collection, with absolute names.
     // PORT: the lines go to `collection_redirect_and_file_format`, not to
     // the Go cache (see that field).

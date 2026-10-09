@@ -62,7 +62,7 @@ fn marshal_json_string(value: &str) -> String {
 // methods that return the index of the new diagnostic in
 // `program_diagnostics`, so a caller can still add a message chain.
 impl NewProgram {
-    // Go: program.go:918 createOptionDiagnosticInObjectLiteralSyntax (closure)
+    // Go: program.go:942 createOptionDiagnosticInObjectLiteralSyntax (closure)
     #[allow(clippy::too_many_arguments)]
     fn create_option_diagnostic_in_object_literal_syntax(
         &mut self,
@@ -97,7 +97,7 @@ impl NewProgram {
         })
     }
 
-    // Go: program.go:928 createCompilerOptionsDiagnostic (closure)
+    // Go: program.go:952 createCompilerOptionsDiagnostic (closure)
     fn create_compiler_options_diagnostic(
         &mut self,
         syntax: &OptionsSyntax,
@@ -118,7 +118,7 @@ impl NewProgram {
         self.program_diagnostics.len() - 1
     }
 
-    // Go: program.go:940 createDiagnosticForOption (closure)
+    // Go: program.go:964 createDiagnosticForOption (closure)
     fn create_diagnostic_for_option(
         &mut self,
         syntax: &OptionsSyntax,
@@ -143,7 +143,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:948 createDiagnosticForOptionName (closure)
+    // Go: program.go:972 createDiagnosticForOptionName (closure)
     fn create_diagnostic_for_option_name(
         &mut self,
         syntax: &OptionsSyntax,
@@ -162,7 +162,7 @@ impl NewProgram {
         );
     }
 
-    // Go: program.go:955 createOptionValueDiagnostic (closure)
+    // Go: program.go:979 createOptionValueDiagnostic (closure)
     fn create_option_value_diagnostic(
         &mut self,
         syntax: &OptionsSyntax,
@@ -173,7 +173,7 @@ impl NewProgram {
         self.create_diagnostic_for_option(syntax, false /*onKey*/, option1, "", message, args);
     }
 
-    // Go: program.go:959 createRemovedOptionDiagnostic (closure)
+    // Go: program.go:983 createRemovedOptionDiagnostic (closure)
     fn create_removed_option_diagnostic(
         &mut self,
         syntax: &OptionsSyntax,
@@ -203,8 +203,8 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:921 createDiagnosticForOptionPaths (closure)
-    // PORT: Go `forEachOptionPathsSyntax` (program.go:917) is inlined; it is
+    // Go: program.go:1126 createDiagnosticForOptionPaths (closure)
+    // PORT: Go `forEachOptionPathsSyntax` (program.go:1122) is inlined; it is
     // `ForEachPropertyAssignment(getCompilerOptionsObjectLiteralSyntax(), "paths", callback)`.
     fn create_diagnostic_for_option_paths(
         &mut self,
@@ -239,7 +239,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:934 createDiagnosticForOptionPathKeyValue (closure)
+    // Go: program.go:1139 createDiagnosticForOptionPathKeyValue (closure)
     fn create_diagnostic_for_option_path_key_value(
         &mut self,
         syntax: &OptionsSyntax,
@@ -978,7 +978,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:1170 verifyEmitFilePath (closure)
+    // Go: program.go:1375 verifyEmitFilePath (closure)
     // Verify that all the emit files are unique and don't overwrite input files
     fn verify_emit_file_path(
         &mut self,
@@ -1051,7 +1051,7 @@ impl NewProgram {
         // after the range ends.
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
         let mut blocked_paths: Vec<Path> = Vec::new();
-        // Go: program.go:1396 createDiagnosticForReference (closure)
+        // Go: program.go:1420 createDiagnosticForReference (closure)
         let create_diagnostic_for_reference =
             |diagnostics: &mut Vec<Diagnostic>,
              config: &ParsedCommandLine,

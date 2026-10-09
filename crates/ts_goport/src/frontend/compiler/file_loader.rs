@@ -1039,7 +1039,7 @@ impl FileLoader {
     // 12 items, so libs with the same priority can change places there.
     // `gostd::slices::sort_func` is the same pdqsort, so they move as in Go.
     pub fn sort_libs(&self, lib_files: &mut [Rc<ParsedSourceFile>]) {
-        // Go: fileloader.go:345 slices.SortFunc(libFiles, cmp.Compare on the priorities)
+        // Go: fileloader.go:362 slices.SortFunc(libFiles, cmp.Compare on the priorities)
         crate::gostd::slices::sort_func(lib_files, |f1, f2| {
             self.get_default_lib_file_priority(f1)
                 .cmp(&self.get_default_lib_file_priority(f2)) as i32
@@ -2480,7 +2480,7 @@ pub(crate) fn guess_import_mode(
     if !import_syntax_affects_module_resolution(options) {
         return RESOLUTION_MODE_NONE;
     }
-    // Go: fileloader.go:1087 getEmitSyntaxForUsageLocationWorker, for a
+    // Go: fileloader.go:1075 getEmitSyntaxForUsageLocationWorker, for a
     // usage that is not a require or an import call.
     let file_emit_mode = get_emit_module_format_of_file_worker(file_name, options, meta);
     if file_emit_mode == ModuleKind::COMMON_JS {
@@ -2494,7 +2494,7 @@ pub(crate) fn guess_import_mode(
 /// The synthetic imports of a file (Go `resolveImportsAndModuleAugmentations`,
 /// before its imports): `tslib` for `importHelpers`, then the JSX runtime
 /// import. The parse worker of the file resolves them too (`FilePrep`).
-// Go: fileloader.go:844 to :862 (resolveImportsAndModuleAugmentations)
+// Go: fileloader.go:835 to :853 (resolveImportsAndModuleAugmentations)
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SyntheticImports {
     /// The file gets the `tslib` import (`EXTERNAL_HELPERS_MODULE_NAME_TEXT`).

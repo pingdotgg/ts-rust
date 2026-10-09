@@ -170,7 +170,7 @@ impl NewProgram {
             .iter()
             .flat_map(|m| m.values())
             .collect();
-        // Go: compiler/program.go:2063 slices.SortFunc(redirectFiles, a.index - b.index)
+        // Go: compiler/program.go:2164 slices.SortFunc(redirectFiles, a.index - b.index)
         crate::gostd::slices::sort_func(&mut redirect_files, |a, b| a.index.cmp(&b.index) as i32);
 
         let files = self.get_source_files();
