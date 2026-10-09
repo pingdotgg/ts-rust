@@ -146,15 +146,13 @@ impl<P: ProgramView> LanguageService<P> {
             INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
         );
         // If exportEquals != nil, we're about to add references to `import("mod")` anyway, so don't double-count them.
-        // PORT: Go calls `getReferencedSymbolsForModule`, which gets this
-        // same checker again; the worker runs its body with the held checker.
-        let module_references = self.get_referenced_symbols_for_module_worker(
+        let module_references = self.get_referenced_symbols_for_module(
+            checker,
             program,
             symbol,
             export_equals.is_some(),
             source_files,
             source_files_set,
-            checker,
         );
         if export_equals.is_nil()
             || !checker
@@ -759,46 +757,17 @@ pub fn get_merged_aliased_symbol_of_namespace_export_declaration(
 }
 
 impl<P: ProgramView> LanguageService<P> {
-    // Go: ls/findallreferences.go:1627 (*LanguageService).getReferencedSymbolsForModule
-    // PORT: Go gets the request checker here (`program.GetTypeChecker(ctx)`)
-    // and runs the rest of the body with it. That body is
-    // `get_referenced_symbols_for_module_worker`, so that
-    // `getReferencedSymbolsForModuleIfDeclaredBySourceFile`, which already
-    // holds the same checker (Go gets it again), runs it without a second
-    // `borrow_mut`. The Go `debug.Assert` reads the symbol, so it is in the
-    // worker.
+    // Go: ls/findallreferences.go:1735 (*LanguageService).getReferencedSymbolsForModule
+    // ts#64543: the caller passes the checker it holds (acquisitions are not
+    // reentrant). Before ts#64543 Go acquired it here.
     pub fn get_referenced_symbols_for_module(
         &self,
-        ctx: &Context,
-        program: &P,
-        symbol: SymbolId,
-        exclude_import_type_of_export_equals: bool,
-        source_files: &[Node],
-        source_files_set: &FxHashSet<String>,
-    ) -> Vec<Rc<RefCell<SymbolAndEntries>>> {
-        let (checker, _done) = program.get_type_checker(ctx);
-        let c = &mut *checker.borrow_mut();
-        self.get_referenced_symbols_for_module_worker(
-            program,
-            symbol,
-            exclude_import_type_of_export_equals,
-            source_files,
-            source_files_set,
-            c,
-        )
-    }
-
-    // Go: ls/findallreferences.go:1633 (*LanguageService).getReferencedSymbolsForModule (body after GetTypeChecker)
-    // PORT: see `get_referenced_symbols_for_module`. `checker` is the request
-    // checker that Go gets there.
-    pub fn get_referenced_symbols_for_module_worker(
-        &self,
-        program: &P,
-        symbol: SymbolId,
-        exclude_import_type_of_export_equals: bool,
-        source_files: &[Node],
-        source_files_set: &FxHashSet<String>,
         checker: &mut Checker,
+        program: &P,
+        symbol: SymbolId,
+        exclude_import_type_of_export_equals: bool,
+        source_files: &[Node],
+        source_files_set: &FxHashSet<String>,
     ) -> Vec<Rc<RefCell<SymbolAndEntries>>> {
         crate::go_assert!(checker.sym(symbol).value_declaration.is_some());
 

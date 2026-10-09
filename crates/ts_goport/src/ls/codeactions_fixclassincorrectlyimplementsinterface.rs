@@ -6,8 +6,8 @@ use crate::ls::prelude::*;
 // - Go `GetTypeCheckerForFile` + `defer done()` is
 //   `ls_program::get_type_checker_for_file` with the `Release` guard kept to
 //   the end of the function. The checker is borrowed only around the code
-//   that uses it, because `getAllDiagnostics` and the import adder can lease
-//   the same checker (a second `borrow_mut` would panic).
+//   that uses it. Since ts#64543 `getAllDiagnostics` runs before the
+//   acquisition, because acquisitions are not reentrant.
 // - Go `autoimport.ImportAdder` (nil allowed) is
 //   `Option<Box<dyn autoimport::ImportAdder>>` (w3 shape); helpers borrow it
 //   as `Option<&mut dyn autoimport::ImportAdder>`.
@@ -113,6 +113,11 @@ fn get_all_code_actions_to_fix_class_incorrectly_implements_interface(
     context: &Context,
     fix_context: &CodeFixContext<'_>,
 ) -> Result<Option<CombinedCodeActions>, GoError> {
+    // ts#64543: the diagnostics are read before the checker is acquired,
+    // because `getAllDiagnostics` acquires a checker itself and acquisitions
+    // are not reentrant.
+    let all_diags = get_all_diagnostics(context, fix_context.program, fix_context.source_file);
+
     let (type_checker, _done) = ls_program::get_type_checker_for_file(
         fix_context.program,
         context,
@@ -130,7 +135,7 @@ fn get_all_code_actions_to_fix_class_incorrectly_implements_interface(
 
     let mut seen_class_declarations: FxHashSet<Node> = FxHashSet::default();
 
-    for diag in get_all_diagnostics(context, fix_context.program, fix_context.source_file) {
+    for diag in all_diags {
         if is_fixable_diagnostic(
             &diag,
             &FIX_CLASS_INCORRECTLY_IMPLEMENTS_INTERFACE_ERROR_CODES,

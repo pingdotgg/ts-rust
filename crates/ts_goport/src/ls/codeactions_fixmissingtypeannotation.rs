@@ -155,6 +155,11 @@ fn get_all_isolated_declarations_code_actions(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
 ) -> Result<Option<CombinedCodeActions>, GoError> {
+    // ts#64543: the diagnostics are read before the checker is acquired,
+    // because `getAllDiagnostics` acquires a checker itself and acquisitions
+    // are not reentrant.
+    let all_diags = get_all_diagnostics(ctx, fix_context.program, fix_context.source_file);
+
     let (checker, _done) =
         ls_program::get_type_checker_for_file(fix_context.program, ctx, fix_context.source_file);
     // Go: defer done() (`_done` releases at the end of the function)
@@ -165,11 +170,6 @@ fn get_all_isolated_declarations_code_actions(
         fix_context.ls.format_options(),
         Rc::clone(&fix_context.ls.converters),
     );
-
-    // PORT: Go builds the fixer before `getAllDiagnostics`. The fixer holds
-    // the checker borrow and `getAllDiagnostics` leases the same checker, so
-    // the diagnostics are read first. Building the fixer has no side effect.
-    let all_diags = get_all_diagnostics(ctx, fix_context.program, fix_context.source_file);
 
     let mut checker_ref = checker.borrow_mut();
     let mut fixer = IsolatedDeclarationsFixer {

@@ -4,12 +4,11 @@ use crate::ls::prelude::*;
 //
 // PORT (whole file):
 // - Go `program.GetTypeChecker(ctx)` is `ls_program::get_type_checker`.
-//   Go leases the checker again in nested calls; the pool returns the
-//   checker the request already holds. A second `RefCell` borrow would
-//   panic, so a nested helper takes the caller's `ch: &mut Checker` (as the
-//   w3 autoimport `View` methods do), and a lease that Go only hands to
-//   `NewImportAdder` is held without a borrow (pinned decision: the adder
-//   does not store the checker).
+//   Since ts#64543 Go acquires the checker once and passes it to the nested
+//   helpers (acquisitions are not reentrant). A helper takes the caller's
+//   `ch: &mut Checker` (as the w3 autoimport `View` methods do); the caller
+//   borrows the lease around each call (pinned decision: the adder does not
+//   store the checker).
 // - Go `*autoimport.View` is `Rc<autoimport::View>`; Go `*autoimport.Fix` is
 //   `Rc<autoimport::Fix>`.
 // - Go `[]*fixInfo` is `Vec<FixInfo>`; the values are never changed after
@@ -67,13 +66,18 @@ struct FixInfo {
     is_jsx_namespace_fix: bool,
 }
 
-// Go: ls/codeactions_importfixes.go:63 getImportCodeActions
+// Go: ls/codeactions_importfixes.go:62 getImportCodeActions
 fn get_import_code_actions(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
 ) -> Result<Vec<CodeAction>, GoError> {
+    // ts#64543: the checker is acquired here and passed to `getFixInfos`.
+    // Go: defer done(). `_done` releases the checker at the end of the
+    // function; the borrow ends after `getFixInfos`.
+    let (ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
+
     let info = get_fix_infos(
-        ctx,
+        &mut ch.borrow_mut(),
         fix_context,
         fix_context.error_code,
         fix_context.span.pos(),
@@ -109,7 +113,7 @@ fn get_import_code_actions(
     Ok(actions)
 }
 
-// Go: ls/codeactions_importfixes.go:95 getAllImportCodeActions
+// Go: ls/codeactions_importfixes.go:97 getAllImportCodeActions
 fn get_all_import_code_actions(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
@@ -134,9 +138,9 @@ fn get_all_import_code_actions(
 
     // PORT: Go passes `ch` to the views and to `NewImportAdder`, which the
     // pinned Rust view and adder do not take. The lease is held to the end
-    // of the function (Go `defer done()`) but not borrowed, because
-    // `getFixInfos` below leases and borrows the same checker.
-    let (_ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
+    // of the function (Go `defer done()`); it is borrowed around each
+    // `addImportFromDiagnostic` call (ts#64543 passes it there).
+    let (ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
 
     let mut view = fix_context
         .ls
@@ -161,7 +165,7 @@ fn get_all_import_code_actions(
     );
 
     for diag in &import_diags {
-        add_import_from_diagnostic(ctx, &mut *import_adder, diag, fix_context)?;
+        add_import_from_diagnostic(&mut ch.borrow_mut(), &mut *import_adder, diag, fix_context)?;
     }
 
     if !import_adder.has_fixes() {
@@ -178,10 +182,10 @@ fn get_all_import_code_actions(
     }))
 }
 
-// Go: ls/codeactions_importfixes.go:152 addImportFromDiagnostic
+// Go: ls/codeactions_importfixes.go:154 addImportFromDiagnostic
 // addImportFromDiagnostic finds the best import fix for a diagnostic and adds it to the adder.
 fn add_import_from_diagnostic(
-    ctx: &Context,
+    ch: &mut Checker,
     import_adder: &mut dyn autoimport::ImportAdder,
     diag: &Diagnostic,
     fix_context: &CodeFixContext<'_>,
@@ -196,16 +200,16 @@ fn add_import_from_diagnostic(
         params: None,
     };
 
-    let infos = get_fix_infos(ctx, &diag_fix_context, diag.code(), diag.pos())?;
+    let infos = get_fix_infos(ch, &diag_fix_context, diag.code(), diag.pos())?;
     if !infos.is_empty() {
         import_adder.add_import_fix(infos[0].fix.clone());
     }
     Ok(())
 }
 
-// Go: ls/codeactions_importfixes.go:171 getFixInfos
+// Go: ls/codeactions_importfixes.go:173 getFixInfos
 fn get_fix_infos(
-    ctx: &Context,
+    ch: &mut Checker,
     fix_context: &CodeFixContext<'_>,
     error_code: i32,
     pos: i32,
@@ -223,10 +227,6 @@ fn get_fix_infos(
     {
         return Ok(Vec::new());
     }
-
-    // Go: defer done(). `_done` releases the checker when it drops at the end of scope.
-    let (ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
-    let ch = &mut *ch.borrow_mut();
 
     let view: Option<Rc<autoimport::View>>;
     let mut info: Vec<FixInfo> = Vec::new();

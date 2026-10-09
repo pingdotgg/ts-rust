@@ -28,14 +28,13 @@ impl LanguageService {
             Feature::INLAY_HINTS,
         );
         let mut result: Vec<lsproto::InlayHint> = Vec::with_capacity(mapped_ranges.len());
-        // PORT: Go defers each `done()` to the end of the function; the
-        // guards are kept in `dones` until then. The checker borrow ends with
-        // each loop pass, because the projections can share one checker.
-        let mut dones = Vec::with_capacity(mapped_ranges.len());
+        // ts#64543: each range releases its checker before the next range
+        // acquires one (Go wraps the loop body in a func with `defer done()`),
+        // because acquisitions are not reentrant. `_done` drops at the end of
+        // each pass.
         for mapped in mapped_ranges {
             let projection = mapped.script;
-            let (checker, done) = ls_program::get_type_checker_for_file(program, ctx, projection);
-            dones.push(done);
+            let (checker, _done) = ls_program::get_type_checker_for_file(program, ctx, projection);
             let c = &mut *checker.borrow_mut();
             let mut inlay_hint_state = InlayHintState {
                 ctx,

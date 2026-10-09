@@ -2124,8 +2124,7 @@ impl<P: ProgramView> LanguageService<P> {
     // Go: ls/findallreferences.go:1269 getReferencedSymbolsForNode
     // PORT: Go holds the checker for the whole function. Here the checker is
     // borrowed around each use, and `getReferencedSymbolsForModule` gets it
-    // as its last argument (findallreferences_p2.rs) instead of asking the
-    // program again.
+    // as its first argument (ts#64543).
     pub fn get_referenced_symbols_for_node(
         &self,
         ctx: &Context,
@@ -2166,7 +2165,7 @@ impl<P: ProgramView> LanguageService<P> {
                 .get_merged_symbol_exported(resolved_ref.file.symbol());
             if module_symbol.is_some() {
                 return self.get_referenced_symbols_for_module(
-                    ctx,
+                    &mut checker.borrow_mut(),
                     program,
                     module_symbol, /*excludeImportTypeOfExportEquals*/
                     false,
@@ -2251,7 +2250,7 @@ impl<P: ProgramView> LanguageService<P> {
                 return Vec::new();
             }
             return self.get_referenced_symbols_for_module(
-                ctx,
+                &mut checker.borrow_mut(),
                 program,
                 symbol_parent,
                 false, /*excludeImportTypeOfExportEquals*/
