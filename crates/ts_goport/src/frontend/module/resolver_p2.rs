@@ -1081,7 +1081,6 @@ impl ResolutionState<'_> {
 
         if let Some(existing) = self
             .resolver
-            .caches
             .package_json_info_cache
             .get(&package_json_path)
         {
@@ -1126,7 +1125,6 @@ impl ResolutionState<'_> {
             });
             let result = self
                 .resolver
-                .caches
                 .package_json_info_cache
                 .set(&package_json_path, result);
             self.resolver.caches.log_package_json(&result);
@@ -1135,7 +1133,7 @@ impl ResolutionState<'_> {
             if directory_exists {
                 trace_write!(self, diag::File_0_does_not_exist, package_json_path);
             }
-            let stored = self.resolver.caches.package_json_info_cache.set(
+            let stored = self.resolver.package_json_info_cache.set(
                 &package_json_path,
                 Rc::new(InfoCacheEntry {
                     package_directory: package_directory.to_string(),

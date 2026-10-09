@@ -1107,7 +1107,7 @@ impl InfoCacheEntry {
 // first read of a load is the cache entry. A worker's entry has `Rc`
 // contents on the worker's thread, so the loader keeps the text and parses
 // it only when a lookup asks for the entry (`InfoCache::get`).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PendingInfo {
     pub package_directory: String,
     pub directory_exists: bool,
@@ -1158,6 +1158,22 @@ pub fn new_info_cache(current_directory: &str, use_case_sensitive_file_names: bo
         pending: RefCell::new(FxHashMap::default()),
         current_directory: current_directory.to_string(),
         use_case_sensitive_file_names,
+    }
+}
+
+// Go: packagejson/cache.go:230 (*InfoCache).Clone (ts#64519)
+/// A new cache table with the entries of this one. The entries are shared;
+/// later entries of either cache are not in the other.
+// PORT: the pending reads of the parse workers (`add_pending`) are copied
+// too: Go's cache already holds them as entries.
+impl Clone for InfoCache {
+    fn clone(&self) -> Self {
+        InfoCache {
+            cache: RefCell::new(self.cache.borrow().clone()),
+            pending: RefCell::new(self.pending.borrow().clone()),
+            current_directory: self.current_directory.clone(),
+            use_case_sensitive_file_names: self.use_case_sensitive_file_names,
+        }
     }
 }
 

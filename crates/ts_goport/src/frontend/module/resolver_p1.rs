@@ -375,17 +375,23 @@ pub fn get_compiler_options_with_redirect(
     compiler_options.clone()
 }
 
-// Go: module/resolver.go:335 DefaultResolver
-// PORT: Go embeds `caches`; here it is the `caches` field.
+// Go: module/resolver.go:335 DefaultResolver (ts#64519)
+// PORT: Go embeds `*ResolutionData`; here it is the `resolution_data` field,
+// and `Deref` gives its fields (`resolver.compiler_options`) as Go field
+// promotion does. The Go resolution caches are the `caches` field.
 pub struct DefaultResolver {
-    pub caches: Caches,
+    pub resolution_data: Rc<ResolutionData>,
     pub host: Rc<dyn ResolutionHost>,
-    pub compiler_options: Rc<CompilerOptions>,
-    pub typings_location: String,
-    pub project_name: String,
-    // tsgo#4712: the content mapper extensions.
-    pub extra_extensions: Vec<String>,
     // reportDiagnostic: DiagnosticReporter
+    pub caches: Caches,
+}
+
+impl std::ops::Deref for DefaultResolver {
+    type Target = ResolutionData;
+
+    fn deref(&self) -> &ResolutionData {
+        &self.resolution_data
+    }
 }
 
 // Go: module/resolver.go:350 ResolverOptions
@@ -401,35 +407,40 @@ pub struct ResolverOptions {
     pub package_json_cache: Option<Rc<InfoCache>>,
 }
 
-// Go: module/resolver.go:363 NewResolver
+// Go: module/resolver.go:363 NewResolver (ts#64519)
 // PORT: Go keeps a nil `Host` or `CompilerOptions` and panics at the first
 // use; `DefaultResolver` has no nil for them, so this panics now.
 #[must_use]
 pub fn new_resolver(opts: ResolverOptions) -> DefaultResolver {
+    let data = Rc::new(new_resolution_data(&opts));
     let host = opts.host.expect("module.NewResolver: nil Host");
-    let compiler_options = opts
-        .compiler_options
-        .expect("module.NewResolver: nil CompilerOptions");
-    // PORT: Go sets the fields one by one on a zero `caches`.
-    let caches = match opts.package_json_cache {
-        Some(package_json_cache) => Caches::with_package_json_info_cache(package_json_cache),
-        None => new_caches(
-            host.get_current_directory(),
-            host.fs().use_case_sensitive_file_names(),
-            &compiler_options,
-        ),
-    };
-    DefaultResolver {
-        host,
-        compiler_options,
-        typings_location: opts.typings_location,
-        project_name: opts.project_name,
-        extra_extensions: opts.extra_extensions,
-        caches,
+    data.new_resolver(host)
+}
+
+impl ResolutionData {
+    // Go: module/resolver.go:371 (*ResolutionData).NewResolver (ts#64519)
+    /// A resolver on `host` that shares this data (the options and the
+    /// package.json cache), with empty resolution caches.
+    // PORT: the ts#64159 checks of Go N' (a rooted base directory, the same
+    // case sensitivity as the package.json cache) are not here: the port has
+    // no typed paths.
+    #[must_use]
+    pub fn new_resolver(self: &Rc<Self>, host: Rc<dyn ResolutionHost>) -> DefaultResolver {
+        DefaultResolver {
+            resolution_data: self.clone(),
+            host,
+            caches: Caches::default(),
+        }
     }
 }
 
 impl DefaultResolver {
+    // Go: module/resolver.go:367 (*DefaultResolver).GetResolutionData (ts#64519)
+    #[must_use]
+    pub fn get_resolution_data(&self) -> Rc<ResolutionData> {
+        self.resolution_data.clone()
+    }
+
     // Go: module/resolver.go:401 newTraceBuilder
     #[must_use]
     pub fn new_trace_builder(&self) -> Option<Rc<RefCell<Tracer>>> {
@@ -473,7 +484,7 @@ impl DefaultResolver {
         }
     }
 
-    // Go: module/resolver.go:412 PackageJsonCacheEntries (tsgo#4301)
+    // Go: module/resolver.go:412 PackageJsonCacheEntries (tsgo#4301, ts#64519)
     // PORT: the entries include the package.json lookups of the parse
     // worker answers that this resolver took (`Caches::worker_package_jsons`),
     // so that they are what the one Go cache of all parse tasks holds: after
@@ -487,22 +498,16 @@ impl DefaultResolver {
         &self,
         mut f: impl FnMut(&Path, PackageJsonCacheEntry<'_>) -> bool,
     ) {
-        let cache = &self.caches.package_json_info_cache;
         let mut go_on = true;
-        cache.range(|key, entry| {
-            go_on = f(
-                key,
-                PackageJsonCacheEntry {
-                    package_directory: &entry.package_directory,
-                    directory_exists: entry.directory_exists,
-                    exists: entry.exists(),
-                },
-            );
-            go_on
-        });
+        self.resolution_data
+            .package_json_cache_entries(|key, entry| {
+                go_on = f(key, entry);
+                go_on
+            });
         if !go_on {
             return;
         }
+        let cache = &self.package_json_info_cache;
         let worker_package_jsons = self.caches.worker_package_jsons.borrow();
         let mut seen: FxHashSet<Path> = FxHashSet::default();
         for lookup in worker_package_jsons
