@@ -279,6 +279,13 @@ impl DocumentSymbolsVisitor<'_> {
                 }
             }
         }
+        // ts#64160: top-level imports are not document symbols (Go N'
+        // symbols.go:164).
+        if node.parent().kind() == SyntaxKind::SourceFile
+            && is_import_or_import_equals_declaration(node)
+        {
+            return false;
+        }
         match node.kind() {
             SyntaxKind::ClassDeclaration
             | SyntaxKind::ClassExpression
