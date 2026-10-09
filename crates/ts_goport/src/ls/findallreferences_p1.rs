@@ -763,7 +763,9 @@ impl LanguageService {
         let program = self.get_program();
         let (checker, _done) = ls_program::get_type_checker(program, ctx);
         let checker = &mut *checker.borrow_mut();
-        let emit_resolver = checker.get_emit_resolver();
+        // ts#64649: a new emit resolver for a new emit context (Go N'
+        // findallreferences.go:512); `GetEmitResolver` is gone.
+        let emit_resolver = checker.new_emit_resolver(new_emit_context());
         let symbol = entry
             .borrow()
             .definition

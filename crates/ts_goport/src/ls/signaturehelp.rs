@@ -277,13 +277,16 @@ pub fn get_type_help_item(
     source_file: Node,
     c: &mut Checker,
 ) -> SignatureInformation {
+    // ts#64649: one emit context and one node builder for the item.
+    let emit_context = new_emit_context();
+    let builder = Rc::new(RefCell::new(new_node_builder(c, emit_context.clone())));
     let mut printer = new_printer(
         PrinterOptions {
             new_line: NewLineKind::LF,
             ..Default::default()
         },
         PrintHandlers::default(),
-        None,
+        Some(emit_context),
     );
 
     let mut parameters: Vec<SignatureHelpParameter> = Vec::with_capacity(type_parameter.len());
@@ -293,6 +296,7 @@ pub fn get_type_help_item(
             source_file,
             enclosing_declaration,
             c,
+            &builder,
             &mut printer,
         ));
     }
@@ -659,7 +663,7 @@ impl LanguageService {
         })
     }
 
-    // Go: ls/signaturehelp.go:449 getSignatureHelpItem
+    // Go: ls/signaturehelp.go:451 getSignatureHelpItem
     #[allow(clippy::too_many_arguments)]
     pub fn get_signature_help_item(
         &self,
@@ -673,6 +677,8 @@ impl LanguageService {
         doc_format: &lsproto::MarkupKind,
         vs_capability: bool,
     ) -> Vec<SignatureInformation> {
+        // ts#64649: one emit context for the parameters and the return type.
+        let emit_context = new_emit_context();
         let infos = if is_type_parameter_list {
             self.item_info_for_type_parameters(
                 candidate,
@@ -681,6 +687,7 @@ impl LanguageService {
                 source_file,
                 doc_format,
                 vs_capability,
+                &emit_context,
             )
         } else {
             self.item_info_for_parameters(
@@ -690,6 +697,7 @@ impl LanguageService {
                 source_file,
                 doc_format,
                 vs_capability,
+                &emit_context,
             )
         };
 
@@ -699,6 +707,7 @@ impl LanguageService {
             enclosing_declaration,
             source_file,
             vs_capability,
+            &emit_context,
         );
 
         // Generate documentation from the signature's declaration
@@ -747,13 +756,14 @@ impl LanguageService {
     }
 }
 
-// Go: ls/signaturehelp.go:488 returnTypeToDisplayParts
+// Go: ls/signaturehelp.go:491 returnTypeToDisplayParts
 pub fn return_type_to_display_parts(
     candidate_signature: SignatureId,
     c: &mut Checker,
     enclosing_declaration: Node,
     source_file: Node,
     vs_capability: bool,
+    emit_context: &Rc<EmitContext>,
 ) -> Rc<RefCell<DisplayPartsWriter>> {
     let dpw = new_display_parts_writer(vs_capability);
 
@@ -779,7 +789,7 @@ pub fn return_type_to_display_parts(
                     ..Default::default()
                 },
                 PrintHandlers::default(),
-                Some(new_emit_context()),
+                Some(emit_context.clone()),
             );
             // Use a temporary writer for p.Write since the printer calls Clear() on its writer
             let temp_dpw = new_display_parts_writer(vs_capability);
@@ -794,7 +804,7 @@ pub fn return_type_to_display_parts(
 }
 
 impl LanguageService {
-    // Go: ls/signaturehelp.go:513 itemInfoForTypeParameters
+    // Go: ls/signaturehelp.go:516 itemInfoForTypeParameters
     pub fn item_info_for_type_parameters(
         &self,
         candidate_signature: SignatureId,
@@ -803,8 +813,10 @@ impl LanguageService {
         source_file: Node,
         doc_format: &lsproto::MarkupKind,
         vs_capability: bool,
+        emit_context: &Rc<EmitContext>,
     ) -> Vec<SignatureHelpItemInfo> {
-        let emit_context = new_emit_context();
+        // ts#64649: the caller's emit context and one node builder.
+        let builder = Rc::new(RefCell::new(new_node_builder(c, emit_context.clone())));
         let mut p = new_printer(
             PrinterOptions {
                 new_line: NewLineKind::LF,
@@ -829,6 +841,7 @@ impl LanguageService {
                     source_file,
                     enclosing_declaration,
                     c,
+                    &builder,
                     &mut p,
                 ),
             );
@@ -840,6 +853,7 @@ impl LanguageService {
             this_parameter = vec![self.create_signature_help_parameter_for_parameter(
                 candidate_this_parameter,
                 enclosing_declaration,
+                &builder,
                 &mut p,
                 source_file,
                 c,
@@ -884,9 +898,8 @@ impl LanguageService {
             // the per-parameter work below still runs for its checker effects.
             let mut parameters = this_parameter.clone();
             for (j, &param) in parameter_list.iter().enumerate() {
-                let nb = Rc::new(RefCell::new(new_node_builder(c, emit_context.clone())));
                 let param_node = c.node_builder_symbol_to_parameter_declaration(
-                    &nb,
+                    &builder,
                     param,
                     enclosing_declaration,
                     SIGNATURE_HELP_NODE_BUILDER_FLAGS,
@@ -923,7 +936,7 @@ impl LanguageService {
         result
     }
 
-    // Go: ls/signaturehelp.go:588 itemInfoForParameters
+    // Go: ls/signaturehelp.go:592 itemInfoForParameters
     pub fn item_info_for_parameters(
         &self,
         candidate_signature: SignatureId,
@@ -932,8 +945,10 @@ impl LanguageService {
         source_file: Node,
         doc_format: &lsproto::MarkupKind,
         vs_capability: bool,
+        emit_context: &Rc<EmitContext>,
     ) -> Vec<SignatureHelpItemInfo> {
-        let emit_context = new_emit_context();
+        // ts#64649: the caller's emit context and one node builder.
+        let builder = Rc::new(RefCell::new(new_node_builder(c, emit_context.clone())));
         let mut p = new_printer(
             PrinterOptions {
                 new_line: NewLineKind::LF,
@@ -954,6 +969,7 @@ impl LanguageService {
                         source_file,
                         enclosing_declaratipn,
                         c,
+                        &builder,
                         &mut p,
                     ),
                 );
@@ -998,9 +1014,8 @@ impl LanguageService {
             param_dpw.borrow_mut().write_from(&dpw.borrow());
 
             for (j, &param) in parameter_list.iter().enumerate() {
-                let nb = Rc::new(RefCell::new(new_node_builder(c, emit_context.clone())));
                 let param_node = c.node_builder_symbol_to_parameter_declaration(
-                    &nb,
+                    &builder,
                     param,
                     enclosing_declaratipn,
                     SIGNATURE_HELP_NODE_BUILDER_FLAGS,
@@ -1055,14 +1070,14 @@ impl LanguageService {
     }
 }
 
-// Go: ls/signaturehelp.go:666 signatureHelpNodeBuilderFlags
+// Go: ls/signaturehelp.go:671 signatureHelpNodeBuilderFlags
 pub const SIGNATURE_HELP_NODE_BUILDER_FLAGS: NodeBuilderFlags =
     NodeBuilderFlags::OMIT_PARAMETER_MODIFIERS
         .union(NodeBuilderFlags::IGNORE_ERRORS)
         .union(NodeBuilderFlags::USE_ALIAS_DEFINED_OUTSIDE_CURRENT_SCOPE);
 
 impl LanguageService {
-    // Go: ls/signaturehelp.go:669 createSignatureHelpParameterFromLabel
+    // Go: ls/signaturehelp.go:674 createSignatureHelpParameterFromLabel
     // createSignatureHelpParameterFromLabel creates a signatureHelpParameter from a pre-computed label string.
     pub fn create_signature_help_parameter_from_label(
         &self,
@@ -1109,19 +1124,20 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/signaturehelp.go:694 createSignatureHelpParameterForParameter
+    // Go: ls/signaturehelp.go:699 createSignatureHelpParameterForParameter
     pub fn create_signature_help_parameter_for_parameter(
         &self,
         parameter: SymbolId,
         enclosing_declaratipn: Node,
+        builder: &Rc<RefCell<NodeBuilder>>,
         p: &mut Printer,
         source_file: Node,
         c: &mut Checker,
         doc_format: &lsproto::MarkupKind,
     ) -> SignatureHelpParameter {
-        let nb = Rc::new(RefCell::new(new_node_builder(c, new_emit_context())));
+        // ts#64649: the caller's node builder.
         let parameter_node = c.node_builder_symbol_to_parameter_declaration(
-            &nb,
+            builder,
             parameter,
             enclosing_declaratipn,
             SIGNATURE_HELP_NODE_BUILDER_FLAGS,
@@ -1133,17 +1149,18 @@ impl LanguageService {
     }
 }
 
-// Go: ls/signaturehelp.go:699 createSignatureHelpParameterForTypeParameter
+// Go: ls/signaturehelp.go:705 createSignatureHelpParameterForTypeParameter
 pub fn create_signature_help_parameter_for_type_parameter(
     t: TypeId,
     source_file: Node,
     enclosing_declaration: Node,
     c: &mut Checker,
+    builder: &Rc<RefCell<NodeBuilder>>,
     p: &mut Printer,
 ) -> SignatureHelpParameter {
-    let nb = Rc::new(RefCell::new(new_node_builder(c, new_emit_context())));
+    // ts#64649: the caller's node builder.
     let type_parameter_node = c.node_builder_type_parameter_to_declaration(
-        &nb,
+        builder,
         t,
         enclosing_declaration,
         SIGNATURE_HELP_NODE_BUILDER_FLAGS,

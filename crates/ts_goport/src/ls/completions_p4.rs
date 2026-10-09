@@ -897,6 +897,8 @@ pub fn get_js_doc_parameter_completions(
         }
     }
     let mut param_index = -1;
+    // ts#64649: one emit context for all the annotations, made on first use.
+    let mut emit_context: Option<Rc<EmitContext>> = None;
     // Go: core.MapNonNil(fun.Parameters(), func(param) *CompletionItem { ... })
     let mut result: Vec<CompletionItem> = Vec::new();
     for param in fun.parameters().iter() {
@@ -910,6 +912,7 @@ pub fn get_js_doc_parameter_completions(
             let mut tabstop_counter = 1;
             let param_name = param.name().text();
             let mut display_text = get_js_doc_param_annotation(
+                &mut emit_context,
                 param_name,
                 param.initializer(),
                 param.dot_dot_dot_token(),
@@ -924,6 +927,7 @@ pub fn get_js_doc_parameter_completions(
             let mut snippet_text = String::new();
             if is_snippet {
                 snippet_text = get_js_doc_param_annotation(
+                    &mut emit_context,
                     param_name,
                     param.initializer(),
                     param.dot_dot_dot_token(),
@@ -963,6 +967,7 @@ pub fn get_js_doc_parameter_completions(
             // Destructuring parameter; do it positionally
             let param_path = format!("param{param_index}");
             let display_text_result = generate_js_doc_param_tags_for_destructuring(
+                &mut emit_context,
                 &param_path,
                 param.name(),
                 param.initializer(),
@@ -976,6 +981,7 @@ pub fn get_js_doc_parameter_completions(
             let mut snippet_text = String::new();
             if is_snippet {
                 let snippet_text_result = generate_js_doc_param_tags_for_destructuring(
+                    &mut emit_context,
                     &param_path,
                     param.name(),
                     param.initializer(),
@@ -1027,6 +1033,7 @@ pub fn get_js_doc_parameter_completions(
 // `&mut i32`; the Go `debug.Assert(tabstopCounter != nil)` always holds.
 #[allow(clippy::too_many_arguments)]
 pub fn get_js_doc_param_annotation(
+    emit_context: &mut Option<Rc<EmitContext>>,
     param_name: &str,
     initializer: Node,
     dot_dot_dot_token: Node,
@@ -1075,7 +1082,9 @@ pub fn get_js_doc_param_annotation(
                         None, /*idToSymbol*/
                     );
                     if type_node.is_some() {
-                        let emit_context = new_emit_context();
+                        // ts#64649: the caller's emit context, made on first use.
+                        let emit_context =
+                            emit_context.get_or_insert_with(new_emit_context).clone();
                         // !!! snippet p
                         let mut p = new_printer(
                             PrinterOptions {
@@ -1137,6 +1146,7 @@ pub fn get_js_doc_param_name_with_initializer(param_name: &str, initializer: Nod
 // Go: completions.go:6360 generateJSDocParamTagsForDestructuring
 #[allow(clippy::too_many_arguments)]
 pub fn generate_js_doc_param_tags_for_destructuring(
+    emit_context: &mut Option<Rc<EmitContext>>,
     path: &str,
     pattern: Node,
     initializer: Node,
@@ -1150,6 +1160,7 @@ pub fn generate_js_doc_param_tags_for_destructuring(
     let mut tabstop_counter = 1;
     if !is_js {
         return vec![get_js_doc_param_annotation(
+            emit_context,
             path,
             initializer,
             dot_dot_dot_token,
@@ -1163,6 +1174,7 @@ pub fn generate_js_doc_param_tags_for_destructuring(
         )];
     }
     js_doc_param_pattern_worker(
+        emit_context,
         path,
         pattern,
         initializer,
@@ -1179,6 +1191,7 @@ pub fn generate_js_doc_param_tags_for_destructuring(
 // Go: completions.go:6400 jsDocParamPatternWorker
 #[allow(clippy::too_many_arguments)]
 pub fn js_doc_param_pattern_worker(
+    emit_context: &mut Option<Rc<EmitContext>>,
     path: &str,
     pattern: Node,
     initializer: Node,
@@ -1193,6 +1206,7 @@ pub fn js_doc_param_pattern_worker(
     if is_object_binding_pattern(pattern) && dot_dot_dot_token.is_nil() {
         let mut child_counter = *counter;
         let root_param = get_js_doc_param_annotation(
+            emit_context,
             path,
             initializer,
             dot_dot_dot_token,
@@ -1207,6 +1221,7 @@ pub fn js_doc_param_pattern_worker(
         let mut child_tags: Vec<String> = Vec::new();
         for element in pattern.elements().iter() {
             let element_tags = js_doc_param_element_worker(
+                emit_context,
                 path,
                 element,
                 initializer,
@@ -1232,6 +1247,7 @@ pub fn js_doc_param_pattern_worker(
         }
     }
     vec![get_js_doc_param_annotation(
+        emit_context,
         path,
         initializer,
         dot_dot_dot_token,
@@ -1250,6 +1266,7 @@ pub fn js_doc_param_pattern_worker(
 // We can't deeply annotate an array binding pattern.
 #[allow(clippy::too_many_arguments)]
 pub fn js_doc_param_element_worker(
+    emit_context: &mut Option<Rc<EmitContext>>,
     path: &str,
     element: Node,
     _initializer: Node,
@@ -1273,6 +1290,7 @@ pub fn js_doc_param_element_worker(
         }
         let param_name = format!("{path}.{property_name}");
         return vec![get_js_doc_param_annotation(
+            emit_context,
             &param_name,
             element.initializer(),
             element.dot_dot_dot_token(),
@@ -1291,6 +1309,7 @@ pub fn js_doc_param_element_worker(
             return Vec::new();
         }
         return js_doc_param_pattern_worker(
+            emit_context,
             &format!("{path}.{property_name}"),
             element.name(),
             element.initializer(),

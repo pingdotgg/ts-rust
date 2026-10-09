@@ -706,9 +706,19 @@ struct QuickInfoWriter<'c> {
     alias_level: i32,
     first_declaration: Node,
     symbol_was_expanded: bool,
+    // Go: displayEmitContext (ts#64649, hover.go:441), made on first use.
+    display_emit_context: Option<Rc<EmitContext>>,
 }
 
 impl QuickInfoWriter<'_> {
+    // Go: ls/hover.go:442 getEmitContext (closure, ts#64649)
+    // One emit context for the whole quick info.
+    fn get_emit_context(&mut self) -> Rc<EmitContext> {
+        self.display_emit_context
+            .get_or_insert_with(new_emit_context)
+            .clone()
+    }
+
     // Go: ls/hover.go:444 writeTypeClassified (closure)
     // writeTypeClassified writes a type to dpw with proper classification (punctuation, symbols, keywords).
     // Falls back to flat text when vsCapability is false or when TypeToTypeNode fails.
@@ -721,7 +731,7 @@ impl QuickInfoWriter<'_> {
             self.dpw.borrow_mut().write(&text);
             return;
         }
-        let emit_context = new_emit_context();
+        let emit_context = self.get_emit_context();
         // PORT: Go shares one idToSymbol map between the node builder and the
         // printer. The Rust builder owns the map; it is moved into the printer
         // after the node is built.
@@ -791,7 +801,7 @@ impl QuickInfoWriter<'_> {
         } else {
             SyntaxKind::CallSignature
         };
-        let emit_context = new_emit_context();
+        let emit_context = self.get_emit_context();
         // PORT: shared idToSymbol map, see write_type_classified.
         let nb = Rc::new(RefCell::new(new_node_builder_ex(
             self.c,
@@ -870,7 +880,7 @@ impl QuickInfoWriter<'_> {
             return;
         }
         let attributes = declaration.attributes();
-        let emit_context = new_emit_context();
+        let emit_context = self.get_emit_context();
         emit_context.set_emit_flags(attributes, EmitFlags::SINGLE_LINE);
         let mut p = new_printer(
             PrinterOptions {
@@ -1593,6 +1603,7 @@ pub fn get_quick_info_and_declaration_at_location(
         alias_level: 0,
         first_declaration: Node::NIL,
         symbol_was_expanded: false,
+        display_emit_context: None,
     };
 
     if node.kind() == SyntaxKind::ThisKeyword && is_in_expression_context(node)
