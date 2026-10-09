@@ -62,7 +62,7 @@ fn marshal_json_string(value: &str) -> String {
 // methods that return the index of the new diagnostic in
 // `program_diagnostics`, so a caller can still add a message chain.
 impl NewProgram {
-    // Go: program.go:918 createOptionDiagnosticInObjectLiteralSyntax (closure)
+    // Go: program.go:942 createOptionDiagnosticInObjectLiteralSyntax (closure)
     #[allow(clippy::too_many_arguments)]
     fn create_option_diagnostic_in_object_literal_syntax(
         &mut self,
@@ -97,7 +97,7 @@ impl NewProgram {
         })
     }
 
-    // Go: program.go:928 createCompilerOptionsDiagnostic (closure)
+    // Go: program.go:952 createCompilerOptionsDiagnostic (closure)
     fn create_compiler_options_diagnostic(
         &mut self,
         syntax: &OptionsSyntax,
@@ -118,7 +118,7 @@ impl NewProgram {
         self.program_diagnostics.len() - 1
     }
 
-    // Go: program.go:940 createDiagnosticForOption (closure)
+    // Go: program.go:964 createDiagnosticForOption (closure)
     fn create_diagnostic_for_option(
         &mut self,
         syntax: &OptionsSyntax,
@@ -143,7 +143,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:948 createDiagnosticForOptionName (closure)
+    // Go: program.go:972 createDiagnosticForOptionName (closure)
     fn create_diagnostic_for_option_name(
         &mut self,
         syntax: &OptionsSyntax,
@@ -162,7 +162,7 @@ impl NewProgram {
         );
     }
 
-    // Go: program.go:955 createOptionValueDiagnostic (closure)
+    // Go: program.go:979 createOptionValueDiagnostic (closure)
     fn create_option_value_diagnostic(
         &mut self,
         syntax: &OptionsSyntax,
@@ -173,7 +173,7 @@ impl NewProgram {
         self.create_diagnostic_for_option(syntax, false /*onKey*/, option1, "", message, args);
     }
 
-    // Go: program.go:959 createRemovedOptionDiagnostic (closure)
+    // Go: program.go:983 createRemovedOptionDiagnostic (closure)
     fn create_removed_option_diagnostic(
         &mut self,
         syntax: &OptionsSyntax,
@@ -203,8 +203,8 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:921 createDiagnosticForOptionPaths (closure)
-    // PORT: Go `forEachOptionPathsSyntax` (program.go:917) is inlined; it is
+    // Go: program.go:1126 createDiagnosticForOptionPaths (closure)
+    // PORT: Go `forEachOptionPathsSyntax` (program.go:1122) is inlined; it is
     // `ForEachPropertyAssignment(getCompilerOptionsObjectLiteralSyntax(), "paths", callback)`.
     fn create_diagnostic_for_option_paths(
         &mut self,
@@ -239,7 +239,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:934 createDiagnosticForOptionPathKeyValue (closure)
+    // Go: program.go:1139 createDiagnosticForOptionPathKeyValue (closure)
     fn create_diagnostic_for_option_path_key_value(
         &mut self,
         syntax: &OptionsSyntax,
@@ -286,7 +286,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:724 (*Program).verifyCompilerOptions
+    // Go: program.go:909 (*Program).verifyCompilerOptions
     pub fn verify_compiler_options(&mut self) {
         // PORT: Go holds a `*core.CompilerOptions`. The `Rc` is cloned so
         // `self` can be borrowed mutably.
@@ -300,10 +300,12 @@ impl NewProgram {
             // BaseUrl will have been turned absolute by this point.
             let mut use_instead = String::new();
             if !syntax.config_file_path.is_empty() {
+                // ts#64159 (program.go:1006): the file system's case
+                // sensitivity (N: the zero-value `comparePathsOptions`).
                 let mut relative = get_relative_path_from_file(
                     &syntax.config_file_path,
                     &options.base_url,
-                    &self.compare_paths_options,
+                    &self.case_sensitivity(),
                 );
                 if !(relative.starts_with("./") || relative.starts_with("../")) {
                     relative = format!("./{relative}");
@@ -683,14 +685,15 @@ impl NewProgram {
                     emitted_files.push(file.file_name().to_string());
                 }
             }
+            // ts#64159 (program.go:1245): the base directory (rule R1), and
+            // the directories compare as rooted text (rule R3).
             let dir59 = get_computed_common_source_directory(
                 &emitted_files,
-                &self.get_current_directory(),
+                &self.base_directory(),
                 self.use_case_sensitive_file_names(),
             );
             if !dir59.is_empty()
-                && get_canonical_file_name(&dir, self.use_case_sensitive_file_names())
-                    != get_canonical_file_name(&dir59, self.use_case_sensitive_file_names())
+                && compare_rooted_text(&dir, &dir59, self.use_case_sensitive_file_names()) != 0
             {
                 // change in layout
                 let option1 = if !options.out_file.is_empty() {
@@ -713,7 +716,11 @@ impl NewProgram {
                     diag::The_common_source_directory_of_0_is_1_The_rootDir_setting_must_be_explicitly_set_to_this_or_another_path_to_adjust_your_output_s_file_layout,
                     &args![
                         get_base_file_name(&options.config_file_path),
-                        get_relative_path_from_file(&options.config_file_path, &dir59, &self.compare_paths_options)
+                        // ts#64159 (program.go:1261): the relative path with the
+                        // file system's case sensitivity, or the absolute one on
+                        // another root (rule R4), which
+                        // `get_relative_path_from_file` already gives.
+                        get_relative_path_from_file(&options.config_file_path, &dir59, &self.case_sensitivity())
                     ],
                 );
                 self.program_diagnostics[diag].add_message_chain(Some(new_compiler_diagnostic(
@@ -974,7 +981,7 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:1170 verifyEmitFilePath (closure)
+    // Go: program.go:1375 verifyEmitFilePath (closure)
     // Verify that all the emit files are unique and don't overwrite input files
     fn verify_emit_file_path(
         &mut self,
@@ -1022,20 +1029,20 @@ impl NewProgram {
         }
     }
 
-    // Go: program.go:1220 (*Program).blockEmittingOfFile
+    // Go: program.go:1409 (*Program).blockEmittingOfFile
     pub fn block_emitting_of_file(&mut self, emit_file_name: &str, diag: Diagnostic) {
         let path = self.to_path(emit_file_name);
         self.has_emit_blocking_diagnostics.insert(path);
         self.program_diagnostics.push(diag);
     }
 
-    // Go: program.go:1225 (*Program).IsEmitBlocked
+    // Go: program.go:1414 (*Program).IsEmitBlocked
     pub fn is_emit_blocked(&self, emit_file_name: &str) -> bool {
         self.has_emit_blocking_diagnostics
             .contains(&self.to_path(emit_file_name))
     }
 
-    // Go: program.go:1229 (*Program).verifyProjectReferences
+    // Go: program.go:1418 (*Program).verifyProjectReferences
     pub fn verify_project_references(&mut self) {
         let build_info_file_name = if !self.options().suppress_output_path_check.is_true() {
             self.opts.config.get_build_info_file_name()
@@ -1047,7 +1054,7 @@ impl NewProgram {
         // after the range ends.
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
         let mut blocked_paths: Vec<Path> = Vec::new();
-        // Go: program.go:1396 createDiagnosticForReference (closure)
+        // Go: program.go:1420 createDiagnosticForReference (closure)
         let create_diagnostic_for_reference =
             |diagnostics: &mut Vec<Diagnostic>,
              config: &ParsedCommandLine,
@@ -1121,7 +1128,7 @@ impl NewProgram {
     }
 }
 
-// Go: program.go:1431 hasZeroOrOneAsteriskCharacter
+// Go: program.go:1455 hasZeroOrOneAsteriskCharacter
 pub fn has_zero_or_one_asterisk_character(str: &str) -> bool {
     let mut seen_asterisk = false;
     for ch in str.chars() {
@@ -1137,7 +1144,7 @@ pub fn has_zero_or_one_asterisk_character(str: &str) -> bool {
     true
 }
 
-// Go: program.go:1446 moduleResolutionSupportsPackageJsonExportsAndImports
+// Go: program.go:1470 moduleResolutionSupportsPackageJsonExportsAndImports
 pub fn module_resolution_supports_package_json_exports_and_imports(
     module_resolution: ModuleResolutionKind,
 ) -> bool {
@@ -1146,7 +1153,7 @@ pub fn module_resolution_supports_package_json_exports_and_imports(
         || module_resolution == ModuleResolutionKind::BUNDLER
 }
 
-// Go: program.go:1451 emitModuleKindIsNonNodeESM
+// Go: program.go:1475 emitModuleKindIsNonNodeESM
 pub fn emit_module_kind_is_non_node_esm(module_kind: ModuleKind) -> bool {
     module_kind >= ModuleKind::ES2015 && module_kind <= ModuleKind::ES_NEXT
 }

@@ -7,7 +7,14 @@ use std::cell::OnceCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Go `includeProcessor`.
+/// Go `fileIncludeData` and `includeProcessor`.
+// Go: includeprocessor.go:15 fileIncludeData, includeprocessor.go:20
+// includeProcessor (ts#64519: the processed files keep the reasons and the
+// processing diagnostics, and each program has its own includeProcessor
+// with the caches)
+// PORT: one struct holds both. The processed files hold it, and its `Clone`
+// (`ReuseProgram`) shares the reasons and the diagnostics and starts the
+// caches empty, which is the Go split.
 // PORT: Go `collections.SyncMap` caches are `RefCell` maps (single thread).
 // Maps keyed by `*FileIncludeReason` use the `Rc` pointer as the key, like
 // Go pointer keys. Go `sync.Once` values are `OnceCell`.
@@ -21,6 +28,8 @@ pub struct IncludeProcessor {
     // apart and read after `processing_diagnostics`, the Go append order.
     pub late_processing_diagnostics: RefCell<Vec<Rc<ProcessingDiagnostic>>>,
 
+    // ts#64519
+    pub(crate) reason_diagnostics: RefCell<FxHashMap<IncludeReasonDiagnosticKey, Diagnostic>>,
     pub(crate) reason_to_reference_location:
         RefCell<FxHashMap<*const FileIncludeReason, Rc<ReferenceFileLocation>>>,
     pub(crate) include_reason_to_related_info:
@@ -46,10 +55,21 @@ pub struct IncludeProcessor {
     pub(crate) compiler_options_syntax: OnceCell<Node>,
 }
 
-// PORT: Go `UpdateProgram` copies `processedFiles` and so shares the
-// `*includeProcessor`. `updateFileIncludeProcessor` replaces it right after,
-// so a clone only needs the reasons and the diagnostics. The caches start
-// empty.
+/// Go `includeReasonDiagnosticKey` (ts#64519).
+// Go: includeprocessor.go:31 includeReasonDiagnosticKey
+// PORT: the Go `*FileIncludeReason` key is the reason's address.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct IncludeReasonDiagnosticKey {
+    pub reason: *const FileIncludeReason,
+    pub relative_file_name: bool,
+    // ts#64159 (includeprocessor.go:34)
+    pub relative_to: String,
+}
+
+// PORT: Go `ReuseProgram` copies `processedFiles` (the reasons and the
+// processing diagnostics) and gives the new program an empty
+// `includeProcessor` (ts#64519). A clone shares the reasons and the
+// diagnostics, and its caches start empty.
 impl Clone for IncludeProcessor {
     fn clone(&self) -> Self {
         IncludeProcessor {
@@ -61,21 +81,8 @@ impl Clone for IncludeProcessor {
     }
 }
 
-// Go: includeprocessor.go:28 updateFileIncludeProcessor
-// PORT: Go replaces the processor of `p` in place and shares the reason map
-// and the diagnostics slice. Rust shares the reason map and clones the
-// diagnostics (the old program keeps its own).
-pub fn update_file_include_processor(p: &mut NewProgram) {
-    p.include_processor = IncludeProcessor {
-        file_include_reasons: p.include_processor.file_include_reasons.clone(),
-        processing_diagnostics: p.include_processor.processing_diagnostics.clone(),
-        late_processing_diagnostics: p.include_processor.late_processing_diagnostics.clone(),
-        ..IncludeProcessor::default()
-    };
-}
-
 impl IncludeProcessor {
-    // Go: includeprocessor.go:35 (*includeProcessor).getDiagnostics
+    // Go: includeprocessor.go:37 (*includeProcessor).getDiagnostics
     pub fn get_diagnostics(&self, p: &NewProgram) -> &RefCell<DiagnosticsCollection> {
         self.computed_diagnostics.get_or_init(|| {
             let mut computed_diagnostics = DiagnosticsCollection::default();
@@ -112,7 +119,7 @@ impl IncludeProcessor {
         self.diagnostics_read.store(true, Ordering::Relaxed);
     }
 
-    // Go: includeprocessor.go:59 (*includeProcessor).addProcessingDiagnostic
+    // Go: includeprocessor.go:61 (*fileIncludeData).addProcessingDiagnostic
     pub fn add_processing_diagnostic(
         &mut self,
         d: impl IntoIterator<Item = Rc<ProcessingDiagnostic>>,
@@ -120,7 +127,7 @@ impl IncludeProcessor {
         self.processing_diagnostics.extend(d);
     }
 
-    // Go: includeprocessor.go:63 (*includeProcessor).addProcessingDiagnosticsForFileCasing
+    // Go: includeprocessor.go:65 (*fileIncludeData).addProcessingDiagnosticsForFileCasing
     pub fn add_processing_diagnostics_for_file_casing(
         &mut self,
         file: &Path,
@@ -158,7 +165,7 @@ impl IncludeProcessor {
         }
     }
 
-    // Go: includeprocessor.go:89 (*includeProcessor).getReferenceLocation
+    // Go: includeprocessor.go:91 (*includeProcessor).getReferenceLocation
     pub fn get_reference_location(
         &self,
         r: &FileIncludeReason,
@@ -178,7 +185,7 @@ impl IncludeProcessor {
             .clone()
     }
 
-    // Go: includeprocessor.go:98 (*includeProcessor).getCompilerOptionsObjectLiteralSyntax
+    // Go: includeprocessor.go:100 (*includeProcessor).getCompilerOptionsObjectLiteralSyntax
     pub fn get_compiler_options_object_literal_syntax(&self, program: &NewProgram) -> Node {
         *self.compiler_options_syntax.get_or_init(|| {
             if let Some(config_file) = &program.opts.config.config_file {
@@ -196,7 +203,7 @@ impl IncludeProcessor {
         })
     }
 
-    // Go: includeprocessor.go:114 (*includeProcessor).getRelatedInfo
+    // Go: includeprocessor.go:116 (*includeProcessor).getRelatedInfo
     pub fn get_related_info(
         &self,
         r: &FileIncludeReason,
@@ -216,7 +223,7 @@ impl IncludeProcessor {
             .clone()
     }
 
-    // Go: includeprocessor.go:123 (*includeProcessor).explainRedirectAndImpliedFormat
+    // Go: includeprocessor.go:125 (*includeProcessor).explainRedirectAndImpliedFormat
     // PORT: Go nil and empty results are both an empty `Vec`. Callers only
     // append the result. This is the `ExplainFiles` caller; the diagnostics
     // collection calls `explain_redirect_and_implied_format_for_collection`.
@@ -255,7 +262,7 @@ impl IncludeProcessor {
             .clone()
     }
 
-    // Go: processingDiagnostic.go:106 the `explainRedirectAndImpliedFormat`
+    // Go: processingDiagnostic.go:107 the `explainRedirectAndImpliedFormat`
     // call of the diagnostics collection, with absolute names.
     // PORT: the lines go to `collection_redirect_and_file_format`, not to
     // the Go cache (see that field).
@@ -340,12 +347,15 @@ impl IncludeProcessor {
                 || source_file.common_js_module_indicator.is_some())
         {
             let meta_data = program.get_source_file_meta_data(&file.path());
+            // ts#64159 (includeprocessor.go:168): the package.json name is
+            // `PackageJsonDirectory.ResolveFile("package.json")`, so one in
+            // the root is "/package.json" (N: "//package.json").
             match program.get_implied_node_format_for_emit(file) {
                 ModuleKind::ES_NEXT => {
                     if meta_data.package_json_type == "module" {
                         result.push(new_compiler_diagnostic(
                             diag::File_is_ECMAScript_module_because_0_has_field_type_with_value_module,
-                            args![to_file_name(&format!("{}/package.json", meta_data.package_json_directory))],
+                            args![to_file_name(&combine_paths(&meta_data.package_json_directory, &["package.json"]))],
                         ));
                     }
                 }
@@ -353,15 +363,15 @@ impl IncludeProcessor {
                     if !meta_data.package_json_type.is_empty() {
                         result.push(new_compiler_diagnostic(
                             diag::File_is_CommonJS_module_because_0_has_field_type_whose_value_is_not_module,
-                            args![to_file_name(&format!("{}/package.json", meta_data.package_json_directory))],
+                            args![to_file_name(&combine_paths(&meta_data.package_json_directory, &["package.json"]))],
                         ));
                     } else if !meta_data.package_json_directory.is_empty() {
                         if meta_data.package_json_type.is_empty() {
                             result.push(new_compiler_diagnostic(
                                 diag::File_is_CommonJS_module_because_0_does_not_have_field_type,
-                                args![to_file_name(&format!(
-                                    "{}/package.json",
-                                    meta_data.package_json_directory
+                                args![to_file_name(&combine_paths(
+                                    &meta_data.package_json_directory,
+                                    &["package.json"]
                                 ))],
                             ));
                         }

@@ -1294,7 +1294,7 @@ impl Fs for AheadFs {
         self.os.chtimes(path, a_time, m_time)
     }
 
-    // Go: project/overlayfs.go:297 overlayFS.DirectoryExists
+    // Go: project/overlayfs.go:299 overlayFS.DirectoryExists
     fn directory_exists(&self, path: &str) -> bool {
         let (exists, call) = self.directory_lookup(path);
         match call {
@@ -1316,7 +1316,7 @@ impl Fs for AheadFs {
         self.os.stat(path)
     }
 
-    // Go: project/overlayfs.go:360 overlayFS.Realpath
+    // Go: project/overlayfs.go:362 overlayFS.Realpath
     fn realpath(&self, path: &str) -> String {
         let (real, call) = self.job.stats.realpath(&self.job.closed, path, || {
             let real = self.os.realpath(path);

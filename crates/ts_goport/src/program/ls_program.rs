@@ -65,7 +65,7 @@ impl Release {
         Release(Some(Box::new(f)))
     }
 
-    // Go: compiler/checkerpool.go:493 noop
+    // Go: compiler/checkerpool.go:495 noop
     pub fn noop() -> Release {
         Release(None)
     }
@@ -85,11 +85,13 @@ impl Drop for Release {
     }
 }
 
-// Go: compiler/checkerpool.go:22 CheckerPool
+// Go: compiler/checkerpool.go:24 CheckerPool
 // CheckerPool is implemented by the project system to provide checkers with
 // request-scoped lifetime and reclamation. It returns a checker and a release
 // function that must be called when the caller is done with the checker.
 // The returned checker must not be accessed concurrently; each acquisition is exclusive.
+// Acquisitions are not reentrant, even when they share a request ID. Callers must
+// pass an already acquired checker to nested operations instead of acquiring again.
 // If file is non-nil, the pool may use it as an affinity hint to return the same
 // checker for the same file across calls.
 // PORT: `file` is `Node::NIL` for Go nil. The caller borrows the checker
@@ -111,8 +113,6 @@ struct ProgramCheckers {
     program: Rc<NewProgram>,
     /// Its program version.
     version: &'static GoProgram,
-    /// Go `Program.opts.CreateCheckerPool`.
-    create_checker_pool: Option<CreateCheckerPool>,
     /// Go `Program.checkerPool`.
     checker_pool: Rc<dyn CheckerPool>,
     /// Go `Program.compilerCheckerPool`.
@@ -121,9 +121,13 @@ struct ProgramCheckers {
     declaration_diagnostic_cache: RefCell<FxHashMap<Node, Vec<Diagnostic>>>,
     /// The host of the load that made the files of `program`: its own host
     /// after `new_program` or an update that loads again, and the old
-    /// program's load host after an update that clones. Go `UpdateProgram`
-    /// shares `processedFiles`, whose resolver reads that host's file system
-    /// after the load too (`GetPackageScopeForPath`).
+    /// program's load host after an update that clones. The processed
+    /// files keep the resolver of the load, which reads that host's file
+    /// system after the load too (`GetPackageScopeForPath`).
+    // PORT: since ts#64519 Go keeps no resolver: `Program.newResolver`
+    // reads the program's own host. The module part of ts#64519
+    // (`module.ResolutionData`) is not ported yet, so the port keeps the
+    // load host until then.
     load_host: Rc<dyn CompilerHost>,
 }
 
@@ -458,8 +462,9 @@ fn release_if_pending(version: &'static GoProgram) {
 // Program construction and release
 // ---------------------------------------------------------------------------
 
-// Go: compiler/program.go:285 NewProgram
+// Go: compiler/program.go:313 NewProgram
 // PORT: Go `opts.CreateCheckerPool` is the `create_checker_pool` argument.
+// The program does not keep it (ts#64519).
 // The frontend program parses with no current program, then becomes a
 // program version of the process (`program::new_program_version`).
 // PORT: Go runs `initCheckerPool` before `verifyCompilerOptions`. Here the
@@ -479,13 +484,13 @@ pub fn new_program(
     p
 }
 
-// Go: compiler/program.go:305 UpdateProgram
+// Go: compiler/program.go:335 UpdateProgram
 // PORT: `NewProgram::update_program` builds the new program. It
 // becomes a program version that shares the unchanged file versions of
-// `p`, and gets its checker pool here. `create_checker_pool`, when set,
-// overrides the one of `p` (Go `newOpts.CreateCheckerPool`).
-// `create_module_resolver` goes to `NewProgram::update_program`; a Go nil
-// `createModuleResolver` is `None` (ts#64299).
+// `p`, and gets its checker pool here. Since ts#64519 the new program uses
+// `create_checker_pool` as given (`None` is the compiler pool), not the one
+// of `p`. `create_module_resolver` goes to `NewProgram::update_program`; a
+// Go nil `createModuleResolver` is `None` (ts#64299).
 pub fn update_program(
     p: &NewProgram,
     changed_file_path: &tspath::Path,
@@ -494,12 +499,6 @@ pub fn update_program(
     create_module_resolver: Option<Rc<dyn Fn(module::ResolverOptions) -> Rc<dyn module::Resolver>>>,
 ) -> (Rc<NewProgram>, Option<Rc<ParsedSourceFile>>, bool) {
     let old = PROGRAM_CHECKERS.with(|programs| programs.borrow().get(&program_key(p)).cloned());
-    let create_checker_pool = create_checker_pool.or_else(|| {
-        old.as_ref()
-            .expect("program was not made by ls_program::new_program, or it is released")
-            .create_checker_pool
-            .clone()
-    });
     let (result, new_file, reused) = {
         let _scope = crate::core::enter_program(None);
         p.update_program(changed_file_path, new_host, create_module_resolver)
@@ -571,8 +570,9 @@ fn release_now(key: usize) {
     crate::ast::free_synthetic_owner(version.id);
 }
 
-// Go: compiler/program.go:435 initCheckerPool
-// PORT: `load_host` is not in Go (`ProgramCheckers::load_host`).
+// Go: compiler/program.go:455 initCheckerPool
+// PORT: `load_host` is not in Go (`ProgramCheckers::load_host`). Go ts#64519
+// passes the factory as an argument and does not keep it.
 fn init_checker_pool(
     p: &Rc<NewProgram>,
     version: &'static GoProgram,
@@ -599,7 +599,6 @@ fn init_checker_pool(
     let checkers = Rc::new(ProgramCheckers {
         program: Rc::clone(p),
         version,
-        create_checker_pool,
         checker_pool,
         compiler_checker_pool,
         declaration_diagnostic_cache: RefCell::new(FxHashMap::default()),
@@ -611,13 +610,13 @@ fn init_checker_pool(
     });
 }
 
-// Go: compiler/program.go:450 GetCheckerPool
+// Go: compiler/program.go:470 GetCheckerPool
 // GetCheckerPool returns the checker pool associated with this program.
 pub fn get_checker_pool(p: &NewProgram) -> Rc<dyn CheckerPool> {
     program_checkers(p).checker_pool.clone()
 }
 
-// Go: checker/checker.go:911 NewChecker (the checker id)
+// Go: checker/checker.go:913 NewChecker (the checker id)
 // PORT: Go `NewChecker(program, tracer)` also returns the checker mutex; a
 // pool here holds `Rc<RefCell<Checker>>` and the borrow is the lock. The
 // tracer is dropped. Go `program.BindSourceFiles()` runs inside
@@ -667,7 +666,7 @@ fn next_checker_index() -> usize {
 // Compiler checker pool (Go compiler/checkerpool.go)
 // ---------------------------------------------------------------------------
 
-// Go: compiler/checkerpool.go:26 checkerPool
+// Go: compiler/checkerpool.go:28 checkerPool
 // PORT: the pool lives on the dispatch thread. Go `locks` are the
 // `RefCell` of each checker: a caller holds `borrow_mut` where Go holds the
 // lock, and a second borrow panics where Go would block. `tracing` is dropped.
@@ -724,7 +723,7 @@ pub const CHECKER_ASSOCIATION_BALANCE_PENALTY_MULTIPLIER: i64 = 16;
 pub const CHECKER_ASSOCIATION_PRIORITIZED_SOURCE_PENALTY: i64 = 12;
 pub const CHECKER_ASSOCIATION_STRONG_BALANCE_MIN_CHECKER_COUNT: usize = 4;
 
-// Go: compiler/checkerpool.go:108 checkerAssociationPolicy
+// Go: compiler/checkerpool.go:110 checkerAssociationPolicy
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CheckerAssociationPolicy {
     pub prioritize_source_files: bool,
@@ -732,7 +731,7 @@ pub struct CheckerAssociationPolicy {
     pub balance_penalty_multiplier: i64,
 }
 
-// Go: compiler/checkerpool.go:131 getCheckerAssociationPolicy
+// Go: compiler/checkerpool.go:133 getCheckerAssociationPolicy
 // getCheckerAssociationPolicy selects one of three calibrated regimes:
 //
 //  1. Source-dominated, any checker count:
@@ -775,7 +774,7 @@ pub fn get_checker_association_policy(
     }
 }
 
-// Go: compiler/checkerpool.go:164 getCheckerAssociationsInOrder
+// Go: compiler/checkerpool.go:166 getCheckerAssociationsInOrder
 // getCheckerAssociationsInOrder partitions the import graph using a weighted adaptation
 // of FENNEL's streaming graph-partitioning objective with gamma = 3/2. Each file
 // is placed where it has the most already-placed neighbors, minus the incremental
@@ -874,7 +873,7 @@ pub fn get_checker_associations_in_order(
         .collect()
 }
 
-// Go: compiler/checkerpool.go:239 getCheckerAssociationOrder
+// Go: compiler/checkerpool.go:241 getCheckerAssociationOrder
 // getCheckerAssociationOrder places source files before declarations and
 // orders each group by descending estimated work. This exposes expensive semantic
 // roots early, when all checker loads are still available. Returning nil preserves
@@ -892,7 +891,7 @@ pub fn get_checker_association_order(
         return None;
     }
     let mut file_order: Vec<usize> = (0..file_weights.len()).collect();
-    // Go: compiler/checkerpool.go:245 sort.Slice(fileOrder, ...)
+    // Go: compiler/checkerpool.go:249 sort.Slice(fileOrder, ...)
     crate::gostd::slices::sort_slice(&mut file_order, |&left, &right| {
         if is_declaration_file[left] != is_declaration_file[right] {
             return !is_declaration_file[left];
@@ -905,13 +904,13 @@ pub fn get_checker_association_order(
     Some(file_order)
 }
 
-// Go: compiler/checkerpool.go:261 getCheckerAssociationBaseWeight
+// Go: compiler/checkerpool.go:263 getCheckerAssociationBaseWeight
 #[must_use]
 pub fn get_checker_association_base_weight(node_count: i64, text_length: i64) -> i64 {
     (node_count + text_length / CHECKER_ASSOCIATION_TEXT_WEIGHT_DIVISOR).max(1)
 }
 
-// Go: compiler/checkerpool.go:274 shouldPrioritizeSourceFiles
+// Go: compiler/checkerpool.go:276 shouldPrioritizeSourceFiles
 // shouldPrioritizeSourceFiles reports whether all declaration-file base work is at
 // most half of one average checker load:
 //
@@ -930,7 +929,7 @@ pub fn should_prioritize_source_files(
     declaration_weight * checker_count as i64 * 2 <= total_weight
 }
 
-// Go: compiler/checkerpool.go:285 getCheckerAssociationWeights
+// Go: compiler/checkerpool.go:287 getCheckerAssociationWeights
 // getCheckerAssociationWeights combines local syntax work with syntactic import
 // fanout. One import unit is totalBaseWeight / totalImports, so imports collectively
 // contribute approximately the same vertex weight as syntax. Syntactic imports are
@@ -960,7 +959,7 @@ pub fn get_checker_association_weights(base_weights: &[i64], import_counts: &[i6
 /// The checker index of each file of `program.files`, in file order: the
 /// association part of Go `checkerPool.createCheckers` (#4313). The compile
 /// path pool (`program::create_checkers`) uses it too.
-// Go: compiler/checkerpool.go:363 (*checkerPool).createCheckers (the associations)
+// Go: compiler/checkerpool.go:367 (*checkerPool).createCheckers (the associations)
 #[must_use]
 pub fn get_checker_associations(program: &NewProgram, checker_count: usize) -> Vec<usize> {
     let files = &program.files;
@@ -1010,7 +1009,7 @@ pub fn get_checker_associations(program: &NewProgram, checker_count: usize) -> V
     )
 }
 
-// Go: compiler/checkerpool.go:421 (*checkerPool).getImportAdjacency
+// Go: compiler/checkerpool.go:425 (*checkerPool).getImportAdjacency
 // getImportAdjacency returns an undirected import graph represented by file
 // index. A directed import from A to B makes both files adjacent because either
 // file can benefit from sharing checker caches with the other.
@@ -1049,12 +1048,12 @@ fn get_import_adjacency(program: &NewProgram) -> Vec<Vec<usize>> {
     adjacent_files
 }
 
-// Go: compiler/checkerpool.go:303 newCheckerPool
+// Go: compiler/checkerpool.go:305 newCheckerPool
 fn new_checker_pool(program: &Rc<NewProgram>) -> CompilerCheckerPool {
     new_checker_pool_with_tracing(program)
 }
 
-// Go: compiler/checkerpool.go:307 newCheckerPoolWithTracing
+// Go: compiler/checkerpool.go:309 newCheckerPoolWithTracing
 // PORT: tracing is dropped.
 fn new_checker_pool_with_tracing(program: &Rc<NewProgram>) -> CompilerCheckerPool {
     let mut checker_count: i64 = 4;
@@ -1078,7 +1077,7 @@ fn new_checker_pool_with_tracing(program: &Rc<NewProgram>) -> CompilerCheckerPoo
 }
 
 impl CheckerPool for CompilerCheckerPool {
-    // Go: compiler/checkerpool.go:62 (*checkerPool).GetChecker
+    // Go: compiler/checkerpool.go:331 (*checkerPool).GetChecker
     // GetChecker implements CheckerPool. When file is non-nil, returns the checker
     // associated with that file; otherwise returns the first checker.
     // PORT: Go locks checker 0 and returns the unlock. The lock is the
@@ -1113,7 +1112,7 @@ impl CompilerCheckerPool {
             .expect("file is not in the program")
     }
 
-    // Go: compiler/checkerpool.go:77 (*checkerPool).getCheckerForFileNonExclusive
+    // Go: compiler/checkerpool.go:346 (*checkerPool).getCheckerForFileNonExclusive
     // getCheckerForFileNonExclusive returns the checker for the given file without locking.
     // This is only safe when the caller guarantees no concurrent access to the same checker,
     // e.g. for read-only operations like obtaining an emit resolver.
@@ -1123,7 +1122,7 @@ impl CompilerCheckerPool {
         (c, Release::noop())
     }
 
-    // Go: compiler/checkerpool.go:82 (*checkerPool).getCheckerForFileExclusive
+    // Go: compiler/checkerpool.go:351 (*checkerPool).getCheckerForFileExclusive
     // PORT: Go locks the checker and returns the unlock. The lock is the
     // caller's borrow, so the release does nothing.
     fn get_checker_for_file_exclusive(
@@ -1137,14 +1136,14 @@ impl CompilerCheckerPool {
         (c, Release::noop())
     }
 
-    // Go: compiler/checkerpool.go:93 (*checkerPool).getCheckerNonExclusive
+    // Go: compiler/checkerpool.go:362 (*checkerPool).getCheckerNonExclusive
     // getCheckerNonExclusive returns the first checker without locking.
     fn get_checker_non_exclusive(&self) -> (Rc<RefCell<Checker>>, Release) {
         self.create_checkers();
         (Rc::clone(self.checker(0)), Release::noop())
     }
 
-    // Go: compiler/checkerpool.go:98 (*checkerPool).createCheckers
+    // Go: compiler/checkerpool.go:367 (*checkerPool).createCheckers
     // PORT: Go `createCheckersOnce` is a flag. Go makes the checkers on a
     // WorkGroup; here they are made in index order, so their ids follow the
     // index.
@@ -1167,7 +1166,7 @@ impl CompilerCheckerPool {
         let _ = self.file_associations.set(file_associations);
     }
 
-    // Go: compiler/checkerpool.go:123 (*checkerPool).forEachCheckerParallel
+    // Go: compiler/checkerpool.go:451 (*checkerPool).forEachCheckerParallel
     // Runs `cb` for each checker in the pool concurrently, locking and unlocking checker mutexes as it goes,
     // making it safe to call `forEachCheckerParallel` from many threads simultaneously.
     // PORT: on the dispatch thread the checkers run one after another, in
@@ -1180,7 +1179,7 @@ impl CompilerCheckerPool {
         }
     }
 
-    // Go: compiler/checkerpool.go:136 (*checkerPool).GetGlobalDiagnostics
+    // Go: compiler/checkerpool.go:464 (*checkerPool).GetGlobalDiagnostics
     pub fn get_global_diagnostics(&self) -> Vec<Diagnostic> {
         self.create_checkers();
         let mut global_diagnostics: Vec<Vec<Diagnostic>> = vec![Vec::new(); self.checkers.len()];
@@ -1190,7 +1189,7 @@ impl CompilerCheckerPool {
         sort_and_deduplicate_diagnostics(global_diagnostics.into_iter().flatten().collect())
     }
 
-    // Go: compiler/checkerpool.go:148 (*checkerPool).forEachCheckerGroupDo
+    // Go: compiler/checkerpool.go:476 (*checkerPool).forEachCheckerGroupDo
     // forEachCheckerGroupDo runs one task per checker in parallel. Each task iterates
     // the provided files, processing only those assigned to its checker. Within each
     // checker's set, files are visited in their original order.
@@ -1225,7 +1224,7 @@ impl CompilerCheckerPool {
 // Program checker access (Go compiler/program.go:445-492)
 // ---------------------------------------------------------------------------
 
-// Go: compiler/program.go:574 BindSourceFiles
+// Go: compiler/program.go:595 BindSourceFiles
 // PORT: the Rust binder binds every file of the program version into one
 // arena (`program::bind_all`). A file version that an earlier version
 // bound is not bound again.
@@ -1238,7 +1237,7 @@ pub fn bind_source_files(p: &NewProgram) {
 // until the returned release runs (see the module comment), so the caller
 // uses the checker with its program current.
 
-// Go: compiler/program.go:590 GetTypeChecker
+// Go: compiler/program.go:611 GetTypeChecker
 // Return the type checker associated with the program.
 pub fn get_type_checker(p: &NewProgram, ctx: &Context) -> (Rc<RefCell<Checker>>, Release) {
     let program = enter(p);
@@ -1250,7 +1249,7 @@ pub fn get_type_checker(p: &NewProgram, ctx: &Context) -> (Rc<RefCell<Checker>>,
     (checker, program.with_release(release))
 }
 
-// Go: compiler/program.go:597 ForEachCheckerParallel
+// Go: compiler/program.go:618 ForEachCheckerParallel
 pub fn for_each_checker_parallel(p: &NewProgram, cb: &mut dyn FnMut(usize, &mut Checker)) {
     let _program = enter(p);
     let checkers = program_checkers(p);
@@ -1259,7 +1258,7 @@ pub fn for_each_checker_parallel(p: &NewProgram, cb: &mut dyn FnMut(usize, &mut 
     }
 }
 
-// Go: compiler/program.go:607 GetTypeCheckerForFile
+// Go: compiler/program.go:628 GetTypeCheckerForFile
 // Return a checker for the given file. We may have multiple checkers in concurrent scenarios and this
 // method returns the checker that was tasked with checking the file. Note that it isn't possible to mix
 // types obtained from different checkers, so only non-type data (such as diagnostics or string
@@ -1278,7 +1277,7 @@ pub fn get_type_checker_for_file(
     (checker, program.with_release(release))
 }
 
-// Go: compiler/program.go:616 GetTypeCheckerForFileExclusive
+// Go: compiler/program.go:637 GetTypeCheckerForFileExclusive
 // Return a checker for the given file, locked to the current thread to prevent data races from multiple threads
 // accessing the same checker. The lock will be released when the `done` function is called.
 pub fn get_type_checker_for_file_exclusive(
@@ -1313,7 +1312,7 @@ fn source_file_nodes(p: &NewProgram) -> Vec<Node> {
     p.files.iter().map(|file| file.root).collect()
 }
 
-// Go: compiler/program.go:667 collectDiagnostics
+// Go: compiler/program.go:691 collectDiagnostics
 // collectDiagnostics collects diagnostics from a single file or all files.
 // If sourceFile is non-nil, returns diagnostics for just that file.
 // If sourceFile is nil, returns diagnostics for all files in the program.
@@ -1335,7 +1334,7 @@ fn collect_diagnostics(
     filter_and_sort_diagnostics(result)
 }
 
-// Go: compiler/program.go:678 collectDiagnosticsFromFiles
+// Go: compiler/program.go:702 collectDiagnosticsFromFiles
 // PORT: Go runs the files on a WorkGroup. On the dispatch thread they run
 // one after another, in file order.
 fn collect_diagnostics_from_files(
@@ -1352,7 +1351,7 @@ fn collect_diagnostics_from_files(
     diagnostics
 }
 
-// Go: compiler/program.go:695 collectCheckerDiagnostics
+// Go: compiler/program.go:719 collectCheckerDiagnostics
 // collectCheckerDiagnostics collects diagnostics from a single file or all files,
 // using a callback that receives the checker for each file. When the checker pool
 // supports grouped iteration (compiler pool), files are grouped by checker and
@@ -1379,7 +1378,7 @@ fn collect_checker_diagnostics(
     filter_and_sort_diagnostics(diagnostics.into_iter().flatten().collect())
 }
 
-// Go: compiler/program.go:720 collectCheckerDiagnosticsFromFiles
+// Go: compiler/program.go:744 collectCheckerDiagnosticsFromFiles
 // collectCheckerDiagnosticsFromFiles collects checker diagnostics for a list of files.
 // PORT: Go runs the files of an external pool on a WorkGroup. On the
 // dispatch thread they run one after another, in file order.
@@ -1413,7 +1412,7 @@ fn collect_checker_diagnostics_from_files(
     diagnostics
 }
 
-// Go: compiler/program.go:743 GetSyntacticDiagnostics
+// Go: compiler/program.go:767 GetSyntacticDiagnostics
 pub fn get_syntactic_diagnostics(
     p: &NewProgram,
     ctx: &Context,
@@ -1445,7 +1444,7 @@ pub fn get_syntactic_diagnostics(
     )
 }
 
-// Go: compiler/program.go:787 GetBindDiagnostics
+// Go: compiler/program.go:811 GetBindDiagnostics
 // PORT: Go binds only `sourceFile` when it is set, else every file. The
 // Rust binder binds every file of the program version into one arena, so
 // both cases bind all files.
@@ -1461,7 +1460,7 @@ pub fn get_bind_diagnostics(p: &NewProgram, ctx: &Context, source_file: Node) ->
     )
 }
 
-// Go: compiler/program.go:798 GetSemanticDiagnostics
+// Go: compiler/program.go:822 GetSemanticDiagnostics
 pub fn get_semantic_diagnostics(
     p: &NewProgram,
     ctx: &Context,
@@ -1473,7 +1472,7 @@ pub fn get_semantic_diagnostics(
     })
 }
 
-// Go: compiler/program.go:804 GetSemanticDiagnosticsForIncremental
+// Go: compiler/program.go:828 GetSemanticDiagnosticsForIncremental
 // GetSemanticDiagnosticsForIncremental includes newly discovered globals in each
 // file's cached diagnostics and leaves noEmit filtering to the builder.
 pub fn get_semantic_diagnostics_for_incremental(
@@ -1496,7 +1495,7 @@ pub fn get_semantic_diagnostics_for_incremental(
     result
 }
 
-// Go: compiler/program.go:815 GetSuggestionDiagnostics
+// Go: compiler/program.go:839 GetSuggestionDiagnostics
 pub fn get_suggestion_diagnostics(
     p: &NewProgram,
     ctx: &Context,
@@ -1508,7 +1507,7 @@ pub fn get_suggestion_diagnostics(
     })
 }
 
-// Go: compiler/program.go:819 GetProgramDiagnostics
+// Go: compiler/program.go:843 GetProgramDiagnostics
 pub fn get_program_diagnostics(p: &NewProgram) -> Vec<Diagnostic> {
     let _program = enter(p);
     let mut diagnostics = p.program_diagnostics.clone();
@@ -1524,7 +1523,7 @@ pub fn get_program_diagnostics(p: &NewProgram) -> Vec<Diagnostic> {
     sort_and_deduplicate_diagnostics(diagnostics)
 }
 
-// Go: compiler/program.go:840 GetIncludeProcessorDiagnostics
+// Go: compiler/program.go:864 GetIncludeProcessorDiagnostics
 pub fn get_include_processor_diagnostics(p: &NewProgram, source_file: Node) -> Vec<Diagnostic> {
     let _program = enter(p);
     if skip_type_checking(p, source_file, false) {
@@ -1540,7 +1539,7 @@ pub fn get_include_processor_diagnostics(p: &NewProgram, source_file: Node) -> V
     filtered
 }
 
-// Go: compiler/program.go:848 SkipTypeChecking
+// Go: compiler/program.go:872 SkipTypeChecking
 pub fn skip_type_checking(p: &NewProgram, source_file: Node, ignore_no_check: bool) -> bool {
     let _program = enter(p);
     let options = p.options();
@@ -1553,7 +1552,7 @@ pub fn skip_type_checking(p: &NewProgram, source_file: Node, ignore_no_check: bo
         || !can_include_bind_and_check_diagnostics(p, source_file)
 }
 
-// Go: compiler/program.go:856 canIncludeBindAndCheckDiagnostics
+// Go: compiler/program.go:880 canIncludeBindAndCheckDiagnostics
 fn can_include_bind_and_check_diagnostics(p: &NewProgram, source_file: Node) -> bool {
     let info = source_file_info(source_file);
     if info.check_js_directive.is_some_and(|d| !d.enabled) {
@@ -1576,7 +1575,7 @@ fn can_include_bind_and_check_diagnostics(p: &NewProgram, source_file: Node) -> 
     is_plain_js || is_check_js
 }
 
-// Go: compiler/program.go:1455 GetGlobalDiagnostics
+// Go: compiler/program.go:1479 GetGlobalDiagnostics
 pub fn get_global_diagnostics(p: &NewProgram, ctx: &Context) -> Vec<Diagnostic> {
     let _program = enter(p);
     if p.files.is_empty() {
@@ -1591,7 +1590,7 @@ pub fn get_global_diagnostics(p: &NewProgram, ctx: &Context) -> Vec<Diagnostic> 
     Vec::new()
 }
 
-// Go: compiler/program.go:1467 GetDeclarationDiagnostics
+// Go: compiler/program.go:1491 GetDeclarationDiagnostics
 pub fn get_declaration_diagnostics(
     p: &NewProgram,
     ctx: &Context,
@@ -1607,7 +1606,7 @@ pub fn get_declaration_diagnostics(
     )
 }
 
-// Go: compiler/program.go:1618 getDeclarationDiagnosticsForFile
+// Go: compiler/program.go:1642 getDeclarationDiagnosticsForFile
 fn get_declaration_diagnostics_for_file(
     p: &NewProgram,
     ctx: &Context,
@@ -1640,21 +1639,31 @@ fn get_declaration_diagnostics_for_file(
     diagnostics
 }
 
-// Go: compiler/emitHost.go:38 newEmitHost
+// Go: compiler/emitHost.go:39 newEmitHost
 // PORT: the language-service form of `program::new_emit_host`. The checker
 // comes from `GetTypeCheckerForFile` of `p`, which a dispatch-thread pool
-// shares as `Rc<RefCell<Checker>>`, so the resolver links to that `Rc`
-// (`get_emit_resolver_of_shared_checker`) instead of a compile worker
-// checker. The host methods read the current program, which is `p`.
+// shares as `Rc<RefCell<Checker>>`, so each resolver links to that `Rc`
+// (`new_emit_resolver_of_shared_checker`, ts#64649) instead of a compile
+// worker checker. The host keeps a weak link, as the resolvers do. The host
+// methods read the current program, which is `p`.
 fn new_emit_host(p: &NewProgram, ctx: &Context, file: Node) -> (Rc<EmitHost>, Release) {
     let (checker, done) = get_type_checker_for_file(p, ctx, file);
-    let emit_resolver =
-        crate::checker::emit_resolver_p1::get_emit_resolver_of_shared_checker(&checker);
-    let host = Rc::new(EmitHost { emit_resolver });
+    let checker = Rc::downgrade(&checker);
+    let host = crate::program::new_emit_host_with(Rc::new(move |emit_context| {
+        let checker = checker
+            .upgrade()
+            .expect("the checker of an emit host was dropped");
+        let resolver: Rc<dyn crate::printer::EmitResolver> =
+            crate::checker::emit_resolver_p1::new_emit_resolver_of_shared_checker(
+                &checker,
+                emit_context,
+            );
+        resolver
+    }));
     (host, done)
 }
 
-// Go: compiler/program.go:1867 Program.Emit
+// Go: compiler/program.go:1890 Program.Emit
 // PORT: the language service form of `program_emit::emit` (#4710: the
 // language server flake check; the API emit methods call Go `Program.Emit`
 // too). Each file's emit host gets its checker from the checker pool of `p`
@@ -1726,7 +1735,7 @@ pub fn emit(p: &NewProgram, ctx: &Context, options: EmitOptions) -> EmitResult {
     combine_emit_results(results)
 }
 
-// Go: compiler/program.go:1976 HandleNoEmitOptions
+// Go: compiler/program.go:1999 HandleNoEmitOptions
 // PORT: the language service form of `program_emit::handle_no_emit_options`
 // (`Program.Emit` passes a nil `emitBuildInfo`). The bind, semantic, global
 // and declaration diagnostics come from `p` and its checker pool. The
@@ -1770,14 +1779,16 @@ fn handle_no_emit_options(
     Some(EmitResult::default())
 }
 
-// Go: compiler/program.go:1785 IsGlobalTypingsFile
+// Go: compiler/program.go:1809 IsGlobalTypingsFile
 pub fn is_global_typings_file(p: &NewProgram, file_name: &str) -> bool {
     if !tspath::is_declaration_file_name(file_name) {
         return false;
     }
+    // ts#64159 (program.go:1813): the file system's case sensitivity (N: the
+    // zero-value `comparePathsOptions`).
     tspath::contains_path(
         &p.get_global_typings_cache_location(),
         file_name,
-        &p.compare_paths_options,
+        &p.case_sensitivity(),
     )
 }

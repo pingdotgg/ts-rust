@@ -15,7 +15,7 @@ use crate::frontend::tspath::{Path, has_extension, path_is_relative, to_path};
 use crate::printer::emit_context::PrintTables;
 use crate::sourcemap::generator::RawSourceMap;
 
-// Go: compiler/program.go:1837 WriteFileData
+// Go: compiler/program.go:1860 WriteFileData
 #[derive(Clone, Debug, Default)]
 pub struct WriteFileData {
     pub source_map_url_pos: i32,
@@ -29,14 +29,14 @@ pub struct WriteFileData {
     pub source_file: Node,
 }
 
-// Go: compiler/program.go:1845 WriteFile
+// Go: compiler/program.go:1868 WriteFile
 // PORT: Go `error` is `Result<(), String>`. Emit runs on the checker
 // threads and the emit pool, so the callback is shared and thread safe. The
 // callback may set `skipped_dts_write`.
 pub type WriteFile =
     Arc<dyn Fn(&str, &str, &mut WriteFileData) -> Result<(), String> + Send + Sync>;
 
-// Go: compiler/program.go:1847 EmitOptions
+// Go: compiler/program.go:1870 EmitOptions
 // PORT: Go `TargetSourceFiles` nil is `None`. A Go non-nil empty slice is
 // `Some` of an empty list, which emits no file (#4699).
 #[derive(Clone, Default)]
@@ -89,7 +89,7 @@ impl EmitterOptions {
     }
 }
 
-// Go: compiler/program.go:1854 EmitResult
+// Go: compiler/program.go:1877 EmitResult
 #[derive(Clone, Debug, Default)]
 pub struct EmitResult {
     pub emit_skipped: bool,
@@ -101,7 +101,7 @@ pub struct EmitResult {
     pub source_maps: Vec<SourceMapEmitResult>,
 }
 
-// Go: compiler/program.go:1861 SourceMapEmitResult
+// Go: compiler/program.go:1884 SourceMapEmitResult
 #[derive(Clone, Debug, Default)]
 pub struct SourceMapEmitResult {
     /// Input source file (which one can use on program to get the file), 1:1 mapping with the sourceMap.sources list
@@ -110,7 +110,7 @@ pub struct SourceMapEmitResult {
     pub generated_file: String,
 }
 
-// Go: compiler/program.go:1867 Program.Emit
+// Go: compiler/program.go:1890 Program.Emit
 // PORT: Go queues one emit per file on a work group and takes a writer from
 // a pool. Each file's emit runs on the thread of its checker (the emit
 // resolver reaches that checker there), and the results combine in file
@@ -1436,7 +1436,7 @@ fn new_emitter(
     }
 }
 
-// Go: compiler/program.go:1939 CombineEmitResults
+// Go: compiler/program.go:1962 CombineEmitResults
 pub fn combine_emit_results(results: Vec<EmitResult>) -> EmitResult {
     let mut result = EmitResult::default();
     for emit_result in results {
@@ -1450,7 +1450,7 @@ pub fn combine_emit_results(results: Vec<EmitResult>) -> EmitResult {
     result
 }
 
-// Go: compiler/program.go:1976 HandleNoEmitOptions
+// Go: compiler/program.go:1999 HandleNoEmitOptions
 // HandleNoEmitOptions mirrors tsc's handleNoEmitOptions.
 // PORT: #4407 replaced Go `HandleNoEmitOnError`. This is the plain program
 // form, for `Program.Emit`, which passes a nil `emitBuildInfo`, so it has no

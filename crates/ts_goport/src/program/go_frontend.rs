@@ -286,7 +286,7 @@ pub(super) fn mark_freeable_parses(np: &NewProgram) {
     }
 }
 
-// Go: compiler/program.go:2300 GetSymlinkCache (`get_go_symlink_cache`)
+// Go: compiler/program.go:2330 GetSymlinkCache (`get_go_symlink_cache`)
 // PORT: Go builds the cache on first use, on any goroutine. The port
 // builds it from the frontend program, which only the loading thread has,
 // and keeps a thread-safe copy in the program's shared state. The loading
@@ -393,7 +393,7 @@ pub(super) fn publish_parsed_files(cwd: &str) {
     publish_file_stores(files);
 }
 
-// Go: ast/ast.go:2745 (*SourceFile).resolveJSDoc (slow path; the caller
+// Go: ast/ast.go:2747 (*SourceFile).resolveJSDoc (slow path; the caller
 // has checked the parser cache) and parser/jsdoc.go:19 parseJSDocForNode
 /// The lazy JSDoc of `node` in published file `file`, whose info is
 /// `info`. The result is cached in `LAZY_JSDOC`.
@@ -441,7 +441,7 @@ pub(crate) fn cached_lazy_js_doc(node: Node) -> Option<&'static [Node]> {
     LAZY_JSDOC.with(|cache| cache.borrow().get(&node).copied())
 }
 
-// Go: compiler/program.go:129 FileExists (the Go frontend program)
+// Go: compiler/program.go:145 FileExists (the Go frontend program)
 // PORT: the loading thread asks the program host (with its cache). Another
 // thread (a checker worker) cannot read that cache. It asks the program's
 // thread-safe cache (Go `cachedvfs.FS`, compiler/host.go:52), which asks
@@ -764,7 +764,7 @@ fn build_program(
             (tables, common_source_directory)
         }
     };
-    // Go: compiler/program.go:408 ReuseProgram keeps `processedFiles`, so
+    // Go: compiler/program.go:359 ReuseProgram keeps `processedFiles`, so
     // the new program keeps the resolver and the package.json lookups of
     // module specifier generation in its cache (program.go:147-169).
     if let Some(old) = &previous
@@ -919,7 +919,7 @@ fn full_tables(np: &NewProgram, previous: Option<(&NewProgram, &GoSharedState)>)
     for (slot, file) in files.iter().enumerate() {
         file_by_path.insert(file.path().0.clone(), slot);
     }
-    // Go: filesparser.go:425 `filesByPath[task.path] = packageIdFile`. A
+    // Go: filesparser.go:480 `filesByPath[task.path] = packageIdFile`. A
     // package dedup redirect path maps to the first file with the same
     // package id, so `GetSourceFileByPath` finds that file.
     // PERF: copies the path only when it adds an entry (`entry` needs an
@@ -1071,10 +1071,10 @@ fn common_source_directory_of(p: &NewProgram) -> String {
     )
 }
 
-// Go: compiler/program.go:828 collectContentMapperOptionDiagnostics (#4712)
+// Go: compiler/program.go:852 collectContentMapperOptionDiagnostics (#4712)
 // PORT: returns the list; Go sets `p.contentMapperOptionDiagnostics`.
 fn collect_content_mapper_option_diagnostics(p: &NewProgram) -> Vec<Diagnostic> {
-    // Go: compiler/program.go:138 ContentMapperProject
+    // Go: compiler/program.go:158 ContentMapperProject
     let Some(project) = p.host().content_mapper_project() else {
         return Vec::new();
     };
@@ -1371,7 +1371,7 @@ impl GoSharedState {
                 Some((path.0.clone(), project_references.entry(entry.as_ref()?)))
             })
             .collect();
-        let can_use_project_reference_source = mapper.opts.can_use_project_reference_source();
+        let can_use_project_reference_source = mapper.use_source_of_project_reference;
         drop(mapper);
         // Go asks for the redirect of checker files only, which are program
         // files. A redirect comes from the path and the project references,
@@ -1474,7 +1474,7 @@ impl GoSharedState {
         }
     }
 
-    // Go: compiler/program.go:528 ContentMapperExtensions (#4712)
+    // Go: compiler/program.go:549 ContentMapperExtensions (#4712)
     pub(super) fn content_mapper_extensions(&self) -> &[String] {
         &self.content_mapper_extensions
     }
@@ -1484,7 +1484,7 @@ impl GoSharedState {
         &self.content_mapper_option_diagnostics
     }
 
-    // Go: compiler/program.go:181 GetSourceOfProjectReferenceIfOutputIncluded
+    // Go: compiler/program.go:206 GetSourceOfProjectReferenceIfOutputIncluded
     // (the map lookup; the caller falls back to the file name)
     pub(super) fn get_source_of_project_reference_if_output_included(
         &self,
@@ -1495,7 +1495,7 @@ impl GoSharedState {
             .map(String::as_str)
     }
 
-    // Go: compiler/projectreferencefilemapper.go:68 getProjectReferenceFromSource
+    // Go: compiler/projectreferencefilemapper.go:78 getProjectReferenceFromSource
     pub(super) fn get_project_reference_from_source(
         &self,
         path: &str,
@@ -1503,7 +1503,7 @@ impl GoSharedState {
         self.source_to_project_reference.get(path).cloned()
     }
 
-    // Go: compiler/projectreferencefilemapper.go:72 getProjectReferenceFromOutputDts
+    // Go: compiler/projectreferencefilemapper.go:82 getProjectReferenceFromOutputDts
     pub(super) fn get_project_reference_from_output_dts(
         &self,
         path: &str,
@@ -1511,12 +1511,12 @@ impl GoSharedState {
         self.output_dts_to_project_reference.get(path).cloned()
     }
 
-    // Go: compiler/projectreferencefilemapper.go:76 isSourceFromProjectReference
+    // Go: compiler/projectreferencefilemapper.go:86 isSourceFromProjectReference
     pub(super) fn is_source_from_project_reference(&self, path: &str) -> bool {
         self.can_use_project_reference_source && self.source_to_project_reference.contains_key(path)
     }
 
-    // Go: compiler/program.go:206 GetRedirectForResolution (for program files)
+    // Go: compiler/program.go:231 GetRedirectForResolution (for program files)
     pub(super) fn get_redirect_for_resolution(
         &self,
         file: Node,
@@ -1524,7 +1524,7 @@ impl GoSharedState {
         self.redirects_for_resolution.get(&file.file_index())
     }
 
-    // Go: compiler/program.go:215 GetResolvedProjectReferences
+    // Go: compiler/program.go:245 GetResolvedProjectReferences
     pub(super) fn get_resolved_project_references(
         &self,
     ) -> Vec<Option<Arc<ResolvedProjectReference>>> {
@@ -1539,8 +1539,8 @@ impl GoSharedState {
         self.known_symlinks.get().cloned()
     }
 
-    // Go: compiler/program.go:211 GetParseFileRedirect
-    // Go: compiler/projectreferencefilemapper.go:35 getParseFileRedirect
+    // Go: compiler/program.go:236 GetParseFileRedirect
+    // Go: compiler/projectreferencefilemapper.go:45 getParseFileRedirect
     // PORT: after the load, so `getSourceToDtsIfSymlink` only reads
     // `realpathDtsToSource`. None is the Go "".
     // PERF: with no project reference entries there is no redirect, and
@@ -1579,12 +1579,12 @@ impl GoSharedState {
         (!redirect.is_empty()).then_some(redirect)
     }
 
-    // Go: compiler/program.go:173 GetRedirectTargets
+    // Go: compiler/program.go:198 GetRedirectTargets
     pub(super) fn get_redirect_targets(&self, path: &str) -> Vec<String> {
         self.redirect_targets.get(path).cloned().unwrap_or_default()
     }
 
-    // Go: compiler/program.go:242 GetSourceFileFromReference (for the
+    // Go: compiler/program.go:275 GetSourceFileFromReference (for the
     // preserved references of a program file)
     pub(super) fn get_source_file_from_reference(&self, origin: Node, r: &FileReference) -> Node {
         self.references
@@ -1593,7 +1593,7 @@ impl GoSharedState {
             .expect("not a preserved reference of a program file")
     }
 
-    // Go: compiler/program.go:623 GetResolvedModule
+    // Go: compiler/program.go:644 GetResolvedModule
     // PERF: returns a borrow, and looks the name up as `&str`. A name has at
     // most one entry per mode, so the mode scan finds the Go map entry.
     pub(super) fn get_resolved_module(
@@ -1609,7 +1609,7 @@ impl GoSharedState {
             .get(&(module_reference, mode) as &dyn crate::frontend::module::ModeAwareKey)
     }
 
-    // Go: compiler/program.go:640 GetResolvedModules (ranged over: every
+    // Go: compiler/program.go:664 GetResolvedModules (ranged over: every
     // resolution of every file)
     // PERF: borrows the version's own map, as Go returns `p.resolvedModules`
     // with no copy. The order is the map order; Go ranges over maps in a
@@ -1621,7 +1621,7 @@ impl GoSharedState {
             .map(|resolved| &**resolved)
     }
 
-    // Go: compiler/program.go:2199 GetJSXRuntimeImportSpecifier
+    // Go: compiler/program.go:2228 GetJSXRuntimeImportSpecifier
     pub(super) fn get_jsx_runtime_import_specifier(&self, path: &str) -> (String, Node) {
         self.jsx_runtime_import_specifiers
             .get(path)
@@ -1629,7 +1629,7 @@ impl GoSharedState {
             .unwrap_or((String::new(), Node::NIL))
     }
 
-    // Go: compiler/program.go:1390 IsEmitBlocked
+    // Go: compiler/program.go:1414 IsEmitBlocked
     pub(super) fn is_emit_blocked(&self, emit_file_name: &str) -> bool {
         let path = crate::frontend::tspath::to_path(
             emit_file_name,
@@ -1639,13 +1639,13 @@ impl GoSharedState {
         self.has_emit_blocking_diagnostics.contains(&path.0)
     }
 
-    // Go: compiler/program.go:2195 IsSourceFileFromExternalLibrary
+    // Go: compiler/program.go:2224 IsSourceFileFromExternalLibrary
     pub(super) fn is_source_file_from_external_library(&self, path: &str) -> bool {
         self.source_files_found_searching_node_modules
             .contains(path)
     }
 
-    // Go: compiler/program.go:2206 GetImportHelpersImportSpecifier
+    // Go: compiler/program.go:2235 GetImportHelpersImportSpecifier
     pub(super) fn get_import_helpers_import_specifier(&self, path: &str) -> Node {
         self.import_helpers_import_specifiers
             .get(path)
@@ -1653,7 +1653,7 @@ impl GoSharedState {
             .unwrap_or(Node::NIL)
     }
 
-    // Go: compiler/program.go:840 GetIncludeProcessorDiagnostics (the
+    // Go: compiler/program.go:864 GetIncludeProcessorDiagnostics (the
     // include processor part)
     pub(super) fn get_include_processor_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         // Go builds the collection here (`includeProcessor.getDiagnostics`).
@@ -1769,7 +1769,8 @@ mod tests {
             .insert(file.path().clone(), file);
         NewProgram {
             opts: np.opts.clone(),
-            compare_paths_options: np.compare_paths_options.clone(),
+            hosts: np.hosts.clone(),
+            module_resolution_error: np.module_resolution_error.clone(),
             processed_files,
             uses_uri_style_node_core_modules: np.uses_uri_style_node_core_modules,
             common_source_directory: std::cell::OnceCell::new(),

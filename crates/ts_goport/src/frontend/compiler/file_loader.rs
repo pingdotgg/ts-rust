@@ -16,19 +16,19 @@ use crate::spanmap::{MappingError, MappingErrorKind};
 use std::cell::Cell;
 use std::sync::Arc;
 
-// Go: fileloader.go:34 maxContentMapperFailures (tsgo#4712)
+// Go: fileloader.go:35 maxContentMapperFailures (tsgo#4712)
 // maxContentMapperFailures is the number of transform failures a single content mapper may accumulate
 // before it is disabled for the rest of the program.
 const MAX_CONTENT_MAPPER_FAILURES: i32 = 5;
 
-// Go: fileloader.go:26 libResolution
+// Go: fileloader.go:27 libResolution
 pub struct LibResolution {
     pub library_name: String,
     pub resolution: Arc<ResolvedModule>,
     pub trace: Vec<DiagAndArgs>,
 }
 
-// Go: fileloader.go:36 LibFile
+// Go: fileloader.go:37 LibFile
 #[derive(Clone, Debug, Default)]
 pub struct LibFile {
     pub name: String,
@@ -36,19 +36,26 @@ pub struct LibFile {
     pub replaced: bool,
 }
 
-// Go: fileloader.go:42 sourceFileFromReferenceDiagnostic
+// Go: fileloader.go:44 sourceFileFromReferenceDiagnostic
 pub struct SourceFileFromReferenceDiagnostic {
     pub message: &'static Message,
     pub args: Vec<String>,
 }
 
-// Go: fileloader.go:47 fileLoader
+// Go: fileloader.go:49 fileLoader
 // PORT: the Go loader is shared by the parse work group. The port is single
 // threaded (contract 10), so the atomics and sync maps are `Cell` and
 // `RefCell`, and `factoryMu` is not needed. `resolver` is `None` only until
 // `process_all_program_files` sets it, as in Go.
+// Go: fileloader.go:49 fileLoader (ts#64519: `opts ProgramConfig`, `host`,
+// `tracing`). PORT: `tracing` is the process session.
 pub struct FileLoader {
-    pub opts: ProgramOptions,
+    pub opts: ProgramConfig,
+    pub host: Rc<dyn CompilerHost>,
+    /// The program has a `create_module_resolver` factory.
+    // PORT: not in Go, which only calls the factory. Parse workers resolve
+    // ahead only for the default resolver (PERF, `process_all_program_files`).
+    pub custom_module_resolver: bool,
     pub resolver: Option<Rc<dyn Resolver>>,
     pub default_library_path: String,
     pub compare_paths_options: ComparePathsOptions,
@@ -110,7 +117,7 @@ pub struct FileLoader {
     pub module_resolution_error: RefCell<Option<GoError>>,
 }
 
-// Go: fileloader.go:81 redirectsFile
+// Go: fileloader.go:84 redirectsFile
 #[derive(Clone, Debug, Default)]
 pub struct RedirectsFile {
     // Index of file at which this redirect file needs to be iterated
@@ -120,7 +127,7 @@ pub struct RedirectsFile {
     pub target: Path,
 }
 
-// Go: fileloader.go:89 DuplicateSourceFile
+// Go: fileloader.go:92 DuplicateSourceFile
 // PORT: Go keeps `Hash xxh3.Uint128` for the language server parse cache.
 // Here `hash` is the hash that a parse cache set on the file
 // (`ParsedSourceFile::hash`), and `text` is kept so the language server can
@@ -155,18 +162,18 @@ impl DuplicateSourceFile {
 }
 
 impl RedirectsFile {
-    // Go: fileloader.go:105 (*redirectsFile).FileName
+    // Go: fileloader.go:108 (*redirectsFile).FileName
     pub fn file_name(&self) -> String {
         self.file_name.clone()
     }
 
-    // Go: fileloader.go:109 (*redirectsFile).Path
+    // Go: fileloader.go:109 (*redirectsFile).Path (at 673a5f17d713; ts#64159 renames it PathKey, compiler/fileloader.go:112)
     pub fn path(&self) -> Path {
         self.path.clone()
     }
 }
 
-// Go: fileloader.go:113 processedFiles
+// Go: fileloader.go:116 processedFiles
 // PORT: Go nil maps that stay nil until first use are `Option`. Go
 // `*includeProcessor` is owned by value. Go `UpdateProgram` copies this
 // struct and so shares its maps with the old program. The maps that stay
@@ -207,20 +214,30 @@ pub struct ProcessedFiles {
     // Program-level diagnostics reported when a content mapper fails fatally (reported once per mapper).
     // tsgo#4712
     pub content_mapper_diagnostics: Vec<Diagnostic>,
-    // ts#64299
-    pub module_resolution_error: Option<GoError>,
+    // Go `moduleResolutionError` (ts#64299) is a `Program` field since
+    // ts#64519 (`NewProgram::module_resolution_error`).
     pub finished_processing: bool,
 }
 
-// Go: fileloader.go:147 jsxRuntimeImportSpecifier
+// Go: fileloader.go:161 jsxRuntimeImportSpecifier
 #[derive(Clone, Debug)]
 pub struct JsxRuntimeImportSpecifier {
     pub module_reference: String,
     pub specifier: Node,
 }
 
-// Go: fileloader.go:152 processAllProgramFiles
-pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) -> ProcessedFiles {
+// Go: fileloader.go:166 processAllProgramFiles
+// PORT: Go ts#64519 returns the processed files, the resolver's
+// `ResolutionData` and the module resolution error. The module part of
+// ts#64519 is not ported, so the processed files keep the resolver and
+// this returns the files and the error.
+pub fn process_all_program_files(
+    opts: ProgramConfig,
+    hosts: ProgramHosts,
+    factories: ProgramFactories,
+    single_threaded: bool,
+) -> (ProcessedFiles, Option<GoError>) {
+    let ProgramHosts { host } = hosts;
     let compiler_options = opts.config.compiler_options().clone();
     let root_files: Vec<String> = opts.config.file_names().to_vec();
     let supported_extensions =
@@ -237,14 +254,14 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
         max_node_module_js_depth =
             i32::try_from(p).unwrap_or(if p < 0 { i32::MIN } else { i32::MAX });
     }
-    let current_directory = opts.host.get_current_directory().to_string();
+    let current_directory = host.get_current_directory().to_string();
     let mut loader = FileLoader {
         default_library_path: get_normalized_absolute_path(
-            &opts.host.default_library_path(),
+            &host.default_library_path(),
             &current_directory,
         ),
         compare_paths_options: ComparePathsOptions {
-            use_case_sensitive_file_names: opts.host.fs().use_case_sensitive_file_names(),
+            use_case_sensitive_file_names: host.fs().use_case_sensitive_file_names(),
             current_directory: current_directory.clone(),
         },
         files_parser: RefCell::new(FilesParser {
@@ -265,8 +282,8 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
         // PORT: Go uses the zero `ast.NodeFactory`, which makes synthetic nodes.
         factory: NodeFactory::new(),
         project_reference_file_mapper: Rc::new(RefCell::new(ProjectReferenceFileMapper::new(
-            opts.clone(),
-            opts.host.clone(),
+            &opts,
+            host.clone(),
         ))),
         dts_directories: FxHashSet::default(),
         path_for_lib_file_cache: RefCell::new(FxHashMap::default()),
@@ -280,7 +297,9 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
         concurrent_transforms: RefCell::new(FxHashMap::default()),
         mapped_prefetch_ready: Cell::new(false),
         module_resolution_error: RefCell::new(None),
+        custom_module_resolver: factories.create_module_resolver.is_some(),
         opts,
+        host,
     };
     loader.add_project_reference_tasks(single_threaded);
     let resolver_host: Rc<dyn ResolutionHost> = loader
@@ -298,7 +317,7 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
         extra_extensions: loader.opts.config.content_mapper_extensions(),
         package_json_cache: None,
     };
-    if let Some(create_module_resolver) = loader.opts.create_module_resolver.clone() {
+    if let Some(create_module_resolver) = factories.create_module_resolver {
         loader.resolver = Some(create_module_resolver(resolver_options));
     } else {
         let mut resolver = new_resolver(resolver_options);
@@ -322,7 +341,7 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
             && super::files_parser::parse_workers_enabled()
             && workers_resolve_imports(&compiler_options)
             && !loader.opts.skip_module_resolution
-            && loader.opts.host.is_plain_os_fs()
+            && loader.host.is_plain_os_fs()
             && compiler_options.trace_resolution != Tristate::True
             && !loader.opts.can_use_project_reference_source()
         {
@@ -342,7 +361,7 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
                 .config
                 .resolved_project_reference_paths()
                 .is_empty()
-            && let Some(host) = loader.opts.host.resolve_ahead()
+            && let Some(host) = loader.host.resolve_ahead()
         {
             // PERF: a language server load after the first: workers resolve
             // the keys of the previous load ahead of the loader
@@ -421,7 +440,7 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
     // keeps the lookups of its parse tasks, and drops the other worker
     // lookups (`BuildStatCache`). Only the default resolver takes worker
     // answers.
-    if let Some(stats) = loader.opts.host.stat_cache() {
+    if let Some(stats) = loader.host.stat_cache() {
         let taken = loader
             .resolver
             .as_ref()
@@ -443,7 +462,9 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
         shared.end_package_json_reads(&resolver.caches.package_json_info_cache);
     }
 
-    // Clear out loader and host to ensure its not used post program creation
+    // PORT: Go ts#64519 keeps the loader and the host in a
+    // `projectReferenceFileMapperBuilder`, and the program gets only its
+    // mapper. Here the mapper holds them while loading, and loses them now.
     {
         let mut mapper = loader.project_reference_file_mapper.borrow_mut();
         mapper.loader = None;
@@ -452,6 +473,7 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
 
     let files_parser = loader.files_parser.borrow();
     let processed_files = files_parser.get_processed_files(&loader);
+    let module_resolution_error = loader.module_resolution_error.borrow().clone();
     drop(files_parser);
     drop(root_tasks);
     // PERF: in a one-program process the loader state (every parse task)
@@ -460,7 +482,14 @@ pub fn process_all_program_files(opts: ProgramOptions, single_threaded: bool) ->
     if FORGET_LOADER_STATE.with(Cell::get) {
         std::mem::forget(loader);
     }
-    processed_files
+    (processed_files, module_resolution_error)
+}
+
+/// `process_all_program_files` of the flat options, for the tests.
+#[cfg(test)]
+fn process_all_program_files_of(opts: ProgramOptions, single_threaded: bool) -> ProcessedFiles {
+    let (config, hosts, factories) = opts.split();
+    process_all_program_files(config, hosts, factories, single_threaded).0
 }
 
 #[cfg(test)]
@@ -490,7 +519,7 @@ pub fn with_loader_state_forgotten<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-// Go: fileloader.go:467 contentMapperTransformDiagnostic (tsgo#4712)
+// Go: fileloader.go:465 contentMapperTransformDiagnostic (tsgo#4712)
 // PORT: Go `*ast.SourceFile` is the file's SourceFile node. Go
 // `errors.AsType` on a found `*TransformError` searches that error and the
 // errors it wraps (`TransformError::to_go_error`).
@@ -639,7 +668,7 @@ fn content_mapper_transform_diagnostic(file: Node, label: &str, err: &GoError) -
     )
 }
 
-// Go: fileloader.go:523 ContentMapperProjectErrorDiagnostic (tsgo#4712)
+// Go: fileloader.go:521 ContentMapperProjectErrorDiagnostic (tsgo#4712)
 // ContentMapperProjectErrorDiagnostic returns the localized diagnostic message for a project setup error.
 pub fn content_mapper_project_error_diagnostic(err: &GoError) -> &'static Message {
     if let Some(project_error) = errors::as_type::<ProjectError>(err) {
@@ -665,7 +694,7 @@ pub fn content_mapper_project_error_diagnostic(err: &GoError) -> &'static Messag
     diag::The_content_mapper_process_failed_while_handling_the_project_request
 }
 
-// Go: fileloader.go:541 contentMapperTransformDiagnosticChain (tsgo#4712)
+// Go: fileloader.go:539 contentMapperTransformDiagnosticChain (tsgo#4712)
 fn content_mapper_transform_diagnostic_chain(
     file: Node,
     label: &str,
@@ -679,7 +708,7 @@ fn content_mapper_transform_diagnostic_chain(
     )
 }
 
-// Go: fileloader.go:545 contentMapperTransformDiagnosticWithDetail (tsgo#4712)
+// Go: fileloader.go:543 contentMapperTransformDiagnosticWithDetail (tsgo#4712)
 fn content_mapper_transform_diagnostic_with_detail(
     file: Node,
     label: &str,
@@ -695,7 +724,7 @@ fn content_mapper_transform_diagnostic_with_detail(
     diagnostic
 }
 
-// Go: fileloader.go:556 contentMapperMappingDiagnostic (tsgo#4712)
+// Go: fileloader.go:554 contentMapperMappingDiagnostic (tsgo#4712)
 // contentMapperMappingDiagnostic builds the diagnostic reported against a mapper that produced an
 // invalid span map, including the offsets involved so the mapper's author can locate the problem.
 fn content_mapper_mapping_diagnostic(
@@ -744,7 +773,7 @@ fn content_mapper_mapping_diagnostic(
     }
 }
 
-// Go: fileloader.go:601 ContentMapperInitializationDiagnostic (tsgo#4712)
+// Go: fileloader.go:599 ContentMapperInitializationDiagnostic (tsgo#4712)
 // ContentMapperInitializationDiagnostic returns a fileless diagnostic for a mapper initialization failure.
 pub fn content_mapper_initialization_diagnostic(label: &str, err: &GoError) -> Diagnostic {
     let initialize_error = errors::as_type::<InitializeError>(err);
@@ -801,7 +830,7 @@ pub fn content_mapper_initialization_diagnostic(label: &str, err: &GoError) -> D
     diagnostic
 }
 
-// Go: fileloader.go:630 ContentMapperProjectDiagnostic (tsgo#4712)
+// Go: fileloader.go:628 ContentMapperProjectDiagnostic (tsgo#4712)
 // ContentMapperProjectDiagnostic returns a fileless diagnostic for project setup or mapper initialization.
 pub fn content_mapper_project_diagnostic(err: &GoError) -> Diagnostic {
     if errors::as_type::<InitializeError>(err).is_some() {
@@ -811,24 +840,23 @@ pub fn content_mapper_project_diagnostic(err: &GoError) -> Diagnostic {
 }
 
 impl FileLoader {
-    // Go: fileloader.go:229 (*fileLoader).toPath
+    // Go: fileloader.go:238 (*fileLoader).toPath
     pub fn to_path(&self, file: &str) -> Path {
         to_path(
             file,
-            &self.opts.host.get_current_directory(),
-            self.opts.host.fs().use_case_sensitive_file_names(),
+            &self.host.get_current_directory(),
+            self.host.fs().use_case_sensitive_file_names(),
         )
     }
 
-    // Go: fileloader.go:233 (*fileLoader).addRootTask
+    // Go: fileloader.go:242 (*fileLoader).addRootTask
     pub fn add_root_task(
         &mut self,
         file_name: &str,
         lib_file: Option<Rc<LibFile>>,
         include_reason: Rc<FileIncludeReason>,
     ) {
-        let abs_path =
-            get_normalized_absolute_path(file_name, &self.opts.host.get_current_directory());
+        let abs_path = get_normalized_absolute_path(file_name, &self.host.get_current_directory());
         if self
             .opts
             .config
@@ -846,25 +874,16 @@ impl FileLoader {
         }
     }
 
-    // Go: fileloader.go:244 (*fileLoader).addRootFileTask
+    // Go: fileloader.go:253 (*fileLoader).addRootFileTask
     pub fn add_root_file_task(
         &mut self,
         file_name: &str,
         lib_file: Option<Rc<LibFile>>,
         include_reason: Rc<FileIncludeReason>,
     ) {
-        let curr_dir = self.opts.host.get_current_directory().to_string();
+        let curr_dir = self.host.get_current_directory().to_string();
         let abs_path = get_normalized_absolute_path(file_name, &curr_dir);
-        let mut containing_file = curr_dir.clone();
-        if let Some(config_file) = &self.opts.config.config_file {
-            containing_file = get_normalized_absolute_path(&config_file.file_name, &curr_dir);
-        }
-        let (resolved_file, diagnostic) = self.get_source_file_from_reference(
-            &abs_path,
-            file_name,
-            &containing_file,
-            &include_reason,
-        );
+        let (resolved_file, diagnostic) = self.get_source_file_from_reference(&abs_path, file_name);
         let mut root_task = ParseTask {
             normalized_file_path: resolved_file,
             lib_file,
@@ -883,14 +902,14 @@ impl FileLoader {
         self.root_tasks.push(Rc::new(RefCell::new(root_task)));
     }
 
-    // Go: fileloader.go:272 (*fileLoader).addAutomaticTypeDirectiveTasks
+    // Go: fileloader.go:277 (*fileLoader).addAutomaticTypeDirectiveTasks
     pub fn add_automatic_type_directive_tasks(&mut self) {
         let containing_directory;
         let compiler_options = self.opts.config.compiler_options();
         if !compiler_options.config_file_path.is_empty() {
             containing_directory = get_directory_path(&compiler_options.config_file_path);
         } else {
-            containing_directory = self.opts.host.get_current_directory().to_string();
+            containing_directory = self.host.get_current_directory().to_string();
         }
         let containing_file_name =
             combine_paths(&containing_directory, &[INFERRED_TYPES_CONTAINING_FILE]);
@@ -901,7 +920,7 @@ impl FileLoader {
         })));
     }
 
-    // Go: fileloader.go:287 (*fileLoader).resolveAutomaticTypeDirectives
+    // Go: fileloader.go:286 (*fileLoader).resolveAutomaticTypeDirectives
     #[allow(clippy::type_complexity)]
     pub fn resolve_automatic_type_directives(
         &self,
@@ -918,7 +937,7 @@ impl FileLoader {
         let mut type_resolutions_trace: Vec<DiagAndArgs> = Vec::new();
         let mut p_diagnostics: Vec<Rc<ProcessingDiagnostic>> = Vec::new();
         // PORT: Go passes the compiler host as a `module.ResolutionHost`.
-        let host = CompilerResolutionHost::new(self.opts.host.clone());
+        let host = CompilerResolutionHost::new(self.host.clone());
         let host: &dyn ResolutionHost = &host;
         let automatic_type_directive_names =
             get_automatic_type_directive_names(self.opts.config.compiler_options(), host);
@@ -1015,19 +1034,19 @@ impl FileLoader {
         parser.parse(root_tasks);
     }
 
-    // Go: fileloader.go:358 (*fileLoader).sortLibs
+    // Go: fileloader.go:361 (*fileLoader).sortLibs
     // PORT: Go `slices.SortFunc` is pdqsort. It is not stable for more than
     // 12 items, so libs with the same priority can change places there.
     // `gostd::slices::sort_func` is the same pdqsort, so they move as in Go.
     pub fn sort_libs(&self, lib_files: &mut [Rc<ParsedSourceFile>]) {
-        // Go: fileloader.go:345 slices.SortFunc(libFiles, cmp.Compare on the priorities)
+        // Go: fileloader.go:362 slices.SortFunc(libFiles, cmp.Compare on the priorities)
         crate::gostd::slices::sort_func(lib_files, |f1, f2| {
             self.get_default_lib_file_priority(f1)
                 .cmp(&self.get_default_lib_file_priority(f2)) as i32
         });
     }
 
-    // Go: fileloader.go:364 (*fileLoader).getDefaultLibFilePriority
+    // Go: fileloader.go:367 (*fileLoader).getDefaultLibFilePriority
     pub fn get_default_lib_file_priority(&self, a: &ParsedSourceFile) -> usize {
         // defaultLibraryPath and a.FileName() are absolute and normalized; a prefix check should suffice.
         let default_library_path = remove_trailing_directory_separator(&self.default_library_path);
@@ -1055,7 +1074,7 @@ impl FileLoader {
         LIBS.len() + 2
     }
 
-    // Go: fileloader.go:384 (*fileLoader).loadSourceFileMetaData
+    // Go: fileloader.go:382 (*fileLoader).loadSourceFileMetaData
     pub fn load_source_file_meta_data(&self, file_name: &str) -> SourceFileMetaData {
         if self.opts.skip_module_resolution {
             return SourceFileMetaData {
@@ -1071,7 +1090,7 @@ impl FileLoader {
         )
     }
 
-    // Go: fileloader.go:413 (*fileLoader).parseSourceFile
+    // Go: fileloader.go:412 (*fileLoader).parseSourceFile
     pub fn parse_source_file(&self, t: &ParseTask) -> Option<Rc<ParsedSourceFile>> {
         let _trace = crate::tracing::get().map(|tr| {
             tr.push(
@@ -1110,10 +1129,10 @@ impl FileLoader {
         {
             return self.parse_content_mapped_file(parse_options);
         }
-        self.opts.host.get_source_file(&parse_options)
+        self.host.get_source_file(&parse_options)
     }
 
-    // Go: fileloader.go:438 (*fileLoader).parseContentMappedFile (tsgo#4712)
+    // Go: fileloader.go:436 (*fileLoader).parseContentMappedFile (tsgo#4712)
     // parseContentMappedFile produces a content-mapped virtual source file via the host's content
     // mapper, preserving the original file name and retaining the untransformed text on the
     // source file. Content mapper extensions only reach the parser when content mappers are configured.
@@ -1148,10 +1167,7 @@ impl FileLoader {
                 &transform_identity,
             )));
         }
-        let files = self
-            .opts
-            .host
-            .get_content_mapped_source_files(&opts, &mapper);
+        let files = self.host.get_content_mapped_source_files(&opts, &mapper);
         self.note_content_mapper_transform(&mapper);
         match files {
             Ok(files) => files.canonical,
@@ -1191,11 +1207,11 @@ impl FileLoader {
         }
     }
 
-    // Go: fileloader.go:578 (*fileLoader).getContentMapperTransformIdentity (tsgo#4712)
+    // Go: fileloader.go:576 (*fileLoader).getContentMapperTransformIdentity (tsgo#4712)
     // PORT: Go `fmt.Sprintf("%x", u.Bytes())` of the `xxh3.Uint128` is the
     // 32 hex digits of the `u128`.
     fn get_content_mapper_transform_identity(&self, mapper: &Rc<Mapper>) -> String {
-        if let Some(project) = self.opts.host.content_mapper_project()
+        if let Some(project) = self.host.content_mapper_project()
             && let Ok(identity) = project.identity(mapper)
         {
             return identity;
@@ -1206,7 +1222,7 @@ impl FileLoader {
         )
     }
 
-    // Go: fileloader.go:587 (*fileLoader).emptyContentMappedFile (tsgo#4712)
+    // Go: fileloader.go:585 (*fileLoader).emptyContentMappedFile (tsgo#4712)
     // emptyContentMappedFile produces an empty TypeScript source file for a content-mapped file whose
     // transform could not be used, retaining the original content for diagnostics. Importers see it as an
     // empty module rather than triggering a "cannot find module" error. It is still marked as content-mapped
@@ -1220,7 +1236,7 @@ impl FileLoader {
         mapper_identity: &str,
         transform_identity: &str,
     ) -> ParsedSourceFile {
-        let (content, _) = self.opts.host.fs().read_file(&opts.file_name);
+        let (content, _) = self.host.fs().read_file(&opts.file_name);
         let source_file = parse_source_file(opts, "", ScriptKind::TS);
         source_file.set_content_mapper_info(crate::ast::ContentMapperSourceFileInfo {
             content_mapper: mapper_identity.to_string(),
@@ -1269,13 +1285,12 @@ impl FileLoader {
     fn note_content_mapper_transform(&self, mapper: &Rc<Mapper>) {
         let key = Rc::as_ptr(mapper);
         if self.concurrent_transforms.borrow().contains_key(&key)
-            || !self.opts.host.prefetch_content_mapped()
+            || !self.host.prefetch_content_mapped()
             || std::env::var_os("GOPORT_MAPPED_PREFETCH").is_some_and(|value| value == "0")
         {
             return;
         }
         let Some(transform) = self
-            .opts
             .host
             .content_mapper_project()
             .and_then(|project| project.concurrent_transform(mapper))
@@ -1296,7 +1311,7 @@ impl FileLoader {
         }
     }
 
-    // Go: fileloader.go:638 (*fileLoader).contentMapperUnavailable (tsgo#4712)
+    // Go: fileloader.go:636 (*fileLoader).contentMapperUnavailable (tsgo#4712)
     // contentMapperUnavailable reports whether mapper failed initialization or exceeded its failure budget.
     fn content_mapper_unavailable(&self, mapper: Option<&Rc<Mapper>>) -> bool {
         let Some(mapper) = mapper else {
@@ -1313,7 +1328,7 @@ impl FileLoader {
                 >= MAX_CONTENT_MAPPER_FAILURES
     }
 
-    // Go: fileloader.go:647 (*fileLoader).recordContentMapperInitializationFailure (tsgo#4712)
+    // Go: fileloader.go:645 (*fileLoader).recordContentMapperInitializationFailure (tsgo#4712)
     fn record_content_mapper_initialization_failure(
         &self,
         mapper: &Rc<Mapper>,
@@ -1333,7 +1348,7 @@ impl FileLoader {
         self.disable_concurrent_transform(mapper);
     }
 
-    // Go: fileloader.go:660 (*fileLoader).recordContentMapperFailure (tsgo#4712)
+    // Go: fileloader.go:658 (*fileLoader).recordContentMapperFailure (tsgo#4712)
     // recordContentMapperFailure counts a transform failure for mapper. It returns whether the failure
     // should be reported for this file (false once the mapper is already disabled). On the failure that
     // reaches maxContentMapperFailures it appends a single program diagnostic disabling the mapper.
@@ -1357,7 +1372,7 @@ impl FileLoader {
         true
     }
 
-    // Go: fileloader.go:680 (*fileLoader).isSupportedExtension
+    // Go: fileloader.go:678 (*fileLoader).isSupportedExtension
     pub fn is_supported_extension(&self, canonical_file_name: &str) -> bool {
         for group in &self.supported_extensions_with_json_if_resolve_json_module {
             let group: Vec<&str> = group.iter().map(String::as_str).collect();
@@ -1368,18 +1383,18 @@ impl FileLoader {
         false
     }
 
-    // Go: fileloader.go:689 (*fileLoader).getSourceFileFromReference
+    // Go: fileloader.go:682 (*fileLoader).getSourceFileFromReference
+    // ts#64159: the "A file cannot have a reference to itself" check moved
+    // to `resolve_tripleslash_path_reference`, after the extension lookup.
     pub fn get_source_file_from_reference(
         &self,
         file_name: &str,
         reference_text: &str,
-        containing_file: &str,
-        include_reason: &FileIncludeReason,
     ) -> (String, Option<SourceFileFromReferenceDiagnostic>) {
         let options = self.opts.config.compiler_options();
         let allow_non_ts_extensions = options.allow_non_ts_extensions.is_true();
         let diagnostic_file_name = normalize_slashes(reference_text);
-        let fs = self.opts.host.fs();
+        let fs = self.host.fs();
 
         if has_extension(file_name) {
             let canonical_file_name =
@@ -1412,19 +1427,6 @@ impl FileLoader {
                     Some(SourceFileFromReferenceDiagnostic {
                         message: diag::File_0_not_found,
                         args: args![diagnostic_file_name],
-                    }),
-                );
-            }
-
-            if include_reason.is_referenced_file()
-                && get_canonical_file_name(containing_file, fs.use_case_sensitive_file_names())
-                    == canonical_file_name
-            {
-                return (
-                    String::new(),
-                    Some(SourceFileFromReferenceDiagnostic {
-                        message: diag::A_file_cannot_have_a_reference_to_itself,
-                        args: Vec::new(),
                     }),
                 );
             }
@@ -1467,35 +1469,33 @@ impl FileLoader {
         )
     }
 
-    // Go: fileloader.go:736 (*fileLoader).resolveTripleslashPathReference
+    // Go: fileloader.go:723 (*fileLoader).resolveTripleslashPathReference
     pub fn resolve_tripleslash_path_reference(
         &self,
         module_name: &str,
         containing_file: &str,
         index: i32,
     ) -> (Option<ResolvedRef>, Option<Rc<ProcessingDiagnostic>>) {
-        let base_path = get_directory_path(containing_file);
-        let mut referenced_file_name = module_name.to_string();
-
-        if !is_rooted_disk_path(module_name) {
-            referenced_file_name = combine_paths(&base_path, &[module_name]);
-        }
-        let normalized_file_name = normalize_path(&referenced_file_name);
+        // ts#64159 (fileloader.go:724): Go
+        // `containingFile.Directory().ResolveFile(moduleName)` normalizes the
+        // name and drops a trailing separator, so `/// <reference
+        // path="other/" />` finds other.ts. N kept the separator.
+        let normalized_file_name = resolve_path_without_trailing_directory_separator(
+            &get_directory_path(containing_file),
+            &[module_name],
+        );
+        let containing_path = self.to_path(containing_file);
         let include_reason = new_file_include_reason(
             FileIncludeKind::REFERENCE_FILE,
             FileIncludeData::ReferencedFile(ReferencedFileData {
-                file: self.to_path(containing_file),
+                file: containing_path.clone(),
                 index,
                 synthetic: Node::NIL,
             }),
         );
 
-        let (resolved_file_name, diagnostic) = self.get_source_file_from_reference(
-            &normalized_file_name,
-            module_name,
-            containing_file,
-            &include_reason,
-        );
+        let (resolved_file_name, diagnostic) =
+            self.get_source_file_from_reference(&normalized_file_name, module_name);
         if let Some(diagnostic) = diagnostic {
             return (
                 None,
@@ -1503,6 +1503,19 @@ impl FileLoader {
                     Some(include_reason),
                     diagnostic.message,
                     diagnostic.args,
+                )),
+            );
+        }
+        // ts#64159 (fileloader.go:747): the check is on the resolved file,
+        // so `/// <reference path="a" />` in a.ts (found as "a" + ".ts")
+        // is an error too. N checked only a name with an extension.
+        if containing_path == self.to_path(&resolved_file_name) {
+            return (
+                None,
+                Some(new_explaining_processing_diagnostic(
+                    Some(include_reason),
+                    diag::A_file_cannot_have_a_reference_to_itself,
+                    Vec::new(),
                 )),
             );
         }
@@ -1517,7 +1530,7 @@ impl FileLoader {
         )
     }
 
-    // Go: fileloader.go:775 (*fileLoader).resolveTypeReferenceDirectives
+    // Go: fileloader.go:765 (*fileLoader).resolveTypeReferenceDirectives
     pub fn resolve_type_reference_directives(&self, t: &mut ParseTask) {
         let file = t
             .file
@@ -1618,11 +1631,11 @@ impl FileLoader {
         t.type_resolutions_trace = type_resolutions_trace;
     }
 
-    // Go: fileloader.go:828 externalHelpersModuleNameText
+    // Go: fileloader.go:819 externalHelpersModuleNameText
     // PORT: the Go constant is `EXTERNAL_HELPERS_MODULE_NAME_TEXT` in
     // checker/types.rs. It is reused here.
 
-    // Go: fileloader.go:830 (*fileLoader).resolveImportsAndModuleAugmentations
+    // Go: fileloader.go:821 (*fileLoader).resolveImportsAndModuleAugmentations
     pub(crate) fn resolve_imports_and_module_augmentations(
         &self,
         t: &mut ParseTask,
@@ -1735,7 +1748,9 @@ impl FileLoader {
                         (Some(kept), Some(kept_index)) => kept.get(kept_index),
                         _ => (entry.text(), import_usage(entry), None),
                     };
-                if module_name.is_empty() {
+                // ts#63915: a source phase import is not resolved
+                // (fileloader.go:884).
+                if module_name.is_empty() || is_source_phase_import(entry.parent()) {
                     continue;
                 }
 
@@ -1906,7 +1921,7 @@ impl FileLoader {
         }
     }
 
-    // Go: fileloader.go:951 (*fileLoader).createSyntheticImport
+    // Go: fileloader.go:943 (*fileLoader).createSyntheticImport
     pub fn create_synthetic_import(&self, text: &str, file: &ParsedSourceFile) -> Node {
         let external_helpers_module_reference =
             self.factory.new_string_literal(text, TokenFlags::NONE);
@@ -1921,7 +1936,7 @@ impl FileLoader {
         external_helpers_module_reference
     }
 
-    // Go: fileloader.go:961 (*fileLoader).pathForLibFile
+    // Go: fileloader.go:953 (*fileLoader).pathForLibFile
     pub fn path_for_lib_file(&self, name: &str) -> Rc<LibFile> {
         if let Some(cached) = self.path_for_lib_file_cache.borrow().get(name) {
             return cached.clone();
@@ -1941,7 +1956,7 @@ impl FileLoader {
             let library_name = get_library_name_from_lib_file_name(name);
             let resolve_from = get_inferred_library_name_resolve_from(
                 self.opts.config.compiler_options(),
-                &self.opts.host.get_current_directory(),
+                &self.host.get_current_directory(),
                 name,
             );
             let (resolution, trace) = self.resolve_library(&library_name, &resolve_from);
@@ -1974,7 +1989,7 @@ impl FileLoader {
             .clone()
     }
 
-    // Go: fileloader.go:987 (*fileLoader).resolveLibrary
+    // Go: fileloader.go:981 (*fileLoader).resolveLibrary
     pub fn resolve_library(
         &self,
         library_name: &str,
@@ -2042,7 +2057,7 @@ pub(crate) fn package_json_type_applies(
 /// The body of Go `(*fileLoader).loadSourceFileMetaData` with the loader's
 /// resolver and options as parameters, so a parse worker can run it with
 /// its own resolver (`files_parser.rs`).
-// Go: fileloader.go:384 (*fileLoader).loadSourceFileMetaData
+// Go: fileloader.go:382 (*fileLoader).loadSourceFileMetaData
 // PORT: the scope is the parts of it that this function reads
 // (`PackageScope`). In a resolve-ahead load, the loader takes the scope that
 // the workers found, or the scope that it found for the directory before
@@ -2064,7 +2079,7 @@ pub(crate) fn source_file_meta_data(
 /// The metadata of `file_name` in the package scope `package_json_scope`
 /// (`source_file_meta_data` after its scope lookup). A parse worker finds
 /// the scope of a directory once for all its files (`FilePrep`).
-// Go: fileloader.go:384 (*fileLoader).loadSourceFileMetaData
+// Go: fileloader.go:382 (*fileLoader).loadSourceFileMetaData
 pub(crate) fn meta_of_package_scope(
     package_json_scope: Option<PackageScope>,
     options: &CompilerOptions,
@@ -2103,7 +2118,7 @@ pub(crate) fn workers_resolve_imports(options: &CompilerOptions) -> bool {
             || kind == ModuleResolutionKind::BUNDLER)
 }
 
-// Go: fileloader.go:1000 getLibraryNameFromLibFileName
+// Go: fileloader.go:994 getLibraryNameFromLibFileName
 pub fn get_library_name_from_lib_file_name(lib_file_name: &str) -> String {
     // Support resolving to lib.dom.d.ts -> @typescript/lib-dom, and
     //                      lib.dom.iterable.d.ts -> @typescript/lib-dom/iterable
@@ -2126,7 +2141,7 @@ pub fn get_library_name_from_lib_file_name(lib_file_name: &str) -> String {
     path
 }
 
-// Go: fileloader.go:1023 getInferredLibraryNameResolveFrom
+// Go: fileloader.go:1017 getInferredLibraryNameResolveFrom
 pub fn get_inferred_library_name_resolve_from(
     options: &CompilerOptions,
     current_directory: &str,
@@ -2143,7 +2158,7 @@ pub fn get_inferred_library_name_resolve_from(
     )
 }
 
-// Go: fileloader.go:1033 getModeForTypeReferenceDirectiveInFile
+// Go: fileloader.go:1021 getModeForTypeReferenceDirectiveInFile
 pub fn get_mode_for_type_reference_directive_in_file(
     ref_: &FileReference,
     file: &ParsedSourceFile,
@@ -2157,7 +2172,7 @@ pub fn get_mode_for_type_reference_directive_in_file(
     }
 }
 
-// Go: fileloader.go:1041 getDefaultResolutionModeForFile
+// Go: fileloader.go:1029 getDefaultResolutionModeForFile
 // PORT: private, because program.rs has a public
 // `get_default_resolution_mode_for_file` (Go program.go) with another shape.
 pub(crate) fn get_default_resolution_mode_for_file(
@@ -2172,7 +2187,7 @@ pub(crate) fn get_default_resolution_mode_for_file(
     }
 }
 
-// Go: fileloader.go:1049 getModeForUsageLocation
+// Go: fileloader.go:1037 getModeForUsageLocation
 // PORT: private, because program.rs has a public `get_mode_for_usage_location`
 // (Go program.go) with another shape. Go `options` can be nil (`None`). The
 // node reads are `import_usage`, and the rest is `mode_for_import_usage`,
@@ -2198,6 +2213,8 @@ enum ImportUsage {
     Require,
     /// `import(...)`.
     ImportCall,
+    /// `import.source(...)` (ts#63915).
+    SourcePhaseImportCall,
     /// Any other module name.
     Other,
 }
@@ -2205,7 +2222,7 @@ enum ImportUsage {
 /// The node reads of Go `getModeForUsageLocation` for the module name
 /// `usage`, in their order, and those of
 /// `getEmitSyntaxForUsageLocationWorker` (`emit_usage`).
-// Go: fileloader.go:1049 getModeForUsageLocation
+// Go: fileloader.go:1037 getModeForUsageLocation
 fn import_usage(usage: Node) -> ImportUsage {
     let parent = usage.parent();
     if is_import_declaration(parent)
@@ -2246,14 +2263,19 @@ fn import_usage(usage: Node) -> ImportUsage {
 
 /// The node reads of Go `getEmitSyntaxForUsageLocationWorker` for a module
 /// name whose parent is `parent`.
-// Go: fileloader.go:1087 getEmitSyntaxForUsageLocationWorker
+// Go: fileloader.go:1075 getEmitSyntaxForUsageLocationWorker
 fn emit_usage(parent: Node) -> ImportUsage {
     if is_require_call(parent, false /*requireStringLiteralLikeArgument*/)
         || is_external_module_reference(parent) && is_import_equals_declaration(parent.parent())
     {
         return ImportUsage::Require;
     }
-    if is_import_call(walk_up_parenthesized_expressions(parent)) {
+    let call = walk_up_parenthesized_expressions(parent);
+    if is_import_call(call) {
+        // ts#63915
+        if is_source_phase_import_call(call) {
+            return ImportUsage::SourcePhaseImportCall;
+        }
         return ImportUsage::ImportCall;
     }
     ImportUsage::Other
@@ -2262,7 +2284,7 @@ fn emit_usage(parent: Node) -> ImportUsage {
 /// Go `getModeForUsageLocation` for a module name of `usage` in
 /// `file_name`. `file_emit_mode` keeps the file's emit format for the other
 /// names of the file (`emit_syntax_for_usage`).
-// Go: fileloader.go:1049 getModeForUsageLocation
+// Go: fileloader.go:1037 getModeForUsageLocation
 fn mode_for_import_usage(
     usage: ImportUsage,
     file_name: &str,
@@ -2378,7 +2400,7 @@ fn drop_dead_import_names() {
     });
 }
 
-// Go: fileloader.go:1081 importSyntaxAffectsModuleResolution
+// Go: fileloader.go:1069 importSyntaxAffectsModuleResolution
 fn import_syntax_affects_module_resolution(options: &CompilerOptions) -> bool {
     let module_resolution = options.get_module_resolution_kind();
     ModuleResolutionKind::NODE16 <= module_resolution
@@ -2387,7 +2409,7 @@ fn import_syntax_affects_module_resolution(options: &CompilerOptions) -> bool {
         || options.get_resolve_package_json_imports()
 }
 
-// Go: fileloader.go:1087 getEmitSyntaxForUsageLocationWorker
+// Go: fileloader.go:1075 getEmitSyntaxForUsageLocationWorker
 pub(crate) fn get_emit_syntax_for_usage_location_worker(
     file_name: &str,
     meta: &SourceFileMetaData,
@@ -2407,7 +2429,7 @@ pub(crate) fn get_emit_syntax_for_usage_location_worker(
 /// (`emit_usage`). `file_emit_mode` keeps Go `GetEmitModuleFormatOfFileWorker`
 /// of the file, which reads only the file name, the options and the
 /// metadata, for the other names of the file.
-// Go: fileloader.go:1087 getEmitSyntaxForUsageLocationWorker
+// Go: fileloader.go:1075 getEmitSyntaxForUsageLocationWorker
 fn emit_syntax_for_usage(
     usage: ImportUsage,
     file_name: &str,
@@ -2420,6 +2442,10 @@ fn emit_syntax_for_usage(
     }
     let file_emit_mode = *file_emit_mode
         .get_or_insert_with(|| get_emit_module_format_of_file_worker(file_name, options, meta));
+    // ts#63915: `import.source(...)` is ESNext syntax (fileloader.go:1092).
+    if usage == ImportUsage::SourcePhaseImportCall {
+        return ModuleKind::ES_NEXT;
+    }
     if usage == ImportUsage::ImportCall {
         return if should_transform_import_call(file_name, options, file_emit_mode) {
             ModuleKind::COMMON_JS
@@ -2455,7 +2481,7 @@ pub(crate) fn guess_import_mode(
     if !import_syntax_affects_module_resolution(options) {
         return RESOLUTION_MODE_NONE;
     }
-    // Go: fileloader.go:1087 getEmitSyntaxForUsageLocationWorker, for a
+    // Go: fileloader.go:1075 getEmitSyntaxForUsageLocationWorker, for a
     // usage that is not a require or an import call.
     let file_emit_mode = get_emit_module_format_of_file_worker(file_name, options, meta);
     if file_emit_mode == ModuleKind::COMMON_JS {
@@ -2469,7 +2495,7 @@ pub(crate) fn guess_import_mode(
 /// The synthetic imports of a file (Go `resolveImportsAndModuleAugmentations`,
 /// before its imports): `tslib` for `importHelpers`, then the JSX runtime
 /// import. The parse worker of the file resolves them too (`FilePrep`).
-// Go: fileloader.go:844 to :862 (resolveImportsAndModuleAugmentations)
+// Go: fileloader.go:835 to :853 (resolveImportsAndModuleAugmentations)
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SyntheticImports {
     /// The file gets the `tslib` import (`EXTERNAL_HELPERS_MODULE_NAME_TEXT`).
@@ -2600,7 +2626,7 @@ mod tests {
         );
         assert!(errors.is_empty());
         let host = new_cached_fs_compiler_host(&cwd, fs, &bundled::lib_path(), None, None, None);
-        let processed = process_all_program_files(
+        let processed = process_all_program_files_of(
             ProgramOptions {
                 host,
                 config: Rc::new(config.unwrap()),
@@ -2674,7 +2700,7 @@ mod tests {
         );
         assert!(errors.is_empty());
         let host = new_cached_fs_compiler_host(&cwd, fs, &bundled::lib_path(), None, None, None);
-        let processed = process_all_program_files(
+        let processed = process_all_program_files_of(
             ProgramOptions {
                 host,
                 config: Rc::new(config.unwrap()),
@@ -3161,7 +3187,7 @@ export const a: T | Dep | number = x + (h as never);
             &bundled::wrap_fs(osvfs_fs()),
             &bundled::lib_path(),
         );
-        let processed = process_all_program_files(
+        let processed = process_all_program_files_of(
             ProgramOptions {
                 host,
                 config: Rc::new(config.unwrap()),
@@ -3773,7 +3799,7 @@ export const a: T | Dep | number = x + (h as never);
             None,
             project.clone(),
         );
-        let processed = process_all_program_files(
+        let processed = process_all_program_files_of(
             ProgramOptions {
                 host: compiler_host,
                 config,
@@ -3977,5 +4003,558 @@ export const a: T | Dep | number = x + (h as never);
             );
             assert_eq!((transforms.len(), spawns), (0, 0));
         }
+    }
+
+    /// A temp dir with `files` and a `tsconfig.json` with `tsconfig`, its
+    /// parsed config and a compiler host on it. The caller removes the dir.
+    fn ts64519_project(
+        label: &str,
+        tsconfig: &str,
+        files: &[(&str, &str)],
+    ) -> (std::path::PathBuf, String, Rc<ParsedCommandLine>) {
+        let dir =
+            std::env::temp_dir().join(format!("ts_goport_ts64519_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, text) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        std::fs::write(dir.join("tsconfig.json"), tsconfig).unwrap();
+        let cwd = dir.to_string_lossy().replace('\\', "/");
+        let sys = System {
+            fs: bundled::wrap_fs(osvfs_fs()),
+            current_directory: cwd.clone(),
+        };
+        let (config, errors) = get_parsed_command_line_of_config_file(
+            &format!("{cwd}/tsconfig.json"),
+            None,
+            None,
+            &sys,
+            None,
+        );
+        assert!(errors.is_empty());
+        (dir, cwd, Rc::new(config.unwrap()))
+    }
+
+    /// A fresh compiler host on the OS file system in `cwd`.
+    fn ts64519_host(cwd: &str) -> Rc<dyn CompilerHost> {
+        new_cached_fs_compiler_host(
+            cwd,
+            bundled::wrap_fs(osvfs_fs()),
+            &bundled::lib_path(),
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn ts64519_options(
+        host: Rc<dyn CompilerHost>,
+        config: &Rc<ParsedCommandLine>,
+        create_module_resolver: Option<CreateModuleResolver>,
+    ) -> ProgramOptions {
+        ProgramOptions {
+            host,
+            config: config.clone(),
+            use_source_of_project_reference: false,
+            single_threaded: Tristate::True,
+            typings_location: String::new(),
+            project_name: String::new(),
+            create_module_resolver,
+            skip_module_resolution: false,
+        }
+    }
+
+    /// A module resolver that fails every module name, as an API resolver
+    /// whose callback fails (ts#64299).
+    struct FailingResolver(DefaultResolver);
+
+    impl Resolver for FailingResolver {
+        fn resolve_module_name(
+            &self,
+            _module_name: &str,
+            _containing_file: &str,
+            _resolution_mode: ResolutionMode,
+            _redirected_reference: Option<&dyn ModuleResolvedProjectReference>,
+        ) -> (
+            Option<Arc<ResolvedModule>>,
+            Vec<DiagAndArgs>,
+            Option<GoError>,
+        ) {
+            (None, Vec::new(), Some(errors::new("resolver failed")))
+        }
+        fn resolve_module_name_from_directory(
+            &self,
+            module_name: &str,
+            containing_directory: &str,
+            resolution_mode: ResolutionMode,
+        ) -> (
+            Option<Arc<ResolvedModule>>,
+            Vec<DiagAndArgs>,
+            Option<GoError>,
+        ) {
+            let (resolved, trace, err) = self.0.resolve_module_name_from_directory(
+                module_name,
+                containing_directory,
+                resolution_mode,
+            );
+            (Some(resolved), trace, err)
+        }
+        fn resolve_type_reference_directive(
+            &self,
+            name: &str,
+            containing_file: &str,
+            resolution_mode: ResolutionMode,
+            redirected_reference: Option<&dyn ModuleResolvedProjectReference>,
+        ) -> (Rc<ResolvedTypeReferenceDirective>, Vec<DiagAndArgs>) {
+            self.0.resolve_type_reference_directive(
+                name,
+                containing_file,
+                resolution_mode,
+                redirected_reference,
+            )
+        }
+        fn get_package_scope_for_path(&self, directory: &str) -> Option<Rc<InfoCacheEntry>> {
+            self.0.get_package_scope_for_path(directory)
+        }
+        fn package_json_cache_entries(
+            &self,
+            f: &mut dyn FnMut(&Path, PackageJsonCacheEntry<'_>) -> bool,
+        ) {
+            self.0.package_json_cache_entries(f);
+        }
+        fn resolve_package_directory(
+            &self,
+            module_name: &str,
+            containing_file: &str,
+            resolution_mode: ResolutionMode,
+            redirected_reference: Option<&dyn ModuleResolvedProjectReference>,
+        ) -> Option<ResolvedModule> {
+            self.0.resolve_package_directory(
+                module_name,
+                containing_file,
+                resolution_mode,
+                redirected_reference,
+            )
+        }
+    }
+
+    // Go: compiler/program_test.go:80 TestIncludeReasonDiagnosticsAreProgramLocal
+    // (ts#64519). PORT: Go compares the cached pointers of two programs; a
+    // reused program here shares the reason, and each program caches its own
+    // diagnostics.
+    #[test]
+    fn include_reason_diagnostics_are_program_local() {
+        let (dir, cwd, config) = ts64519_project(
+            "reasons",
+            r#"{"compilerOptions":{"noLib":true},"files":["index.ts"]}"#,
+            &[("index.ts", "export const a = 1;")],
+        );
+        let _scope = crate::core::enter_program(None);
+        let old = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+        let path = old
+            .get_source_file(&format!("{cwd}/index.ts"))
+            .unwrap()
+            .path()
+            .clone();
+        let (new, _, reused) = old.reuse_program(&path, ts64519_host(&cwd), None);
+        assert!(reused);
+        let new = new.unwrap();
+        let reason = old.get_include_reasons()[&path][0].clone();
+        assert!(Rc::ptr_eq(&reason, &new.get_include_reasons()[&path][0]));
+        for relative in [false, true] {
+            let old_diagnostic = reason.to_diagnostic(&old, relative, "");
+            assert_eq!(
+                old.include_processor.reason_diagnostics.borrow().len(),
+                usize::from(relative) + 1
+            );
+            assert_eq!(
+                new.include_processor.reason_diagnostics.borrow().len(),
+                usize::from(relative)
+            );
+            let new_diagnostic = reason.to_diagnostic(&new, relative, "");
+            assert_eq!(
+                new.include_processor.reason_diagnostics.borrow().len(),
+                usize::from(relative) + 1
+            );
+            assert_eq!(new_diagnostic.message_text(), old_diagnostic.message_text());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go: compiler/program.go:396 (ts#64519): a program whose module resolver
+    // failed is never reused; it is built again.
+    #[test]
+    fn module_resolution_error_blocks_reuse() {
+        let (dir, cwd, config) = ts64519_project(
+            "resolver_error",
+            r#"{"compilerOptions":{"noLib":true},"files":["index.ts"]}"#,
+            &[
+                (
+                    "index.ts",
+                    r#"import { b } from "./b"; export const a = b;"#,
+                ),
+                ("b.ts", "export const b = 1;"),
+            ],
+        );
+        let _scope = crate::core::enter_program(None);
+        let failing: CreateModuleResolver = Rc::new(|options: ResolverOptions| {
+            let resolver: Rc<dyn Resolver> = Rc::new(FailingResolver(new_resolver(options)));
+            resolver
+        });
+        let p = new_program(ts64519_options(ts64519_host(&cwd), &config, Some(failing)));
+        assert!(p.module_resolution_error().is_some());
+        let path = p
+            .get_source_file(&format!("{cwd}/index.ts"))
+            .unwrap()
+            .path()
+            .clone();
+        let (cloned, new_file, reused) = p.reuse_program(&path, ts64519_host(&cwd), None);
+        assert!(!reused && cloned.is_none() && new_file.is_some());
+        // The full build with the default resolver resolves the import.
+        let (rebuilt, _, reused) = p.update_program(&path, ts64519_host(&cwd), None);
+        assert!(!reused);
+        assert!(rebuilt.module_resolution_error().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go: compiler/program_test.go:95 TestProgramHostsAndFactories (ts#64519):
+    // a program does not keep its factories. A reuse calls none of them, and
+    // an update that builds again uses only the factory that it is given.
+    // PORT: the checker pool factory is `ls_program`'s; this checks the
+    // module resolver factory.
+    #[test]
+    fn program_does_not_keep_its_factories() {
+        let (dir, cwd, config) = ts64519_project(
+            "factories",
+            r#"{"compilerOptions":{"noLib":true},"files":["index.ts"]}"#,
+            &[
+                (
+                    "index.ts",
+                    r#"import { b } from "./b"; export const a = b;"#,
+                ),
+                ("b.ts", "export const b = 1;"),
+            ],
+        );
+        let _scope = crate::core::enter_program(None);
+        let resolvers = Rc::new(Cell::new(0));
+        let counting: CreateModuleResolver = {
+            let resolvers = resolvers.clone();
+            Rc::new(move |options: ResolverOptions| {
+                resolvers.set(resolvers.get() + 1);
+                let resolver: Rc<dyn Resolver> = Rc::new(new_resolver(options));
+                resolver
+            })
+        };
+        let p = new_program(ts64519_options(
+            ts64519_host(&cwd),
+            &config,
+            Some(counting.clone()),
+        ));
+        assert_eq!(resolvers.get(), 1);
+        let path = p
+            .get_source_file(&format!("{cwd}/index.ts"))
+            .unwrap()
+            .path()
+            .clone();
+        let new_host = ts64519_host(&cwd);
+        let (cloned, _, reused) = p.reuse_program(&path, new_host.clone(), Some(counting.clone()));
+        assert!(reused);
+        assert_eq!(resolvers.get(), 1);
+        assert!(Rc::ptr_eq(cloned.unwrap().host(), &new_host));
+        // An import change builds the program again.
+        std::fs::write(dir.join("index.ts"), "export const a = 2;").unwrap();
+        let (rebuilt, _, reused) = p.update_program(&path, ts64519_host(&cwd), None);
+        assert!(!reused);
+        assert_eq!(
+            resolvers.get(),
+            1,
+            "the old program's factory is not used again"
+        );
+        let (_, _, reused) = rebuilt.update_program(&path, ts64519_host(&cwd), Some(counting));
+        assert!(reused);
+        assert_eq!(resolvers.get(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Go: compiler/program_test.go:482 TestImportSourceProgram (ts#63915)
+    #[test]
+    fn import_source_program() {
+        for (name, source, evaluation) in [
+            (
+                "static",
+                r#"import source a from "./a.js";"#,
+                r#"import { a as value } from "./a.js";"#,
+            ),
+            (
+                "dynamic",
+                r#"import.source("./a.js");"#,
+                r#"import("./a.js");"#,
+            ),
+        ] {
+            let content =
+                format!(r#"{source}import source b from "missing"; import.source("other");"#);
+            let (dir, cwd, config) = ts64519_project(
+                &format!("import_source_{name}"),
+                r#"{"compilerOptions":{"module":"esnext","noLib":true},"files":["index.ts"]}"#,
+                &[("index.ts", &content), ("a.ts", "export const a = 1;")],
+            );
+            let _scope = crate::core::enter_program(None);
+            let index = format!("{cwd}/index.ts");
+            let a = format!("{cwd}/a.ts");
+            let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+            let file = program.get_source_file(&index).unwrap();
+            assert!(program.get_source_file(&a).is_none(), "{name}");
+            assert!(
+                program
+                    .resolved_modules
+                    .get(file.path())
+                    .is_none_or(|resolutions| resolutions.is_empty()),
+                "{name}"
+            );
+            assert!(program.get_unresolved_imports().is_empty(), "{name}");
+            assert!(program.unresolved_package_names().is_empty(), "{name}");
+            let path = file.path().clone();
+            let assert_resolutions = |program: &NewProgram, file: &ParsedSourceFile| {
+                for &specifier in &file.imports {
+                    let resolved =
+                        program.get_resolved_module_from_module_specifier(file, specifier);
+                    assert_eq!(
+                        resolved.is_some_and(|resolved| resolved.is_resolved()),
+                        !is_source_phase_import(specifier.parent()),
+                        "{name}"
+                    );
+                }
+            };
+
+            let edited = format!("{evaluation}{}", content.strip_prefix(source).unwrap());
+            std::fs::write(dir.join("index.ts"), &edited).unwrap();
+            let (program, file, reused) = program.update_program(&path, ts64519_host(&cwd), None);
+            assert!(!reused, "{name}");
+            assert!(program.get_source_file(&a).is_some(), "{name}");
+            assert_resolutions(&program, &file.unwrap());
+
+            std::fs::write(dir.join("index.ts"), &content).unwrap();
+            let (program, _, reused) = program.update_program(&path, ts64519_host(&cwd), None);
+            assert!(!reused, "{name}");
+            assert!(program.get_source_file(&a).is_none(), "{name}");
+
+            std::fs::write(dir.join("index.ts"), format!("{evaluation}{content}")).unwrap();
+            let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+            let file = program.get_source_file(&index).unwrap();
+            assert_resolutions(&program, &file);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    // ts#64159 (fileloader.go:747): "A file cannot have a reference to
+    // itself" is checked on the resolved file, so a reference without an
+    // extension that resolves to its own file is TS1006 too. A reference to
+    // another spelling that does not exist stays "not found".
+    #[test]
+    fn triple_slash_self_reference_is_checked_after_resolution() {
+        let (dir, _cwd, config) = ts64519_project(
+            "self_reference",
+            r#"{"compilerOptions":{"noLib":true},"files":["a.ts","b.ts","c.ts"]}"#,
+            &[
+                (
+                    "a.ts",
+                    "/// <reference path=\"a\" />\nexport const a = 1;\n",
+                ),
+                (
+                    "b.ts",
+                    "/// <reference path=\"./b.ts\" />\nexport const b = 1;\n",
+                ),
+                (
+                    "c.ts",
+                    "/// <reference path=\"./C.ts\" />\nexport const c = 1;\n",
+                ),
+            ],
+        );
+        let _scope = crate::core::enter_program(None);
+        let cwd = _cwd;
+        let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+        let codes = |name: &str| {
+            let file = program.get_source_file(&format!("{cwd}/{name}")).unwrap();
+            program
+                .include_processor
+                .get_diagnostics(&program)
+                .borrow_mut()
+                .get_diagnostics_for_file(file.root)
+                .iter()
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(codes("a.ts"), [1006]);
+        assert_eq!(codes("b.ts"), [1006]);
+        assert_eq!(codes("c.ts"), [6053]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ts#64159 (fileloader.go:724): a triple-slash path reference resolves
+    // like Go `ResolveFile`, which drops a trailing separator. So "other/"
+    // finds other.ts, and "h/" in h.ts is a self reference (TS1006). N gave
+    // TS6231 and TS6054 here.
+    #[test]
+    fn triple_slash_reference_drops_a_trailing_separator() {
+        let (dir, cwd, config) = ts64519_project(
+            "trailing_separator",
+            r#"{"compilerOptions":{"noLib":true},"files":["main.ts","h.ts"]}"#,
+            &[
+                (
+                    "main.ts",
+                    concat!(
+                        "/// <reference path=\"other/\" />\n",
+                        "/// <reference path=\"./third//\" />\n",
+                        "/// <reference path=\"dir/\" />\n",
+                        "/// <reference path=\"dir/inner/\" />\n",
+                        "/// <reference path=\"fourth.ts/\" />\n",
+                        "export {};\n",
+                    ),
+                ),
+                ("other.ts", "declare const otherValue: number;\n"),
+                ("third.ts", "declare const thirdValue: number;\n"),
+                ("dir.ts", "declare const dirValue: number;\n"),
+                ("dir/inner.ts", "declare const innerValue: number;\n"),
+                ("fourth.ts", "declare const fourthValue: number;\n"),
+                (
+                    "h.ts",
+                    "/// <reference path=\"h/\" />\nexport const h = 1;\n",
+                ),
+            ],
+        );
+        let _scope = crate::core::enter_program(None);
+        let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+        let codes = |name: &str| {
+            let file = program.get_source_file(&format!("{cwd}/{name}")).unwrap();
+            program
+                .include_processor
+                .get_diagnostics(&program)
+                .borrow_mut()
+                .get_diagnostics_for_file(file.root)
+                .iter()
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(codes("main.ts"), [] as [i32; 0]);
+        assert_eq!(codes("h.ts"), [1006]);
+        // program.go:280 `GetSourceFileFromReference` resolves the same way.
+        let main = program.get_source_file(&format!("{cwd}/main.ts")).unwrap();
+        let referenced: Vec<_> = main
+            .referenced_files
+            .iter()
+            .map(|r| {
+                program
+                    .get_source_file_from_reference(&main, r)
+                    .map(|file| file.file_name().to_string())
+            })
+            .collect();
+        let expected: Vec<_> = [
+            "other.ts",
+            "third.ts",
+            "dir.ts",
+            "dir/inner.ts",
+            "fourth.ts",
+        ]
+        .iter()
+        .map(|name| Some(format!("{cwd}/{name}")))
+        .collect();
+        assert_eq!(referenced, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ts#64159: the program compares paths with the file system's case
+    // sensitivity (Go `p.caseSensitivity`), not the N zero value, which
+    // compared case-insensitively. On a case-sensitive file system "Proj"
+    // and "proj" are different directories:
+    // - program.go:1844: the files under proj/src are not under the default
+    //   rootDir Proj (TS6059);
+    // - program.go:1261: the TS5011 common source directory is "../proj/src"
+    //   (N: "./src");
+    // - program.go:1006: the baseUrl suggestion is "../proj/src/*" (N:
+    //   "./src/*").
+    #[test]
+    fn program_paths_use_the_file_system_case_sensitivity() {
+        if !osvfs_fs().use_case_sensitive_file_names() {
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("ts_goport_ts64159_case_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, text) in [
+            ("proj/src/a/x.ts", "export const x = 1;\n"),
+            ("proj/src/b/y.ts", "export const y = 1;\n"),
+            (
+                "Proj/tsconfig.json",
+                r#"{"compilerOptions":{"outDir":"../out","noLib":true},"include":["../proj/src"]}"#,
+            ),
+            (
+                "Proj/baseurl.json",
+                r#"{"compilerOptions":{"noEmit":true,"noLib":true,"baseUrl":"../proj/src"},"include":["../proj/src"]}"#,
+            ),
+        ] {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let cwd = dir.to_string_lossy().replace('\\', "/");
+        let sys = System {
+            fs: bundled::wrap_fs(osvfs_fs()),
+            current_directory: cwd.clone(),
+        };
+        let _scope = crate::core::enter_program(None);
+        let program_diagnostics = |config_name: &str| {
+            let (config, errors) = get_parsed_command_line_of_config_file(
+                &format!("{cwd}/Proj/{config_name}"),
+                None,
+                None,
+                &sys,
+                None,
+            );
+            assert!(errors.is_empty());
+            let config = Rc::new(config.unwrap());
+            let program = new_program(ts64519_options(ts64519_host(&cwd), &config, None));
+            let mut diagnostics = program.program_diagnostics.clone();
+            diagnostics.extend(
+                program
+                    .include_processor
+                    .get_diagnostics(&program)
+                    .borrow_mut()
+                    .get_global_diagnostics(),
+            );
+            diagnostics
+        };
+
+        let diagnostics = program_diagnostics("tsconfig.json");
+        let not_under_root_dir: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.code == 6059)
+            .map(|d| d.message_args.clone())
+            .collect();
+        assert_eq!(
+            not_under_root_dir,
+            [
+                vec![format!("{cwd}/proj/src/a/x.ts"), format!("{cwd}/Proj")],
+                vec![format!("{cwd}/proj/src/b/y.ts"), format!("{cwd}/Proj")],
+            ]
+        );
+        let common_source_directory: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.code == 5011)
+            .map(|d| d.message_args.clone())
+            .collect();
+        assert_eq!(
+            common_source_directory,
+            [vec!["tsconfig.json".to_string(), "../proj/src".to_string()]]
+        );
+
+        let diagnostics = program_diagnostics("baseurl.json");
+        let base_url = diagnostics.iter().find(|d| d.code == 5102).unwrap();
+        assert_eq!(
+            base_url.message_chain[0].message_args,
+            [r#""paths": {"*": ["../proj/src/*"]}"#]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

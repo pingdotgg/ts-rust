@@ -5,7 +5,7 @@
 use crate::frontend::prelude::*;
 use std::sync::{Arc, OnceLock};
 
-// Go: program.go:79 packageNamesInfo
+// Go: program.go:91 packageNamesInfo
 // PORT: U21 dropped the `packageNames` field and this type. It is here
 // because only `collectPackageNames` uses it. Go `*collections.Set[string]`
 // is an `FxHashSet<String>`.
@@ -20,7 +20,7 @@ pub struct PackageNamesInfo {
 pub type ResolutionCallback<'f, T> = dyn FnMut(&T, &str, ResolutionMode, &Path) + 'f;
 
 impl NewProgram {
-    // Go: program.go:2067 (*Program).toPath
+    // Go: program.go:2067 (*Program).toPath (at 673a5f17d713; ts#64159 makes it PathKeyForFileName, compiler/program.go:2090)
     pub fn to_path(&self, filename: &str) -> Path {
         to_path(
             filename,
@@ -29,13 +29,13 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:2071 (*Program).GetSourceFile
+    // Go: program.go:2094 (*Program).GetSourceFile
     pub fn get_source_file(&self, filename: &str) -> Option<Rc<ParsedSourceFile>> {
         let path = self.to_path(filename);
         self.get_source_file_by_path(&path)
     }
 
-    // Go: program.go:2076 (*Program).GetSourceFileForResolvedModule
+    // Go: program.go:2098 (*Program).GetSourceFileForResolvedModule
     pub fn get_source_file_for_resolved_module(
         &self,
         file_name: &str,
@@ -50,17 +50,17 @@ impl NewProgram {
         file
     }
 
-    // Go: program.go:2087 (*Program).FilesByPath
+    // Go: program.go:2113 (*Program).FilesByPath
     pub fn files_by_path(&self) -> &FxHashMap<Path, Rc<ParsedSourceFile>> {
         &self.processed_files.files_by_path
     }
 
-    // Go: program.go:2091 (*Program).GetSourceFileByPath
+    // Go: program.go:2117 (*Program).GetSourceFileByPath
     pub fn get_source_file_by_path(&self, path: &Path) -> Option<Rc<ParsedSourceFile>> {
         self.processed_files.files_by_path.get(path).cloned()
     }
 
-    // Go: program.go:2095 (*Program).HasSameFileNames
+    // Go: program.go:2121 (*Program).HasSameFileNames
     // PORT: Go `maps.EqualFunc` treats a nil map as empty; a `None`
     // `redirect_files_by_path` is an empty map here.
     pub fn has_same_file_names(&self, other: &NewProgram) -> bool {
@@ -95,18 +95,18 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:2104 (*Program).GetSourceFiles
+    // Go: program.go:2130 (*Program).GetSourceFiles
     pub fn get_source_files(&self) -> &[Rc<ParsedSourceFile>] {
         &self.processed_files.files
     }
 
-    // Go: program.go:2109 (*Program).GetIncludeReasons
+    // Go: program.go:2135 (*Program).GetIncludeReasons
     // Testing only
     pub fn get_include_reasons(&self) -> &FxHashMap<Path, Vec<Rc<FileIncludeReason>>> {
         &self.processed_files.include_processor.file_include_reasons
     }
 
-    // Go: program.go:2114 (*Program).IsMissingPath
+    // Go: program.go:2140 (*Program).IsMissingPath
     // Testing only
     pub fn is_missing_path(&self, path: &Path) -> bool {
         self.processed_files
@@ -115,17 +115,24 @@ impl NewProgram {
             .any(|missing_path| self.to_path(missing_path) == *path)
     }
 
-    // Go: program.go:2120 (*Program).ExplainFiles
+    // Go: program.go:2144 (*Program).ExplainFiles
     // Each line is one write, as Go's `fmt.Fprintln`; its errors are ignored.
     // Go `fmt.Fprintln(w, "  ", x)` puts one more space between the operands.
     // PORT: the Go `explainFile` closure increments `filesExplained`; here
     // the callers do it, so the loop condition can read the counter.
-    pub fn explain_files(&self, w: &mut dyn std::io::Write, locale: &crate::locale::Locale) {
+    // ts#64159: the names are relative to `current_directory` (the system
+    // current directory, execute/tsc/emit.go:156), not to the program's.
+    pub fn explain_files(
+        &self,
+        w: &mut dyn std::io::Write,
+        locale: &crate::locale::Locale,
+        current_directory: &str,
+    ) {
         let to_relative_file_name = |file_name: &str| {
-            get_relative_path_from_directory(
-                &self.get_current_directory(),
+            super::file_include::relative_file_name_from_directory(
+                current_directory,
                 file_name,
-                &self.compare_paths_options,
+                self,
             )
         };
         let explain_file = |w: &mut dyn std::io::Write, file: &dyn HasFileName| {
@@ -138,8 +145,12 @@ impl NewProgram {
                 .get(&file.path())
             {
                 for reason in reasons {
-                    let line =
-                        format!("   {}\n", reason.to_diagnostic(self, true).localize(locale));
+                    let line = format!(
+                        "   {}\n",
+                        reason
+                            .to_diagnostic(self, true, current_directory)
+                            .localize(locale)
+                    );
                     let _ = w.write_all(line.as_bytes());
                 }
             }
@@ -159,7 +170,7 @@ impl NewProgram {
             .iter()
             .flat_map(|m| m.values())
             .collect();
-        // Go: compiler/program.go:2063 slices.SortFunc(redirectFiles, a.index - b.index)
+        // Go: compiler/program.go:2164 slices.SortFunc(redirectFiles, a.index - b.index)
         crate::gostd::slices::sort_func(&mut redirect_files, |a, b| a.index.cmp(&b.index) as i32);
 
         let files = self.get_source_files();
@@ -188,19 +199,25 @@ impl NewProgram {
         );
     }
 
-    // Go: program.go:2160 (*Program).GetLibFileFromReference
+    // Go: program.go:2187 (*Program).GetLibFileFromReference
     pub fn get_lib_file_from_reference(
         &self,
         ref_: &FileReference,
     ) -> Option<Rc<ParsedSourceFile>> {
-        let (path, ok) = get_lib_file_name(&ref_.file_name);
+        let (name, ok) = get_lib_file_name(&ref_.file_name);
         if !ok {
             return None;
         }
-        self.processed_files.files_by_path.get(&Path(path)).cloned()
+        // ts#64159 (program.go:2187): the lib file of that name. N looked the
+        // bare name ("lib.dom.d.ts") up as a path and found nothing.
+        self.processed_files
+            .lib_files
+            .iter()
+            .find(|(_, lib_file)| lib_file.name == name)
+            .and_then(|(path, _)| self.processed_files.files_by_path.get(path).cloned())
     }
 
-    // Go: program.go:2171 (*Program).GetResolvedTypeReferenceDirectiveFromTypeReferenceDirective
+    // Go: program.go:2200 (*Program).GetResolvedTypeReferenceDirectiveFromTypeReferenceDirective
     pub fn get_resolved_type_reference_directive_from_type_reference_directive(
         &self,
         type_ref: &FileReference,
@@ -213,7 +230,7 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:2175 (*Program).GetResolvedTypeReferenceDirective (ts#64247)
+    // Go: program.go:2204 (*Program).GetResolvedTypeReferenceDirective (ts#64247)
     pub fn get_resolved_type_reference_directive(
         &self,
         file: &dyn HasFileName,
@@ -231,14 +248,14 @@ impl NewProgram {
         resolutions.get(&key).cloned()
     }
 
-    // Go: program.go:2184 (*Program).GetResolvedTypeReferenceDirectives
+    // Go: program.go:2213 (*Program).GetResolvedTypeReferenceDirectives
     pub fn get_resolved_type_reference_directives(
         &self,
     ) -> &FxHashMap<Path, ModeAwareCache<Rc<ResolvedTypeReferenceDirective>>> {
         &self.processed_files.type_resolutions_in_file
     }
 
-    // Go: program.go:2188 (*Program).getModeForTypeReferenceDirectiveInFile
+    // Go: program.go:2217 (*Program).getModeForTypeReferenceDirectiveInFile
     pub fn get_mode_for_type_reference_directive_in_file(
         &self,
         ref_: &FileReference,
@@ -250,14 +267,14 @@ impl NewProgram {
         self.get_default_resolution_mode_for_file(source_file)
     }
 
-    // Go: program.go:2195 (*Program).IsSourceFileFromExternalLibrary
+    // Go: program.go:2224 (*Program).IsSourceFileFromExternalLibrary
     pub fn is_source_file_from_external_library(&self, file: &ParsedSourceFile) -> bool {
         self.processed_files
             .source_files_found_searching_node_modules
             .contains(file.path())
     }
 
-    // Go: program.go:2199 (*Program).GetJSXRuntimeImportSpecifier
+    // Go: program.go:2228 (*Program).GetJSXRuntimeImportSpecifier
     // PORT: a Go nil map is `None`.
     pub fn get_jsx_runtime_import_specifier(&self, path: &Path) -> (String, Node) {
         if let Some(result) = self
@@ -271,7 +288,7 @@ impl NewProgram {
         (String::new(), Node::NIL)
     }
 
-    // Go: program.go:2206 (*Program).GetImportHelpersImportSpecifier
+    // Go: program.go:2235 (*Program).GetImportHelpersImportSpecifier
     // PORT: a Go nil map is `None`; a missing entry is `Node::NIL`.
     pub fn get_import_helpers_import_specifier(&self, path: &Path) -> Node {
         self.processed_files
@@ -281,7 +298,7 @@ impl NewProgram {
             .unwrap_or(Node::NIL)
     }
 
-    // Go: program.go:2210 (*Program).SourceFileMayBeEmitted
+    // Go: program.go:2239 (*Program).SourceFileMayBeEmitted
     pub fn source_file_may_be_emitted(
         &self,
         source_file: &ParsedSourceFile,
@@ -291,22 +308,22 @@ impl NewProgram {
         source_file_may_be_emitted(source_file, self, force_dts_emit, false)
     }
 
-    // Go: program.go:2214 (*Program).ResolvedPackageNames
+    // Go: program.go:2243 (*Program).ResolvedPackageNames
     pub fn resolved_package_names(&self) -> &FxHashSet<String> {
         &self.collect_package_names().resolved
     }
 
-    // Go: program.go:2218 (*Program).UnresolvedPackageNames
+    // Go: program.go:2247 (*Program).UnresolvedPackageNames
     pub fn unresolved_package_names(&self) -> &FxHashSet<String> {
         &self.collect_package_names().unresolved
     }
 
-    // Go: program.go:2222 (*Program).DeepImportPackageNames
+    // Go: program.go:2251 (*Program).DeepImportPackageNames
     pub fn deep_import_package_names(&self) -> &FxHashSet<String> {
         &self.collect_package_names().deep_import_packages
     }
 
-    // Go: program.go:2226 (*Program).collectPackageNames
+    // Go: program.go:2255 (*Program).collectPackageNames
     // PORT: `package_names` is Go `packageNames lazyValue[*packageNamesInfo]`.
     fn collect_package_names(&self) -> &PackageNamesInfo {
         self.package_names.get_value(|| {
@@ -326,7 +343,10 @@ impl NewProgram {
                     continue;
                 }
                 for &imp in &file.imports {
-                    if is_external_module_name_relative(imp.text()) {
+                    // ts#63915
+                    if is_source_phase_import(imp.parent())
+                        || is_external_module_name_relative(imp.text())
+                    {
                         continue;
                     }
                     if let Some(resolved_modules) =
@@ -402,14 +422,14 @@ impl NewProgram {
         })
     }
 
-    // Go: program.go:2283 (*Program).IsLibFile
+    // Go: program.go:2313 (*Program).IsLibFile
     pub fn is_lib_file(&self, source_file: &ParsedSourceFile) -> bool {
         self.processed_files
             .lib_files
             .contains_key(source_file.path())
     }
 
-    // Go: program.go:2288 (*Program).HasTSFile
+    // Go: program.go:2318 (*Program).HasTSFile
     // PORT: Go `hasTSFileOnce` plus `hasTSFile` is `has_ts_file: OnceCell<bool>`.
     pub fn has_ts_file(&self) -> bool {
         *self.has_ts_file.get_or_init(|| {
@@ -420,7 +440,7 @@ impl NewProgram {
         })
     }
 
-    // Go: program.go:2300 (*Program).GetSymlinkCache
+    // Go: program.go:2330 (*Program).GetSymlinkCache
     // PORT: `known_symlinks` is Go `knownSymlinks lazyValue[*symlinks.KnownSymlinks]`.
     pub fn get_symlink_cache(&self) -> Rc<KnownSymlinks> {
         self.known_symlinks
@@ -521,13 +541,13 @@ impl NewProgram {
         known_symlinks
     }
 
-    // Go: program.go:644 (*Program).ModuleResolutionError (ts#64299)
+    // Go: program.go:668 (*Program).ModuleResolutionError (ts#64299)
     // PORT: a nil Go `error` is `None`.
     pub fn module_resolution_error(&self) -> Option<crate::gostd::GoError> {
-        self.processed_files.module_resolution_error.clone()
+        self.module_resolution_error.clone()
     }
 
-    // Go: program.go:2349 (*Program).ForEachResolvedModule
+    // Go: program.go:2380 (*Program).ForEachResolvedModule
     pub fn for_each_resolved_module(
         &self,
         callback: &mut ResolutionCallback<'_, Arc<ResolvedModule>>,
@@ -536,7 +556,7 @@ impl NewProgram {
         for_each_resolution(&self.processed_files.resolved_modules, callback, file);
     }
 
-    // Go: program.go:2353 (*Program).ForEachResolvedTypeReferenceDirective
+    // Go: program.go:2384 (*Program).ForEachResolvedTypeReferenceDirective
     pub fn for_each_resolved_type_reference_directive(
         &self,
         callback: &mut ResolutionCallback<'_, Rc<ResolvedTypeReferenceDirective>>,
@@ -550,7 +570,7 @@ impl NewProgram {
     }
 }
 
-// Go: program.go:2357 forEachResolution
+// Go: program.go:2388 forEachResolution
 pub fn for_each_resolution<T>(
     resolution_cache: &FxHashMap<Path, ModeAwareCache<T>>,
     callback: &mut ResolutionCallback<'_, T>,
@@ -571,7 +591,7 @@ pub fn for_each_resolution<T>(
     }
 }
 
-// Go: program.go:2373 plainJSErrors
+// Go: program.go:2404 plainJSErrors
 // PORT: Go package-level set; built once on first use.
 pub fn plain_js_errors() -> &'static FxHashSet<i32> {
     static PLAIN_JS_ERRORS: OnceLock<FxHashSet<i32>> = OnceLock::new();
@@ -602,6 +622,8 @@ pub fn plain_js_errors() -> &'static FxHashSet<i32> {
             diag::A_continue_statement_can_only_jump_to_a_label_of_an_enclosing_iteration_statement.code() as i32,
             diag::A_default_clause_cannot_appear_more_than_once_in_a_switch_statement.code() as i32,
             diag::A_default_export_must_be_at_the_top_level_of_a_file_or_module_declaration.code() as i32,
+            // ts#64640
+            diag::A_deferred_import_must_specify_a_namespace_binding.code() as i32,
             diag::A_definite_assignment_assertion_is_not_permitted_in_this_context.code() as i32,
             diag::A_destructuring_declaration_must_have_an_initializer.code() as i32,
             diag::A_get_accessor_cannot_have_parameters.code() as i32,
@@ -615,6 +637,8 @@ pub fn plain_js_errors() -> &'static FxHashSet<i32> {
             diag::A_return_statement_cannot_be_used_inside_a_class_static_block.code() as i32,
             diag::A_set_accessor_cannot_have_rest_parameter.code() as i32,
             diag::A_set_accessor_must_have_exactly_one_parameter.code() as i32,
+            // ts#63915
+            diag::A_source_phase_import_must_specify_a_local_binding.code() as i32,
             diag::An_export_declaration_can_only_be_used_at_the_top_level_of_a_module.code() as i32,
             diag::An_export_declaration_cannot_have_modifiers.code() as i32,
             diag::An_import_declaration_can_only_be_used_at_the_top_level_of_a_module.code() as i32,
@@ -638,11 +662,19 @@ pub fn plain_js_errors() -> &'static FxHashSet<i32> {
             diag::Jump_target_cannot_cross_function_boundary.code() as i32,
             diag::Line_terminator_not_permitted_before_arrow.code() as i32,
             diag::Modifiers_cannot_appear_here.code() as i32,
+            // ts#63915
+            diag::Named_and_namespace_imports_are_not_allowed_in_a_source_phase_import.code() as i32,
             diag::Only_a_single_variable_declaration_is_allowed_in_a_for_in_statement.code() as i32,
             diag::Only_a_single_variable_declaration_is_allowed_in_a_for_of_statement.code() as i32,
+            // ts#63915
+            diag::Optional_chaining_cannot_be_used_with_import_source.code() as i32,
             diag::Private_identifiers_are_not_allowed_outside_class_bodies.code() as i32,
             diag::Private_identifiers_are_only_allowed_in_class_bodies_and_may_only_be_used_as_part_of_a_class_member_declaration_property_access_or_on_the_left_hand_side_of_an_in_expression.code() as i32,
             diag::Property_0_is_not_accessible_outside_class_1_because_it_has_a_private_identifier.code() as i32,
+            // ts#63915
+            diag::Source_phase_imports_are_not_allowed_on_statements_that_compile_to_CommonJS_require_calls.code() as i32,
+            // ts#63915
+            diag::Source_phase_imports_are_only_supported_when_the_module_option_is_set_to_esnext_nodenext_or_preserve.code() as i32,
             diag::Tagged_template_expressions_are_not_permitted_in_an_optional_chain.code() as i32,
             diag::The_left_hand_side_of_a_for_of_statement_may_not_be_async.code() as i32,
             diag::The_variable_declaration_of_a_for_in_statement_cannot_have_an_initializer.code() as i32,
@@ -651,6 +683,8 @@ pub fn plain_js_errors() -> &'static FxHashSet<i32> {
             diag::Variable_declaration_list_cannot_be_empty.code() as i32,
             diag::X_0_and_1_operations_cannot_be_mixed_without_parentheses.code() as i32,
             diag::X_0_expected.code() as i32,
+            // ts#63915
+            diag::X_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_defer_or_source.code() as i32,
             diag::X_0_is_not_a_valid_meta_property_for_keyword_1_Did_you_mean_2.code() as i32,
             diag::X_0_list_cannot_be_empty.code() as i32,
             diag::X_0_modifier_already_seen.code() as i32,
@@ -677,7 +711,7 @@ pub fn plain_js_errors() -> &'static FxHashSet<i32> {
     })
 }
 
-// Go: symlinks/knownsymlinks.go:81 (*KnownSymlinks).SetSymlinksFromResolutions
+// Go: symlinks/knownsymlinks.go:91 (*KnownSymlinks).SetSymlinksFromResolutions
 // PORT: the method lives here because it needs frontend resolution types.
 impl KnownSymlinks {
     pub fn set_symlinks_from_resolutions(
@@ -713,7 +747,7 @@ impl KnownSymlinks {
 }
 
 impl NewProgram {
-    // Go: program.go:623 (*Program).GetResolvedModule
+    // Go: program.go:644 (*Program).GetResolvedModule
     pub fn get_resolved_module(
         &self,
         file: &dyn HasFileName,
@@ -731,7 +765,7 @@ impl NewProgram {
         None
     }
 
-    // Go: program.go:632 (*Program).GetResolvedModuleFromModuleSpecifier
+    // Go: program.go:653 (*Program).GetResolvedModuleFromModuleSpecifier
     pub fn get_resolved_module_from_module_specifier(
         &self,
         file: &dyn HasFileName,
@@ -740,11 +774,15 @@ impl NewProgram {
         if !is_string_literal_like(module_specifier) {
             panic!("moduleSpecifier must be a StringLiteralLike");
         }
+        // ts#63915
+        if is_source_phase_import(module_specifier.parent()) {
+            return None;
+        }
         let mode = self.get_mode_for_usage_location(file, module_specifier);
         self.get_resolved_module(file, module_specifier.text(), mode)
     }
 
-    // Go: program.go:1739 (*Program).GetSourceFileMetaData
+    // Go: program.go:1763 (*Program).GetSourceFileMetaData
     // PORT: a missing Go map entry is the zero value.
     pub fn get_source_file_meta_data(&self, path: &Path) -> SourceFileMetaData {
         self.processed_files
@@ -754,7 +792,7 @@ impl NewProgram {
             .unwrap_or_default()
     }
 
-    // Go: program.go:1743 (*Program).GetEmitModuleFormatOfFile
+    // Go: program.go:1767 (*Program).GetEmitModuleFormatOfFile
     pub fn get_emit_module_format_of_file(&self, source_file: &dyn HasFileName) -> ModuleKind {
         get_emit_module_format_of_file_worker(
             &source_file.file_name(),
@@ -763,7 +801,7 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:1747 (*Program).GetEmitSyntaxForUsageLocation
+    // Go: program.go:1771 (*Program).GetEmitSyntaxForUsageLocation
     pub fn get_emit_syntax_for_usage_location(
         &self,
         source_file: &dyn HasFileName,
@@ -777,7 +815,7 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:1751 (*Program).GetImpliedNodeFormatForEmit
+    // Go: program.go:1775 (*Program).GetImpliedNodeFormatForEmit
     pub fn get_implied_node_format_for_emit(
         &self,
         source_file: &dyn HasFileName,
@@ -791,7 +829,7 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:1755 (*Program).GetModeForUsageLocation
+    // Go: program.go:1779 (*Program).GetModeForUsageLocation
     pub fn get_mode_for_usage_location(
         &self,
         source_file: &dyn HasFileName,
@@ -805,7 +843,7 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:1759 (*Program).GetModeForResolutionAtIndex (ts#64292)
+    // Go: program.go:1783 (*Program).GetModeForResolutionAtIndex (ts#64292)
     // PORT: Go `*ast.SourceFile` is the file root `Node` (the api passes a
     // file of this program); its `ast.HasFileName` view copies the file name
     // and path. Go `index int` is `usize`.
@@ -832,7 +870,7 @@ impl NewProgram {
         panic!("resolution index out of range")
     }
 
-    // Go: program.go:1776 (*Program).GetDefaultResolutionModeForFile
+    // Go: program.go:1800 (*Program).GetDefaultResolutionModeForFile
     pub fn get_default_resolution_mode_for_file(
         &self,
         source_file: &dyn HasFileName,
@@ -844,12 +882,12 @@ impl NewProgram {
         )
     }
 
-    // Go: program.go:1780 (*Program).IsSourceFileDefaultLibrary
+    // Go: program.go:1804 (*Program).IsSourceFileDefaultLibrary
     pub fn is_source_file_default_library(&self, path: &Path) -> bool {
         self.processed_files.lib_files.contains_key(path)
     }
 
-    // Go: program.go:1799 (*Program).CommonSourceDirectory
+    // Go: program.go:1823 (*Program).CommonSourceDirectory
     // PORT: Go `checkSourceFilesBelongToPath` adds processing diagnostics
     // through the include processor, which uses interior mutability here.
     pub fn common_source_directory(&self) -> String {
@@ -882,7 +920,7 @@ impl NewProgram {
             .clone()
     }
 
-    // Go: program.go:875 (*Program).getSourceFilesToEmit
+    // Go: program.go:899 (*Program).getSourceFilesToEmit
     // PORT: Go nil `targetSourceFiles` is `None`; an empty slice is
     // `Some(&[])` (#4699: a slice of targets and `forceJsEmit`).
     pub fn get_source_files_to_emit(
@@ -901,7 +939,7 @@ impl NewProgram {
     }
 }
 
-// Go: emitter.go:493 sourceFileMayBeEmitted
+// Go: emitter.go:476 sourceFileMayBeEmitted
 // PORT: the Go host is `SourceFileMayBeEmittedHost`; the program is the only
 // host the frontend uses.
 pub fn source_file_may_be_emitted(
@@ -1000,7 +1038,7 @@ pub fn source_file_may_be_emitted(
     true
 }
 
-// Go: emitter.go:553 getSourceFilesToEmit
+// Go: emitter.go:538 getSourceFilesToEmit
 // PORT: Go nil `targetSourceFiles` is `None` (#4699: a slice of targets and
 // `forceJsEmit`).
 pub fn get_source_files_to_emit(
@@ -1040,7 +1078,7 @@ impl OutputPathsHost for NewProgram {
 }
 
 impl NewProgram {
-    // Go: program.go:1817 (*Program).checkSourceFilesBelongToPath
+    // Go: program.go:1841 (*Program).checkSourceFilesBelongToPath
     // PERF: Go makes the canonical absolute path of every file before the
     // `ContainsPath` test, but only the diagnostic of a file outside
     // `rootDirectory` reads it. It is a pure function of the file name, so
@@ -1052,8 +1090,11 @@ impl NewProgram {
         root_directory: &str,
     ) -> bool {
         let mut all_files_belong_to_path = true;
+        // ts#64159 (program.go:1844): the file system's case sensitivity (N:
+        // the zero-value `comparePathsOptions`, case-insensitive).
+        let case_sensitivity = self.case_sensitivity();
         for file in source_files {
-            if !contains_path(root_directory, file, &self.compare_paths_options) {
+            if !contains_path(root_directory, file, &case_sensitivity) {
                 let absolute_source_file_path = get_canonical_file_name(
                     &get_normalized_absolute_path(file, &self.get_current_directory()),
                     self.use_case_sensitive_file_names(),
