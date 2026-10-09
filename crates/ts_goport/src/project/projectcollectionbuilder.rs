@@ -2228,7 +2228,10 @@ impl ProjectCollectionBuilder {
                 let p = p.unwrap_or_else(|| crate::core::go_nil_dereference()).borrow();
                 let command_line = p.command_line.as_ref().unwrap_or_else(|| crate::core::go_nil_dereference());
                 command_line.file_names() != new_command_line.file_names()
-                    // Go: !reflect.DeepEqual(p.CommandLine.CompilerOptions(), compilerOptions)
+                    // Go: !p.CommandLine.CompilerOptions().Equals(compilerOptions) (ts#64457,
+                    // projectcollectionbuilder.go:1338 at fed0bf24149f; it was
+                    // reflect.DeepEqual). PORT: the derived `PartialEq` compares every
+                    // field, as the generated Equals does.
                     || **command_line.compiler_options() != *compiler_options
                     || !project_references_equal(
                         command_line.project_references(),
@@ -2382,7 +2385,10 @@ impl ProjectCollectionBuilder {
                 let p = p.unwrap_or_else(|| crate::core::go_nil_dereference()).borrow();
                 let command_line = p.command_line.as_ref().unwrap_or_else(|| crate::core::go_nil_dereference());
                 command_line.file_names() != new_command_line.file_names()
-                    // Go: !reflect.DeepEqual(p.CommandLine.CompilerOptions(), compilerOptions)
+                    // Go: !p.CommandLine.CompilerOptions().Equals(compilerOptions) (ts#64457,
+                    // projectcollectionbuilder.go:1424 at fed0bf24149f; it was
+                    // reflect.DeepEqual). PORT: the derived `PartialEq` compares every
+                    // field, as the generated Equals does.
                     || **command_line.compiler_options() != *compiler_options
                     || !project_references_equal(
                         command_line.project_references(),
