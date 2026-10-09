@@ -284,14 +284,14 @@ impl LanguageService {
     }
 }
 
-// Go: ls/hover.go:204 documentationLocationMapper
+// Go: ls/hover.go:200 documentationLocationMapper
 /// `l.documentationLocationMapper(feature)` or `noMappedLocation`.
 // PORT: Go passes the func value; here a reference to the closure.
 pub type DocumentationLocationMapper<'a> =
     &'a dyn Fn(Node, TextRange) -> (lsproto::Location, Fidelity);
 
 impl<P: ProgramView> LanguageService<P> {
-    // Go: ls/hover.go:206 documentationLocationMapper
+    // Go: ls/hover.go:202 documentationLocationMapper
     pub fn documentation_location_mapper(
         &self,
         feature: Feature,
