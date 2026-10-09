@@ -598,6 +598,10 @@ pub struct APIReconfigureProgramRequest {
 // PORT: Go nil `vfs.FS` is `None`. `Debug` skips the file system.
 #[derive(Clone, Default)]
 pub struct APISnapshotRequest {
+    // ts#64554 (snapshot.go:337 at fed0bf24149f). PORT: Go
+    // `*lsutil.UserPreferences` nil is `None`.
+    pub user_preferences: Option<lsutil::UserPreferences>,
+    pub prepare_auto_imports: lsproto::DocumentUri,
     pub open_projects: Option<FxHashSet<String>>,
     pub close_projects: Option<FxHashSet<tspath::Path>>,
     pub open_files: Option<IndexMap<tspath::Path, String>>,
@@ -619,6 +623,8 @@ pub struct APISnapshotRequest {
 impl std::fmt::Debug for APISnapshotRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("APISnapshotRequest")
+            .field("user_preferences", &self.user_preferences.is_some())
+            .field("prepare_auto_imports", &self.prepare_auto_imports)
             .field("open_projects", &self.open_projects)
             .field("close_projects", &self.close_projects)
             .field("open_files", &self.open_files)
