@@ -1665,14 +1665,14 @@ impl RegistryBuilder {
             }
             if should_rebuild {
                 let entry = project.clone();
-                // ts#64159 (R1): registry.go:1050 resolves from the program's
-                // base directory.
                 let mut br = new_bucket_build_result(
                     Box::new(move |bucket: Rc<RegistryBucket>| entry.replace(bucket)),
                     (self.base.to_path)(
                         &program
                             .as_deref()
                             .unwrap_or_else(|| crate::core::go_nil_dereference())
+                            // ts#64159 (R1): registry.go:1050, the program's
+                            // base directory.
                             .base_directory(),
                     ),
                 );
