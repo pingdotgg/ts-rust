@@ -667,6 +667,20 @@ impl UnmarshalerFrom for DocumentIdentifier {
                 text,
             )))
         };
+        // PORT: Go reports a method error at the start of the value
+        // (`/openFiles/0`, not `/openFiles/0/uri`). The port reports it after
+        // the value, so an error inside the object first reads the rest of
+        // the object.
+        let finish_object = |dec: &mut JsonDecoder<'_>, value_pending: bool| {
+            if value_pending {
+                dec.skip_value()?;
+            }
+            while dec.peek_kind() != b'}' {
+                dec.read_token()?;
+                dec.skip_value()?;
+            }
+            dec.read_token().map(|_| ())
+        };
         *self = DocumentIdentifier::default();
         // Try reading as a plain string first
         let tok = dec.read_token()?;
@@ -690,6 +704,7 @@ impl UnmarshalerFrom for DocumentIdentifier {
                     }
                     if token_string(&key) == "uri" {
                         if found_uri {
+                            finish_object(dec, true)?;
                             return error(format!(
                                 "DocumentIdentifier: duplicate field {}",
                                 crate::gostd::strconv::quote(&token_string(&key))
@@ -697,6 +712,15 @@ impl UnmarshalerFrom for DocumentIdentifier {
                         }
                         let val = dec.read_token()?;
                         if val.kind() != b'"' || token_string(&val).is_empty() {
+                            // A non-string token that opens a value is
+                            // read whole first.
+                            if matches!(val.kind(), b'{' | b'[') {
+                                return error(
+                                    "DocumentIdentifier: uri must be a non-empty string"
+                                        .to_string(),
+                                );
+                            }
+                            finish_object(dec, false)?;
                             return error(
                                 "DocumentIdentifier: uri must be a non-empty string".to_string(),
                             );
