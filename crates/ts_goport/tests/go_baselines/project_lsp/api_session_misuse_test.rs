@@ -36,6 +36,7 @@ use ts_goport::{program, project};
 
 use super::api_util::{doc, nil_error};
 use super::projecttestutil::{self, files};
+use super::requestfilesystem_test::{directories, files as request_files, listing};
 use super::util::{bg, uri};
 
 /// Go's runtime text for a nil pointer dereference.
@@ -490,9 +491,16 @@ child_test! {
     // request file system's names (requestfilesystem.go:256,
     // filechanges.go:57, :62, :72). The port read "" as the current
     // directory and kept the URL names.
+    // api round 3: the listed child directories (requestfilesystem.go:172)
+    // and the listing names (:501, :573, :579) resolve with
+    // `RootedDirectoryPath.ResolveDirectory` (rooted_path.go:784), which
+    // panics on a relative name with a query or fragment in a URL
+    // directory (:791) and on a URL result with one (:803). The port
+    // joined them with `combine_paths`.
     fn empty_and_url_suffixed_paths_panic_with_go_texts() {
         const EMPTY: &str = "path must not be empty";
         const URL: &str = "path must not contain a URL query or fragment";
+        const RELATIVE_URL: &str = "relative URL path must not contain a query or fragment";
         let api = api_a();
         let named = |file_name: &str| DocumentIdentifier {
             file_name: file_name.to_string(),
@@ -599,7 +607,24 @@ child_test! {
             files: [(name.to_string(), "x".to_string())].into_iter().collect(),
             ..file_system(Kind::FULL)
         };
+        let full_with_child = |directory: &str, child: &str| RequestFileSystem {
+            directories: directories(vec![(directory, listing(&["b.ts"], &[child]))]),
+            ..full_with_file("a.ts")
+        };
         for (label, request, expected) in [
+            ("listed URL child", full_with_child("d", "file:///a?x"), URL),
+            ("listed URL child, fragment", full_with_child("d", "http://h/x#f"), URL),
+            ("listed URL child, query", full_with_child("d", "http://h/x?y"), URL),
+            (
+                "listed relative child of a URL directory, query",
+                full_with_child("http://h/d", "x?y"),
+                RELATIVE_URL,
+            ),
+            (
+                "listed relative child of a URL directory, fragment",
+                full_with_child("file:///d", "x#y"),
+                RELATIVE_URL,
+            ),
             ("empty file key", full_with_file(""), EMPTY),
             ("URL file key", full_with_file("file:///a.ts?x"), URL),
             (
@@ -646,7 +671,56 @@ child_test! {
             });
             assert_eq!(text, expected, "createSnapshot {label}");
         }
+        // Go answers these: the name is not a URL, or has no query.
+        for (label, request) in [
+            ("listed relative child, query", full_with_child("d", "x?y")),
+            (
+                "listed relative child of a URL directory",
+                full_with_child("http://h/d", "x"),
+            ),
+        ] {
+            if let Err(err) = api.session.handle_create_snapshot(
+                &api.ctx,
+                &CreateSnapshotParams {
+                    file_system: Some(request),
+                    ..Default::default()
+                },
+            ) {
+                panic!("createSnapshot {label}: {}", err.error());
+            }
+        }
         api.close();
+
+        // A listing name (requestfilesystem.go:501) that the wildcard of
+        // `include` reads.
+        let (project_session, _) = projecttestutil::setup(files(&[]));
+        let session = api::new_lsp_session(project_session.clone(), None);
+        let wildcard = |name: &str| CreateSnapshotParams {
+            snapshot_request_changes_params: SnapshotRequestChangesParams {
+                open_projects: vec![doc("/home/projects/q/tsconfig.json")],
+                ..Default::default()
+            },
+            file_system: Some(RequestFileSystem {
+                files: request_files(&[
+                    (
+                        "/home/projects/q/tsconfig.json",
+                        r#"{"include": ["src"], "compilerOptions": {"noLib": true}}"#,
+                    ),
+                    ("/home/projects/q/src/main.ts", "export const m = 1;"),
+                ]),
+                directories: directories(vec![(
+                    "/home/projects/q/src",
+                    listing(&[name, "main.ts"], &[]),
+                )]),
+                ..file_system(Kind::FULL)
+            }),
+            ..Default::default()
+        };
+        let text = go_panic_text(|| session.handle_create_snapshot(&bg(), &wildcard("file:///z.ts?x")));
+        assert_eq!(text, URL, "createSnapshot wildcard URL listing name");
+        nil_error(session.handle_create_snapshot(&bg(), &wildcard("z.ts?x")));
+        session.close();
+        project_session.close();
     }
 }
 

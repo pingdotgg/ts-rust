@@ -320,8 +320,13 @@ pub fn new_request_file_system_worker(
             })));
         }
         result.register_directory(&tspath::get_directory_path(&absolute_directory_name));
+        // Go: requestfilesystem.go:172 (ts#64159: `ResolveDirectory`, which
+        // panics on a URL query or fragment)
         for child in &entries.directories {
-            listed_directories.push(tspath::combine_paths(&absolute_directory_name, &[child]));
+            listed_directories.push(crate::api::resolve_directory(
+                &absolute_directory_name,
+                child,
+            ));
         }
     }
     for link_name in sorted_keys(&params.symlinks) {
@@ -620,11 +625,12 @@ impl RequestFileSystemImpl {
         Some((self.base.clone(), resolved.path))
     }
 
-    // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.filterLocalEntries
+    // Go: api/requestfilesystem/requestfilesystem.go:497 requestFileSystem.filterLocalEntries
+    // ts#64159: the names resolve with `ResolveDirectory` (:501).
     fn filter_local_entries(&self, directory_name: &str, entries: &vfs::Entries) -> vfs::Entries {
         let mut result = clone_entries(entries);
         let keep = |name: &str| {
-            let file_name = tspath::combine_paths(directory_name, &[name]);
+            let file_name = crate::api::resolve_directory(directory_name, name);
             if self.local_path_info(&file_name).0.is_some() {
                 return true;
             }
@@ -651,11 +657,12 @@ impl RequestFileSystemImpl {
         (entries, explicit, ok)
     }
 
-    // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.removeEntries
+    // Go: api/requestfilesystem/requestfilesystem.go:569 requestFileSystem.removeEntries
+    // ts#64159: the names resolve with `ResolveDirectory` (:573, :579).
     fn remove_entries(&self, directory_name: &str, entries: &vfs::Entries) -> vfs::Entries {
         let mut result = clone_entries(entries);
         let blocked =
-            |name: &str| self.blocks_fallback(&tspath::combine_paths(directory_name, &[name]));
+            |name: &str| self.blocks_fallback(&crate::api::resolve_directory(directory_name, name));
         result.files.retain(|name| !blocked(name));
         result.directories.retain(|name| !blocked(name));
         if let Some(symlinks) = &mut result.symlinks {
