@@ -6,6 +6,8 @@ Each item: one line of goal, the files or worktree it owns, and what it waits fo
 
 ## Ready
 
+- **T3 Code drop-in (Theo, 2026-10-09: "asap"; t3code PR #16704). Running: workflow t3dropin1.** t3sat1: the `satisfies` TS2322 (diagnose against Go N, fix if a port bug, list other T3 Code gaps). plat2: darwin-x64 and win32-arm64 release binaries (PR stacked on win1). Then a release; Theo runs `npm/trust-setup.sh` for the new packages first. Later items from the T3 report: Effect editor features in `--lsp` (quick fixes, refactors), and T3 Code launcher passthrough of `-w` and `-b`.
+
 - **Windows support (Theo, 2026-10-09: "asap for next release"). Running: workflow win1.** One PR: a Windows CI job, win32-x64 tsc.exe (PGO) in the release and npm (@tsc-rs/win32-x64), dev docs, Go comparison and timing on Windows. Root merges when CI, Release and the skeptic pass. Theo runs `npm/trust-setup.sh` for @tsc-rs/win32-x64 (and linux-arm64) before the tag. Follow-ups: win32-arm64, fswatch walkdir_windows, the Windows allocator.
 
 - **Public issues first (Theo, 2026-10-07).** Check `scripts/goport/gh-inbox.py list` every 2 hours. A real incompatibility that a user reports goes before perf work. Upstream issues get the `upstream issue` label and wait for a pin bump.
