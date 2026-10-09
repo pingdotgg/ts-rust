@@ -11,14 +11,17 @@
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
 
+use ts_goport::api::requestfilesystem::{Kind, RequestFileSystem, RequestSymlink};
 use ts_goport::api::{
     self, CheckerNodeParams, CheckerSymbolParams, CheckerTypeParams, CreateSnapshotParams,
-    GetCompletionsAtPositionParams, GetContextualTypeForArgumentParams, GetContextualTypeParams,
+    CreateSourceFileParams, DocumentIdentifier, GetCompletionsAtPositionParams,
+    GetContextualTypeForArgumentParams, GetContextualTypeParams,
     GetCurrentLanguageServerSnapshotParams, GetDefaultProjectForFileParams, GetDiagnosticsParams,
     GetSourceFileParams, GetSymbolAtPositionParams, GetTypeAtPositionParams,
-    GetTypeFromTypeNodeParams, GetTypePropertyParams, NodeHandle,
-    SignatureToSignatureDeclarationParams, SnapshotID, SnapshotRequestChangesParams,
-    SourceFileResponse, TypeToTypeNodeParams,
+    GetTypeFromTypeNodeParams, GetTypePropertyParams, NodeHandle, ParseConfigFileParams,
+    ParseJsonConfigFileContentParams, ReadConfigFileParams, SignatureToSignatureDeclarationParams,
+    SnapshotID, SnapshotRequestChangesParams, SourceFileResponse, TranspileFromFileParams,
+    TypeToTypeNodeParams,
 };
 use ts_goport::astdata::SyntaxKind;
 use ts_goport::flags::ScriptKind;
@@ -472,6 +475,177 @@ child_test! {
             )
         });
         assert_eq!(text, "Unhandled kind in signatureToSignatureDeclarationHelper", "F5");
+        api.close();
+    }
+}
+
+child_test! {
+    // ts#64159 (api skeptic, bump D wave 2b): Go N' roots each client path
+    // with `tspath.ToRootedPath` (rooted_path.go:29), which panics on an
+    // empty path (:31) and on a URL path with a query or fragment (:34).
+    // The sites: `DocumentIdentifier.ToFileName` (proto.go:357; a request
+    // without its file field has the zero identifier), transpileFromFile
+    // (session.go:2310), createSourceFile (`ResolveFile`, session.go:2108),
+    // parseJsonConfigFileContent's configDirectory (session.go:2026) and the
+    // request file system's names (requestfilesystem.go:256,
+    // filechanges.go:57, :62, :72). The port read "" as the current
+    // directory and kept the URL names.
+    fn empty_and_url_suffixed_paths_panic_with_go_texts() {
+        const EMPTY: &str = "path must not be empty";
+        const URL: &str = "path must not contain a URL query or fragment";
+        let api = api_a();
+        let named = |file_name: &str| DocumentIdentifier {
+            file_name: file_name.to_string(),
+            ..Default::default()
+        };
+        let symbol_at = |file: DocumentIdentifier| {
+            go_panic_text(|| {
+                api.session.handle_get_symbol_at_position(
+                    &api.ctx,
+                    &GetSymbolAtPositionParams {
+                        snapshot: api.snapshot,
+                        project: api.project.clone(),
+                        file,
+                        position: 1,
+                    },
+                )
+            })
+        };
+        let metadata = |file: DocumentIdentifier| {
+            go_panic_text(|| {
+                api.session.handle_get_source_file_metadata(
+                    &api.ctx,
+                    &GetSourceFileParams {
+                        snapshot: api.snapshot,
+                        project: api.project.clone(),
+                        file,
+                    },
+                )
+            })
+        };
+        let default_project = |file: DocumentIdentifier| {
+            go_panic_text(|| {
+                api.session.handle_get_default_project_for_file(
+                    &api.ctx,
+                    &GetDefaultProjectForFileParams {
+                        snapshot: api.snapshot,
+                        file,
+                    },
+                )
+            })
+        };
+        assert_eq!(symbol_at(DocumentIdentifier::default()), EMPTY);
+        assert_eq!(metadata(DocumentIdentifier::default()), EMPTY);
+        assert_eq!(default_project(DocumentIdentifier::default()), EMPTY);
+        let text = go_panic_text(|| {
+            api.session
+                .handle_read_config_file(&api.ctx, &ReadConfigFileParams::default())
+        });
+        assert_eq!(text, EMPTY, "readConfigFile");
+        let text = go_panic_text(|| {
+            api.session
+                .handle_parse_config_file(&api.ctx, &ParseConfigFileParams::default())
+        });
+        assert_eq!(text, EMPTY, "parseConfigFile");
+        for file_name in ["file:///a.ts?x", "http://h/a.ts#f"] {
+            assert_eq!(metadata(named(file_name)), URL, "{file_name}");
+            assert_eq!(default_project(named(file_name)), URL, "{file_name}");
+        }
+
+        for (file_name, expected) in [("", EMPTY), ("file:///a.ts?x", URL)] {
+            let text = go_panic_text(|| {
+                api.session.handle_transpile_from_file(
+                    &api.ctx,
+                    &TranspileFromFileParams {
+                        file_name: file_name.to_string(),
+                        ..Default::default()
+                    },
+                    false,
+                )
+            });
+            assert_eq!(text, expected, "transpileFromFile {file_name:?}");
+        }
+        let text = go_panic_text(|| {
+            api.session.handle_create_source_file(
+                &api.ctx,
+                &CreateSourceFileParams {
+                    file_name: "http://h/a.ts#f".to_string(),
+                    source_text: "let a = 1".to_string(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(text, URL, "createSourceFile");
+        let text = go_panic_text(|| {
+            api.session.handle_parse_json_config_file_content(
+                &api.ctx,
+                &ParseJsonConfigFileContentParams {
+                    config_directory: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(text, EMPTY, "parseJsonConfigFileContent");
+
+        let file_system = |kind: Kind| RequestFileSystem {
+            kind,
+            ..Default::default()
+        };
+        let symlink = |target: &str| RequestSymlink {
+            target: target.to_string(),
+            host: false,
+        };
+        let full_with_file = |name: &str| RequestFileSystem {
+            files: [(name.to_string(), "x".to_string())].into_iter().collect(),
+            ..file_system(Kind::FULL)
+        };
+        for (label, request, expected) in [
+            ("empty file key", full_with_file(""), EMPTY),
+            ("URL file key", full_with_file("file:///a.ts?x"), URL),
+            (
+                "empty directory key",
+                RequestFileSystem {
+                    directories: [(String::new(), Default::default())].into_iter().collect(),
+                    ..file_system(Kind::FULL)
+                },
+                EMPTY,
+            ),
+            (
+                "empty symlink key",
+                RequestFileSystem {
+                    symlinks: [(String::new(), symlink("a.ts"))].into_iter().collect(),
+                    ..file_system(Kind::LAYER)
+                },
+                EMPTY,
+            ),
+            (
+                "empty symlink target",
+                RequestFileSystem {
+                    symlinks: [("l.ts".to_string(), symlink(""))].into_iter().collect(),
+                    ..file_system(Kind::LAYER)
+                },
+                EMPTY,
+            ),
+            (
+                "empty removed path",
+                RequestFileSystem {
+                    removed_paths: vec![String::new()],
+                    ..file_system(Kind::LAYER)
+                },
+                EMPTY,
+            ),
+        ] {
+            let text = go_panic_text(|| {
+                api.session.handle_create_snapshot(
+                    &api.ctx,
+                    &CreateSnapshotParams {
+                        file_system: Some(request),
+                        ..Default::default()
+                    },
+                )
+            });
+            assert_eq!(text, expected, "createSnapshot {label}");
+        }
         api.close();
     }
 }

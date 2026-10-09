@@ -125,8 +125,9 @@ pub fn run_api(args: &[String]) -> i32 {
         in_: None,
         out: None,
         err: Some(Box::new(stdio::Stderr)),
-        // Go: tspath.ToRootedDirectoryPath(flags.cwd, system.cwd)
-        cwd: crate::frontend::tspath::get_normalized_absolute_path(&flags.cwd, &system_cwd),
+        // Go: tspath.ToRootedDirectoryPath(flags.cwd, system.cwd). An empty
+        // `--cwd=` is a Go panic.
+        cwd: crate::api::to_rooted_path(&flags.cwd, &system_cwd),
         default_library_path,
         pipe_path: String::new(),
         callbacks: callbacks_list,

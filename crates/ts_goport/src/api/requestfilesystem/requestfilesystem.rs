@@ -397,14 +397,27 @@ impl RequestFileSystemImpl {
         fallback == RequestFallback::Missing
     }
 
-    // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.toAbsolutePath
+    // Go: api/requestfilesystem/requestfilesystem.go:252 requestFileSystem.toAbsolutePath
+    // ts#64159: only `newRequestFileSystemWorker` calls it, for the names
+    // of the request.
     fn to_absolute_path(&self, path: &str) -> String {
         self.to_absolute_path_from(path, &self.current_directory)
     }
 
-    // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.toAbsolutePathFrom
+    // Go: api/requestfilesystem/requestfilesystem.go:256 requestFileSystem.toAbsolutePathFrom
+    // ts#64159: `tspath.ToRootedPath`, so an empty name or a URL name with
+    // a query or fragment is a Go panic.
     fn to_absolute_path_from(&self, path: &str, current_directory: &str) -> String {
-        let absolute_path = tspath::get_normalized_absolute_path(path, current_directory);
+        crate::api::to_rooted_path(path, current_directory)
+    }
+
+    // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.toAbsolutePath
+    // (at 673a5f17d713)
+    // PORT: ts#64159 gives the file system methods typed rooted paths, so
+    // Go N' does not normalize them again. The port's paths are strings: the
+    // lookups normalize them as Go N did.
+    fn to_lookup_path(&self, path: &str) -> String {
+        let absolute_path = tspath::get_normalized_absolute_path(path, &self.current_directory);
         if tspath::is_disk_path_root(&absolute_path) {
             return absolute_path;
         }
@@ -420,7 +433,7 @@ impl RequestFileSystemImpl {
 
     // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.registerDirectory
     fn register_directory(&self, directory_name: &str) {
-        let mut directory_name = self.to_absolute_path(directory_name);
+        let mut directory_name = self.to_lookup_path(directory_name);
         loop {
             let node = ensure(&self.paths, &self.to_path(&directory_name));
             if node.borrow().entry.is_some() {
@@ -440,7 +453,7 @@ impl RequestFileSystemImpl {
 
     // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.resolvePath
     fn resolve_path(&self, path: &str) -> ResolvedRequestPath {
-        let path = self.to_absolute_path(path);
+        let path = self.to_lookup_path(path);
         let mut result = ResolvedRequestPath {
             path,
             ok: true,
@@ -473,8 +486,7 @@ impl RequestFileSystemImpl {
                 return result;
             };
             let suffix = suffix.strip_prefix('/').unwrap_or(&suffix).to_string();
-            result.path =
-                self.to_absolute_path(&tspath::combine_paths(&matched.target, &[&suffix]));
+            result.path = self.to_lookup_path(&tspath::combine_paths(&matched.target, &[&suffix]));
             if matched.host {
                 result.host = true;
                 return result;
@@ -506,7 +518,7 @@ impl RequestFileSystemImpl {
         let mut seen: FxHashSet<tspath::Path> = FxHashSet::default();
         seen.insert(self.to_path(path));
         let mut queue: std::collections::VecDeque<String> =
-            std::collections::VecDeque::from([self.to_absolute_path(path)]);
+            std::collections::VecDeque::from([self.to_lookup_path(path)]);
         let mut aliases: Vec<String> = Vec::new();
         while let Some(candidate) = queue.pop_front() {
             for symlink in &symlinks {
@@ -525,7 +537,7 @@ impl RequestFileSystemImpl {
                 }
                 let suffix = suffix.strip_prefix('/').unwrap_or(&suffix).to_string();
                 let alias =
-                    self.to_absolute_path(&tspath::combine_paths(&symlink.link_name, &[&suffix]));
+                    self.to_lookup_path(&tspath::combine_paths(&symlink.link_name, &[&suffix]));
                 let alias_path = self.to_path(&alias);
                 if seen.contains(&alias_path) {
                     continue;
@@ -559,7 +571,7 @@ impl RequestFileSystemImpl {
 
     // Go: api/requestfilesystem/requestfilesystem.go requestFileSystem.lookupPath
     fn lookup_path(&self, path: &str) -> RequestPathLookup {
-        let absolute_path = self.to_absolute_path(path);
+        let absolute_path = self.to_lookup_path(path);
         let (info, path_fallback) = self.local_path_info(&absolute_path);
         if info.is_some() {
             return RequestPathLookup {

@@ -791,11 +791,13 @@ impl DocumentIdentifier {
     // ts#64159: a file name is rooted against `cwd` (Go
     // `tspath.ToRootedFilePath`). The Go N function ToAbsoluteFileName
     // (proto.go:344 at 673a5f17d713) is removed by ts#64159: this is it.
+    // An empty file name (a missing field) or a URL name with a query or
+    // fragment is a Go panic (`to_rooted_path`).
     pub fn to_file_name(&self, cwd: &str) -> String {
         if !self.uri.0.is_empty() {
             return self.uri.file_name();
         }
-        tspath::get_normalized_absolute_path(&self.file_name, cwd)
+        super::to_rooted_path(&self.file_name, cwd)
     }
 
     // Go: proto.go:363 ToURI

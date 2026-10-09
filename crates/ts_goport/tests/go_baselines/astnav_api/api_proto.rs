@@ -1,9 +1,10 @@
-//! Port of internal/api/proto_test.go.
+//! Port of internal/api/proto_test.go, and tests of the API copy of Go
+//! `tspath.ToRootedPath` (`api::to_rooted_path`, ts#64159).
 
 use super::Subtests;
 use ts_goport::api::{
     DiagnosticPositionResponse, DiagnosticSourceLineResponse, DocumentIdentifier, EnsurePrograms,
-    new_diagnostic_response,
+    new_diagnostic_response, to_rooted_path,
 };
 use ts_goport::ast::{TextRange, new_diagnostic, source_file_get_position_map};
 use ts_goport::diag;
@@ -274,4 +275,110 @@ fn test_new_diagnostic_response_truncates_long_formatting_context() {
             line(6, "seven"),
         ]
     );
+}
+
+/// The message of the Go panic (`go_panic`) that `f` raises.
+fn go_panic_text<R>(f: impl FnOnce() -> R) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .err()
+        .expect("no panic");
+    match payload.downcast::<ts_goport::core::GoPanic>() {
+        Ok(panic) => panic.message,
+        Err(_) => panic!("not a Go panic"),
+    }
+}
+
+// Go: tspath/typed_paths_test.go:10 TestToRootedFilePath and :275
+// TestToRootedFilePathRequiresRoot (ts#64159): the `ToRootedPath` asserts,
+// on the API copy (`api::to_rooted_path`, session_p2.rs).
+// PORT: Go `ToRootedFilePath` and `ToRootedDirectoryPath` are
+// `ToRootedPath` with a typed result, so one call checks the three.
+#[test]
+fn to_rooted_path_matches_go_to_rooted_path() {
+    assert_eq!(
+        to_rooted_path("./src/../src/a.ts", "/project"),
+        "/project/src/a.ts"
+    );
+    assert_eq!(to_rooted_path("/project/src/", "/ignored"), "/project/src");
+    assert_eq!(to_rooted_path("/", "/ignored"), "/");
+    assert_eq!(
+        to_rooted_path("file:///project/src/a.ts", "/ignored"),
+        "file:///project/src/a.ts"
+    );
+    assert_eq!(
+        to_rooted_path("^/untitled/ts-nul-authority/Untitled-1", "/ignored"),
+        "^/untitled/ts-nul-authority/Untitled-1"
+    );
+    for (input, expected) in [
+        ("c:", "c:/"),
+        ("//server", "//server/"),
+        ("file://server", "file://server/"),
+        (
+            "^/~ts-uri~/custom/ts-nul-authority",
+            "^/~ts-uri~/custom/ts-nul-authority/",
+        ),
+        (
+            "^/~ts-uri~/custom/authority?query",
+            "^/~ts-uri~/custom/authority?query/",
+        ),
+    ] {
+        assert_eq!(to_rooted_path(input, "/ignored"), expected, "{input}");
+    }
+    assert_eq!(to_rooted_path("/a://b?x/../y", "/ignored"), "/a:/y");
+    for input in [
+        "http://server?query#fragment",
+        "http://server?x/../y",
+        "file:///c:?query/path",
+    ] {
+        assert_eq!(
+            go_panic_text(|| to_rooted_path(input, "/ignored")),
+            "path must not contain a URL query or fragment",
+            "{input}"
+        );
+    }
+    assert_eq!(
+        go_panic_text(|| to_rooted_path("file.ts?query/..", "http://server/base")),
+        "relative URL path must not contain a query or fragment"
+    );
+    assert_eq!(
+        go_panic_text(|| to_rooted_path("", "/project")),
+        "path must not be empty"
+    );
+    assert_eq!(
+        go_panic_text(|| to_rooted_path("src/a.ts", "")),
+        "path must be rooted"
+    );
+}
+
+// Go: api/proto.go:353 DocumentIdentifier.ToFileName (ts#64159). Port-only
+// test (api skeptic, bump D wave 2b): a file name is rooted with Go
+// `tspath.ToRootedFilePath`, so the zero identifier (a request without the
+// field) and a URL name with a query or fragment panic as in Go N'. A URI
+// gives its file name.
+#[test]
+fn document_identifier_to_file_name_roots_like_go() {
+    let name = |file_name: &str| DocumentIdentifier {
+        file_name: file_name.to_string(),
+        ..Default::default()
+    };
+    assert_eq!(name("src/../a.ts").to_file_name("/p"), "/p/a.ts");
+    assert_eq!(
+        DocumentIdentifier {
+            uri: ts_goport::lsp::lsproto::DocumentUri("file:///p/a.ts".to_string()),
+            ..Default::default()
+        }
+        .to_file_name("/q"),
+        "/p/a.ts"
+    );
+    assert_eq!(
+        go_panic_text(|| DocumentIdentifier::default().to_file_name("/p")),
+        "path must not be empty"
+    );
+    for file_name in ["file:///a.ts?x", "http://h/a.ts#f"] {
+        assert_eq!(
+            go_panic_text(|| name(file_name).to_file_name("/p")),
+            "path must not contain a URL query or fragment",
+            "{file_name}"
+        );
+    }
 }

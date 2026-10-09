@@ -80,13 +80,14 @@ pub fn add_file_changes(
     let mut overlay_files: FxHashSet<tspath::Path> =
         FxHashSet::with_capacity_and_hasher(request.files.len(), Default::default());
     for file_name in file_names {
-        let absolute_file_name = tspath::get_normalized_absolute_path(file_name, current_directory);
+        // ts#64159 (Go N' filechanges.go:57): `tspath.ToRootedFilePath`.
+        let absolute_file_name = crate::api::to_rooted_path(file_name, current_directory);
         overlay_files.insert(to_path(&absolute_file_name));
         add_change_and_aliases(summary, &absolute_file_name, false);
     }
     for removed_path in &request.removed_paths {
-        let absolute_file_name =
-            tspath::get_normalized_absolute_path(removed_path, current_directory);
+        // ts#64159 (Go N' filechanges.go:62): `tspath.ToRootedPath`.
+        let absolute_file_name = crate::api::to_rooted_path(removed_path, current_directory);
         if overlay_files.contains(&to_path(&absolute_file_name)) {
             continue;
         }
@@ -96,7 +97,8 @@ pub fn add_file_changes(
     // Delete events expand through the snapshot's cached directory tree and create
     // events that refresh wildcard roots and previously missing module resolutions.
     let add_replacement = |summary: &mut project::FileChangeSummary, path: &str| {
-        let absolute_path = tspath::get_normalized_absolute_path(path, current_directory);
+        // ts#64159 (Go N' filechanges.go:72): `tspath.ToRootedPath`.
+        let absolute_path = crate::api::to_rooted_path(path, current_directory);
         add_change_and_aliases(summary, &absolute_path, true);
         summary
             .created

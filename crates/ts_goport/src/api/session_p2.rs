@@ -3539,15 +3539,54 @@ pub fn try_rooted_path_from_normalized(path: &str) -> bool {
         || bytes.len() > root_length && tspath::has_trailing_directory_separator(path))
 }
 
+// Go: tspath/rooted_path.go:29 ToRootedPath (ts#64159)
+// ToRootedPath resolves path against currentDirectory and normalizes it.
+// Go `ToRootedFilePath` (:120) and `ToRootedDirectoryPath` (:154) are this
+// function with a typed result. An empty `path`, or a URL `path` with a
+// query or fragment, is a Go panic; a request handler answers it as
+// `panic: <message>`.
+// PORT: the API copy (see `try_path_key_from_canonical`). Go normalizes
+// with `getNormalizedAbsolutePathFromDirectory` (path.go:409), which gives
+// the text of `tspath::get_normalized_absolute_path` for a rooted current
+// directory.
+pub fn to_rooted_path(path: &str, current_directory: &str) -> String {
+    if path.is_empty() {
+        crate::core::go_panic("path must not be empty".to_string());
+    }
+    if has_rooted_url_suffix(path) {
+        crate::core::go_panic("path must not contain a URL query or fragment".to_string());
+    }
+    if tspath::get_encoded_root_length(path) == 0
+        && has_url_root(current_directory)
+        && path.contains(['?', '#'])
+    {
+        crate::core::go_panic("relative URL path must not contain a query or fragment".to_string());
+    }
+    let mut normalized = tspath::get_normalized_absolute_path(path, current_directory);
+    if tspath::get_encoded_root_length(&normalized) == 0 || has_rooted_url_suffix(&normalized) {
+        crate::core::go_panic("path must be rooted".to_string());
+    }
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if tspath::get_root_length(&normalized) == normalized.len()
+        && !tspath::has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    normalized
+}
+
 // Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
 fn has_rooted_url_suffix(path: &str) -> bool {
-    // Go: tspath/rooted_path.go:114 hasURLRoot
-    let has_url_root = tspath::get_encoded_root_length(path) < 0 && path.contains("://");
-    if !has_url_root {
+    if !has_url_root(path) {
         return false;
     }
     let after_scheme = path.split_once("://").map_or("", |(_, rest)| rest);
     after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/rooted_path.go:114 hasURLRoot (ts#64159)
+fn has_url_root(path: &str) -> bool {
+    tspath::get_encoded_root_length(path) < 0 && path.contains("://")
 }
 
 // Go: tspath/path.go:554 hasRelativePathSegment

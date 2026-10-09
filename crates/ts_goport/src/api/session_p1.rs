@@ -2422,9 +2422,8 @@ impl Session {
                 vec![ERR_CLIENT_ERROR.clone()],
             ));
         };
-        // ts#64159 (Go N' api/session.go:1376)
-        let profile_directory =
-            tspath::get_normalized_absolute_path(&params.dir, &self.get_current_directory());
+        // ts#64159 (Go N' api/session.go:1376): `tspath.ToRootedDirectoryPath`.
+        let profile_directory = to_rooted_path(&params.dir, &self.get_current_directory());
         if let Err(err) = self.cpu_profiler.start_cpu_profile(&profile_directory) {
             return Err(errors::errorf(
                 format!(
@@ -2440,12 +2439,9 @@ impl Session {
     // Go: api/session.go:1193 handleStopCPUProfile
     pub fn handle_stop_cpu_profile(&self, _ctx: &Context) -> Result<ProfileResult, GoError> {
         match self.cpu_profiler.stop_cpu_profile() {
-            // ts#64159 (Go N' api/session.go:1388)
+            // ts#64159 (Go N' api/session.go:1388): `tspath.ToRootedFilePath`.
             Ok(file_path) => Ok(ProfileResult {
-                file: tspath::get_normalized_absolute_path(
-                    &file_path,
-                    &self.get_current_directory(),
-                ),
+                file: to_rooted_path(&file_path, &self.get_current_directory()),
             }),
             Err(err) => Err(errors::errorf(
                 format!("{}: failed to stop CPU profile: {}", *ERR_CLIENT_ERROR, err),
@@ -2466,15 +2462,12 @@ impl Session {
                 vec![ERR_CLIENT_ERROR.clone()],
             ));
         };
-        // ts#64159 (Go N' api/session.go:1395)
-        let profile_directory =
-            tspath::get_normalized_absolute_path(&params.dir, &self.get_current_directory());
+        // ts#64159 (Go N' api/session.go:1395, :1400): `tspath.ToRootedDirectoryPath`
+        // and `tspath.ToRootedFilePath`.
+        let profile_directory = to_rooted_path(&params.dir, &self.get_current_directory());
         match crate::pprof::save_heap_profile(&profile_directory) {
             Ok(file_path) => Ok(ProfileResult {
-                file: tspath::get_normalized_absolute_path(
-                    &file_path,
-                    &self.get_current_directory(),
-                ),
+                file: to_rooted_path(&file_path, &self.get_current_directory()),
             }),
             Err(err) => Err(errors::errorf(
                 format!(
@@ -3416,10 +3409,8 @@ impl Session {
         let base_path;
         let mut config_file_name = String::new();
         if let Some(config_directory) = &params.config_directory {
-            base_path = tspath::get_normalized_absolute_path(
-                config_directory,
-                &self.get_current_directory(),
-            );
+            // ts#64159 (Go N' api/session.go:2026): `tspath.ToRootedDirectoryPath`.
+            base_path = to_rooted_path(config_directory, &self.get_current_directory());
         } else {
             config_file_name = params
                 .config_file_name
@@ -3526,10 +3517,11 @@ impl Session {
                 vec![ERR_CLIENT_ERROR.clone()],
             ));
         }
-        Ok(tspath::get_normalized_absolute_path(
-            file_name,
-            &self.get_current_directory(),
-        ))
+        // ts#64159 (Go N' api/session.go:2108): `RootedDirectoryPath.ResolveFile`
+        // (tspath/rooted_path.go:727). For a non-empty name and a rooted
+        // current directory it gives the text and the panics of
+        // `tspath.ToRootedFilePath`.
+        Ok(to_rooted_path(file_name, &self.get_current_directory()))
     }
 
     // Go: api/session.go createSourceFile (ts#64216, ts#64434)
@@ -3776,8 +3768,8 @@ impl Session {
         params: &TranspileFromFileParams,
         declaration: bool,
     ) -> Result<TranspileOutputResponse, GoError> {
-        let file_name =
-            tspath::get_normalized_absolute_path(&params.file_name, &self.get_current_directory());
+        // ts#64159 (Go N' api/session.go:2310): `tspath.ToRootedFilePath`.
+        let file_name = to_rooted_path(&params.file_name, &self.get_current_directory());
         let (input, ok) = self.snapshot_host.fs().read_file(&file_name);
         if !ok {
             return Err(errors::errorf(

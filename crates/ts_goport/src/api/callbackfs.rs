@@ -588,11 +588,9 @@ impl Fs for CallbackFS {
                     let mut realpath = String::new();
                     unmarshal_value(&response.value, &mut realpath);
                     // ts#64159 (Go N' callbackfs.go:298): the answer is
-                    // rooted against the directory of `path`.
-                    return tspath::get_normalized_absolute_path(
-                        &realpath,
-                        &tspath::get_directory_path(path),
-                    );
+                    // rooted against the directory of `path`
+                    // (`tspath.ToRootedPath`, so "" is a Go panic).
+                    return to_rooted_path(&realpath, &tspath::get_directory_path(path));
                 }
                 "identity" => return path.to_string(),
                 "useOS" => return self.base.realpath(path),
