@@ -434,14 +434,9 @@ pub fn set_options_from_test_config(
 
         if let Some(command_line_option) = get_command_line_option(name) {
             let parsed_value = get_option_value(command_line_option, value, current_directory);
-            let errors =
-                parse_compiler_options(command_line_option.name, parsed_value, compiler_options);
-            if !errors.is_empty() {
-                fatal(format!(
-                    "Error parsing value '{value}' for compiler option '{}'.",
-                    command_line_option.name
-                ));
-            }
+            // ts#64457 (harnessutil.go:271): Go `ParseCompilerOptions` returns
+            // no errors, so there is no "Error parsing value" failure.
+            parse_compiler_options(command_line_option.name, parsed_value, compiler_options);
             continue;
         }
         if let Some(harness_option) = get_harness_option(name) {

@@ -140,34 +140,110 @@ pub const SKIPPED_TESTS: &[&str] = &[
     "requireOfJsonFileWithModuleNodeResolutionEmitNone.ts",
 ];
 
-// Go: compiler_runner.go:153 compilerVaryBy
-// Set of compiler options for which we allow variations to be specified in the test file,
-// for instance `// @strict: true, false`.
+// Go: testrunner/options_generated.go:7 compilerVaryBy (ts#64457)
+// The compiler options for which a test file can give variations, for
+// instance `// @strict: true, false`. Go generates the list
+// (tools/scripts/tsc/generate-options.ts:871): every compiler option that is
+// not command-line only and is a boolean or an enum, lowercased and sorted.
+// N computed a smaller set from the `Affects*` flags (compiler_runner.go:150
+// at 673a5f17d713; removed by ts#64457). No test case of N' gives two values
+// for an option of the difference, so no configuration name changes.
 pub fn compiler_vary_by() -> &'static HashSet<String> {
-    static MAP: OnceLock<HashSet<String>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut vary_by_options: Vec<&str> = OPTIONS_DECLARATIONS
-            .iter()
-            .filter(|option| {
-                !option.is_command_line_only
-                    && (option.kind == CommandLineOptionKind::BOOLEAN
-                        || option.kind == CommandLineOptionKind::ENUM)
-                    && (option.affects_program_structure
-                        || option.affects_emit
-                        || option.affects_module_resolution
-                        || option.affects_bind_diagnostics
-                        || option.affects_semantic_diagnostics
-                        || option.affects_source_file
-                        || option.affects_declaration_path
-                        || option.affects_build_info)
-            })
-            .map(|option| option.name)
-            .collect();
-        // explicit variations that do not match above conditions
-        vary_by_options.push("noEmit");
-        vary_by_options.push("isolatedModules");
-        vary_by_options.into_iter().map(str::to_lowercase).collect()
-    })
+    const COMPILER_VARY_BY: &[&str] = &[
+        "all",
+        "allowarbitraryextensions",
+        "allowimportingtsextensions",
+        "allowjs",
+        "allowsyntheticdefaultimports",
+        "allowumdglobalaccess",
+        "allowunreachablecode",
+        "allowunusedlabels",
+        "alwaysstrict",
+        "assumechangesonlyaffectdirectdependencies",
+        "checkjs",
+        "composite",
+        "declaration",
+        "declarationmap",
+        "deduplicatepackages",
+        "diagnostics",
+        "disablereferencedprojectload",
+        "disablesizelimit",
+        "disablesolutionsearching",
+        "disablesourceofprojectreferenceredirect",
+        "downleveliteration",
+        "emitbom",
+        "emitdeclarationonly",
+        "emitdecoratormetadata",
+        "erasablesyntaxonly",
+        "esmoduleinterop",
+        "exactoptionalpropertytypes",
+        "experimentaldecorators",
+        "explainfiles",
+        "extendeddiagnostics",
+        "forceconsistentcasinginfilenames",
+        "importhelpers",
+        "incremental",
+        "init",
+        "inlinesourcemap",
+        "inlinesources",
+        "isolateddeclarations",
+        "isolatedmodules",
+        "jsx",
+        "libreplacement",
+        "listemittedfiles",
+        "listfiles",
+        "module",
+        "moduledetection",
+        "moduleresolution",
+        "newline",
+        "nocheck",
+        "noemit",
+        "noemithelpers",
+        "noemitonerror",
+        "noerrortruncation",
+        "nofallthroughcasesinswitch",
+        "noimplicitany",
+        "noimplicitoverride",
+        "noimplicitreturns",
+        "noimplicitthis",
+        "nolib",
+        "nopropertyaccessfromindexsignature",
+        "noresolve",
+        "nouncheckedindexedaccess",
+        "nouncheckedsideeffectimports",
+        "nounusedlocals",
+        "nounusedparameters",
+        "preserveconstenums",
+        "preservesymlinks",
+        "preservewatchoutput",
+        "pretty",
+        "quiet",
+        "removecomments",
+        "resolvejsonmodule",
+        "resolvepackagejsonexports",
+        "resolvepackagejsonimports",
+        "rewriterelativeimportextensions",
+        "singlethreaded",
+        "skipdefaultlibcheck",
+        "skiplibcheck",
+        "sourcemap",
+        "stabletypeordering",
+        "strict",
+        "strictbindcallapply",
+        "strictbuiltiniteratorreturn",
+        "strictfunctiontypes",
+        "strictnullchecks",
+        "strictpropertyinitialization",
+        "stripinternal",
+        "target",
+        "traceresolution",
+        "usedefineforclassfields",
+        "useunknownincatchvariables",
+        "verbatimmodulesyntax",
+        "version",
+    ];
+    static SET: OnceLock<HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| COMPILER_VARY_BY.iter().map(ToString::to_string).collect())
 }
 
 // Go: compiler_runner.go:210 compilerFileBasedTest
