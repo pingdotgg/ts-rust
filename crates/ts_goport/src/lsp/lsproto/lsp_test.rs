@@ -4,7 +4,7 @@
 
 use crate::lsp::lsproto::prelude::*;
 
-// Go: lsp_test.go:10 TestUnmarshalCompletionItem
+// Go: lsp_test.go:11 TestUnmarshalCompletionItem
 #[test]
 fn test_unmarshal_completion_item() {
     const MESSAGE: &str = r#"{

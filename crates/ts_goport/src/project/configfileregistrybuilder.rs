@@ -21,7 +21,7 @@ use std::rc::Weak;
 // PORT: the `tsoptions::ParseConfigHost` and `tsoptions::ExtendedConfigCache`
 // impls at the end of this file.
 
-// Go: project/configfileregistrybuilder.go:27 configFileRegistryBuilder
+// Go: project/configfileregistrybuilder.go:23 configFileRegistryBuilder
 // configFileRegistryBuilder tracks changes made on top of a previous
 // configFileRegistry, producing a new clone with `finalize()` after
 // all changes have been made.
@@ -46,7 +46,7 @@ pub struct ConfigFileRegistryBuilder {
     this: Weak<ConfigFileRegistryBuilder>,
 }
 
-// Go: project/configfileregistrybuilder.go:44 newConfigFileRegistryBuilder
+// Go: project/configfileregistrybuilder.go:40 newConfigFileRegistryBuilder
 // PORT: the unused Go `logger` parameter is kept. The base maps are copied
 // into the dirty maps (project/dirty/interfaces.rs decision 3).
 #[allow(clippy::too_many_arguments)]
@@ -94,7 +94,7 @@ impl ConfigFileRegistryBuilder {
             .expect("configFileRegistryBuilder: builder dropped")
     }
 
-    // Go: project/configfileregistrybuilder.go:74 configFileRegistryBuilder.Finalize
+    // Go: project/configfileregistrybuilder.go:70 configFileRegistryBuilder.Finalize
     // Finalize creates a new configFileRegistry based on the changes made in the builder.
     // If no changes were made, it returns the original base registry.
     pub fn finalize(&self) -> Rc<ConfigFileRegistry> {
@@ -134,7 +134,7 @@ impl ConfigFileRegistryBuilder {
         new_registry
     }
 
-    // Go: project/configfileregistrybuilder.go:103 configFileRegistryBuilder.contentMappers (tsgo#4712)
+    // Go: project/configfileregistrybuilder.go:99 configFileRegistryBuilder.contentMappers (tsgo#4712)
     pub fn content_mappers(&self) -> Rc<ConfiguredContentMappers> {
         if self.all_configured_content_mappers.borrow().is_none() {
             let mut command_lines: Vec<Rc<tsoptions::ParsedCommandLine>> = Vec::new();
@@ -162,12 +162,12 @@ impl ConfigFileRegistryBuilder {
             .expect("set above")
     }
 
-    // Go: project/configfileregistrybuilder.go:119 configFileRegistryBuilder.invalidateContentMappers (tsgo#4712)
+    // Go: project/configfileregistrybuilder.go:115 configFileRegistryBuilder.invalidateContentMappers (tsgo#4712)
     pub fn invalidate_content_mappers(&self) {
         *self.all_configured_content_mappers.borrow_mut() = None;
     }
 
-    // Go: project/configfileregistrybuilder.go:125 configFileRegistryBuilder.findOrAcquireConfigForFile
+    // Go: project/configfileregistrybuilder.go:121 configFileRegistryBuilder.findOrAcquireConfigForFile
     pub fn find_or_acquire_config_for_file(
         &self,
         config_file_name: &str,
@@ -196,7 +196,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:148 configFileRegistryBuilder.reloadIfNeeded
+    // Go: project/configfileregistrybuilder.go:144 configFileRegistryBuilder.reloadIfNeeded
     // reloadIfNeeded updates the command line of the config file entry based on its
     // pending reload state. This function should only be called from within the
     // Change() method of a dirty map entry.
@@ -261,7 +261,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:173 configFileRegistryBuilder.updateExtendingConfigs
+    // Go: project/configfileregistrybuilder.go:169 configFileRegistryBuilder.updateExtendingConfigs
     pub fn update_extending_configs(
         &self,
         extending_config_path: &tspath::Path,
@@ -329,7 +329,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:217 configFileRegistryBuilder.updateRootFilesWatch
+    // Go: project/configfileregistrybuilder.go:214 configFileRegistryBuilder.updateRootFilesWatch
     // PORT: Go `ParsedCommandLine` methods with a nil receiver return nil
     // (`WildcardDirectories`, `LiteralFileNames`, `ExtendedSourceFiles`);
     // a `None` command line gives empty values here.
@@ -436,7 +436,7 @@ impl ConfigFileRegistryBuilder {
         entry.borrow_mut().root_files_watch = new_root_files_watch;
     }
 
-    // Go: project/configfileregistrybuilder.go:283 configFileRegistryBuilder.acquireConfigForProject
+    // Go: project/configfileregistrybuilder.go:285 configFileRegistryBuilder.acquireConfigForProject
     // acquireConfigForProject loads a config file entry from the cache, or parses it if not already
     // cached, then adds the project (if provided) to `retainingProjects` to keep it alive
     // in the cache. Each `acquireConfigForProject` call that passes a `project` should be accompanied
@@ -490,7 +490,7 @@ impl ConfigFileRegistryBuilder {
             .clone()
     }
 
-    // Go: project/configfileregistrybuilder.go:313 configFileRegistryBuilder.acquireConfigForFile
+    // Go: project/configfileregistrybuilder.go:315 configFileRegistryBuilder.acquireConfigForFile
     // acquireConfigForFile loads a config file entry from the cache, or parses it if not already
     // cached, then adds the open file to `retainingOpenFiles` to keep it alive in the cache.
     // Each `acquireConfigForFile` call that passes an `openFilePath`
@@ -546,7 +546,7 @@ impl ConfigFileRegistryBuilder {
             .clone()
     }
 
-    // Go: project/configfileregistrybuilder.go:343 configFileRegistryBuilder.releaseConfigForProject
+    // Go: project/configfileregistrybuilder.go:345 configFileRegistryBuilder.releaseConfigForProject
     // releaseConfigForProject removes the project from the config entry. Once no projects
     // or files are associated with the config entry, it will be removed on the next call to `cleanup`.
     // ts#64319: takes the project ID.
@@ -565,7 +565,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:357 configFileRegistryBuilder.retainConfigForProject (ts#63950)
+    // Go: project/configfileregistrybuilder.go:359 configFileRegistryBuilder.retainConfigForProject (ts#63950)
     // PORT: a Go nil `retainingProjects` map is the empty set here, so the
     // Go `make` before the write is not needed.
     // ts#64319: takes the project ID.
@@ -587,7 +587,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:376 configFileRegistryBuilder.didCloseFile
+    // Go: project/configfileregistrybuilder.go:378 configFileRegistryBuilder.didCloseFile
     // didCloseFile removes the open file from the config entry. Once no projects
     // or files are associated with the config entry, it will be removed on the next call to `cleanup`.
     pub fn did_close_file(&self, path: &tspath::Path) {
@@ -612,7 +612,7 @@ impl ConfigFileRegistryBuilder {
         });
     }
 
-    // Go: project/configfileregistrybuilder.go:404 configFileRegistryBuilder.DidChangeCustomConfigFileName
+    // Go: project/configfileregistrybuilder.go:406 configFileRegistryBuilder.DidChangeCustomConfigFileName
     pub fn did_change_custom_config_file_name(
         &self,
         _logger: Option<Rc<logging::LogTree>>,
@@ -625,7 +625,7 @@ impl ConfigFileRegistryBuilder {
         true
     }
 
-    // Go: project/configfileregistrybuilder.go:413 configFileRegistryBuilder.invalidateCache
+    // Go: project/configfileregistrybuilder.go:415 configFileRegistryBuilder.invalidateCache
     pub fn invalidate_cache(&self, logger: Option<Rc<logging::LogTree>>) -> ChangeFileResult {
         let mut affected_projects: Option<FxHashSet<ID>> = None;
         let mut affected_files: Option<FxHashSet<tspath::Path>> = None;
@@ -684,7 +684,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:448 configFileRegistryBuilder.isConfigBaseName
+    // Go: project/configfileregistrybuilder.go:450 configFileRegistryBuilder.isConfigBaseName
     pub fn is_config_base_name(&self, base_name: &str) -> bool {
         base_name == "tsconfig.json"
             || base_name == "jsconfig.json"
@@ -692,7 +692,7 @@ impl ConfigFileRegistryBuilder {
                 && base_name == self.custom_config_file_name)
     }
 
-    // Go: project/configfileregistrybuilder.go:453 configFileRegistryBuilder.DidChangeFiles
+    // Go: project/configfileregistrybuilder.go:455 configFileRegistryBuilder.DidChangeFiles
     // PORT: Go passes the summary by value. The local Go maps are
     // `IndexMap`/`IndexSet` (insertion order; PORT: Go map order is random).
     pub fn did_change_files(
@@ -956,7 +956,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:642 configFileRegistryBuilder.handleConfigChange
+    // Go: project/configfileregistrybuilder.go:644 configFileRegistryBuilder.handleConfigChange
     // PORT: a nil result map is the empty set.
     pub fn handle_config_change(
         &self,
@@ -987,7 +987,7 @@ impl ConfigFileRegistryBuilder {
         affected_projects
     }
 
-    // Go: project/configfileregistrybuilder.go:669 configFileRegistryBuilder.computeConfigFileName
+    // Go: project/configfileregistrybuilder.go:671 configFileRegistryBuilder.computeConfigFileName
     pub fn compute_config_file_name(
         &self,
         file_name: &str,
@@ -1059,7 +1059,7 @@ impl ConfigFileRegistryBuilder {
         result
     }
 
-    // Go: project/configfileregistrybuilder.go:722 configFileRegistryBuilder.getConfigFileNameForFile
+    // Go: project/configfileregistrybuilder.go:727 configFileRegistryBuilder.getConfigFileNameForFile
     pub fn get_config_file_name_for_file(
         &self,
         file_name: &str,
@@ -1092,7 +1092,7 @@ impl ConfigFileRegistryBuilder {
         config_name
     }
 
-    // Go: project/configfileregistrybuilder.go:740 configFileRegistryBuilder.forEachConfigFileNameFor
+    // Go: project/configfileregistrybuilder.go:745 configFileRegistryBuilder.forEachConfigFileNameFor
     pub fn for_each_config_file_name_for(&self, path: &tspath::Path, cb: &mut dyn FnMut(&str)) {
         if tspath::is_dynamic_file_name(path) {
             return;
@@ -1123,7 +1123,7 @@ impl ConfigFileRegistryBuilder {
         }
     }
 
-    // Go: project/configfileregistrybuilder.go:758 configFileRegistryBuilder.getAncestorConfigFileName
+    // Go: project/configfileregistrybuilder.go:763 configFileRegistryBuilder.getAncestorConfigFileName
     pub fn get_ancestor_config_file_name(
         &self,
         file_name: &str,
@@ -1167,19 +1167,19 @@ impl ConfigFileRegistryBuilder {
         result
     }
 
-    // Go: project/configfileregistrybuilder.go:787 configFileRegistryBuilder.FS
+    // Go: project/configfileregistrybuilder.go:787 configFileRegistryBuilder.FS (at 673a5f17d713; removed by ts#64159)
     // FS implements tsoptions.ParseConfigHost.
     pub fn fs(&self) -> Rc<dyn vfs::Fs> {
         self.fs.clone()
     }
 
-    // Go: project/configfileregistrybuilder.go:792 configFileRegistryBuilder.GetCurrentDirectory
+    // Go: project/configfileregistrybuilder.go:792 configFileRegistryBuilder.GetCurrentDirectory (at 673a5f17d713; removed by ts#64159)
     // GetCurrentDirectory implements tsoptions.ParseConfigHost.
     pub fn get_current_directory(&self) -> String {
         self.session_options.current_directory.clone()
     }
 
-    // Go: project/configfileregistrybuilder.go:797 configFileRegistryBuilder.GetExtendedConfig
+    // Go: project/configfileregistrybuilder.go:792 configFileRegistryBuilder.GetExtendedConfig
     // GetExtendedConfig implements tsoptions.ExtendedConfigCache.
     // PORT: the cache arguments own their host (`Rc<dyn ParseConfigHost>`).
     // Go passes `host` there; every caller passes this builder as `host`
@@ -1219,7 +1219,7 @@ impl ConfigFileRegistryBuilder {
             .clone()
     }
 
-    // Go: project/configfileregistrybuilder.go:814 configFileRegistryBuilder.Cleanup
+    // Go: project/configfileregistrybuilder.go:809 configFileRegistryBuilder.Cleanup
     pub fn cleanup(&self) {
         let mut changed = false;
         self.configs.range(&mut |entry: &Rc<
@@ -1243,7 +1243,7 @@ impl ConfigFileRegistryBuilder {
     }
 }
 
-// Go: project/configfileregistrybuilder.go:656 contentMapperManifestPath (tsgo#4712)
+// Go: project/configfileregistrybuilder.go:658 contentMapperManifestPath (tsgo#4712)
 pub fn content_mapper_manifest_path(
     command_line: Option<&tsoptions::ParsedCommandLine>,
     to_path: &dyn Fn(&str) -> tspath::Path,
@@ -1267,7 +1267,7 @@ pub fn content_mapper_manifest_path(
     false
 }
 
-// Go: project/configfileregistrybuilder.go:395 changeFileResult
+// Go: project/configfileregistrybuilder.go:397 changeFileResult
 // PORT: a nil Go map is the empty set.
 #[derive(Clone, Debug, Default)]
 pub struct ChangeFileResult {
@@ -1277,7 +1277,7 @@ pub struct ChangeFileResult {
 }
 
 impl ChangeFileResult {
-    // Go: project/configfileregistrybuilder.go:400 changeFileResult.IsEmpty
+    // Go: project/configfileregistrybuilder.go:402 changeFileResult.IsEmpty
     pub fn is_empty(&self) -> bool {
         self.affected_projects.is_empty() && self.affected_files.is_empty()
     }

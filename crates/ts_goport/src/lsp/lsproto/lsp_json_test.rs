@@ -1024,7 +1024,7 @@ fn test_unmarshal_empty_object_work_done_progress_options_empty() {
     assert!(v.work_done_progress.is_none());
 }
 
-// Go: lsp_json_test.go:838 TestUnmarshalEmptyObject, "InitializationOptions empty"
+// Go: lsp_json_test.go:847 TestUnmarshalEmptyObject, "InitializationOptions empty"
 #[test]
 fn test_unmarshal_empty_object_initialization_options_empty() {
     let mut v = InitializationOptions::default();
@@ -1032,7 +1032,7 @@ fn test_unmarshal_empty_object_initialization_options_empty() {
     assert_nil_error("InitializationOptions empty", &err);
 }
 
-// Go: lsp_json_test.go:838 TestUnmarshalEmptyObject, "ClientCapabilities empty"
+// Go: lsp_json_test.go:847 TestUnmarshalEmptyObject, "ClientCapabilities empty"
 #[test]
 fn test_unmarshal_empty_object_client_capabilities_empty() {
     let mut v = ClientCapabilities::default();
@@ -1040,7 +1040,7 @@ fn test_unmarshal_empty_object_client_capabilities_empty() {
     assert_nil_error("ClientCapabilities empty", &err);
 }
 
-// Go: lsp_json_test.go:838 TestUnmarshalEmptyObject, "ServerCapabilities empty"
+// Go: lsp_json_test.go:847 TestUnmarshalEmptyObject, "ServerCapabilities empty"
 #[test]
 fn test_unmarshal_empty_object_server_capabilities_empty() {
     let mut v = ServerCapabilities::default();
@@ -1048,7 +1048,7 @@ fn test_unmarshal_empty_object_server_capabilities_empty() {
     assert_nil_error("ServerCapabilities empty", &err);
 }
 
-// Go: lsp_json_test.go:871 TestMarshalOmitsZeroOptionalFields, "InlayHint omits nil fields"
+// Go: lsp_json_test.go:880 TestMarshalOmitsZeroOptionalFields, "InlayHint omits nil fields"
 #[test]
 fn test_marshal_omits_zero_optional_fields_inlay_hint_omits_nil_fields() {
     let hint = InlayHint {
@@ -1081,7 +1081,7 @@ fn test_marshal_omits_zero_optional_fields_inlay_hint_omits_nil_fields() {
     assert!(s.contains("label"), "should contain 'label', got: {s}");
 }
 
-// Go: lsp_json_test.go:871 TestMarshalOmitsZeroOptionalFields, "FoldingRange omits nil optional fields"
+// Go: lsp_json_test.go:880 TestMarshalOmitsZeroOptionalFields, "FoldingRange omits nil optional fields"
 #[test]
 fn test_marshal_omits_zero_optional_fields_folding_range_omits_nil_optional_fields() {
     let fr = FoldingRange {
@@ -1104,7 +1104,7 @@ fn test_marshal_omits_zero_optional_fields_folding_range_omits_nil_optional_fiel
     assert!(s.contains("endLine"), "should contain 'endLine', got: {s}");
 }
 
-// Go: lsp_json_test.go:903 TestLiteralTypes, "StringLiteralCreate marshal"
+// Go: lsp_json_test.go:912 TestLiteralTypes, "StringLiteralCreate marshal"
 #[test]
 fn test_literal_types_string_literal_create_marshal() {
     let v = StringLiteralCreate;
@@ -1113,7 +1113,7 @@ fn test_literal_types_string_literal_create_marshal() {
     assert_eq!(data.unwrap(), r#""create""#);
 }
 
-// Go: lsp_json_test.go:903 TestLiteralTypes, "StringLiteralCreate unmarshal"
+// Go: lsp_json_test.go:912 TestLiteralTypes, "StringLiteralCreate unmarshal"
 #[test]
 fn test_literal_types_string_literal_create_unmarshal() {
     let mut v = StringLiteralCreate;
@@ -1121,7 +1121,7 @@ fn test_literal_types_string_literal_create_unmarshal() {
     assert_nil_error("StringLiteralCreate unmarshal", &err);
 }
 
-// Go: lsp_json_test.go:903 TestLiteralTypes, "StringLiteralCreate rejects wrong value"
+// Go: lsp_json_test.go:912 TestLiteralTypes, "StringLiteralCreate rejects wrong value"
 #[test]
 fn test_literal_types_string_literal_create_rejects_wrong_value() {
     let mut v = StringLiteralCreate;
@@ -1129,7 +1129,7 @@ fn test_literal_types_string_literal_create_rejects_wrong_value() {
     assert!(err.is_err());
 }
 
-// Go: lsp_json_test.go:903 TestLiteralTypes, "StringLiteralCreate rejects wrong type"
+// Go: lsp_json_test.go:912 TestLiteralTypes, "StringLiteralCreate rejects wrong type"
 #[test]
 fn test_literal_types_string_literal_create_rejects_wrong_type() {
     let mut v = StringLiteralCreate;
@@ -1137,14 +1137,14 @@ fn test_literal_types_string_literal_create_rejects_wrong_type() {
     assert!(err.is_err());
 }
 
-// Go: lsp_json_test.go:936 TestEnumStringValues, "InlayHintKind values"
+// Go: lsp_json_test.go:945 TestEnumStringValues, "InlayHintKind values"
 #[test]
 fn test_enum_string_values_inlay_hint_kind_values() {
     assert_eq!(InlayHintKind::TYPE.string(), "Type");
     assert_eq!(InlayHintKind::PARAMETER.string(), "Parameter");
 }
 
-// Go: lsp_json_test.go:936 TestEnumStringValues, "SymbolKind values"
+// Go: lsp_json_test.go:945 TestEnumStringValues, "SymbolKind values"
 #[test]
 fn test_enum_string_values_symbol_kind_values() {
     assert_eq!(SymbolKind::FILE.string(), "File");
@@ -1152,7 +1152,7 @@ fn test_enum_string_values_symbol_kind_values() {
     assert_eq!(SymbolKind::VARIABLE.string(), "Variable");
 }
 
-// Go: lsp_json_test.go:936 TestEnumStringValues, "unknown enum value"
+// Go: lsp_json_test.go:945 TestEnumStringValues, "unknown enum value"
 #[test]
 fn test_enum_string_values_unknown_enum_value() {
     let v = InlayHintKind(999);
@@ -1178,7 +1178,7 @@ fn check_round_trip<T: MarshalerTo + UnmarshalerFrom + Default>(name: &str, valu
     assert_eq!(data, again.expect("checked"), "{name}: re-marshal differs");
 }
 
-// Go: lsp_json_test.go:966 TestRoundTrip
+// Go: lsp_json_test.go:975 TestRoundTrip
 // TestRoundTrip locks the generated codecs: every value must survive
 // marshal -> unmarshal unchanged. This guards fidelity so codec changes
 // (e.g. pruning or table-driving them) cannot silently corrupt the wire
@@ -1274,7 +1274,7 @@ fn test_round_trip() {
     );
 }
 
-// Go: lsp_json_test.go:1017 TestStrictnessMissingRequired
+// Go: lsp_json_test.go:1026 TestStrictnessMissingRequired
 // TestStrictnessMissingRequired confirms required fields are still enforced;
 // default reflective decoding would silently accept these.
 #[test]
@@ -1304,7 +1304,7 @@ fn test_strictness_missing_required() {
     );
 }
 
-// Go: lsp_json_test.go:1039 TestStrictnessNotObject
+// Go: lsp_json_test.go:1048 TestStrictnessNotObject
 // TestStrictnessNotObject confirms a non-object where an object is required
 // is rejected rather than coerced.
 #[test]
@@ -1333,7 +1333,7 @@ fn is_invalid_params(err: &GoError) -> bool {
     gostd::errors::is(err, &gostd::errors::from_value(ErrorCode::INVALID_PARAMS))
 }
 
-// Go: lsp_json_test.go:1049 TestUnmarshalParamsRequiresParams
+// Go: lsp_json_test.go:1058 TestUnmarshalParamsRequiresParams
 // TestUnmarshalParamsRequiresParams verifies that a NoParams method must be
 // given no params while every other method must be given params, and that a
 // mismatch (including a null value either way) is an InvalidParams error.

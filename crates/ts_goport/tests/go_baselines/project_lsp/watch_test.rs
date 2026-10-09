@@ -15,7 +15,7 @@ fn components(path: &str) -> Vec<String> {
     get_path_components_for_watching(path, "")
 }
 
-// Go: watch_test.go:9 TestGetPathComponentsForWatching
+// Go: watch_test.go:12 TestGetPathComponentsForWatching
 #[test]
 fn get_path_components_for_watching_test() {
     assert_eq!(components("/project"), ["/", "project"]);
@@ -40,7 +40,7 @@ fn get_path_components_for_watching_test() {
     );
 }
 
-// Go: watch_test.go:22 TestNilWatchedFilesClone
+// Go: watch_test.go:25 TestNilWatchedFilesClone
 #[test]
 fn nil_watched_files_clone() {
     let result = WatchedFiles::<i32>::clone_(None, 42);
@@ -114,7 +114,7 @@ fn resolution_lookup_watcher_preserves_included_directory_spelling() {
     );
 }
 
-// Go: watch_test.go:57 TestResolutionLookupWatcherPreservesNodeModulesSpelling (ts#64544)
+// Go: watch_test.go:55 TestResolutionLookupWatcherPreservesNodeModulesSpelling (ts#64544, ts#64159)
 #[test]
 fn resolution_lookup_watcher_preserves_node_modules_spelling() {
     let result = lookup_globs(
@@ -128,7 +128,7 @@ fn resolution_lookup_watcher_preserves_node_modules_spelling() {
     );
 }
 
-// Go: watch_test.go:74 TestResolutionLookupWatcherAggregatesUsingHostCaseSensitivity (ts#64544)
+// Go: watch_test.go:100 TestResolutionLookupWatcherAggregatesUsingHostCaseSensitivity (ts#64544)
 #[test]
 fn resolution_lookup_watcher_aggregates_using_host_case_sensitivity() {
     for (name, use_case_sensitive_file_names) in

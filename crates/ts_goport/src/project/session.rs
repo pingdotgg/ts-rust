@@ -231,7 +231,7 @@ pub struct Session {
     pub global_diag_publish_pending: Cell<bool>,
 }
 
-// Go: project/session.go:199 newContentMapperHost (tsgo#4712)
+// Go: project/session.go:202 newContentMapperHost (tsgo#4712)
 // newContentMapperHost creates the session's shared content mapper host when the workspace is trusted and
 // a spawner is available; otherwise it returns nil, and configured content mappers are rejected by the
 // config-file gate.
@@ -254,7 +254,7 @@ pub fn new_content_mapper_host(init: &SessionInit) -> Option<Rc<dyn contentmappe
     ))
 }
 
-// Go: project/session.go:210 NewSession
+// Go: project/session.go:213 NewSession
 pub fn new_session(init: &SessionInit) -> Rc<Session> {
     // Not in Go: a process with a session is a language server or API
     // process, which frees the file versions it publishes again
@@ -351,12 +351,12 @@ impl std::ops::Deref for Session {
 // `module.ResolutionHost`, whose Rust form returns borrowed values. The
 // inherent methods keep the Go results for other callers (api session).
 impl crate::frontend::module::ResolutionHost for Session {
-    // Go: project/session.go:251 FS (ts#64291: the overlay file system)
+    // Go: project/session.go:255 FS (ts#64291: the overlay file system)
     fn fs(&self) -> &dyn vfs::Fs {
         &*self.fs
     }
 
-    // Go: project/session.go:256 GetCurrentDirectory
+    // Go: project/session.go:260 GetCurrentDirectory
     fn get_current_directory(&self) -> &str {
         &self.options.current_directory
     }
@@ -385,35 +385,35 @@ impl ata::NpmExecutor for Session {
 }
 
 impl Session {
-    // Go: project/session.go:251 FS
+    // Go: project/session.go:255 FS
     // FS implements module.ResolutionHost
     pub fn fs(&self) -> Rc<dyn vfs::Fs> {
         self.fs.clone()
     }
 
-    // Go: project/session.go:256 GetCurrentDirectory
+    // Go: project/session.go:260 GetCurrentDirectory
     // GetCurrentDirectory implements module.ResolutionHost
     pub fn get_current_directory(&self) -> String {
         self.options.current_directory.clone()
     }
 
-    // Go: project/session.go:260 DefaultLibraryPath (ts#64158)
+    // Go: project/session.go:264 DefaultLibraryPath (ts#64158)
     pub fn default_library_path(&self) -> String {
         self.options.default_library_path.clone()
     }
 
-    // Go: project/session.go:265 Config
+    // Go: project/session.go:269 Config
     // Gets copy of current configuration
     pub fn config(&self) -> lsutil::UserPreferences {
         self.workspace_user_preferences.borrow().clone()
     }
 
-    // Go: project/session.go:271 backgroundContext
+    // Go: project/session.go:275 backgroundContext
     fn background_context(&self) -> Context {
         self.with_current_locale(&self.background_ctx)
     }
 
-    // Go: project/session.go:275 WithCurrentLocale (exported by ts#64163)
+    // Go: project/session.go:279 WithCurrentLocale (exported by ts#64163)
     pub fn with_current_locale(&self, ctx: &Context) -> Context {
         let Some(client) = &self.client else {
             return ctx.clone();
@@ -421,13 +421,13 @@ impl Session {
         locale::with_locale(ctx, client.get_locale())
     }
 
-    // Go: project/session.go:283 Trace
+    // Go: project/session.go:283 Trace (at 673a5f17d713; removed by ts#64159)
     // Trace implements module.ResolutionHost
     pub fn trace(&self, _msg: &str) {
         crate::core::go_panic("ATA module resolution should not use tracing".to_string());
     }
 
-    // Go: project/session.go:287 Configure
+    // Go: project/session.go:286 Configure
     // PORT: `configureMu` and `userConfigRWMu` are dropped (one thread).
     pub fn configure(self: &Rc<Self>, config: lsutil::UserPreferences) {
         self.pending_user_config_changes.set(true);
@@ -455,13 +455,13 @@ impl Session {
         self.refresh_ata_if_needed(&old_config, &config);
     }
 
-    // Go: project/session.go:314 InitializeWithUserConfig
+    // Go: project/session.go:313 InitializeWithUserConfig
     pub fn initialize_with_user_config(self: &Rc<Self>, config: lsutil::UserPreferences) {
         *self.initial_user_preferences.borrow_mut() = config.clone();
         self.configure(config);
     }
 
-    // Go: project/session.go:319 DidOpenFile
+    // Go: project/session.go:318 DidOpenFile
     pub fn did_open_file(
         self: &Rc<Self>,
         ctx: &Context,
@@ -497,7 +497,7 @@ impl Session {
         );
     }
 
-    // Go: project/session.go:344 SetContentMapperContributions (tsgo#4712)
+    // Go: project/session.go:343 SetContentMapperContributions (tsgo#4712)
     // SetContentMapperContributions atomically replaces extension-provided inferred-project mappers and
     // discovers configured projects for matching open documents. Configured projects never consume these mappers.
     // PORT: `snapshotUpdateMu` and `pendingFileChangesMu` are dropped (one
@@ -531,7 +531,7 @@ impl Session {
         let _ = self.update_content_mapper_registrations(ctx, &snapshot);
     }
 
-    // Go: project/session.go:363 DidCloseFile
+    // Go: project/session.go:362 DidCloseFile
     pub fn did_close_file(self: &Rc<Self>, _ctx: &Context, uri: &lsproto::DocumentUri) {
         self.cancel_warm_auto_import_cache();
         self.schedule_idle_cache_clean();
@@ -543,7 +543,7 @@ impl Session {
         self.schedule_snapshot_update(UpdateReason::DID_CLOSE_FILE);
     }
 
-    // Go: project/session.go:375 DidChangeFile
+    // Go: project/session.go:374 DidChangeFile
     pub fn did_change_file(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -575,7 +575,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:403 isContentMapperFile (tsgo#4712)
+    // Go: project/session.go:402 isContentMapperFile (tsgo#4712)
     // isContentMapperFile reports whether uri is a content-mapped file handled by a configured content mapper, based
     // on the extensions currently registered with the client for text document synchronization.
     pub fn is_content_mapper_file(&self, uri: &lsproto::DocumentUri) -> bool {
@@ -591,7 +591,7 @@ impl Session {
         tspath::file_extension_is_one_of(&uri.file_name(), &extensions)
     }
 
-    // Go: project/session.go:410 DidSaveFile
+    // Go: project/session.go:409 DidSaveFile
     pub fn did_save_file(self: &Rc<Self>, _ctx: &Context, uri: &lsproto::DocumentUri) {
         self.schedule_idle_cache_clean();
         self.pending_file_changes.borrow_mut().push(FileChange {
@@ -601,7 +601,7 @@ impl Session {
         });
     }
 
-    // Go: project/session.go:420 DidChangeWatchedFiles
+    // Go: project/session.go:419 DidChangeWatchedFiles
     // PORT: Go `[]*lsproto.FileEvent` is `&[lsproto::FileEvent]`.
     pub fn did_change_watched_files(
         self: &Rc<Self>,
@@ -694,7 +694,7 @@ impl Session {
         self.schedule_idle_cache_clean();
     }
 
-    // Go: project/session.go:499 DidChangeCompilerOptionsForInferredProjects
+    // Go: project/session.go:497 DidChangeCompilerOptionsForInferredProjects
     pub fn did_change_compiler_options_for_inferred_projects(
         self: &Rc<Self>,
         ctx: &Context,
@@ -712,13 +712,13 @@ impl Session {
         );
     }
 
-    // Go: project/session.go:507 ScheduleDiagnosticsRefresh
+    // Go: project/session.go:505 ScheduleDiagnosticsRefresh
     // PORT: `_exported`, because Go also has `scheduleDiagnosticsRefresh`.
     pub fn schedule_diagnostics_refresh_exported(self: &Rc<Self>) {
         self.schedule_diagnostics_refresh(self.options.debounce_delay);
     }
 
-    // Go: project/session.go:514 scheduleDiagnosticsRefresh (tsgo#4712)
+    // Go: project/session.go:512 scheduleDiagnosticsRefresh (tsgo#4712)
     // scheduleDiagnosticsRefresh schedules a coalesced workspace diagnostics refresh after delay. A delay of
     // 0 refreshes as soon as the background queue runs the task; it is used for interactive edits (e.g. a
     // content-mapped file) where the debounce would make dependent-file diagnostics feel sluggish.
@@ -803,7 +803,7 @@ impl Session {
         });
     }
 
-    // Go: project/session.go:566 cancelDiagnosticsRefresh
+    // Go: project/session.go:564 cancelDiagnosticsRefresh
     pub fn cancel_diagnostics_refresh(&self) {
         let cancel = self.diagnostics_refresh_cancel.borrow().clone();
         if let Some(cancel) = cancel {
@@ -815,7 +815,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:577 ScheduleSnapshotUpdate
+    // Go: project/session.go:575 ScheduleSnapshotUpdate
     // PORT: the debounce sleep is a `gostd::local::after_func` timer, and
     // the task keeps a `background::TaskHold` until the update has run, as
     // in `schedule_diagnostics_refresh`.
@@ -897,7 +897,7 @@ impl Session {
         });
     }
 
-    // Go: project/session.go:639 cancelScheduledSnapshotUpdate
+    // Go: project/session.go:637 cancelScheduledSnapshotUpdate
     pub fn cancel_scheduled_snapshot_update(&self) {
         let cancel = self.scheduled_snapshot_update_cancel.borrow().clone();
         if let Some(cancel) = cancel {
@@ -911,7 +911,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:652 cancelWarmAutoImportCache
+    // Go: project/session.go:650 cancelWarmAutoImportCache
     pub fn cancel_warm_auto_import_cache(&self) {
         let cancel = self.warm_auto_import_cancel.borrow().clone();
         if let Some(cancel) = cancel {
@@ -1137,7 +1137,7 @@ impl WarmAutoImportPreempt {
     }
 }
 
-// Go: project/session.go:661 idleCacheCleanDelay
+// Go: project/session.go:659 idleCacheCleanDelay
 pub const IDLE_CACHE_CLEAN_DELAY: Duration = Duration::from_secs(30);
 
 impl Session {
@@ -1204,7 +1204,7 @@ impl Session {
     }
 }
 
-// Go: project/session.go:703 performanceTelemetryInterval
+// Go: project/session.go:730 performanceTelemetryInterval
 pub const PERFORMANCE_TELEMETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 // PORT: Go `runtime/metrics.Sample` and `metrics.Value` (Go standard
@@ -1342,7 +1342,7 @@ fn collect_memory_stats(out: &mut dyn std::io::Read) -> Result<OsMemoryStats, Go
 }
 
 impl Session {
-    // Go: project/session.go:707 StartPerformanceTelemetry
+    // Go: project/session.go:734 StartPerformanceTelemetry
     // StartPerformanceTelemetry begins periodic collection and sending of performance
     // telemetry. It should be called once after the session is initialized.
     // PORT: Go loops over a `time.Ticker` in the background task. Here the
@@ -1393,7 +1393,7 @@ impl Session {
         });
     }
 
-    // Go: project/session.go:730 stopPerformanceTelemetry
+    // Go: project/session.go:757 stopPerformanceTelemetry
     pub fn stop_performance_telemetry(&self) {
         let cancel = self.performance_telemetry_cancel.borrow().clone();
         if let Some(cancel) = cancel {
@@ -1402,7 +1402,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:737 sendPerformanceTelemetry
+    // Go: project/session.go:764 sendPerformanceTelemetry
     pub fn send_performance_telemetry(&self, ctx: &Context) {
         if self.client.is_none() || !self.options.telemetry_enabled {
             return;
@@ -1541,7 +1541,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:859 sendProjectInfoTelemetryForNewProjects
+    // Go: project/session.go:886 sendProjectInfoTelemetryForNewProjects
     pub fn send_project_info_telemetry_for_new_projects(
         &self,
         old_snapshot: &Rc<Snapshot>,
@@ -1562,7 +1562,7 @@ impl Session {
         );
     }
 
-    // Go: project/session.go:875 sendProjectInfoTelemetry
+    // Go: project/session.go:902 sendProjectInfoTelemetry
     pub fn send_project_info_telemetry(&self, ctx: &Context, project: &Rc<RefCell<Project>>) {
         if self.client.is_none() || !self.options.telemetry_enabled {
             return;
@@ -1595,7 +1595,7 @@ impl Session {
         self.seen_projects.borrow_mut().insert(project.id());
     }
 
-    // Go: project/session.go:898 collectProjectInfoTelemetry
+    // Go: project/session.go:925 collectProjectInfoTelemetry
     // PORT: Go `map[string]string` and `map[string]any` are `IndexMap`s in
     // insertion order (PORT: Go map order is random, also in its JSON).
     pub fn collect_project_info_telemetry(&self, project: &Project) -> lsproto::TelemetryEvent {
@@ -1744,7 +1744,7 @@ impl Session {
     }
 }
 
-// Go: project/session.go:976 setTristate
+// Go: project/session.go:1003 setTristate
 pub fn set_tristate(m: &mut IndexMap<String, LspAny>, key: &str, v: Tristate) {
     if v == Tristate::True {
         m.insert(key.to_string(), LspAny::Bool(true));
@@ -1753,7 +1753,7 @@ pub fn set_tristate(m: &mut IndexMap<String, LspAny>, key: &str, v: Tristate) {
     }
 }
 
-// Go: project/session.go:984 boolTelemetry
+// Go: project/session.go:1011 boolTelemetry
 pub fn bool_telemetry(v: bool) -> String {
     if v {
         return "true".to_string();
@@ -1761,7 +1761,7 @@ pub fn bool_telemetry(v: bool) -> String {
     "false".to_string()
 }
 
-// Go: project/session.go:991 countFileStats
+// Go: project/session.go:1018 countFileStats
 // PORT: Go returns `*lsproto.ProjectInfoTelemetryMeasurements`; the event
 // field holds the value.
 pub fn count_file_stats(
@@ -1799,12 +1799,12 @@ pub fn count_file_stats(
 }
 
 impl Session {
-    // Go: project/session.go:1018 Snapshot
+    // Go: project/session.go:1045 Snapshot
     pub fn snapshot(&self) -> Rc<Snapshot> {
         self.snapshot.borrow().clone()
     }
 
-    // Go: project/session.go:1028 getSnapshot
+    // Go: project/session.go:1055 getSnapshot
     // getSnapshot flushes pending changes and updates the session's snapshot
     // if needed for the given request. When callerRef is true, the returned
     // snapshot has an extra reference for the caller (taken atomically under
@@ -1904,7 +1904,7 @@ impl Session {
         .expect("updateSnapshot without an API request returns the snapshot")
     }
 
-    // Go: project/session.go:1099 getSnapshotAndDefaultProject
+    // Go: project/session.go:1126 getSnapshotAndDefaultProject
     // PORT: Go `project.GetProgram()` may be nil and `ls.NewLanguageService`
     // keeps it; the Rust language service needs a program, so a nil one
     // panics here (Go panics on first use).
@@ -1958,7 +1958,7 @@ impl Session {
         Ok((snapshot, project, language_service))
     }
 
-    // Go: project/session.go:1118 GetLanguageService
+    // Go: project/session.go:1145 GetLanguageService
     pub fn get_language_service(
         self: &Rc<Self>,
         ctx: &Context,
@@ -1969,7 +1969,7 @@ impl Session {
         Ok(language_service)
     }
 
-    // Go: project/session.go:1126 GetLanguageServiceAndProjectsForFile
+    // Go: project/session.go:1153 GetLanguageServiceAndProjectsForFile
     // PORT: Go `[]ls.Project` is `Vec<Rc<dyn ls::Project>>`.
     pub fn get_language_service_and_projects_for_file(
         self: &Rc<Self>,
@@ -1990,7 +1990,7 @@ impl Session {
         Ok((project, default_ls, all_projects))
     }
 
-    // Go: project/session.go:1136 GetProjectsForFile
+    // Go: project/session.go:1163 GetProjectsForFile
     pub fn get_projects_for_file(
         self: &Rc<Self>,
         ctx: &Context,
@@ -2010,7 +2010,7 @@ impl Session {
         Ok(all_projects)
     }
 
-    // Go: project/session.go:1153 GetLanguageServicesForDocumentsLoadingProjectTree
+    // Go: project/session.go:1180 GetLanguageServicesForDocumentsLoadingProjectTree
     // GetLanguageServicesForDocumentsLoadingProjectTree returns language services for
     // every project in the snapshot, loading all project trees first so that projects
     // that were never opened but reference the given documents are included. Loading the
@@ -2054,7 +2054,7 @@ impl Session {
         services
     }
 
-    // Go: project/session.go:1181 GetLanguageServiceForProjectWithFile
+    // Go: project/session.go:1208 GetLanguageServiceForProjectWithFile
     // PORT: the Go server passes `p.(*project.Project)` (a type assertion on
     // an `ls.Project`). Only `Id()` of the argument is read, so the port
     // takes the `ls::Project` interface itself.
@@ -2090,7 +2090,7 @@ impl Session {
         ))
     }
 
-    // Go: project/session.go:1202 WithSnapshotLoadingProjectTree
+    // Go: project/session.go:1229 WithSnapshotLoadingProjectTree
     // WithSnapshotLoadingProjectTree acquires a ref'd snapshot with the
     // requested project trees loaded, then calls fn. The snapshot stays alive
     // for the duration of fn.
@@ -2117,7 +2117,7 @@ impl Session {
         snapshot.deref();
     }
 
-    // Go: project/session.go:1216 WithSnapshotForDocument
+    // Go: project/session.go:1243 WithSnapshotForDocument
     pub fn with_snapshot_for_document(
         self: &Rc<Self>,
         ctx: &Context,
@@ -2137,7 +2137,7 @@ impl Session {
         snapshot.deref();
     }
 
-    // Go: project/session.go:1235 GetCurrentLanguageServiceWithAutoImports
+    // Go: project/session.go:1262 GetCurrentLanguageServiceWithAutoImports
     // GetCurrentLanguageServiceWithAutoImports flushes pending file changes, clones the
     // current snapshot with auto-import preparation for the given URI, then returns a
     // LanguageService for the default project. Use this only outside of request handling
@@ -2175,7 +2175,7 @@ impl Session {
         ))
     }
 
-    // Go: project/session.go:1257 WithLanguageServiceAndSnapshot
+    // Go: project/session.go:1284 WithLanguageServiceAndSnapshot
     // WithLanguageServiceAndSnapshot synchronously acquires a ref'd snapshot and
     // creates a language service for the given URI. fn receives both the language
     // service and the backing snapshot so it can clone the snapshot (e.g. to
@@ -2220,7 +2220,7 @@ impl Session {
         })))
     }
 
-    // Go: project/session.go:1281 GetLanguageServiceWithAutoImports
+    // Go: project/session.go:1308 GetLanguageServiceWithAutoImports
     // GetLanguageServiceWithAutoImports clones the given snapshot with auto-import
     // preparation for the given URI, without flushing pending file changes.
     // The cloned snapshot will be adopted as the session's current snapshot in the background
@@ -2256,7 +2256,7 @@ impl Session {
         ))
     }
 
-    // Go: project/session.go:1295 tryAdoptSnapshotChangeInBackground
+    // Go: project/session.go:1322 tryAdoptSnapshotChangeInBackground
     // PORT: renamed from `adoptSnapshotChangeInBackground` by ts#64163.
     pub fn try_adopt_snapshot_change_in_background(
         self: &Rc<Self>,
@@ -2275,7 +2275,7 @@ impl Session {
             });
     }
 
-    // Go: project/session.go:1308 adoptSnapshotChange
+    // Go: project/session.go:1335 adoptSnapshotChange
     // adoptSnapshotChange promotes a cloned snapshot as the session's current
     // snapshot so future requests benefit from the work already done. If the
     // session has moved on, the snapshot is discarded; the next request needing
@@ -2330,7 +2330,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1344 UpdateSnapshot
+    // Go: project/session.go:1371 UpdateSnapshot
     // PORT: Go has `UpdateSnapshot` and `updateSnapshot`; the exported one
     // ends in `_exported` (PORTING "Names").
     pub fn update_snapshot_exported(
@@ -2342,7 +2342,7 @@ impl Session {
         self.update_snapshot(ctx, overlays, change, false);
     }
 
-    // Go: project/session.go:1352 updateSnapshotRef
+    // Go: project/session.go:1379 updateSnapshotRef
     // updateSnapshotRef is like UpdateSnapshot but returns the created snapshot
     // with an extra reference for the caller. The ref is taken atomically with
     // the snapshot assignment under snapshotMu, so the snapshot is guaranteed
@@ -2358,7 +2358,7 @@ impl Session {
             .expect("updateSnapshot with callerRef returns the snapshot")
     }
 
-    // Go: project/session.go:1356 updateSnapshot
+    // Go: project/session.go:1383 updateSnapshot
     // PORT: Go passes `change` by value to `Clone` and keeps its own copy
     // for the background task, so the port clones it. A Go nil result (an
     // API error without `callerRef`, ts#64204) is `None`.
@@ -2476,7 +2476,7 @@ impl Session {
         Some(new_snapshot)
     }
 
-    // Go: project/session.go:1420 takeContentMapperTimingDelta (tsgo#4712)
+    // Go: project/session.go:1447 takeContentMapperTimingDelta (tsgo#4712)
     pub fn take_content_mapper_timing_delta(&self) -> contentmapper::Timings {
         let Some(content_mapper_host) = &self.content_mapper_host else {
             return contentmapper::Timings::default();
@@ -2487,7 +2487,7 @@ impl Session {
         delta
     }
 
-    // Go: project/session.go:1432 logContentMapperTimings (tsgo#4712)
+    // Go: project/session.go:1459 logContentMapperTimings (tsgo#4712)
     // PORT: Go `%v` of a `time.Duration` is `{:?}` (log only), as in the
     // other session logs. Go sorts the map keys.
     pub fn log_content_mapper_timings(&self, timings: &contentmapper::Timings) {
@@ -2537,7 +2537,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1476 WaitForBackgroundTasks
+    // Go: project/session.go:1503 WaitForBackgroundTasks
     // WaitForBackgroundTasks waits for all background tasks to complete.
     // This is intended to be used only for testing purposes.
     // PORT: `Queue::wait` runs `gostd::local::run_pending` until the
@@ -2558,7 +2558,7 @@ impl Session {
     }
 }
 
-// Go: project/session.go:1461 hasContentMapperOperationTimings (ts#64015)
+// Go: project/session.go:1488 hasContentMapperOperationTimings (ts#64015)
 // PORT: Go map order is random; the result does not depend on it.
 pub fn has_content_mapper_operation_timings(
     timings: &IndexMap<String, contentmapper::MapperTimings>,
@@ -2571,7 +2571,7 @@ pub fn has_content_mapper_operation_timings(
     false
 }
 
-// Go: project/session.go:1470 hasContentMapperOperationTiming (ts#64015)
+// Go: project/session.go:1497 hasContentMapperOperationTiming (ts#64015)
 pub fn has_content_mapper_operation_timing(timing: &contentmapper::MapperTimings) -> bool {
     timing.spawn.count != 0
         || timing.open_project.count != 0
@@ -2579,7 +2579,7 @@ pub fn has_content_mapper_operation_timing(timing: &contentmapper::MapperTimings
         || timing.transform.count != 0
 }
 
-// Go: project/session.go:1481 updateWatch
+// Go: project/session.go:1508 updateWatch
 // PORT: Go `*WatchedFiles[T]` arguments are `Option<&WatchedFiles<T>>`.
 // Go `logger != nil` compares the interface, which always holds the
 // session logger (a nil `*logger` for the nop logger), so it is always
@@ -2693,7 +2693,7 @@ pub fn update_watch<T>(
 }
 
 impl Session {
-    // Go: project/session.go:1565 updateContentMapperRegistrations (tsgo#4712)
+    // Go: project/session.go:1592 updateContentMapperRegistrations (tsgo#4712)
     // updateContentMapperRegistrations computes the union of content mapper extensions across all loaded
     // configs in the new snapshot and, when the set changes, asks the client to synchronize text documents
     // with those extensions. This is how an otherwise unsupported file (e.g. a `.vue`) begins flowing to the server once a
@@ -2744,7 +2744,7 @@ impl Session {
         Ok(())
     }
 
-    // Go: project/session.go:1600 updateWatches
+    // Go: project/session.go:1627 updateWatches
     // PORT: the Go closures all append to `errors`, so it is a `RefCell`.
     // Go ranges over the config map (random order); the port uses the
     // `FxHashMap` order, which only changes the order of watch requests.
@@ -3018,7 +3018,7 @@ impl Session {
         self.snapshot_host.close();
     }
 
-    // Go: project/session.go:1698 flushChanges
+    // Go: project/session.go:1737 flushChanges
     // PORT: Go `*lsutil.UserPreferences` is `Option<lsutil::UserPreferences>`.
     pub fn flush_changes(
         &self,
@@ -3040,7 +3040,7 @@ impl Session {
         (file_changes, overlays, pending_ata_changes, new_prefs)
     }
 
-    // Go: project/session.go:1718 flushChangesLocked
+    // Go: project/session.go:1757 flushChangesLocked
     // flushChangesLocked should only be called with s.pendingFileChangesMu held.
     pub fn flush_changes_locked(
         &self,
@@ -3065,7 +3065,7 @@ impl Session {
         (changes, overlays)
     }
 
-    // Go: project/session.go:1733 logProjectChanges
+    // Go: project/session.go:1772 logProjectChanges
     // logProjectChanges logs information about projects that have changed between snapshots
     pub fn log_project_changes(&self, old_snapshot: &Rc<Snapshot>, new_snapshot: &Rc<Snapshot>) {
         let logged_project_changes = Cell::new(false);
@@ -3109,7 +3109,7 @@ impl Session {
 }
 
 impl Session {
-    // Go: project/session.go:1765 logCacheStats
+    // Go: project/session.go:1804 logCacheStats
     pub fn log_cache_stats(&self, snapshot: &Rc<Snapshot>) {
         let mut parse_cache_size = 0;
         let mut extended_config_count = 0;
@@ -3231,7 +3231,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1831 refreshInlayHintsIfNeeded
+    // Go: project/session.go:1870 refreshInlayHintsIfNeeded
     pub fn refresh_inlay_hints_if_needed(
         &self,
         old_prefs: &lsutil::UserPreferences,
@@ -3252,7 +3252,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1839 refreshCodeLensIfNeeded
+    // Go: project/session.go:1878 refreshCodeLensIfNeeded
     pub fn refresh_code_lens_if_needed(
         &self,
         old_prefs: &lsutil::UserPreferences,
@@ -3273,7 +3273,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1847 refreshDiagnosticsIfNeeded
+    // Go: project/session.go:1886 refreshDiagnosticsIfNeeded
     pub fn refresh_diagnostics_if_needed(
         self: &Rc<Self>,
         old_prefs: &lsutil::UserPreferences,
@@ -3288,7 +3288,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1855 refreshATAIfNeeded
+    // Go: project/session.go:1894 refreshATAIfNeeded
     pub fn refresh_ata_if_needed(
         self: &Rc<Self>,
         old_prefs: &lsutil::UserPreferences,
@@ -3301,7 +3301,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1863 publishProgramDiagnostics
+    // Go: project/session.go:1902 publishProgramDiagnostics
     pub fn publish_program_diagnostics(
         &self,
         old_snapshot: &Rc<Snapshot>,
@@ -3433,7 +3433,7 @@ impl Session {
     }
 }
 
-// Go: project/session.go:1937 shouldPublishProgramDiagnostics
+// Go: project/session.go:1971 shouldPublishProgramDiagnostics
 pub fn should_publish_program_diagnostics(p: &Project, snapshot_id: u64) -> bool {
     if p.kind != Kind::CONFIGURED || p.program.is_none() || p.program_last_update != snapshot_id {
         return false;
@@ -3442,7 +3442,7 @@ pub fn should_publish_program_diagnostics(p: &Project, snapshot_id: u64) -> bool
 }
 
 impl Session {
-    // Go: project/session.go:1944 publishProjectDiagnostics
+    // Go: project/session.go:1978 publishProjectDiagnostics
     // PORT: Go `[]*ast.Diagnostic` is `&[Diagnostic]` (nil is empty).
     // ts#64159: the URI comes from the config file name, not its path key
     // (which is lower case on a case-insensitive file system).
@@ -3484,7 +3484,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1965 EnqueuePublishGlobalDiagnostics
+    // Go: project/session.go:1999 EnqueuePublishGlobalDiagnostics
     // EnqueuePublishGlobalDiagnostics schedules a background check for new accumulated
     // global diagnostics from checker pools, re-publishing tsconfig diagnostics if changed.
     // Multiple calls are coalesced into a single background task.
@@ -3503,7 +3503,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:1974 publishGlobalDiagnostics
+    // Go: project/session.go:2008 publishGlobalDiagnostics
     pub fn publish_global_diagnostics(self: &Rc<Self>, ctx: &Context) {
         let snapshot = self.snapshot.borrow().clone();
         snapshot.ref_();
@@ -3534,7 +3534,7 @@ impl Session {
         self.global_diag_publish_pending.set(false);
     }
 
-    // Go: project/session.go:1993 triggerATAForUpdatedProjects
+    // Go: project/session.go:2027 triggerATAForUpdatedProjects
     pub fn trigger_ata_for_updated_projects(self: &Rc<Self>, new_snapshot: &Rc<Snapshot>) {
         for project in new_snapshot.project_collection.projects() {
             if !project.borrow().should_trigger_ata(new_snapshot.id()) {
@@ -3645,7 +3645,7 @@ impl Session {
         }
     }
 
-    // Go: project/session.go:2046 warmAutoImportCache
+    // Go: project/session.go:2077 warmAutoImportCache
     // PORT: Go `defer cancel()` and `defer newSnapshot.Deref(s)` run on
     // every return; the port calls them on each path, in Go's defer order.
     //

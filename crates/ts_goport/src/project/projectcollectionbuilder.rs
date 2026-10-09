@@ -94,7 +94,7 @@ pub struct MadeProgram {
     pub checker_pool: Rc<CheckerPool>,
 }
 
-// Go: project/projectcollectionbuilder.go:68 newProjectCollectionBuilder
+// Go: project/projectcollectionbuilder.go:67 newProjectCollectionBuilder
 // PORT: Go `oldAPIState.clone()` copies the state, so the caller passes it by
 // reference.
 #[allow(clippy::too_many_arguments)]
@@ -184,12 +184,12 @@ fn ensure_cloned<'c>(
 }
 
 impl ProjectCollectionBuilder {
-    // Go: project/projectcollectionbuilder.go:113 isOpenFile (ts#64291)
+    // Go: project/projectcollectionbuilder.go:111 isOpenFile (ts#64291)
     pub fn is_open_file(&self, path: &tspath::Path) -> bool {
         self.overlays.contains_key(path)
     }
 
-    // Go: project/projectcollectionbuilder.go:118 Finalize
+    // Go: project/projectcollectionbuilder.go:120 Finalize
     pub fn finalize(
         self: &Rc<Self>,
         _logger: Option<Rc<logging::LogTree>>,
@@ -250,7 +250,7 @@ impl ProjectCollectionBuilder {
         (new_project_collection, config_file_registry)
     }
 
-    // Go: project/projectcollectionbuilder.go:166 forEachProject
+    // Go: project/projectcollectionbuilder.go:168 forEachProject
     pub fn for_each_project(
         self: &Rc<Self>,
         fn_: &mut dyn FnMut(&dyn dirty::Value<Rc<RefCell<Project>>>) -> bool,
@@ -619,7 +619,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:379 nextSyntheticProjectID (ts#64319: was nextSyntheticProjectName)
+    // Go: project/projectcollectionbuilder.go:388 nextSyntheticProjectID (ts#64319: was nextSyntheticProjectName)
     pub fn next_synthetic_project_id(&self) -> SyntheticProjectID {
         let mut id = 1;
         loop {
@@ -644,7 +644,7 @@ impl ProjectCollectionBuilder {
             .collect()
     }
 
-    // Go: project/projectcollectionbuilder.go:388 DidChangeFiles
+    // Go: project/projectcollectionbuilder.go:397 DidChangeFiles
     // PORT: Go passes the summary by value; here by reference.
     pub fn did_change_files(
         self: &Rc<Self>,
@@ -797,7 +797,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:465 refreshContentMapperProjectForChanges (tsgo#4712)
+    // Go: project/projectcollectionbuilder.go:474 refreshContentMapperProjectForChanges (tsgo#4712)
     pub fn refresh_content_mapper_project_for_changes(
         &self,
         entry: &dyn dirty::Value<Rc<RefCell<Project>>>,
@@ -847,7 +847,7 @@ impl ProjectCollectionBuilder {
         });
     }
 
-    // Go: project/projectcollectionbuilder.go:500 cleanupConfiguredProjects
+    // Go: project/projectcollectionbuilder.go:509 cleanupConfiguredProjects
     // cleanupConfiguredProjects sweeps the loaded configured projects and unloads those
     // that are no longer needed. Starting from the set of all configured projects, it
     // retains any project that is the default project (along with its references and
@@ -982,7 +982,7 @@ impl ProjectCollectionBuilder {
         self.config_file_registry_builder.cleanup();
     }
 
-    // Go: project/projectcollectionbuilder.go:571 cleanupAllConfiguredProjects (ts#63950)
+    // Go: project/projectcollectionbuilder.go:579 cleanupAllConfiguredProjects (ts#63950)
     // cleanupAllConfiguredProjects removes all configured projects unconditionally.
     // PORT: Go deletes entries inside `Range`; the port copies the keys first
     // and loads each one again, as Go does.
@@ -1000,7 +1000,7 @@ impl ProjectCollectionBuilder {
         self.config_file_registry_builder.cleanup();
     }
 
-    // Go: project/projectcollectionbuilder.go:590 collectInferredProjectRoots
+    // Go: project/projectcollectionbuilder.go:598 collectInferredProjectRoots
     fn collect_inferred_project_roots(self: &Rc<Self>) -> Vec<String> {
         let mut inferred_project_files: Vec<String> = Vec::new();
         for (path, overlay) in self.overlays.iter() {
@@ -1014,7 +1014,7 @@ impl ProjectCollectionBuilder {
         self.append_api_opened_inferred_roots(inferred_project_files)
     }
 
-    // Go: project/projectcollectionbuilder.go:603 appendAPIOpenedInferredRoots
+    // Go: project/projectcollectionbuilder.go:611 appendAPIOpenedInferredRoots
     // appendAPIOpenedInferredRoots appends API-opened files that aren't open in an
     // overlay and have no configured project, so they're kept as inferred project
     // roots and persist across snapshots.
@@ -1036,12 +1036,12 @@ impl ProjectCollectionBuilder {
         inferred_project_files
     }
 
-    // Go: project/projectcollectionbuilder.go:615 cleanupInferredProject
+    // Go: project/projectcollectionbuilder.go:623 cleanupInferredProject
     pub fn cleanup_inferred_project(self: &Rc<Self>, logger: Option<Rc<logging::LogTree>>) {
         self.update_inferred_project_roots(self.collect_inferred_project_roots(), logger);
     }
 
-    // Go: project/projectcollectionbuilder.go:619 DidChangeContentMapperContributions (tsgo#4712)
+    // Go: project/projectcollectionbuilder.go:627 DidChangeContentMapperContributions (tsgo#4712)
     pub fn did_change_content_mapper_contributions(
         self: &Rc<Self>,
         logger: Option<Rc<logging::LogTree>>,
@@ -1052,7 +1052,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:626 ensureInferredProjectIncludesClosedFile
+    // Go: project/projectcollectionbuilder.go:634 ensureInferredProjectIncludesClosedFile
     pub fn ensure_inferred_project_includes_closed_file(
         self: &Rc<Self>,
         file_name: &str,
@@ -1068,7 +1068,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:639 DidRequestFile
+    // Go: project/projectcollectionbuilder.go:647 DidRequestFile
     // DidRequestFile ensures projects are loaded for the given URI.
     // If configuredProjectsOnly is true, only configured projects are loaded; no inferred project is created
     // and it is not guaranteed that there will be any project containing the file in the resulting snapshot.
@@ -1085,7 +1085,7 @@ impl ProjectCollectionBuilder {
         self.did_request_file(&file_name, &path, configured_projects_only, logger);
     }
 
-    // Go: project/projectcollectionbuilder.go:645 didRequestFile (ts#64391)
+    // Go: project/projectcollectionbuilder.go:653 didRequestFile (ts#64391)
     pub fn did_request_file(
         self: &Rc<Self>,
         file_name: &str,
@@ -1170,7 +1170,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:707 DidRequestProject (ts#64319: takes the project ID)
+    // Go: project/projectcollectionbuilder.go:715 DidRequestProject (ts#64319: takes the project ID)
     pub fn did_request_project(
         self: &Rc<Self>,
         project_id: &ID,
@@ -1201,7 +1201,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:730 DidRequestProjectTrees
+    // Go: project/projectcollectionbuilder.go:738 DidRequestProjectTrees
     pub fn did_request_project_trees(
         self: &Rc<Self>,
         project_tree_request: &ProjectTreeRequest,
@@ -1266,7 +1266,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:761 ensureProjectTree
+    // Go: project/projectcollectionbuilder.go:776 ensureProjectTree
     pub fn ensure_project_tree<'a>(
         self: &'a Rc<Self>,
         wg: &Rc<dyn core_workgroup::WorkGroup<'a> + 'a>,
@@ -1352,7 +1352,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:815 DidUpdateATAState
+    // Go: project/projectcollectionbuilder.go:830 DidUpdateATAState
     // PORT: Go map order is random; FxHashMap order here (log order only).
     pub fn did_update_ata_state(
         self: &Rc<Self>,
@@ -1428,7 +1428,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:867 DidChangeCustomConfigFileName
+    // Go: project/projectcollectionbuilder.go:881 DidChangeCustomConfigFileName
     // if customConfigFileName changes, invalidate default projects.
     pub fn did_change_custom_config_file_name(
         self: &Rc<Self>,
@@ -1447,7 +1447,7 @@ impl ProjectCollectionBuilder {
         self.program_structure_changed.set(true);
     }
 
-    // Go: project/projectcollectionbuilder.go:877 DidChangeUserPreferences (tsgo#4712)
+    // Go: project/projectcollectionbuilder.go:891 DidChangeUserPreferences (tsgo#4712)
     pub fn did_change_user_preferences(
         self: &Rc<Self>,
         old_preferences: &lsutil::UserPreferences,
@@ -1475,7 +1475,7 @@ impl ProjectCollectionBuilder {
         );
     }
 
-    // Go: project/projectcollectionbuilder.go:893 markProjectsAffectedByConfigChanges
+    // Go: project/projectcollectionbuilder.go:907 markProjectsAffectedByConfigChanges
     pub fn mark_projects_affected_by_config_changes(
         self: &Rc<Self>,
         config_change_result: &ChangeFileResult,
@@ -1561,7 +1561,7 @@ impl ProjectCollectionBuilder {
         has_changes
     }
 
-    // Go: project/projectcollectionbuilder.go:944 findDefaultProject
+    // Go: project/projectcollectionbuilder.go:958 findDefaultProject
     pub fn find_default_project(
         self: &Rc<Self>,
         file_name: &str,
@@ -1594,7 +1594,7 @@ impl ProjectCollectionBuilder {
         None
     }
 
-    // Go: project/projectcollectionbuilder.go:963 findDefaultConfiguredProject
+    // Go: project/projectcollectionbuilder.go:977 findDefaultConfiguredProject
     pub fn find_default_configured_project(
         self: &Rc<Self>,
         file_name: &str,
@@ -1651,7 +1651,7 @@ impl ProjectCollectionBuilder {
         configured_projects.get(&project).cloned()
     }
 
-    // Go: project/projectcollectionbuilder.go:995 ensureConfiguredProjectAndAncestorsForFile
+    // Go: project/projectcollectionbuilder.go:1009 ensureConfiguredProjectAndAncestorsForFile
     pub fn ensure_configured_project_and_ancestors_for_file(
         self: &Rc<Self>,
         file_name: &str,
@@ -1670,7 +1670,7 @@ impl ProjectCollectionBuilder {
         result
     }
 
-    // Go: project/projectcollectionbuilder.go:1003 createAncestorTree
+    // Go: project/projectcollectionbuilder.go:1017 createAncestorTree
     pub fn create_ancestor_tree(
         self: &Rc<Self>,
         file_name: &str,
@@ -1753,7 +1753,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:1058 findOrCreateDefaultConfiguredProjectWorker
+    // Go: project/projectcollectionbuilder.go:1072 findOrCreateDefaultConfiguredProjectWorker
     // PORT: Go `*collections.SyncSet[searchNodeKey]` is a `RefCell<FxHashSet>`
     // and Go `collections.SyncMap` of configs is a `RefCell<FxHashMap>`.
     #[allow(clippy::too_many_arguments)]
@@ -2007,7 +2007,7 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:1216 findOrCreateDefaultConfiguredProjectForFile
+    // Go: project/projectcollectionbuilder.go:1230 findOrCreateDefaultConfiguredProjectForFile
     pub fn find_or_create_default_configured_project_for_file(
         self: &Rc<Self>,
         file_name: &str,
@@ -2081,7 +2081,7 @@ impl ProjectCollectionBuilder {
         SearchResult::default()
     }
 
-    // Go: project/projectcollectionbuilder.go:1261 findOrCreateProject
+    // Go: project/projectcollectionbuilder.go:1275 findOrCreateProject
     pub fn find_or_create_project(
         self: &Rc<Self>,
         config_file_name: &str,
@@ -2104,7 +2104,7 @@ impl ProjectCollectionBuilder {
         entry
     }
 
-    // Go: project/projectcollectionbuilder.go:1275 updateInferredProjectRoots
+    // Go: project/projectcollectionbuilder.go:1289 updateInferredProjectRoots
     // PORT: Go reads `CommandLine.Errors` of an inferred or synthetic
     // project here, in `update_or_create_synthetic_project`, in
     // `update_or_create_inferred_project` and in snapshot.rs
@@ -2168,7 +2168,7 @@ impl ProjectCollectionBuilder {
         )
     }
 
-    // Go: project/projectcollectionbuilder.go:1286 updateOrCreateSyntheticProject (ts#64204)
+    // Go: project/projectcollectionbuilder.go:1302 updateOrCreateSyntheticProject (ts#64204)
     #[allow(clippy::too_many_arguments)]
     // ts#64319: keyed by SyntheticProjectID. ts#64299: the module resolver
     // factory and its ID.
@@ -2285,7 +2285,7 @@ impl ProjectCollectionBuilder {
         project
     }
 
-    // Go: project/projectcollectionbuilder.go:1338 updateInferredProject (ts#63950)
+    // Go: project/projectcollectionbuilder.go:1357 updateInferredProject (ts#63950)
     // updateInferredProject preserves the current command line when roots/options are unchanged.
     #[allow(clippy::too_many_arguments)]
     pub fn update_inferred_project(
@@ -2313,7 +2313,7 @@ impl ProjectCollectionBuilder {
         )
     }
 
-    // Go: project/projectcollectionbuilder.go:1354 deleteInferredProject (ts#64204)
+    // Go: project/projectcollectionbuilder.go:1373 deleteInferredProject (ts#64204)
     pub fn delete_inferred_project(self: &Rc<Self>, logger: Option<Rc<logging::LogTree>>) -> bool {
         let Some(project) = self.inferred_project.value() else {
             return false;
@@ -2338,7 +2338,7 @@ impl ProjectCollectionBuilder {
         true
     }
 
-    // Go: project/projectcollectionbuilder.go:1374 updateOrCreateInferredProject (ts#63950)
+    // Go: project/projectcollectionbuilder.go:1393 updateOrCreateInferredProject (ts#63950)
     // updateOrCreateInferredProject always retains an inferred project, including when rootFileNames is empty.
     // The caller transfers ownership of rootFileNames.
     #[allow(clippy::too_many_arguments)]
@@ -2442,7 +2442,7 @@ impl ProjectCollectionBuilder {
         true
     }
 
-    // Go: project/projectcollectionbuilder.go:1428 isSupportedInInferredProject (tsgo#4712)
+    // Go: project/projectcollectionbuilder.go:1451 isSupportedInInferredProject (tsgo#4712)
     pub fn is_supported_in_inferred_project(&self, file_name: &str) -> bool {
         if tspath::is_dynamic_file_name(file_name)
             || get_script_kind_from_file_name(file_name) != ScriptKind::UNKNOWN
@@ -2463,7 +2463,7 @@ impl ProjectCollectionBuilder {
         tspath::file_extension_is_one_of(file_name, &extensions)
     }
 
-    // Go: project/projectcollectionbuilder.go:1440 updateProgram
+    // Go: project/projectcollectionbuilder.go:1463 updateProgram
     // updateProgram updates the program for the given project entry if necessary. It returns
     // a boolean indicating whether the update could have caused any structure-affecting changes.
     pub fn update_program(
@@ -2687,7 +2687,7 @@ impl ProjectCollectionBuilder {
         files_changed
     }
 
-    // Go: project/projectcollectionbuilder.go:1543 markFilesChanged
+    // Go: project/projectcollectionbuilder.go:1566 markFilesChanged
     // PORT: the two Go closures share `dirty` and `dirtyFilePath`, so they
     // are a `Cell` and a `RefCell`.
     pub fn mark_files_changed(
@@ -2764,7 +2764,7 @@ impl ProjectCollectionBuilder {
         );
     }
 
-    // Go: project/projectcollectionbuilder.go:1597 deleteProject (ts#64204: was deleteConfiguredProject)
+    // Go: project/projectcollectionbuilder.go:1620 deleteProject (ts#64204: was deleteConfiguredProject)
     pub fn delete_project(
         self: &Rc<Self>,
         project: &dyn dirty::Value<Rc<RefCell<Project>>>,
@@ -2807,7 +2807,7 @@ impl ProjectCollectionBuilder {
         project.delete();
     }
 
-    // Go: project/projectcollectionbuilder.go:1619 releaseDroppedProjectReferences
+    // Go: project/projectcollectionbuilder.go:1642 releaseDroppedProjectReferences
     // releaseDroppedProjectReferences releases the config entries for project references
     // that were present in oldProgram but are no longer referenced by newProgram. Creating
     // newProgram already re-acquires the config for every reference it still resolves, so
@@ -2845,7 +2845,7 @@ impl ProjectCollectionBuilder {
     }
 }
 
-// Go: project/projectcollectionbuilder.go:1419 projectReferencesEqual (ts#63950)
+// Go: project/projectcollectionbuilder.go:1442 projectReferencesEqual (ts#63950)
 // PORT: Go `[]*core.ProjectReference` elements are never nil here.
 pub fn project_references_equal(a: &[ProjectReference], b: &[ProjectReference]) -> bool {
     a.len() == b.len()
@@ -2939,7 +2939,7 @@ fn is_referenced_by(
     false
 }
 
-// Go: project/projectcollectionbuilder.go:581 logChangeFileResult
+// Go: project/projectcollectionbuilder.go:589 logChangeFileResult
 // PORT: Go passes the result by value; here by reference.
 pub fn log_change_file_result(result: &ChangeFileResult, logger: &Option<Rc<logging::LogTree>>) {
     if !result.affected_projects.is_empty() {
@@ -2956,7 +2956,7 @@ pub fn log_change_file_result(result: &ChangeFileResult, logger: &Option<Rc<logg
     }
 }
 
-// Go: project/projectcollectionbuilder.go:1042 searchNode
+// Go: project/projectcollectionbuilder.go:1056 searchNode
 #[derive(Clone)]
 pub struct SearchNode {
     pub config_file_name: String,
@@ -2964,14 +2964,14 @@ pub struct SearchNode {
     pub logger: Option<Rc<logging::LogTree>>,
 }
 
-// Go: project/projectcollectionbuilder.go:1048 searchNodeKey
+// Go: project/projectcollectionbuilder.go:1062 searchNodeKey
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SearchNodeKey {
     pub config_file_name: String,
     pub load_kind: ProjectLoadKind,
 }
 
-// Go: project/projectcollectionbuilder.go:1053 searchResult
+// Go: project/projectcollectionbuilder.go:1067 searchResult
 #[derive(Clone, Default)]
 pub struct SearchResult {
     pub project: Option<Rc<dirty::SyncMapEntry<ConfiguredProjectID, Rc<RefCell<Project>>>>>,

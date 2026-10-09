@@ -4,7 +4,7 @@ use crate::project::prelude::*;
 
 use xxhash_rust::xxh3::Xxh3;
 
-// Go: project/extendedconfigcache.go:9 ExtendedConfigParseArgs
+// Go: project/extendedconfigcache.go:10 ExtendedConfigParseArgs
 // PORT: the cache stores its parse function for any args, so the args own
 // their values: Go interfaces are `Rc<dyn ..>` (a nil `Cache` is `None`).
 // Go passes the config file registry builder as `Host` and `Cache`, so the
@@ -18,7 +18,7 @@ pub struct ExtendedConfigParseArgs {
     pub cache: Option<Rc<dyn tsoptions::ExtendedConfigCache>>,
 }
 
-// Go: project/extendedconfigcache.go:18 ExtendedConfigCacheEntry
+// Go: project/extendedconfigcache.go:19 ExtendedConfigCacheEntry
 // PORT: Go embeds `*tsoptions.ExtendedConfigCacheEntry`; here it is the
 // field `extended_config_cache_entry` (map-project.md section 4). Go
 // `xxh3.Uint128` is `u128`.
@@ -28,11 +28,11 @@ pub struct ExtendedConfigCacheEntry {
     pub hash: u128,
 }
 
-// Go: project/extendedconfigcache.go:23 ExtendedConfigCache
+// Go: project/extendedconfigcache.go:24 ExtendedConfigCache
 pub type ExtendedConfigCache =
     OwnerCache<tspath::Path, Rc<ExtendedConfigCacheEntry>, ExtendedConfigParseArgs>;
 
-// Go: project/extendedconfigcache.go:25 NewExtendedConfigCache
+// Go: project/extendedconfigcache.go:26 NewExtendedConfigCache
 pub fn new_extended_config_cache() -> Rc<ExtendedConfigCache> {
     new_owner_cache(
         |path: &tspath::Path, args: ExtendedConfigParseArgs| -> Rc<ExtendedConfigCacheEntry> {
@@ -60,7 +60,7 @@ pub fn new_extended_config_cache() -> Rc<ExtendedConfigCache> {
     )
 }
 
-// Go: project/extendedconfigcache.go:40 hash
+// Go: project/extendedconfigcache.go:41 hash
 // PORT: Go passes the args by value; here by reference.
 pub fn hash(entry: &tsoptions::ExtendedConfigCacheEntry, args: &ExtendedConfigParseArgs) -> u128 {
     let mut hasher = Xxh3::new();

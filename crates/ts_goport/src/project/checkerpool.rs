@@ -300,7 +300,7 @@ impl CheckerPool {
         (None, None, false)
     }
 
-    // Go: project/checkerpool.go:220 checkerPool.getDiagnosticsChecker
+    // Go: project/checkerpool.go:194 checkerPool.getDiagnosticsChecker
     // getDiagnosticsChecker returns the dedicated diagnostics checker (index 0).
     // Creates it on first use. Blocks on diagSem if it's currently in use.
     pub fn get_diagnostics_checker(
@@ -347,7 +347,7 @@ impl CheckerPool {
         (c, release)
     }
 
-    // Go: project/checkerpool.go:252 checkerPool.getQueryChecker
+    // Go: project/checkerpool.go:226 checkerPool.getQueryChecker
     // getQueryChecker returns an ephemeral query checker from indices 1+.
     // Uses request affinity, then file affinity, then finds/creates.
     // Blocks on querySem if all query slots are in use.
@@ -417,7 +417,7 @@ impl CheckerPool {
         (c, release)
     }
 
-    // Go: project/checkerpool.go:296 checkerPool.findOrCreateQueryCheckerLocked
+    // Go: project/checkerpool.go:270 checkerPool.findOrCreateQueryCheckerLocked
     // findOrCreateQueryCheckerLocked returns an idle query checker or creates one
     // in the first empty slot. The semaphore guarantees at least one slot is
     // available. Must be called with p.mu held.
@@ -447,7 +447,7 @@ impl CheckerPool {
         );
     }
 
-    // Go: project/checkerpool.go:315 checkerPool.getPersistentChecker
+    // Go: project/checkerpool.go:289 checkerPool.getPersistentChecker
     pub fn get_persistent_checker(&self) -> (Rc<RefCell<Checker>>, Release) {
         self.persistent_sem.send();
         self.mu_lock();
@@ -494,7 +494,7 @@ impl CheckerPool {
         (c, release)
     }
 
-    // Go: project/checkerpool.go:345 checkerPool.createRelease
+    // Go: project/checkerpool.go:319 checkerPool.createRelease
     pub fn create_release(&self, request_id: &str, index: i32, c: Rc<RefCell<Checker>>) -> Release {
         let p = self.this_rc();
         let request_id = request_id.to_string();
@@ -541,7 +541,7 @@ impl CheckerPool {
         })
     }
 
-    // Go: project/checkerpool.go:387 checkerPool.registerRequestCleanup
+    // Go: project/checkerpool.go:361 checkerPool.registerRequestCleanup
     // registerRequestCleanup uses context.AfterFunc to delete the request
     // association when the request context is done. This prevents the map
     // from growing unboundedly with completed request IDs.
@@ -560,7 +560,7 @@ impl CheckerPool {
         }
     }
 
-    // Go: project/checkerpool.go:399 checkerPool.scheduleCleanupLocked
+    // Go: project/checkerpool.go:373 checkerPool.scheduleCleanupLocked
     // scheduleCleanupLocked resets (or starts) the cleanup timer so it fires at
     // the earliest pending checker-expiration deadline among all currently idle,
     // unheld checkers.
@@ -616,7 +616,7 @@ impl CheckerPool {
         }
     }
 
-    // Go: project/checkerpool.go:431 checkerPool.cleanupIdleCheckers
+    // Go: project/checkerpool.go:405 checkerPool.cleanupIdleCheckers
     // cleanupIdleCheckers disposes checkers that have been idle for longer than
     // the idle timeout. The API checker is separate and never idle-cleaned.
     pub fn cleanup_idle_checkers(&self) {
@@ -655,7 +655,7 @@ impl CheckerPool {
         self.schedule_cleanup_locked();
     }
 
-    // Go: project/checkerpool.go:463 checkerPool.disposeCheckerLocked
+    // Go: project/checkerpool.go:437 checkerPool.disposeCheckerLocked
     // disposeCheckerLocked removes a checker from the pool and clears all associations
     // (file and request) that reference it. Must be called with p.mu held.
     pub fn dispose_checker_locked(&self, index: i32, c: &Rc<RefCell<Checker>>) {
@@ -678,7 +678,7 @@ impl CheckerPool {
             .retain(|_req, idx| *idx != index);
     }
 
-    // Go: project/checkerpool.go:484 checkerPool.mergeGlobalDiagnosticsFromCheckerLocked
+    // Go: project/checkerpool.go:458 checkerPool.mergeGlobalDiagnosticsFromCheckerLocked
     // mergeGlobalDiagnosticsFromCheckerLocked checks if the given checker has produced new global
     // diagnostics since the last time we looked, and if so merges them into the accumulated set.
     // Must be called with p.mu held.
@@ -702,7 +702,7 @@ impl CheckerPool {
         }
     }
 
-    // Go: project/checkerpool.go:499 checkerPool.GetGlobalDiagnostics
+    // Go: project/checkerpool.go:473 checkerPool.GetGlobalDiagnostics
     // GetGlobalDiagnostics returns the global diagnostics accumulated from the dedicated
     // diagnostics checker across its instances during this pool's lifetime.
     pub fn get_global_diagnostics(&self) -> Vec<Diagnostic> {
@@ -710,7 +710,7 @@ impl CheckerPool {
         self.global_diag_accumulated.borrow().clone()
     }
 
-    // Go: project/checkerpool.go:507 checkerPool.TakeNewGlobalDiagnostics
+    // Go: project/checkerpool.go:481 checkerPool.TakeNewGlobalDiagnostics
     // TakeNewGlobalDiagnostics reports whether new global diagnostics have been
     // accumulated since the last call, and resets the flag.
     pub fn take_new_global_diagnostics(&self) -> bool {
@@ -720,7 +720,7 @@ impl CheckerPool {
         changed
     }
 
-    // Go: project/checkerpool.go:519 checkerPool.Discard
+    // Go: project/checkerpool.go:493 checkerPool.Discard
     // Discard signals that this pool's program has been replaced. The pool
     // remains functional but stops its idle-cleanup timer so that checkers
     // are not disposed until the pool is GC'd. The API checker is unaffected

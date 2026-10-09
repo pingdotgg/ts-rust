@@ -305,7 +305,7 @@ fn test_watcher_kind_filter() {
     }
 }
 
-// Go: lspwatcher_test.go:147 TestRootFromGlob
+// Go: lspwatcher_test.go:151 TestRootFromGlob
 #[test]
 fn test_root_from_glob() {
     let cases = [

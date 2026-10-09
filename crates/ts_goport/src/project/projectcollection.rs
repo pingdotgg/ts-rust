@@ -62,7 +62,7 @@ pub struct APIState {
     pub open_files: IndexMap<tspath::Path, APIOpenedFile>,
 }
 
-// Go: project/projectcollection.go:67 apiOpenedFile
+// Go: project/projectcollection.go:68 apiOpenedFile
 // apiOpenedFile tracks a file kept open by API clients along with its ref count.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct APIOpenedFile {
@@ -71,19 +71,19 @@ pub struct APIOpenedFile {
 }
 
 impl ProjectCollection {
-    // Go: project/projectcollection.go:72 ConfigFileRegistry
+    // Go: project/projectcollection.go:73 ConfigFileRegistry
     pub fn config_file_registry(&self) -> Option<Rc<ConfigFileRegistry>> {
         self.config_file_registry.clone()
     }
 
-    // Go: project/projectcollection.go:74 ConfiguredProject
+    // Go: project/projectcollection.go:75 ConfiguredProject
     pub fn configured_project(&self, path: &tspath::Path) -> Option<Rc<RefCell<Project>>> {
         self.configured_projects
             .get(&ConfiguredProjectID(path.clone()))
             .cloned()
     }
 
-    // Go: project/projectcollection.go:78 GetProject (ts#64319: was GetProjectByPath)
+    // Go: project/projectcollection.go:79 GetProject (ts#64319: was GetProjectByPath)
     pub fn get_project(&self, id: &ID) -> Option<Rc<RefCell<Project>>> {
         if id.inferred().1 {
             return self.inferred_project.clone();
@@ -99,7 +99,7 @@ impl ProjectCollection {
         None
     }
 
-    // Go: project/projectcollection.go:92 ConfiguredProjects
+    // Go: project/projectcollection.go:93 ConfiguredProjects
     // ConfiguredProjects returns all configured projects in a stable order.
     pub fn configured_projects(&self) -> Vec<Rc<RefCell<Project>>> {
         let mut projects = Vec::with_capacity(self.configured_projects.len());
@@ -107,7 +107,7 @@ impl ProjectCollection {
         projects
     }
 
-    // Go: project/projectcollection.go:98 fillConfiguredProjects
+    // Go: project/projectcollection.go:99 fillConfiguredProjects
     pub fn fill_configured_projects(&self, projects: &mut Vec<Rc<RefCell<Project>>>) {
         for p in self.configured_projects.values() {
             projects.push(p.clone());
@@ -118,7 +118,7 @@ impl ProjectCollection {
         });
     }
 
-    // Go: project/projectcollection.go:108 SyntheticProjects (ts#64204)
+    // Go: project/projectcollection.go:109 SyntheticProjects (ts#64204)
     // SyntheticProjects returns all synthetic projects in a stable order.
     pub fn synthetic_projects(&self) -> Vec<Rc<RefCell<Project>>> {
         let mut projects: Vec<Rc<RefCell<Project>>> =
@@ -133,7 +133,7 @@ impl ProjectCollection {
         projects
     }
 
-    // Go: project/projectcollection.go:120 ProjectsByID (ts#64319: was ProjectsByPath)
+    // Go: project/projectcollection.go:121 ProjectsByID (ts#64319: was ProjectsByPath)
     // ProjectsByID returns all projects keyed by project ID in stable order.
     // PORT: Go `*collections.OrderedMap` is an owned `IndexMap`.
     pub fn projects_by_id(&self) -> IndexMap<ID, Rc<RefCell<Project>>> {
@@ -157,7 +157,7 @@ impl ProjectCollection {
         projects
     }
 
-    // Go: project/projectcollection.go:137 Projects
+    // Go: project/projectcollection.go:138 Projects
     // Projects returns all configured, synthetic, and inferred projects in a stable order.
     pub fn projects(&self) -> Vec<Rc<RefCell<Project>>> {
         let mut projects = Vec::with_capacity(
@@ -173,7 +173,7 @@ impl ProjectCollection {
         projects
     }
 
-    // Go: project/projectcollection.go:150 LanguageServiceProjects (ts#64204)
+    // Go: project/projectcollection.go:151 LanguageServiceProjects (ts#64204)
     // LanguageServiceProjects returns configured and inferred projects in stable order.
     // Synthetic projects are accessed explicitly through the API and do not participate
     // in cross-project language service operations.
@@ -188,12 +188,12 @@ impl ProjectCollection {
         projects
     }
 
-    // Go: project/projectcollection.go:159 InferredProject
+    // Go: project/projectcollection.go:160 InferredProject
     pub fn inferred_project(&self) -> Option<Rc<RefCell<Project>>> {
         self.inferred_project.clone()
     }
 
-    // Go: project/projectcollection.go:165 GetLanguageServiceProjectsContainingFile
+    // Go: project/projectcollection.go:166 GetLanguageServiceProjectsContainingFile
     // GetLanguageServiceProjectsContainingFile does not consider synthetic projects
     // (ones created by API via createProgram)
     // PORT: Go `ls.Project` values are `Rc<dyn ls::Project>`; the project
@@ -218,7 +218,7 @@ impl ProjectCollection {
         projects
     }
 
-    // Go: project/projectcollection.go:179 GetOpenConfiguredProjects
+    // Go: project/projectcollection.go:180 GetOpenConfiguredProjects
     // GetOpenConfiguredProjects returns configured projects containing at least one open file.
     // ts#64319: configured project IDs.
     pub fn get_open_configured_projects(&self) -> Rc<FxHashSet<ConfiguredProjectID>> {
@@ -253,7 +253,7 @@ impl ProjectCollection {
             .clone()
     }
 
-    // Go: project/projectcollection.go:211 GetDefaultProject
+    // Go: project/projectcollection.go:212 GetDefaultProject
     // !!! result could be cached
     pub fn get_default_project(&self, path: &tspath::Path) -> Option<Rc<RefCell<Project>>> {
         if let Some(result) = self.file_default_projects.get(path) {
@@ -310,7 +310,7 @@ impl ProjectCollection {
         first_configured_project
     }
 
-    // Go: project/projectcollection.go:265 findDefaultConfiguredProject
+    // Go: project/projectcollection.go:266 findDefaultConfiguredProject
     pub fn find_default_configured_project(
         &self,
         path: &tspath::Path,
@@ -331,7 +331,7 @@ impl ProjectCollection {
         None
     }
 
-    // Go: project/projectcollection.go:272 findDefaultConfiguredProjectWorker
+    // Go: project/projectcollection.go:273 findDefaultConfiguredProjectWorker
     // PORT: Go `*collections.SyncSet[*Project]` is a `RefCell<FxHashSet>` of
     // project addresses (`Rc::as_ptr as usize`, Go pointer keys).
     pub fn find_default_configured_project_worker(
@@ -449,7 +449,7 @@ impl ProjectCollection {
     }
 }
 
-// Go: project/projectcollection.go:202 openFilePaths
+// Go: project/projectcollection.go:203 openFilePaths
 // PORT: Go `map[tspath.Path]*Overlay` is the `IndexMap` of overlayfs.rs.
 pub fn open_file_paths(overlays: &IndexMap<tspath::Path, Rc<Overlay>>) -> FxHashSet<tspath::Path> {
     let mut open_files: FxHashSet<tspath::Path> =
@@ -460,7 +460,7 @@ pub fn open_file_paths(overlays: &IndexMap<tspath::Path, Rc<Overlay>>) -> FxHash
     open_files
 }
 
-// Go: project/projectcollection.go:348 findDefaultConfiguredProjectFromProgramInclusion
+// Go: project/projectcollection.go:349 findDefaultConfiguredProjectFromProgramInclusion
 // findDefaultConfiguredProjectFromProgramInclusion finds the default configured project for a file
 // based on the file's inclusion in existing projects. The projects should be sorted, as ties will
 // be broken by slice order. `getProject` should return a project with an up-to-date program.

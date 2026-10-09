@@ -264,7 +264,7 @@ pub fn new_watched_files_for_paths(
     )
 }
 
-// Go: project/watch.go:211 Watchers
+// Go: project/watch.go:206 Watchers
 #[derive(Clone, Debug, Default)]
 pub struct Watchers {
     pub watcher_id: WatcherID,
@@ -274,7 +274,7 @@ pub struct Watchers {
 }
 
 impl<T> WatchedFiles<T> {
-    // Go: project/watch.go:218 WatchedFiles.Watchers
+    // Go: project/watch.go:213 WatchedFiles.Watchers
     // PORT: Go returns the shared slices and map; the port returns copies.
     pub fn watchers(&self) -> Watchers {
         // Go: w.computeWatchersOnce.Do(...)
@@ -356,7 +356,7 @@ impl<T> WatchedFiles<T> {
         }
     }
 
-    // Go: project/watch.go:266 WatchedFiles.ID
+    // Go: project/watch.go:265 WatchedFiles.ID
     // PORT: Go allows a nil receiver; call as `WatchedFiles::id(w.as_deref())`.
     pub fn id(w: Option<&WatchedFiles<T>>) -> WatcherID {
         let Some(w) = w else {
@@ -365,17 +365,17 @@ impl<T> WatchedFiles<T> {
         w.watchers().watcher_id
     }
 
-    // Go: project/watch.go:273 WatchedFiles.Name
+    // Go: project/watch.go:272 WatchedFiles.Name
     pub fn name(&self) -> String {
         self.name.clone()
     }
 
-    // Go: project/watch.go:277 WatchedFiles.WatchKind
+    // Go: project/watch.go:276 WatchedFiles.WatchKind
     pub fn watch_kind(&self) -> lsproto::WatchKind {
         self.watch_kind
     }
 
-    // Go: project/watch.go:281 WatchedFiles.Clone
+    // Go: project/watch.go:280 WatchedFiles.Clone
     // PORT: Go allows a nil receiver; call as
     // `WatchedFiles::clone_(w.as_deref(), input)`. `clone_` keeps it apart
     // from `std::clone::Clone`. Go does not copy `id` (it stays 0) or
@@ -602,7 +602,7 @@ pub fn get_typings_locations_globs(
     }
 }
 
-// Go: project/watch.go:424 getPathComponentsForWatching
+// Go: project/watch.go:420 getPathComponentsForWatching
 pub fn get_path_components_for_watching(path: &str, current_directory: &str) -> Vec<String> {
     let components = tspath::get_path_components(path, current_directory);
     let root_length = perceived_os_root_length_for_watching(&components);
@@ -620,7 +620,7 @@ pub fn get_path_components_for_watching(path: &str, current_directory: &str) -> 
     result
 }
 
-// Go: project/watch.go:434 perceivedOsRootLengthForWatching
+// Go: project/watch.go:430 perceivedOsRootLengthForWatching
 pub fn perceived_os_root_length_for_watching(path_components: &[String]) -> i32 {
     let length = path_components.len() as i32;
     if length <= 1 {
@@ -648,7 +648,7 @@ pub fn perceived_os_root_length_for_watching(path_components: &[String]) -> i32 
     1
 }
 
-// Go: project/watch.go:458 getRecursiveGlobPattern
+// Go: project/watch.go:454 getRecursiveGlobPattern
 pub fn get_recursive_glob_pattern(directory: &str) -> String {
     format!(
         "{}/{}",
@@ -657,7 +657,7 @@ pub fn get_recursive_glob_pattern(directory: &str) -> String {
     )
 }
 
-// Go: project/watch.go:464 recursiveDirectoryGlobPattern
+// Go: project/watch.go:460 recursiveDirectoryGlobPattern
 // recursiveDirectoryGlobPattern returns the string form of a recursive watcher
 // for the given directory that would be produced by newRecursiveDirectoryWatcher.
 pub fn recursive_directory_glob_pattern(directory: &str, use_relative_pattern: bool) -> String {
@@ -667,7 +667,7 @@ pub fn recursive_directory_glob_pattern(directory: &str, use_relative_pattern: b
     get_recursive_glob_pattern(directory)
 }
 
-// Go: project/watch.go:474 newRecursiveDirectoryWatcher
+// Go: project/watch.go:470 newRecursiveDirectoryWatcher
 // newRecursiveDirectoryWatcher creates a FileSystemWatcher for recursively
 // watching a directory. When useRelativePattern is true, a RelativePattern with
 // a file:// base URI is used; otherwise a plain glob Pattern is used.
