@@ -1,5 +1,5 @@
 //! Port of Go `internal/api/session_createprogram_test.go` (ts#64204,
-//! ts#64319, ts#64391).
+//! ts#64319, ts#64391, ts#64637).
 //!
 //! PORT: the tests are in `project_lsp` because they use `projecttestutil`
 //! and `child_test!`. Go `bundled.Embedded` is always true in the port, so
@@ -13,6 +13,7 @@ use ts_goport::api::{
     ReconfigureSnapshotProgramParams, SnapshotID, SnapshotRequestChangesParams,
     UpdateSnapshotParams,
 };
+use ts_goport::frontend::core_ext::ProjectReference;
 use ts_goport::frontend::json::{json_marshal, json_unmarshal};
 use ts_goport::gostd::errors;
 use ts_goport::lsp::lsproto;
@@ -415,6 +416,49 @@ child_test! {
             },
         ));
         assert!(!ensured.projects[0].dirty);
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createprogram_test.go:283 TestCreateProgramReportsNonCompositeProjectReference (ts#64637)
+// PORT: the Go test checks the TS6306 of a program with no config file
+// (the compiler part of ts#64637 is ported by the config lane:
+// tsconfigparsing.go nil guard).
+child_test! {
+    fn create_program_reports_non_composite_project_reference() {
+        const ROOT: &str = "/home/projects/p/src/index.ts";
+        const REFERENCED: &str = "/home/projects/p/lib/tsconfig.json";
+        let (project_session, _) = projecttestutil::setup(files(&[
+            (ROOT, "export const x = 1;"),
+            (REFERENCED, r#"{ "compilerOptions": { "strict": true } }"#),
+            ("/home/projects/p/lib/a.ts", "export const a = 1;"),
+        ]));
+        let session = api::new_lsp_session(project_session.clone(), None);
+
+        let mut program = program_params(&[ROOT], no_lib());
+        program.options = Some(api::CreateProgramOptions {
+            project_references: vec![ProjectReference {
+                path: REFERENCED.to_string(),
+                original_path: "../lib".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let response = nil_error(
+            session.handle_create_snapshot(&bg(), &create_programs(vec![program])),
+        );
+        let project_id = response.operation.as_ref().unwrap().created_programs.as_ref().unwrap()[0]
+            .as_id();
+        let diagnostics = nil_error(session.handle_get_program_diagnostics(
+            &bg(),
+            &api::GetProjectDiagnosticsParams {
+                snapshot: response.snapshot,
+                project: project_id,
+            },
+        ));
+        let codes: Vec<i32> = diagnostics.iter().map(|diagnostic| diagnostic.code).collect();
+        assert_eq!(codes, vec![6306]);
         session.close();
         project_session.close();
     }
