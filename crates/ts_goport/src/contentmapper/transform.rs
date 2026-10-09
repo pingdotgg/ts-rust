@@ -143,6 +143,10 @@ fn parse_result_with(
         return Err(new_transform_error(TransformErrorKind::RESPONSE, None).to_go_error());
     }
     let base_parse_options = parse_options.clone();
+    // PORT: Go N' `FileName.AppendSuffix` (ts#64159) panics when the name is
+    // empty or the result is not a normalized rooted path. A program file
+    // name with a checked extension appended always is one, so the port
+    // appends.
     let virtual_file_name = format!("{}{}", base_parse_options.file_name, virtual_extension);
     let mut parse_options = base_parse_options.clone();
     if is_module_virtual_extension(&virtual_extension) {
@@ -200,6 +204,9 @@ fn parse_result_with(
         }
         let suffix = format!(".{i}{}", supplemental.virtual_extension);
         supplemental_options.file_name.push_str(&suffix);
+        // ts#64159: Go `PathKey.AppendCanonicalSuffix(suffix)`. The suffix is
+        // a checked extension in lower case, so it is canonical under either
+        // case sensitivity, and the key is the same text as before.
         supplemental_options.path = Path(format!("{}{}", parse_options.path.0, suffix));
         if is_module_virtual_extension(&supplemental.virtual_extension) {
             supplemental_options.external_module_indicator_options.force = true;

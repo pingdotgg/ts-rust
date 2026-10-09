@@ -17,14 +17,17 @@ use std::time::SystemTime;
 use crate::emitter::emitter::EmitOnly;
 use crate::emitter::program_emit::{self, EmitOptions, WriteFile, WriteFileData};
 use crate::frontend::compiler::{NewProgram, ProgramOptions, new_compiler_host};
-use crate::frontend::tsoptions::{ParsedCommandLine, ParsedOptions, get_default_lib_file_name};
-use crate::frontend::tspath::{combine_paths, get_normalized_absolute_path};
+use crate::frontend::tsoptions::{get_default_lib_file_name, new_parsed_command_line};
+use crate::frontend::tspath::{
+    ComparePathsOptions, combine_paths, file_extension_is, get_encoded_root_length,
+    get_normalized_absolute_path, get_root_length, has_trailing_directory_separator,
+};
 use crate::frontend::vfs::{Entries, FileInfo, Fs, FsError};
 use crate::gostd::Context;
 use crate::gostd::strconv::quote;
 use crate::program;
 
-// Go: transpile/transpile.go:17 Options
+// Go: transpile/transpile.go:16 Options
 /// Options configures single-file transpilation.
 // PORT: Go `CompilerOptions *core.CompilerOptions` is an owned value. The
 // Go worker clones it, so the caller's options stay unchanged either way.
@@ -50,7 +53,7 @@ pub struct Options {
     pub report_diagnostics: bool,
 }
 
-// Go: transpile/transpile.go:39 Output
+// Go: transpile/transpile.go:38 Output
 /// Output contains the emitted text and any requested diagnostics.
 // PORT: an empty `diagnostics` is also the Go nil slice.
 #[derive(Clone, Debug, Default)]
@@ -60,17 +63,19 @@ pub struct Output {
     pub source_map_text: String,
 }
 
-// Go: transpile/transpile.go:47 inputDirectory
+// Go: transpile/transpile.go:46 inputDirectory
 // inputDirectory is the synthetic current directory used to root the
 // single input file created for transpilation.
+// PORT: Go N' `tspath.RootedDirectoryPathFromNormalized("/")` (ts#64159);
+// the port keeps the text.
 const INPUT_DIRECTORY: &str = "/";
 
-// Go: transpile/transpile.go:51 libDirectory
+// Go: transpile/transpile.go:50 libDirectory
 // libDirectory is the synthetic directory that the barebones default library
 // file is placed in for declaration transpilation. See [barebonesLibContent].
 const LIB_DIRECTORY: &str = "/lib";
 
-// Go: transpile/transpile.go:59 barebonesLibContent
+// Go: transpile/transpile.go:58 barebonesLibContent
 // Declaration emit works without a `lib`, but some local inferences you'd
 // expect to work won't without at least a minimal `lib` available, since the
 // checker will type inferred declarations as `any` without these defined.
@@ -97,7 +102,7 @@ interface Symbol {
     readonly [Symbol.toStringTag]: string;
 }";
 
-// Go: transpile/transpile.go:93 TranspileModule
+// Go: transpile/transpile.go:92 TranspileModule
 /// TranspileModule transpiles a single file of source text to JavaScript
 /// using the specified options. If no compiler options are provided, a
 /// default set of compiler options is used. It returns nil if the context is
@@ -116,7 +121,7 @@ pub fn transpile_module(ctx: &Context, input: &str, options: Options) -> Option<
     transpile_worker(ctx, input, options, false /*declaration*/)
 }
 
-// Go: transpile/transpile.go:114 TranspileDeclaration
+// Go: transpile/transpile.go:113 TranspileDeclaration
 /// TranspileDeclaration creates a declaration (.d.ts) file from a single file
 /// of source text using the specified options. If no compiler options are
 /// provided, a default set of compiler options is used.
@@ -146,7 +151,7 @@ struct Written {
     source_map_text: Option<String>,
 }
 
-// Go: transpile/transpile.go:118 transpileWorker
+// Go: transpile/transpile.go:117 transpileWorker
 fn transpile_worker(
     ctx: &Context,
     input: &str,
@@ -155,55 +160,7 @@ fn transpile_worker(
 ) -> Option<Output> {
     let mut opts = options.compiler_options.unwrap_or_default();
 
-    // Clear options that do not apply to single-file transpilation.
-    opts.incremental = Tristate::Unknown;
-    opts.declaration = Tristate::Unknown;
-    opts.emit_declaration_only = Tristate::Unknown;
-    opts.no_emit = Tristate::Unknown;
-    opts.lib = None;
-    opts.out_file = String::new();
-    opts.composite = Tristate::Unknown;
-    opts.ts_build_info_file = String::new();
-    opts.paths = None;
-    opts.root_dirs = None;
-    opts.types = None;
-    opts.allow_importing_ts_extensions = Tristate::Unknown;
-    opts.no_emit_on_error = Tristate::Unknown;
-    opts.declaration_dir = String::new();
-
-    // Do not set `isolatedModules` if `verbatimModuleSyntax` was supplied, since
-    // it would be redundant.
-    if !opts.verbatim_module_syntax.is_true() {
-        opts.isolated_modules = Tristate::True;
-    }
-    opts.no_check = Tristate::True;
-    opts.no_resolve = Tristate::True;
-
-    // transpileModule/transpileDeclaration do not write anything to disk, so
-    // there's no need to verify there are no conflicts between input and
-    // output paths.
-    opts.suppress_output_path_check = Tristate::True;
-
-    // FileName can be a non-ts file.
-    opts.allow_non_ts_extensions = Tristate::True;
-
-    if declaration {
-        opts.declaration = Tristate::True;
-        opts.emit_declaration_only = Tristate::True;
-        opts.isolated_declarations = Tristate::True;
-    } else {
-        opts.declaration = Tristate::False;
-        opts.declaration_map = Tristate::False;
-        opts.isolated_declarations = Tristate::False;
-    }
-
-    // When transpiling declarations, we need a lib. GetDefaultLibFileName will
-    // cause the barebones lib below to be used instead of a real lib.
-    if declaration {
-        opts.no_lib = Tristate::False;
-    } else {
-        opts.no_lib = Tristate::True;
-    }
+    set_options_for_transpile(&mut opts, declaration);
 
     // If jsx is specified, then treat the file as .tsx.
     let mut file_name = options.file_name;
@@ -214,7 +171,7 @@ fn transpile_worker(
             file_name = "module.ts".to_string();
         }
     }
-    let input_file_name = get_normalized_absolute_path(&file_name, INPUT_DIRECTORY);
+    let input_file_name = to_rooted_file_path(&file_name, INPUT_DIRECTORY);
 
     let mut files = FxHashMap::default();
     files.insert(input_file_name.clone(), input.to_string());
@@ -224,25 +181,35 @@ fn transpile_worker(
     // The default lib name depends on the configured target.
     if declaration {
         let lib_file_name = get_default_lib_file_name(&opts);
+        // ts#64159: Go `libDirectory.ResolveFile(libFileName)`; a default
+        // lib file name appends with no normalization, as here.
         files.insert(
             combine_paths(LIB_DIRECTORY, &[lib_file_name.as_str()]),
             BAREBONES_LIB_CONTENT.to_string(),
         );
     }
 
-    let fs: Rc<dyn Fs> = Rc::new(TranspileFs { files });
+    let program_fs = TranspileFs { files };
+    let case_sensitive = program_fs.use_case_sensitive_file_names();
+    let fs: Rc<dyn Fs> = Rc::new(program_fs);
     // tsgo#4712: the 6th argument is the content mapper project (Go nil).
+    // PORT: Go N' `NewCompilerHost` has no current directory (ts#64159): the
+    // program reads the base directory of its config. The port's host keeps
+    // one, the same "/".
     let host = new_compiler_host(INPUT_DIRECTORY, fs, LIB_DIRECTORY, None, None, None);
 
-    // tsgo#4712: Go `core.ParsedOptions` moved to `tsoptions.ParsedOptions`.
-    let config = Rc::new(ParsedCommandLine {
-        parsed_config: ParsedOptions {
-            file_names: vec![input_file_name.clone()],
-            compiler_options: Rc::new(opts),
-            ..ParsedOptions::default()
+    // ts#64159: the config has the base directory "/" and the file system's
+    // case sensitivity (`tsoptions.NewParsedCommandLine`). N left both
+    // unset.
+    let config = Rc::new(new_parsed_command_line(
+        Rc::new(opts),
+        vec![input_file_name.clone()],
+        None,
+        ComparePathsOptions {
+            use_case_sensitive_file_names: case_sensitive,
+            current_directory: INPUT_DIRECTORY.to_string(),
         },
-        ..ParsedCommandLine::default()
-    });
+    ));
     // PORT: Go `compiler.NewProgram`. The frontend program parses with no
     // current program and then becomes a program version.
     let np: Rc<NewProgram> = {
@@ -285,7 +252,7 @@ fn transpile_worker(
                       _data: &mut WriteFileData|
                       -> Result<(), String> {
                     let mut written = written.lock().unwrap_or_else(PoisonError::into_inner);
-                    if file_name.ends_with(".map") {
+                    if file_extension_is(file_name, ".map") {
                         go_assert!(
                             written.source_map_text.is_none(),
                             "Unexpected multiple source map outputs, file: {file_name}"
@@ -335,7 +302,105 @@ fn transpile_worker(
     output
 }
 
-// Go: transpile/fs.go:11 transpileFS
+// Go: tspath/rooted_path.go:120 ToRootedFilePath (ts#64159), through
+// ToRootedPath (:29)
+// ToRootedFilePath resolves fileName against currentDirectory, normalizes it,
+// and gives it file intent.
+// PORT: Go `tspath.RootedFilePath` is a `String`. Go N' normalizes with
+// `getNormalizedAbsolutePathFromDirectory`; for a rooted, normalized current
+// directory it gives the same text as `GetNormalizedAbsolutePath`. Lane-local
+// (with `has_rooted_url_suffix` and `has_url_root`, also in
+// `contentmapper/hostimpl.rs`) until `tspath` has the rooted path helpers of
+// ts#64159.
+fn to_rooted_file_path(file_name: &str, current_directory: &str) -> String {
+    if file_name.is_empty() {
+        go_panic("path must not be empty".to_string());
+    }
+    if has_rooted_url_suffix(file_name) {
+        go_panic("path must not contain a URL query or fragment".to_string());
+    }
+    if get_encoded_root_length(file_name) == 0
+        && has_url_root(current_directory)
+        && file_name.contains(['?', '#'])
+    {
+        go_panic("relative URL path must not contain a query or fragment".to_string());
+    }
+    let mut normalized = get_normalized_absolute_path(file_name, current_directory);
+    if get_encoded_root_length(&normalized) == 0 || has_rooted_url_suffix(&normalized) {
+        go_panic("path must be rooted".to_string());
+    }
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if get_root_length(&normalized) == normalized.len()
+        && !has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    normalized
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    if !has_url_root(path) {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, after)| after);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/rooted_path.go:114 hasURLRoot (ts#64159)
+fn has_url_root(path: &str) -> bool {
+    get_encoded_root_length(path) < 0 && path.contains("://")
+}
+
+// Go: transpile/options_generated.go:7 setOptionsForTranspile (ts#64457)
+// PORT: Go generates it from `tools/scripts/tsc/options.ts`; the port keeps
+// it by hand. It sets the same values as the N code it replaces.
+fn set_options_for_transpile(options: &mut CompilerOptions, declaration: bool) {
+    options.allow_importing_ts_extensions = Tristate::Unknown;
+    options.allow_non_ts_extensions = Tristate::True;
+    options.composite = Tristate::Unknown;
+    if declaration {
+        options.emit_declaration_only = Tristate::True;
+    } else {
+        options.emit_declaration_only = Tristate::Unknown;
+    }
+    if declaration {
+        options.declaration = Tristate::True;
+    } else {
+        options.declaration = Tristate::False;
+    }
+    options.declaration_dir = String::new();
+    if !declaration {
+        options.declaration_map = Tristate::False;
+    }
+    if !options.verbatim_module_syntax.is_true() {
+        options.isolated_modules = Tristate::True;
+    }
+    if declaration {
+        options.isolated_declarations = Tristate::True;
+    } else {
+        options.isolated_declarations = Tristate::False;
+    }
+    options.incremental = Tristate::Unknown;
+    options.lib = None;
+    options.no_emit = Tristate::Unknown;
+    options.no_check = Tristate::True;
+    if declaration {
+        options.no_lib = Tristate::False;
+    } else {
+        options.no_lib = Tristate::True;
+    }
+    options.no_emit_on_error = Tristate::Unknown;
+    options.no_resolve = Tristate::True;
+    options.paths = None;
+    options.root_dirs = None;
+    options.suppress_output_path_check = Tristate::True;
+    options.ts_build_info_file = String::new();
+    options.types = None;
+    options.out_file = String::new();
+}
+
+// Go: transpile/fs.go:12 transpileFS
 // transpileFS embeds unsupported operations so unexpected filesystem access
 // panics.
 // PORT: Go embeds a nil `vfs.FS`, so any other method dereferences nil
@@ -345,12 +410,13 @@ struct TranspileFs {
 }
 
 impl Fs for TranspileFs {
-    // Go: transpile/fs.go:18 transpileFS.UseCaseSensitiveFileNames
+    // Go: transpile/fs.go:18 transpileFS.UseCaseSensitiveFileNames (at 673a5f17d713;
+    // ts#64159 makes it CaseSensitivity, transpile/fs.go:19, CaseSensitive)
     fn use_case_sensitive_file_names(&self) -> bool {
         true
     }
 
-    // Go: transpile/fs.go:22 transpileFS.FileExists
+    // Go: transpile/fs.go:23 transpileFS.FileExists
     fn file_exists(&self, path: &str) -> bool {
         let ok = self.files.contains_key(path);
         if !ok {
@@ -362,7 +428,7 @@ impl Fs for TranspileFs {
         ok
     }
 
-    // Go: transpile/fs.go:30 transpileFS.ReadFile
+    // Go: transpile/fs.go:31 transpileFS.ReadFile
     fn read_file(&self, path: &str) -> (String, bool) {
         match self.files.get(path) {
             Some(content) => (content.clone(), true),
@@ -391,7 +457,7 @@ impl Fs for TranspileFs {
         go_nil_dereference()
     }
 
-    // Go: transpile/fs.go:38 transpileFS.DirectoryExists
+    // Go: transpile/fs.go:39 transpileFS.DirectoryExists
     fn directory_exists(&self, path: &str) -> bool {
         go_panic(format!(
             "unexpected directory existence check for {}",
@@ -407,7 +473,7 @@ impl Fs for TranspileFs {
         go_nil_dereference()
     }
 
-    // Go: transpile/fs.go:42 transpileFS.Realpath
+    // Go: transpile/fs.go:43 transpileFS.Realpath
     fn realpath(&self, path: &str) -> String {
         go_panic(format!("unexpected realpath request for {}", quote(path)))
     }
@@ -430,7 +496,7 @@ mod tests {
         assert_eq!(got, expected);
     }
 
-    // Go: fs_test.go:9 TestTranspileFSRejectsDirectoryAccess
+    // Go: fs_test.go:10 TestTranspileFSRejectsDirectoryAccess
     #[test]
     fn test_transpile_fs_rejects_directory_access() {
         let mut files = FxHashMap::default();
@@ -448,5 +514,130 @@ mod tests {
             },
             r#"unexpected realpath request for "/src/module.ts""#,
         );
+    }
+
+    /// ts#64159 (transpile.go:136 `ToRootedFilePath`): the input name is a
+    /// rooted file path, and a URL with a query or fragment is not one.
+    // PORT: not in Go; the panic text is Go N' output (cmap lane probe).
+    #[test]
+    fn test_transpile_rejects_url_file_name_with_query_or_fragment() {
+        let transpile = |file_name: &str| {
+            let options = Options {
+                file_name: file_name.to_string(),
+                ..Options::default()
+            };
+            transpile_module(&crate::gostd::context::background(), "export {};", options)
+        };
+        for file_name in [
+            "https://example.com/a.ts?x=1",
+            "https://example.com/a.ts#frag",
+        ] {
+            assert_panics(
+                || {
+                    transpile(file_name);
+                },
+                "path must not contain a URL query or fragment",
+            );
+        }
+    }
+
+    // Go: options_test.go:12 TestTranspileConditionalOptions (ts#64457)
+    #[test]
+    fn test_transpile_conditional_options() {
+        for (declaration, want_map) in [(false, Tristate::False), (true, Tristate::True)] {
+            for (verbatim, isolated, want) in [
+                (Tristate::Unknown, Tristate::Unknown, Tristate::True),
+                (Tristate::False, Tristate::False, Tristate::True),
+                (Tristate::True, Tristate::Unknown, Tristate::Unknown),
+                (Tristate::True, Tristate::False, Tristate::False),
+                (Tristate::True, Tristate::True, Tristate::True),
+            ] {
+                let mut options = CompilerOptions {
+                    verbatim_module_syntax: verbatim,
+                    isolated_modules: isolated,
+                    declaration_map: Tristate::True,
+                    ..CompilerOptions::default()
+                };
+                set_options_for_transpile(&mut options, declaration);
+                assert!(
+                    options.isolated_modules == want && options.declaration_map == want_map,
+                    "declaration={declaration} verbatim={verbatim:?} isolated={isolated:?}: got isolated={:?} declarationMap={:?}, want {want:?} {want_map:?}",
+                    options.isolated_modules,
+                    options.declaration_map,
+                );
+            }
+        }
+    }
+
+    // Go: options_test.go:46 TestTranspileClearsInapplicableOptions (ts#64457)
+    // PORT: the port's `Options` owns its compiler options, so the worker
+    // cannot change the caller's copy; the last check still compares them.
+    #[test]
+    fn test_transpile_clears_inapplicable_options() {
+        for declaration in [false, true] {
+            let transpile = if declaration {
+                transpile_declaration
+            } else {
+                transpile_module
+            };
+            let mut paths = IndexMap::default();
+            paths.insert("*".to_string(), Some(vec!["/missing/*".to_string()]));
+            let options = CompilerOptions {
+                incremental: Tristate::True,
+                declaration: Tristate::True,
+                emit_declaration_only: Tristate::True,
+                no_emit: Tristate::True,
+                lib: Some(vec!["missing.d.ts".to_string()]),
+                out_file: "/other/output.js".to_string(),
+                composite: Tristate::True,
+                ts_build_info_file: "/other/buildinfo".to_string(),
+                paths: Some(paths),
+                root_dirs: Some(vec!["/missing".to_string()]),
+                types: Some(vec!["missing".to_string()]),
+                allow_importing_ts_extensions: Tristate::True,
+                no_emit_on_error: Tristate::True,
+                declaration_dir: "/other/declarations".to_string(),
+                ..CompilerOptions::default()
+            };
+            let before = options.clone();
+            const SOURCE: &str = "export const value: number = 1;";
+            let ctx = crate::gostd::context::background();
+            let expected = transpile(
+                &ctx,
+                SOURCE,
+                Options {
+                    report_diagnostics: true,
+                    ..Options::default()
+                },
+            );
+            let actual = transpile(
+                &ctx,
+                SOURCE,
+                Options {
+                    compiler_options: Some(options.clone()),
+                    report_diagnostics: true,
+                    ..Options::default()
+                },
+            );
+            let (Some(expected), Some(actual)) = (expected, actual) else {
+                panic!("Transpilation was unexpectedly canceled");
+            };
+            assert!(
+                !expected.output_text.is_empty()
+                    && actual.output_text == expected.output_text
+                    && actual.source_map_text == expected.source_map_text,
+                "Inapplicable options changed the output: got {actual:?}, want {expected:?}"
+            );
+            assert!(
+                expected.diagnostics.is_empty() && actual.diagnostics.is_empty(),
+                "Unexpected diagnostics: got {:?}, want {:?}",
+                actual.diagnostics,
+                expected.diagnostics
+            );
+            assert!(
+                options.deep_equal(&before),
+                "Transpilation modified the caller's options"
+            );
+        }
     }
 }
