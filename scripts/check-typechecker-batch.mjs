@@ -24,8 +24,9 @@ export const GOPORT_BASELINE_SHA256 = "d1b90114690033ea0d3450182b7340c7f87df27d7
 const KEPT_CRATE_SUITE = /^ts_(scanner|ast|diagnostics|path|core|jsnum)_lib$/;
 // The only suite whose "ignored" names a removal line may keep (stale Go reference files; compare-tests.py).
 const STALE_REFERENCE_SUITE = "go_baselines_reference";
-// The wire of every API rebase run (api_oracle.py check --wire 3, its only wire; bump C reviewer ruling 1 item 1).
-const API_REBASE_WIRE = 3;
+// The wires an API rebase run may use: api_oracle.py check --wire 3 (protocol 3 base bins at a protocol 4 pin,
+// bump C reviewer ruling 1 item 1) and --wire 4 (protocol 4 base bins at a protocol 5 pin, bump D; ruling 3 item 6).
+const API_REBASE_WIRES = [3, 4];
 // R132 is the last revision under the legacy cargo roster (rule goport-protected-set). It was opened
 // in batch port-18 under the legacy rules before stage 1 merged. A later revision needs protectedSet
 // "goport": the legacy check, and with it the roster carry-forward, is only for revisions up to this one.
@@ -566,15 +567,15 @@ function rebaseRuns(kind, entry, tsgo, oracle) {
   requireValue(Array.isArray(known) && known.every(diff => text(diff?.key) && text(diff.reason)) && new Set(known.map(diff => diff.key)).size === known.length
     && (kind === "api" || known.length === 0), `${field}.knownDiffs must list each {key, reason} once${kind === "lsp" ? "; the LSP has none" : ""}.`);
   if (kind === "api") {
-    requireValue(entry.wire === API_REBASE_WIRE && HASH.test(entry.toolSha256),
-      `${field} needs "wire": ${API_REBASE_WIRE} and toolSha256, the api_oracle.py sha256 of its runs (bump C ruling 1 item 1).`);
+    requireValue(API_REBASE_WIRES.includes(entry.wire) && HASH.test(entry.toolSha256),
+      `${field} needs "wire": ${API_REBASE_WIRES.join(" or ")} and toolSha256, the api_oracle.py sha256 of its runs (bump C ruling 1 item 1).`);
   }
   return entry.runs;
 }
 
 // batch.oracleRebase.api (bump C reviewer ruling 1 item 1): the base bins speak an older API protocol, so each run
-// is `api_oracle.py check --wire 3` with one API tool. Every battery of each run's manifest.json must have that
-// wire and toolSha256 as its scriptSha.
+// is `api_oracle.py check --wire <entry.wire>` (3 or 4) with one API tool. Every battery of each run's manifest.json
+// must have that wire and toolSha256 as its scriptSha.
 function checkRebaseWire(entry, readEvidence) {
   for (const run of entry.runs) {
     const manifest = readEvidence({ path: join(run.dir, "manifest.json") }, { pinned: false });
@@ -1157,8 +1158,9 @@ tree, Cargo.toml and Cargo.lock), as candidate.sh reuses it by that key.
   pin, which replace the base batch's runs as the oracle base. Only a
   pin-bump batch (the base batch pin differs from upstreamPin.to) can have it.
   binsSha256 must be the tsgo sha256 of the base batch's gate manifest and
-  oracleSha256 upstreamPin.oracleSha256. The api entry also has "wire": 3
-  and toolSha256 (bump C reviewer ruling 1 item 1): every battery of each
+  oracleSha256 upstreamPin.oracleSha256. The api entry also has "wire" (3,
+  or 4 for protocol 4 base bins at a protocol 5 pin) and toolSha256 (bump C
+  reviewer ruling 1 item 1): every battery of each
   run's manifest.json must have that wire and that api_oracle.py sha256 as
   its scriptSha (scripts/goport/oracle-rebase.sh writes the fragment). The check runs oracle-compare.py
   with every run as a base (protected in any run), --identity and --parity
