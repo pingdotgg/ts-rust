@@ -312,6 +312,13 @@ impl WatchManager {
         let mut resolved: FxHashMap<String, bool> =
             FxHashMap::with_capacity_and_hasher(desired_dirs.len(), Default::default());
         for (dir, recursive) in desired_dirs {
+            // ts#64366: Only directories on disk can be watched. The embedded libs (bundled:///libs) exist in the FS but not on disk.
+            if !tspath::is_rooted_disk_path(dir) {
+                if let Some(debug_log) = &self.debug_log {
+                    write_str(debug_log, &format!("[watch] not a disk path: {dir}\n"));
+                }
+                continue;
+            }
             let mut watch_dir = dir.clone();
             let mut watch_recursive = *recursive;
             while !(self.dir_exists)(&watch_dir) {
@@ -322,7 +329,12 @@ impl WatchManager {
                 watch_dir = parent;
                 watch_recursive = false; // ancestor fallbacks are always non-recursive
             }
-            if !(self.dir_exists)(&watch_dir) || !can_watch_directory(&watch_dir) {
+            // ts#64366: CanWatchDirectory only guards against falling back to an ancestor that is too generic to watch
+            // (/, /home, ...). A directory that exists and was asked for is watched at any depth, otherwise a
+            // project that lives near the filesystem root (say /app or /srv/app) would never be watched.
+            if !(self.dir_exists)(&watch_dir)
+                || (watch_dir != *dir && !can_watch_directory(&watch_dir))
+            {
                 if let Some(debug_log) = &self.debug_log {
                     write_str(
                         debug_log,

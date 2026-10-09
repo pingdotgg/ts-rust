@@ -343,10 +343,8 @@ impl Orchestrator {
             for file_name in resolved.file_names() {
                 let abs_path =
                     get_normalized_absolute_path(file_name, &self.opts.sys.get_current_directory());
-                let dir = get_directory_path(&abs_path);
-                if !desired_dirs.covered(&dir) && can_watch_directory(&dir) {
-                    desired_dirs.set(&dir, false);
-                }
+                // ts#64366: a program file's directory is watched at any depth.
+                self.add_program_file_watch_dir(&mut desired_dirs, &get_directory_path(&abs_path));
                 // tsgo#4712: the directories of the mapper package manifests.
                 // Go does this once per input file.
                 for mapper in resolved.content_mappers() {
@@ -399,10 +397,10 @@ impl Orchestrator {
                         if roots.contains(&fp) {
                             continue;
                         }
-                        let dir = get_directory_path(&abs_path);
-                        if !desired_dirs.covered(&dir) && can_watch_directory(&dir) {
-                            desired_dirs.set(&dir, false);
-                        }
+                        self.add_program_file_watch_dir(
+                            &mut desired_dirs,
+                            &get_directory_path(&abs_path),
+                        );
                     }
                     for package_json in build_info.get_package_jsons(&build_info_dir) {
                         self.add_package_json_watch_dirs(&mut desired_dirs, &package_json);
@@ -423,6 +421,15 @@ impl Orchestrator {
     // Go: build/orchestrator.go:572 (*Orchestrator).addWatchDir
     fn add_watch_dir(&self, desired_dirs: &mut DirWatchSet, dir: &str) {
         if !desired_dirs.covered(dir) && can_watch_directory(dir) {
+            desired_dirs.set(dir, false);
+        }
+    }
+
+    // Go: build/orchestrator.go:777 (*Orchestrator).addProgramFileWatchDir (ts#64366)
+    /// addProgramFileWatchDir watches the directory of a program file at any depth, unlike addWatchDir, which guards lookup
+    /// locations against watching something as generic as / or /home.
+    fn add_program_file_watch_dir(&self, desired_dirs: &mut DirWatchSet, dir: &str) {
+        if !desired_dirs.covered(dir) {
             desired_dirs.set(dir, false);
         }
     }

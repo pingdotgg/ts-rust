@@ -1,7 +1,12 @@
 //! Go: `internal/execute/watchmanager/watchmanager_test.go` (added by
 //! tsgo#4658).
 
-use ts_goport::execute::watchmanager::new_dir_watch_set;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
+use ts_goport::execute::tsc::Writer;
+use ts_goport::execute::watchmanager::{WatchManager, new_dir_watch_set, new_watch_manager};
 use ts_goport::frontend::tspath::ComparePathsOptions;
 
 // Go: watchmanager_test.go:11 caseSensitiveOpts
@@ -177,4 +182,92 @@ fn test_dir_watch_set_dirs() {
     assert_eq!(dirs.len(), 2);
     assert!(!dirs.get("/repo/a").copied().unwrap_or(false));
     assert!(dirs.get("/repo/b").copied().unwrap_or(false));
+}
+
+/// A watch manager whose `dirExists` answers from `existing` (Go:
+/// `NewWatchManager(io.Discard, func(dir string) bool { return existing[dir] })`).
+fn watch_manager_with_existing_dirs(existing: &'static [&'static str]) -> WatchManager {
+    let discard: Writer = Rc::new(RefCell::new(std::io::sink()));
+    new_watch_manager(discard, Box::new(move |dir: &str| existing.contains(&dir)))
+}
+
+/// Go `map[string]bool{...}` literal.
+fn dir_map<const N: usize>(entries: [(&str, bool); N]) -> FxHashMap<String, bool> {
+    entries
+        .into_iter()
+        .map(|(dir, recursive)| (dir.to_string(), recursive))
+        .collect()
+}
+
+// Go: watchmanager_test.go:144 TestResolveDesiredDirsShallowProject (ts#64366)
+/// TestResolveDesiredDirsShallowProject verifies that a directory that exists and was asked for is watched at any
+/// depth. A project close to the filesystem root (/app, /srv/app, a Docker WORKDIR) must not be silently ignored.
+#[test]
+fn test_resolve_desired_dirs_shallow_project() {
+    let wm = watch_manager_with_existing_dirs(&[
+        "/",
+        "/app",
+        "/app/src",
+        "/srv",
+        "/srv/app",
+        "/home",
+        "/home/user",
+        "/home/user/project",
+    ]);
+
+    let resolved = wm.resolve_desired_dirs(&dir_map([
+        ("/app", true),
+        ("/app/src", false),
+        ("/srv/app", true),
+        ("/home/user/project", true),
+    ]));
+
+    assert_eq!(
+        resolved,
+        dir_map([
+            ("/app", true),
+            ("/app/src", false),
+            ("/srv/app", true),
+            ("/home/user/project", true),
+        ])
+    );
+}
+
+// Go: watchmanager_test.go:170 TestResolveDesiredDirsAncestorFallback (ts#64366)
+/// TestResolveDesiredDirsAncestorFallback verifies that the depth check still guards the fallback to an ancestor,
+/// so a missing directory never turns into a watch on something too generic like /, /home or /home/user.
+#[test]
+fn test_resolve_desired_dirs_ancestor_fallback() {
+    let wm = watch_manager_with_existing_dirs(&[
+        "/",
+        "/app",
+        "/home",
+        "/home/user",
+        "/repo",
+        "/repo/a",
+        "/repo/a/b",
+        "/repo/a/b/c",
+    ]);
+
+    let resolved = wm.resolve_desired_dirs(&dir_map([
+        ("/app/missing", true),             // ancestor /app is too shallow
+        ("/home/user/missing", true),       // ancestor /home/user is too shallow
+        ("/repo/a/b/c/missing/deep", true), // ancestor /repo/a/b/c is deep enough, and is never recursive
+        ("/nothing/exists/anywhere", true), // no existing ancestor except /
+    ]));
+
+    assert_eq!(resolved, dir_map([("/repo/a/b/c", false)]));
+}
+
+// Go: watchmanager_test.go:191 TestResolveDesiredDirsSkipsNonDiskPaths (ts#64366)
+/// TestResolveDesiredDirsSkipsNonDiskPaths verifies that a directory that is not on disk, such as the embedded libs
+/// (bundled:///libs), is never watched, even though the wrapped FS reports that it exists.
+#[test]
+fn test_resolve_desired_dirs_skips_non_disk_paths() {
+    let discard: Writer = Rc::new(RefCell::new(std::io::sink()));
+    let wm = new_watch_manager(discard, Box::new(|_: &str| true));
+
+    let resolved = wm.resolve_desired_dirs(&dir_map([("bundled:///libs", false), ("/app", true)]));
+
+    assert_eq!(resolved, dir_map([("/app", true)]));
 }

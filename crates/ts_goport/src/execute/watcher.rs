@@ -554,9 +554,27 @@ impl Watcher {
         for (dir, recursive) in &resolved_dirs {
             coverage.set(dir, *recursive);
         }
+        // ts#64366: program files and root files are watched at any depth.
+        let program = self.get_program();
+        let program_files = program.files_by_path();
+        let case_sensitive = self.sys.fs().use_case_sensitive_file_names();
+        let root_files: FxHashSet<Path> = self
+            .config
+            .file_names()
+            .iter()
+            .map(|file_name| to_path(file_name, &cwd, case_sensitive))
+            .collect();
         for file_path in seen_file_paths {
             let dir = get_directory_path(file_path);
-            if !coverage.covered(&dir) && can_watch_directory(&dir) {
+            if coverage.covered(&dir) {
+                continue;
+            }
+            // Seen files mix program files with lookup locations. Only lookups keep the depth check, so an imported
+            // file outside the tsconfig directory (say /shared next to /app) is still watched. A root file is not in
+            // the program while it is missing, but its directory stays watched so that recreating it rebuilds.
+            let p = to_path(file_path, &cwd, case_sensitive);
+            let is_program_file = program_files.contains_key(&p);
+            if is_program_file || root_files.contains(&p) || can_watch_directory(&dir) {
                 coverage.set(&dir, false);
             }
         }
