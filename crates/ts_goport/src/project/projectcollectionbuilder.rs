@@ -1256,6 +1256,14 @@ impl ProjectCollectionBuilder {
         }
         wg.run_and_wait();
 
+        // ts#64642
+        // Updated configured projects may have moved open files in or out of the inferred project.
+        // Callers iterate over all language service projects, so the inferred one needs a program too.
+        self.cleanup_inferred_project(logger.clone());
+        if self.inferred_project.value().is_some() {
+            self.update_program(&*self.inferred_project, logger.clone());
+        }
+
         if logger.is_some() {
             let elapsed = start_time.elapsed();
             logger.log(&format!(
