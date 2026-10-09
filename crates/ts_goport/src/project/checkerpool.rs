@@ -243,34 +243,38 @@ impl CheckerPool {
             });
     }
 
-    // Go: project/checkerpool.go:157 checkerPool.tryReacquireForRequest
-    // tryReacquireForRequest checks whether the given request already has an
-    // associated checker. If so, it either returns the checker directly (still held)
-    // or reacquires it by claiming a semaphore slot. The caller must provide the
+    // Go: project/checkerpool.go:158 checkerPool.tryReacquireForRequest (ts#64543, at fed0bf24149f)
+    // tryReacquireForRequest claims a semaphore slot, then checks whether the given
+    // request has an idle associated checker. The caller must provide the
     // appropriate semaphore channel and indicate whether this is a diagnostics
     // request (isDiag). If the associated checker is in the wrong category
     // (e.g. a diagnostics index for a query request), the association is deleted
     // and normal acquisition proceeds.
     //
-    // Returns (checker, release, true) if the request was served (either still held
-    // or reclaimed). Returns (nil, nil, false) if the caller must proceed with
+    // Request affinity is only a preference for an idle checker, not permission to
+    // reuse a held checker: concurrent acquisitions can share the same request ID.
+    // Returns (checker, release, true) if the checker was reclaimed.
+    // Returns (nil, nil, false) if the caller must proceed with
     // normal acquisition — in this case, a semaphore slot has already been claimed.
     // Must NOT be called with p.mu held.
+    // PORT: a held checker's request no longer skips the slot, so a nested
+    // acquisition on a full semaphore is `Semaphore::send`'s `unreachable!`
+    // (Go blocks; compiler/checkerpool.go:20 says acquisitions are not
+    // reentrant).
     fn try_reacquire_for_request(
         &self,
         request_id: &str,
         sem: &Semaphore,
         is_diag: bool,
     ) -> (Option<Rc<RefCell<Checker>>>, Option<Release>, bool) {
+        sem.send();
         if request_id.is_empty() {
-            sem.send();
             return (None, None, false);
         }
 
         self.mu_lock();
         let index = self.request_associations.borrow().get(request_id).copied();
         let Some(index) = index else {
-            sem.send();
             return (None, None, false);
         };
 
@@ -278,42 +282,21 @@ impl CheckerPool {
         // Index 0 is for diagnostics; indices 1+ are for queries.
         if (is_diag && index != 0) || (!is_diag && index == 0) {
             self.request_associations.borrow_mut().remove(request_id);
-            sem.send();
             return (None, None, false);
         }
 
         let c = self.checkers.borrow()[index as usize].clone();
         let Some(c) = c else {
             self.request_associations.borrow_mut().remove(request_id);
-            sem.send();
             return (None, None, false);
         };
 
-        let held = self.held_by.borrow()[index as usize].clone();
-        if held == request_id {
-            // Same request, checker still held — return without claiming a slot.
-            return (Some(c), Some(Release::new(noop)), true);
+        if self.held_by.borrow()[index as usize].is_empty() {
+            self.held_by.borrow_mut()[index as usize] = request_id.to_string();
+            let release = self.create_release(request_id, index, c.clone());
+            return (Some(c), Some(release), true);
         }
 
-        if held.is_empty() {
-            // Same request reacquiring after release — need a semaphore slot.
-            sem.send();
-            self.mu_lock();
-            // Re-check: checker may have been disposed while waiting for the slot.
-            let cc = self.checkers.borrow()[index as usize].clone();
-            let same_checker = cc.as_ref().is_some_and(|cc| Rc::ptr_eq(cc, &c));
-            if same_checker && self.held_by.borrow()[index as usize].is_empty() {
-                self.held_by.borrow_mut()[index as usize] = request_id.to_string();
-                let release = self.create_release(request_id, index, c.clone());
-                return (Some(c), Some(release), true);
-            }
-            // Checker was replaced/disposed while waiting for the slot.
-            // The slot is still claimed; the caller will use it for normal acquisition.
-            return (None, None, false);
-        }
-
-        // Checker held by another request — claim a slot normally.
-        sem.send();
         (None, None, false)
     }
 
@@ -756,8 +739,7 @@ impl CheckerPool {
     }
 }
 
-// Go: project/checkerpool.go:533 noop
-pub fn noop() {}
+// Go: project/checkerpool.go:533 noop (at 673a5f17d713; removed by ts#64543)
 
 // Not in Go: the GC frees the checkers of a released pool in the background.
 // PERF (freecheck1): a language server edit frees the old program's pool on
