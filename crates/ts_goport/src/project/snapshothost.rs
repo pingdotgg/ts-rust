@@ -139,6 +139,23 @@ impl SnapshotHost {
             released: Cell::new(false),
         })
     }
+
+    // Go: project/snapshothost.go:65 SnapshotHost.AcquireExistingSourceFile (ts#64518)
+    // PORT: Go's parse cache binds a file before it stores it, so a live entry
+    // is bound. Here a program load binds its files later (see
+    // `new_parse_cache`), so the file is bound here, as `acquire_bound` does
+    // for `acquire_source_file`. A bound file is not bound again.
+    pub fn acquire_existing_source_file(&self, key: ParseCacheKey) -> Option<Rc<SourceFileLease>> {
+        let source_file = self.parse_cache.acquire_existing(&key)?.file;
+        crate::program::publish_parsed_files(&self.options.current_directory);
+        crate::program::bind_file_outside_program(source_file.root);
+        Some(Rc::new(SourceFileLease {
+            cache: self.parse_cache.clone(),
+            key,
+            source_file,
+            released: Cell::new(false),
+        }))
+    }
 }
 
 // Go: project/snapshothost.go:65 NewSnapshotHost

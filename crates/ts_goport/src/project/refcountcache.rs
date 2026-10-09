@@ -80,6 +80,29 @@ impl<K: Eq + Hash + Clone, V: Clone, AcquireArgs> RefCountCache<K, V, AcquireArg
         self.entries.borrow().contains_key(identity)
     }
 
+    // Go: project/refcountcache.go:64 AcquireExisting (ts#64518)
+    // AcquireExisting retrieves an existing entry and increments its reference count.
+    // It returns false without producing a value when no live entry exists.
+    //
+    // The caller is responsible for calling Deref when a value is returned.
+    // PORT: Go returns `(V, bool)`; no live entry is `None`.
+    pub fn acquire_existing(&self, identity: &K) -> Option<V> {
+        let entry = self.entries.borrow().get(identity).cloned()?;
+        if entry.ref_count.get() <= 0 && !self.options.disable_deletion {
+            return None;
+        }
+        entry.ref_count.set(entry.ref_count.get() + 1);
+        // PORT: on one thread a live entry always has its value (Go waits on
+        // the entry lock while the first Acquire produces it).
+        Some(
+            entry
+                .value
+                .borrow()
+                .clone()
+                .expect("RefCountCache: entry value not set"),
+        )
+    }
+
     // Go: project/refcountcache.go:66 AcquireOrError (tsgo#4712)
     // AcquireOrError retrieves an existing entry (incrementing its refcount) or produces a new one via
     // produce. If produce returns an error, no entry is stored and the error is returned, so callers can
