@@ -348,8 +348,9 @@ pub fn compile_module_resolution_spec(
             ..Default::default()
         };
         if let Some(containing_directory) = &entry.containing_directory {
-            static_entry.containing_directory = tspath::get_normalized_absolute_path(
-                &containing_directory.to_absolute_file_name(current_directory),
+            // ts#64159 (Go N' module_resolution.go:166): `tspath.ToRootedDirectoryPath`.
+            static_entry.containing_directory = to_rooted_path(
+                &containing_directory.to_file_name(current_directory),
                 current_directory,
             );
         }
@@ -399,14 +400,14 @@ pub fn static_module_resolution_to_resolved_module(
     let resolved_file_name = static_resolution.resolved_file_name.as_ref()?;
     let mut result = ResolvedModule {
         resolved_file_name: tspath::get_normalized_absolute_path(
-            &resolved_file_name.to_absolute_file_name(current_directory),
+            &resolved_file_name.to_file_name(current_directory),
             current_directory,
         ),
         ..Default::default()
     };
     if let Some(original_path) = &static_resolution.original_path {
         result.original_path = tspath::get_normalized_absolute_path(
-            &original_path.to_absolute_file_name(current_directory),
+            &original_path.to_file_name(current_directory),
             current_directory,
         );
     }
@@ -650,10 +651,9 @@ impl Session {
             }
         }
         let cwd = self.get_current_directory();
-        let containing_directory = tspath::get_normalized_absolute_path(
-            &params.containing_directory.to_absolute_file_name(&cwd),
-            &cwd,
-        );
+        // ts#64159 (Go N' module_resolution.go:340): `tspath.ToRootedDirectoryPath`.
+        let containing_directory =
+            to_rooted_path(&params.containing_directory.to_file_name(&cwd), &cwd);
 
         let mut resolver: Rc<dyn module::Resolver>;
         if params.snapshot.0 != 0 && params.in_progress_snapshot != 0 {

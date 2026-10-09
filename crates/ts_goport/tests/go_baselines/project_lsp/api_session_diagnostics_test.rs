@@ -7,6 +7,12 @@
 //! compare can read its name. Here the version dies with its snapshot, and
 //! the collection reads the name that it kept when it stored the diagnostic.
 //!
+//! ts#64518 (Go N' api/session.go:777 checkerSetup.resolveSymbolHandle): `h`
+//! is a file-owned symbol of x.ts, which only A's program has, so B answers
+//! it with the client error "source file is not part of the requested
+//! program" and stores no diagnostic (see `api_session_crossproject_test`).
+//! The test keeps its name, the death of the version and A's answer.
+//!
 //! PORT: the tests call the session handlers directly, as
 //! `api_session_crossproject_test` does.
 
@@ -15,13 +21,14 @@ use std::rc::Rc;
 use ts_goport::api::requestfilesystem::{Kind, RequestFileSystem};
 use ts_goport::api::{
     self, CreateSnapshotParams, EnsurePrograms, GetSymbolAtPositionParams, GetTypeOfSymbolParams,
-    SnapshotID, SnapshotRequestChangesParams, SymbolID, TypeToTypeNodeParams, UpdateSnapshotParams,
+    SnapshotID, SnapshotRequestChangesParams, SymbolReference, TypeToTypeNodeParams,
+    UpdateSnapshotParams,
 };
 use ts_goport::ast::file_version_probe;
 use ts_goport::gostd::Context;
 use ts_goport::project;
 
-use super::api_util::{doc, nil_error, project_program, snapshot_of};
+use super::api_util::{doc, error_contains, nil_error, project_program, snapshot_of};
 use super::projecttestutil::{self, files};
 use super::requestfilesystem_test::files as request_files;
 use super::util::{bg, text};
@@ -79,7 +86,7 @@ impl Api {
             created
                 .projects
                 .iter()
-                .find(|p| p.config_file_name == config)
+                .find(|p| p.config_file_name.as_deref() == Some(config))
                 .unwrap_or_else(|| panic!("no project {config}"))
                 .id
                 .clone()
@@ -132,7 +139,7 @@ impl Api {
     }
 
     /// The symbol at the first `name` in x.ts text `x`, on A in `snapshot`.
-    fn symbol(&self, snapshot: SnapshotID, x: &str, name: &str) -> SymbolID {
+    fn symbol(&self, snapshot: SnapshotID, x: &str, name: &str) -> SymbolReference {
         nil_error(self.session.handle_get_symbol_at_position(
             &self.ctx,
             &GetSymbolAtPositionParams {
@@ -143,18 +150,38 @@ impl Api {
             },
         ))
         .expect("a symbol")
-        .id
+        .reference
     }
 
     /// Go `typeToString(getTypeOfSymbol(symbol))` on `project` in
     /// `snapshot`.
-    fn type_text(&self, snapshot: SnapshotID, project: &project::ID, symbol: SymbolID) -> String {
+    /// ts#64518: `project` in `snapshot` has no file that owns `symbol`.
+    fn rejects(&self, snapshot: SnapshotID, project: &project::ID, symbol: &SymbolReference) {
+        error_contains(
+            self.session.handle_get_type_of_symbol(
+                &self.ctx,
+                &GetTypeOfSymbolParams {
+                    snapshot,
+                    project: project.clone(),
+                    symbol: symbol.clone(),
+                },
+            ),
+            "source file is not part of the requested program",
+        );
+    }
+
+    fn type_text(
+        &self,
+        snapshot: SnapshotID,
+        project: &project::ID,
+        symbol: &SymbolReference,
+    ) -> String {
         let t = nil_error(self.session.handle_get_type_of_symbol(
             &self.ctx,
             &GetTypeOfSymbolParams {
                 snapshot,
                 project: project.clone(),
-                symbol,
+                symbol: symbol.clone(),
             },
         ))
         .expect("a type");
@@ -194,7 +221,8 @@ child_test! {
     // and panicked ("file version N is released"), and the next answer was
     // `() => any`. Go answers the type each time, and `Add` returns the
     // stored diagnostic of version 2 for the equal one of version 3, so B
-    // stores no new diagnostic.
+    // stores no new diagnostic. ts#64518: B now rejects `h` (module header),
+    // so it stores none; the version still dies with its snapshot.
     fn api_checker_diagnostic_of_released_file_version() {
         let api = Api::new();
         let (x2, x3) = (x_text(2), x_text(3));
@@ -205,15 +233,11 @@ child_test! {
         // The global errors of `noLib`, which B's checker adds when it is
         // made.
         let before = api.b_diagnostic_count(s2);
-        assert_eq!(api.type_text(s2, &api.b, h2), H_TYPE);
+        // ts#64518: B rejects the file-owned `h` (module header) and stores
+        // no diagnostic.
+        api.rejects(s2, &api.b, &h2);
         let stored = api.b_diagnostic_count(s2);
-        // B stores the diagnostic of version 2, so the count below shows
-        // that the equal one of version 3 is not stored again.
-        assert_eq!(
-            stored,
-            before + 1,
-            "B stores \"Cannot find name 'Missing'.\""
-        );
+        assert_eq!(stored, before);
         let version = {
             let program = project_program(&snapshot_of(&api.session, s2), &api.a.0);
             let file = program.get_source_file(X_TS).expect("x.ts");
@@ -222,10 +246,10 @@ child_test! {
         nil_error(api.session.release_snapshot(s2));
         assert!(version.is_freed(), "x.ts version 2 dies with its snapshot");
         for _ in 0..2 {
-            assert_eq!(api.type_text(s3, &api.b, h3), H_TYPE);
+            api.rejects(s3, &api.b, &h3);
         }
         assert_eq!(api.b_diagnostic_count(s3), stored);
-        assert_eq!(api.type_text(s3, &api.a, h3), H_TYPE);
+        assert_eq!(api.type_text(s3, &api.a, &h3), H_TYPE);
         api.close();
     }
 }

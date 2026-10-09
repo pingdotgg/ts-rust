@@ -621,6 +621,36 @@ fn test_decode_source_file_metadata() {
     t.finish();
 }
 
+// Go: api/encoder/decoder_test.go:73 TestDecodeSourceFileRejectsInvalidFileName (ts#64159; N' line)
+#[test]
+fn test_decode_source_file_rejects_invalid_file_name() {
+    let file = Rc::new(parser::parse_source_file(
+        &SourceFileParseOptions {
+            file_name: "/Test.ts".to_string(),
+            path: Path("/test.ts".to_string()),
+            ..Default::default()
+        },
+        "",
+        ScriptKind::TS,
+    ));
+    program::note_parsed_source_file(&file);
+    let (mut buf, _) = encode_source_file(file.root).expect("assert.NilError");
+
+    let invalid_file_name = b"Test/.ts";
+    let index = buf
+        .windows(b"/Test.ts".len())
+        .position(|window| window == b"/Test.ts")
+        .expect("index >= 0");
+    buf[index..index + invalid_file_name.len()].copy_from_slice(invalid_file_name);
+    let err = decode_source_file(&buf).expect_err("expected an error");
+    assert!(
+        err.error()
+            .contains(r#"invalid source file name "Test/.ts""#),
+        "{}",
+        err.error()
+    );
+}
+
 // Go: api/encoder/decoder_test.go:72 TestDecodeSourceFile_Statements
 #[test]
 fn test_decode_source_file_statements() {
@@ -763,6 +793,20 @@ fn test_decode_source_file_import_declaration() {
     assert_eq!(named_imports.elements().len(), 1);
     let spec = as_kind(named_imports.elements().get(0), SyntaxKind::ImportSpecifier);
     assert_eq!(as_kind(spec.name(), SyntaxKind::Identifier).text(), "bar");
+}
+
+// Go: api/encoder/decoder_test.go:202 TestDecodeSourceFile_SourcePhaseImport (ts#63915; N' line)
+#[test]
+fn test_decode_source_file_source_phase_import() {
+    let sf = parse_source_file(r#"import source a from "./a.wasm";"#);
+    let (buf, _) = encode_source_file(sf).expect("assert.NilError");
+
+    let decoded = decode_source_file(&buf).expect("assert.NilError");
+
+    let imp = as_kind(decoded.statements().get(0), SyntaxKind::ImportDeclaration);
+    let clause = as_kind(imp.import_clause(), SyntaxKind::ImportClause);
+    assert_eq!(clause.phase_modifier(), SyntaxKind::SourceKeyword);
+    assert_eq!(clause.name().text(), "a");
 }
 
 // Go: api/encoder/decoder_test.go:184 TestDecodeSourceFile_IfStatement

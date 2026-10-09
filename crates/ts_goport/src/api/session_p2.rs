@@ -106,27 +106,159 @@ impl Session {
         Ok(sd.new_symbol_response(&checker, result, &params.project))
     }
 
-    // Go: api/session.go:3036 resolveSymbolPropertyOfSymbol
+    // Go: api/session.go:405 resolveSymbolReference (ts#64518)
+    // resolveSymbolReference resolves a symbol without a semantic context. A file reference holds the
+    // exact cached AST until the returned release function is called; a snapshot reference also returns
+    // the snapshot and canonical project that own the symbol.
+    // PORT: the Go release function is the lease guard in the result; it
+    // releases when the result drops. A file symbol is read from a copy of
+    // the binder lineage (`program::lineage_for_checker`), which holds every
+    // live bound file; Go reads the `*ast.Symbol` with no checker.
+    pub fn resolve_symbol_reference(
+        &self,
+        reference: &SymbolReference,
+    ) -> Result<ResolvedSymbolReference, GoError> {
+        let client_error = |text: String| {
+            Err(errors::errorf(
+                format!("{}: {text}", *ERR_CLIENT_ERROR),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ))
+        };
+        if reference.kind == SymbolOwnerKind::FILE {
+            let Some(file) = reference
+                .file
+                .as_ref()
+                .filter(|_| reference.snapshot.0 == 0 && reference.project.0.is_empty())
+            else {
+                return client_error("invalid file symbol reference".to_string());
+            };
+            let lease = LeaseGuard(Some(self.acquire_cached_source_file(file)?));
+            let symbols = crate::program::lineage_for_checker();
+            let root = lease
+                .0
+                .as_ref()
+                .map_or(Node::NIL, |lease| lease.source_file());
+            let symbol = get_source_file_symbol_index(&symbols, root)
+                .get(&reference.id)
+                .copied();
+            let Some(symbol) = symbol else {
+                // Go: lease.Release() (the guard drops here).
+                return client_error(format!(
+                    "symbol {} not found in source file",
+                    reference.id.0
+                ));
+            };
+            Ok(ResolvedSymbolReference::File {
+                symbols,
+                symbol,
+                _lease: lease,
+            })
+        } else if reference.kind == SymbolOwnerKind::SNAPSHOT {
+            if reference.file.is_some()
+                || reference.snapshot.0 == 0
+                || reference.project.0.is_empty()
+            {
+                return client_error("invalid snapshot symbol reference".to_string());
+            }
+            let sd = self.get_snapshot_data(reference.snapshot)?;
+            let (checker, symbol) = sd.resolve_symbol_handle(reference.id)?;
+            Ok(ResolvedSymbolReference::Snapshot {
+                sd,
+                project: reference.project.clone(),
+                checker,
+                symbol,
+            })
+        } else {
+            client_error(format!(
+                "invalid symbol reference kind {}",
+                reference.kind.0
+            ))
+        }
+    }
+
+    // Go: api/session.go:2164 handleGetSymbolOfDeclaration (ts#64571)
+    // PORT: the binder symbol is read from a copy of the binder lineage, as
+    // in `resolve_symbol_reference`.
+    pub fn handle_get_symbol_of_declaration(
+        &self,
+        params: &GetSymbolOfDeclarationParams,
+    ) -> Result<SymbolResponse, GoError> {
+        let client_error = |text: String| {
+            Err(errors::errorf(
+                format!("{}: {text}", *ERR_CLIENT_ERROR),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ))
+        };
+        let lease = self.acquire_cached_source_file(&params.file)?;
+        // Go: defer lease.Release()
+        let lease = LeaseGuard(Some(lease));
+        let source_file = lease
+            .0
+            .as_ref()
+            .map_or(Node::NIL, |lease| lease.source_file());
+
+        let table = encoder::get_node_index_table(source_file);
+        if params.index == 0 || params.index as usize >= table.nodes.len() {
+            return client_error(format!(
+                "declaration node index {} is out of range",
+                params.index
+            ));
+        }
+        let node = table.nodes[params.index as usize];
+        if node.is_nil() || !is_declaration(node) {
+            return client_error(format!("node index {} is not a declaration", params.index));
+        }
+        let symbol = node.symbol();
+        if symbol.is_nil() {
+            return client_error(format!(
+                "declaration node index {} has no binder symbol",
+                params.index
+            ));
+        }
+        let symbols = crate::program::lineage_for_checker();
+        Ok(lease.file_symbol_response(&symbols, symbol))
+    }
+
+    // Go: api/session.go:3318 resolveSymbolPropertyOfSymbol
     // resolveSymbolTablePropertyOfSymbol resolves a symbol property of type `Symbol` and returns a symbol response.
+    // ts#64518: the symbol comes from its reference, and a file-owned answer
+    // needs no snapshot.
     pub fn resolve_symbol_property_of_symbol(
         &self,
         params: &GetSymbolPropertyParams,
-        getter: &dyn Fn(&Checker, SymbolId) -> SymbolId,
+        getter: &dyn Fn(&SymbolArena, SymbolId) -> SymbolId,
     ) -> Result<Option<SymbolResponse>, GoError> {
-        let sd = self.get_snapshot_data(params.snapshot)?;
-
-        let (checker, symbol) = sd.resolve_symbol_handle(params.symbol)?;
-        // Node handles in the answer read lazy JSDoc (session_p1.rs header).
-        let _program = ls_program::enter_version(checker.borrow().program);
-
-        let result = getter(&checker.borrow(), symbol);
-        if result.is_nil() {
-            return Ok(None);
+        let resolved = self.resolve_symbol_reference(&params.symbol)?;
+        match &resolved {
+            ResolvedSymbolReference::File {
+                symbols,
+                symbol,
+                _lease: lease,
+            } => {
+                let result = getter(symbols, *symbol);
+                if result.is_nil() {
+                    return Ok(None);
+                }
+                Ok(Some(lease.file_symbol_response(symbols, result)))
+            }
+            ResolvedSymbolReference::Snapshot {
+                sd,
+                project,
+                checker,
+                symbol,
+            } => {
+                // Node handles in the answer read lazy JSDoc (session_p1.rs header).
+                let _program = ls_program::enter_version(checker.borrow().program);
+                let result = getter(&checker.borrow().symbols, *symbol);
+                if result.is_nil() {
+                    return Ok(None);
+                }
+                Ok(sd.new_symbol_response(checker, result, project))
+            }
         }
-        Ok(sd.new_symbol_response(&checker, result, &params.project))
     }
 
-    // Go: api/session.go:3057 resolveSymbolTablePropertyOfSymbol
+    // Go: api/session.go:3337 resolveSymbolTablePropertyOfSymbol
     // resolveSymbolTablePropertyOfSymbol resolves a symbol property of type `SymbolTable` and returns an array of symbol responses.
     // Results are sorted using the checker's canonical symbol ordering so that API consumers receive
     // a stable, deterministic order instead of Go's randomized map iteration order.
@@ -134,39 +266,84 @@ impl Session {
         &self,
         ctx: &Context,
         params: &GetSymbolPropertyParams,
-        getter: &dyn Fn(&Checker, SymbolId) -> SymbolTable,
+        getter: &dyn Fn(&SymbolArena, SymbolId) -> SymbolTable,
     ) -> Result<Vec<Option<SymbolResponse>>, GoError> {
-        let sd = self.get_snapshot_data(params.snapshot)?;
-
-        let (checker, symbol) = sd.resolve_symbol_handle(params.symbol)?;
+        let resolved = self.resolve_symbol_reference(&params.symbol)?;
+        let (sd, project, checker, symbol) = match &resolved {
+            ResolvedSymbolReference::File {
+                symbols,
+                symbol,
+                _lease: lease,
+            } => {
+                let symbol_table = getter(symbols, *symbol);
+                if symbol_table.is_nil() || symbols.len(symbol_table) == 0 {
+                    return Ok(Vec::new());
+                }
+                let mut subs = symbols.values(symbol_table);
+                if subs.len() > 1 {
+                    // Binder tables of a file-owned symbol only contain symbols from the same file, so they
+                    // can be ordered by declaration position without a checker.
+                    let file = get_source_file_of_symbol(symbols, *symbol);
+                    crate::gostd::slices::sort_func(&mut subs, |&left, &right| {
+                        go_assert!(get_source_file_of_symbol(symbols, left) == file);
+                        go_assert!(get_source_file_of_symbol(symbols, right) == file);
+                        let (l, r) = (symbols.sym(left), symbols.sym(right));
+                        let left_has_declaration = !l.declarations.is_empty();
+                        let right_has_declaration = !r.declarations.is_empty();
+                        if left_has_declaration != right_has_declaration {
+                            return if left_has_declaration { -1 } else { 1 };
+                        }
+                        let order = if left_has_declaration {
+                            l.declarations[0].pos().cmp(&r.declarations[0].pos())
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
+                        .then_with(|| {
+                            go_symbol_name(symbols, left).cmp(&go_symbol_name(symbols, right))
+                        })
+                        .then_with(|| {
+                            get_symbol_id(symbols, left).cmp(&get_symbol_id(symbols, right))
+                        });
+                        order as i32
+                    });
+                }
+                return Ok(subs
+                    .into_iter()
+                    .map(|sub| Some(lease.file_symbol_response(symbols, sub)))
+                    .collect());
+            }
+            ResolvedSymbolReference::Snapshot {
+                sd,
+                project,
+                checker,
+                symbol,
+            } => (sd, project, checker, *symbol),
+        };
         // Node handles in the answer read lazy JSDoc (session_p1.rs header).
         let _program = ls_program::enter_version(checker.borrow().program);
 
-        let symbol_table = getter(&checker.borrow(), symbol);
+        let symbol_table = getter(&checker.borrow().symbols, symbol);
         let table_len = checker.borrow().symbols.len(symbol_table);
         if symbol_table.is_nil() || table_len == 0 {
             return Ok(Vec::new());
         }
         let subs = checker.borrow().symbols.values(symbol_table);
         if table_len == 1 {
-            return Ok(vec![sd.new_symbol_response(
-                &checker,
-                subs[0],
-                &params.project,
-            )]);
+            return Ok(vec![sd.new_symbol_response(checker, subs[0], project)]);
         }
 
-        // More than one symbol, need a checker to sort
-        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+        // Tables of snapshot-owned symbols may contain symbols from several files, so they use the
+        // checker's ordering.
+        let setup = self.setup_checker(ctx, params.symbol.snapshot, &params.symbol.project)?;
 
         // PORT: the setup checker only sorts. Each entry keeps the symbol of
         // `checker` for its answer, which Go reads with no checker, as the
         // one-entry answer above does.
         let mut symbols: Vec<(SymbolId, SymbolId)> = Vec::with_capacity(table_len);
         for sub in subs {
-            symbols.push((checker_symbol(&setup.checker, &checker, sub), sub));
+            symbols.push((checker_symbol(&setup.checker, checker, sub), sub));
         }
-        // Go: api/session.go:2196 slices.SortFunc(symbols, setup.checker.CompareSymbols)
+        // Go: api/session.go:3402 slices.SortFunc(symbols, setup.checker.CompareSymbols)
         // PORT: `CompareSymbols` is not a total order (see
         // `sort_symbol_sort_keys`), so this is Go's pdqsort, not std `sort_by`,
         // which can panic.
@@ -179,7 +356,7 @@ impl Session {
 
         let mut results = Vec::with_capacity(symbols.len());
         for (_, sub) in symbols {
-            results.push(sd.new_symbol_response(&checker, sub, &setup.project_id));
+            results.push(sd.new_symbol_response(checker, sub, &setup.project_id));
         }
         Ok(results)
     }
@@ -549,7 +726,7 @@ impl Session {
     ) -> Result<Option<TypeResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let node = setup
@@ -978,6 +1155,13 @@ impl Session {
                 c.get_arguments_symbol(),
             )
         };
+        // ts#64518
+        {
+            let c = setup.checker.borrow();
+            for symbol in [unknown, undefined, arguments] {
+                go_assert!(c.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT));
+            }
+        }
         let (unknown, _) = setup
             .sd
             .register_symbol(&setup.checker, unknown, &setup.project_id);
@@ -1303,7 +1487,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
         let export_symbol = setup.checker.borrow().get_export_symbol_of_symbol(symbol);
         Ok(setup.new_symbol_response(export_symbol))
@@ -1318,7 +1502,7 @@ impl Session {
     ) -> Result<bool, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let result = setup
@@ -1661,6 +1845,70 @@ impl Session {
         Ok(setup.new_symbol_response(symbol))
     }
 
+    // Go: api/session.go:4692 handleGetMergedSymbol (ts#64598)
+    pub fn handle_get_merged_symbol(
+        &self,
+        ctx: &Context,
+        params: &CheckerSymbolParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
+        let symbol = checker_symbol(&setup.checker, &owner, symbol);
+
+        let merged = setup.checker.borrow().get_merged_symbol(symbol);
+        Ok(setup.new_symbol_response(merged))
+    }
+
+    // Go: api/session.go:4708 handleGetSymbolOfNode (ts#64598)
+    // @gen-proto-nullable
+    pub fn handle_get_symbol_of_node(
+        &self,
+        ctx: &Context,
+        params: &CheckerNodeParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let node = setup
+            .sd
+            .resolve_node_handle(&setup.program, &params.location)?;
+
+        let symbol = setup.checker.borrow_mut().get_symbol_of_node(node);
+        Ok(setup.new_symbol_response(symbol))
+    }
+
+    // Go: api/session.go:4724 handleGetSymbolOfDeclarationForChecker (ts#64598)
+    // @gen-proto-nullable
+    pub fn handle_get_symbol_of_declaration_for_checker(
+        &self,
+        ctx: &Context,
+        params: &CheckerNodeParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let node = setup
+            .sd
+            .resolve_node_handle(&setup.program, &params.location)?;
+        let symbol = setup.checker.borrow_mut().get_symbol_of_declaration(node);
+        Ok(setup.new_symbol_response(symbol))
+    }
+
+    // Go: api/session.go:4739 handleGetParentOfSymbolForChecker (ts#64598)
+    // @gen-proto-nullable
+    pub fn handle_get_parent_of_symbol_for_checker(
+        &self,
+        ctx: &Context,
+        params: &CheckerSymbolParams,
+    ) -> Result<Option<SymbolResponse>, GoError> {
+        let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
+
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
+        let symbol = checker_symbol(&setup.checker, &owner, symbol);
+
+        let parent = setup.checker.borrow_mut().get_parent_of_symbol(symbol);
+        Ok(setup.new_symbol_response(parent))
+    }
+
     // Go: api/session.go:4271 handleGetAliasedSymbol
     // handleGetAliasedSymbol resolves an alias symbol to its target.
     pub fn handle_get_aliased_symbol(
@@ -1670,7 +1918,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let aliased = setup.checker.borrow_mut().get_aliased_symbol(symbol);
@@ -1687,7 +1935,7 @@ impl Session {
     ) -> Result<String, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(String::new());
         }
@@ -1710,7 +1958,7 @@ impl Session {
     ) -> Result<Vec<Option<SymbolResponse>>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(Vec::new());
         }
@@ -1748,7 +1996,7 @@ impl Session {
     ) -> Result<Vec<JSDocTagInfo>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(Vec::new());
         }
@@ -1778,7 +2026,7 @@ impl Session {
     ) -> Result<String, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(String::new());
         }
@@ -1826,7 +2074,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(None);
         }
@@ -1866,7 +2114,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         let symbol = checker_symbol(&setup.checker, &owner, symbol);
 
         let target = setup
@@ -1885,7 +2133,7 @@ impl Session {
     ) -> Result<Option<SymbolResponse>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(None);
         }
@@ -1994,6 +2242,17 @@ impl SnapshotData {
                 ));
             }
         };
+        // ts#64159
+        if !try_path_key_from_canonical(&s[second_dot + 1..]) {
+            return Err(errors::errorf(
+                format!(
+                    "{}: invalid node handle {}",
+                    *ERR_CLIENT_ERROR,
+                    gostd::strconv::quote(s)
+                ),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ));
+        }
         let path = tspath::Path(s[second_dot + 1..].to_string());
 
         let source_file = program
@@ -2196,7 +2455,7 @@ impl Session {
                 let Some(project) = project else {
                     panic!(
                         "no project found for opened file {}",
-                        file.to_absolute_file_name(&self.get_current_directory())
+                        file.to_file_name(&self.get_current_directory())
                     );
                 };
                 results.push(OpenedFileOperationResult {
@@ -2284,7 +2543,8 @@ pub fn format_session_id(id: u64) -> String {
 }
 
 impl Session {
-    // Go: api/session.go:4745 toPath
+    // Go: api/session.go:4745 toPath (at 673a5f17d713; ts#64159 renames it
+    // pathKey, api/session.go:5231, which gives this key for rooted names)
     // toPath converts a file name to a normalized path.
     pub fn to_path(&self, file_name: &str) -> tspath::Path {
         tspath::to_path(
@@ -2489,7 +2749,7 @@ impl Session {
             return Ok(Node::NIL);
         };
         let source_file = program
-            .get_source_file(&file.to_file_name())
+            .get_source_file(&file.to_file_name(&program_base_directory(&program)))
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -2513,7 +2773,7 @@ impl Session {
     ) -> Result<Vec<NodeHandle>, GoError> {
         let setup = self.setup_checker(ctx, params.snapshot, &params.project)?;
 
-        let (owner, symbol) = setup.resolve_symbol_handle(params.symbol)?;
+        let (owner, symbol) = setup.resolve_symbol_handle(&params.symbol)?;
         if symbol.is_nil() {
             return Ok(Vec::new());
         }
@@ -2521,7 +2781,11 @@ impl Session {
 
         let source_file = setup
             .program
-            .get_source_file(&params.file.to_file_name())
+            .get_source_file(
+                &params
+                    .file
+                    .to_file_name(&program_base_directory(&setup.program)),
+            )
             .map_or(Node::NIL, |f| f.root);
         if source_file.is_nil() {
             return Err(errors::errorf(
@@ -2607,13 +2871,18 @@ impl Session {
                    program: &Rc<compiler::NewProgram>|
          -> Result<(Option<ls::CompletionList>, Node), GoError> {
             let source_file = program
-                .get_source_file(&params.file.to_file_name())
+                .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
                 .map_or(Node::NIL, |f| f.root);
             if source_file.is_nil() {
                 return Ok((None, source_file));
             }
-            let lang_svc =
-                self.setup_language_service(snapshot, Rc::clone(program), &params.project, "")?;
+            // ts#64554: the source file is the active file.
+            let lang_svc = self.setup_language_service(
+                snapshot,
+                Rc::clone(program),
+                &params.project,
+                source_file_file_name(source_file),
+            )?;
             // PORT: Go converts the uint32 position to a 64-bit int, and
             // UTF16ToUTF8 adds the delta of the last entry to a position past
             // all entries. A port position past i32::MAX is past any text.
@@ -2698,11 +2967,30 @@ impl Session {
         if let Err(err) = &result
             && errors::is(err, &ls::ERR_NEEDS_AUTO_IMPORTS)
         {
+            // ts#64554 (Go N' api/session.go:5508): symbols must come from the
+            // requested snapshot, so it must be prepared already.
+            if params.include_symbol {
+                return Err(errors::errorf(
+                    format!(
+                        "{}: snapshot is not prepared for auto-imports for {}",
+                        *ERR_CLIENT_ERROR, params.file
+                    ),
+                    vec![ERR_CLIENT_ERROR.clone()],
+                ));
+            }
+            // ts#64544 (Go N' api/session.go:5511): the URI of the program's
+            // file name.
+            let source_file = program
+                .get_source_file(&params.file.to_file_name(&program_base_directory(&program)))
+                .map_or(Node::NIL, |f| f.root);
+            if source_file.is_nil() {
+                return Ok(None);
+            }
             // ts#64163
             let prepared_snapshot = self.snapshot_host.clone_snapshot_with_auto_imports(
                 ctx,
                 &sd.snapshot,
-                &params.file.to_uri(&self.get_current_directory()),
+                &lsconv::file_name_to_document_uri(source_file_file_name(source_file)),
                 None,
             );
             if let Some(project_session) = &self.project_session {
@@ -3170,4 +3458,144 @@ fn past_text_reads_jsdoc_snippet(file: Node, trigger: Option<&str>, jsdoc_on: bo
                 && jsdoc_on
         }
     }
+}
+
+/// What Go `resolveSymbolReference` returns (ts#64518): the symbol, the
+/// snapshot data and canonical project of a snapshot-owned symbol, and the
+/// release function of a file-owned one.
+pub enum ResolvedSymbolReference {
+    /// A file-owned symbol. `symbols` (a binder lineage copy) holds it; the
+    /// lease holds its file until this value drops.
+    File {
+        symbols: SymbolArena,
+        symbol: SymbolId,
+        _lease: LeaseGuard,
+    },
+    /// A snapshot-owned symbol and the checker whose arena holds it.
+    Snapshot {
+        sd: Rc<SnapshotData>,
+        project: project::ID,
+        checker: Rc<RefCell<Checker>>,
+        symbol: SymbolId,
+    },
+}
+
+/// Go `defer lease.Release()`: releases the lease when it drops.
+pub struct LeaseGuard(Option<Rc<project::SourceFileLease>>);
+
+impl LeaseGuard {
+    /// Go `newFileSymbolResponse(symbol)` for a symbol of the leased file
+    /// (`new_leased_file_symbol_response`).
+    fn file_symbol_response(&self, symbols: &SymbolArena, symbol: SymbolId) -> SymbolResponse {
+        match &self.0 {
+            Some(lease) => {
+                new_leased_file_symbol_response(symbols, symbol, lease.parsed_source_file())
+            }
+            None => new_file_symbol_response(symbols, symbol),
+        }
+    }
+}
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        if let Some(lease) = self.0.take() {
+            lease.release();
+            project::drop_released_lease(lease);
+        }
+    }
+}
+
+// Go: tspath/pathkey.go:31 TryPathKeyFromCanonical (ts#64159)
+// Whether `path` is a canonical path key: empty, or a rooted normalized
+// path.
+// PORT: the port keeps string paths (bump D plan section 3, behavior only),
+// and the typed path helpers are not in the Rust tspath, which the
+// program lane owns. The API checks the paths that it reads from a client
+// with these copies.
+pub fn try_path_key_from_canonical(path: &str) -> bool {
+    path.is_empty() || try_rooted_path_from_normalized(path)
+}
+
+// Go: tspath/rooted_path.go:86 TryRootedPathFromNormalized (ts#64159)
+// Whether `path` is rooted and normalized: no URL query or fragment, no
+// backslash, no relative or empty segment, and a trailing separator only
+// on a bare root.
+pub fn try_rooted_path_from_normalized(path: &str) -> bool {
+    if has_rooted_url_suffix(path) {
+        return false;
+    }
+    let mut root_length = tspath::get_encoded_root_length(path);
+    if root_length < 0 {
+        root_length = !root_length;
+    }
+    let root_length = root_length as usize;
+    let bytes = path.as_bytes();
+    !(path.is_empty()
+        || root_length == 0
+        || path.contains('\\')
+        || root_length < bytes.len() && bytes[root_length] == b'/'
+        || has_relative_path_segment(&path[root_length..])
+        || bytes.len() == root_length && !tspath::has_trailing_directory_separator(path)
+        || bytes.len() > root_length && tspath::has_trailing_directory_separator(path))
+}
+
+// Go: tspath/rooted_path.go:29 ToRootedPath (ts#64159)
+// ToRootedPath resolves path against currentDirectory and normalizes it.
+// Go `ToRootedFilePath` (:120) and `ToRootedDirectoryPath` (:154) are this
+// function with a typed result. An empty `path`, or a URL `path` with a
+// query or fragment, is a Go panic; a request handler answers it as
+// `panic: <message>`.
+// PORT: the API copy (see `try_path_key_from_canonical`). Go normalizes
+// with `getNormalizedAbsolutePathFromDirectory` (path.go:409), which gives
+// the text of `tspath::get_normalized_absolute_path` for a rooted current
+// directory.
+pub fn to_rooted_path(path: &str, current_directory: &str) -> String {
+    if path.is_empty() {
+        crate::core::go_panic("path must not be empty".to_string());
+    }
+    if has_rooted_url_suffix(path) {
+        crate::core::go_panic("path must not contain a URL query or fragment".to_string());
+    }
+    if tspath::get_encoded_root_length(path) == 0
+        && has_url_root(current_directory)
+        && path.contains(['?', '#'])
+    {
+        crate::core::go_panic("relative URL path must not contain a query or fragment".to_string());
+    }
+    let mut normalized = tspath::get_normalized_absolute_path(path, current_directory);
+    if tspath::get_encoded_root_length(&normalized) == 0 || has_rooted_url_suffix(&normalized) {
+        crate::core::go_panic("path must be rooted".to_string());
+    }
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if tspath::get_root_length(&normalized) == normalized.len()
+        && !tspath::has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    normalized
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    if !has_url_root(path) {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, rest)| rest);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/rooted_path.go:114 hasURLRoot (ts#64159)
+fn has_url_root(path: &str) -> bool {
+    tspath::get_encoded_root_length(path) < 0 && path.contains("://")
+}
+
+// Go: tspath/path.go:554 hasRelativePathSegment
+// Whether a segment of `p` is "." or "..", or empty between two slashes.
+// PORT: a copy of the private Rust `tspath::has_relative_path_segment`.
+fn has_relative_path_segment(p: &str) -> bool {
+    let segments: Vec<&str> = p.split('/').collect();
+    let last = segments.len() - 1;
+    segments.iter().enumerate().any(|(i, segment)| {
+        *segment == "." || *segment == ".." || segment.is_empty() && i != 0 && i != last
+    })
 }

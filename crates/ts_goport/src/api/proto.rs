@@ -302,6 +302,11 @@ impl Method {
     pub const RELEASE: Method = Method(Cow::Borrowed("release"));
     // ts#64434
     pub const RELEASE_SOURCE_FILE: Method = Method(Cow::Borrowed("releaseSourceFile"));
+    // ts#64518
+    pub const RETAIN_SOURCE_FILE: Method = Method(Cow::Borrowed("retainSourceFile"));
+    pub const GET_CACHED_SOURCE_FILE: Method = Method(Cow::Borrowed("getCachedSourceFile"));
+    // ts#64571
+    pub const GET_SYMBOL_OF_DECLARATION: Method = Method(Cow::Borrowed("getSymbolOfDeclaration"));
 
     // ts#63937
     pub const BATCH_REQUESTS: Method = Method(Cow::Borrowed("batchRequests"));
@@ -502,6 +507,13 @@ impl Method {
         Method(Cow::Borrowed("getImmediateAliasedSymbol"));
     // ts#63945
     pub const GET_TARGET_SYMBOL: Method = Method(Cow::Borrowed("getTargetSymbol"));
+    // ts#64598
+    pub const GET_MERGED_SYMBOL: Method = Method(Cow::Borrowed("getMergedSymbol"));
+    pub const GET_SYMBOL_OF_NODE: Method = Method(Cow::Borrowed("getSymbolOfNode"));
+    pub const GET_SYMBOL_OF_DECLARATION_FOR_CHECKER: Method =
+        Method(Cow::Borrowed("getSymbolOfDeclarationForChecker"));
+    pub const GET_PARENT_OF_SYMBOL_FOR_CHECKER: Method =
+        Method(Cow::Borrowed("getParentOfSymbolForChecker"));
     // ts#64264
     pub const GET_EXPORT_SYMBOL_OF_SYMBOL_FOR_CHECKER: Method =
         Method(Cow::Borrowed("getExportSymbolOfSymbolForChecker"));
@@ -576,19 +588,48 @@ impl Method {
 }
 
 // InitializeResponse is returned by the initialize method.
-// Go: proto.go:265 InitializeResponse
+// Go: proto.go:273 InitializeResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InitializeResponse {
-    // UseCaseSensitiveFileNames indicates whether the host file system is case-sensitive.
-    pub use_case_sensitive_file_names: bool,
+    // CaseSensitivity determines how the host file system compares paths.
+    // ts#64159: replaces UseCaseSensitiveFileNames. PORT: Go
+    // `tspath.CaseSensitivity` (a uint8: 0 insensitive, 1 sensitive,
+    // tspath/path.go:1006) is `CaseSensitivity`.
+    pub case_sensitivity: CaseSensitivity,
     // CurrentDirectory is the server's current working directory.
     pub current_directory: String,
 }
 
 proto_json!(marshal InitializeResponse {
-    use_case_sensitive_file_names: "useCaseSensitiveFileNames" plain,
+    case_sensitivity: "caseSensitivity" plain,
     current_directory: "currentDirectory" plain,
 });
+
+// Go: tspath/path.go:1003 CaseSensitivity (ts#64159)
+// PORT: the port keeps a bool for case sensitivity (bump D plan section 3,
+// behavior only); the API answers Go's number.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaseSensitivity(pub u8);
+
+impl CaseSensitivity {
+    pub const INSENSITIVE: CaseSensitivity = CaseSensitivity(0);
+    pub const SENSITIVE: CaseSensitivity = CaseSensitivity(1);
+
+    pub fn from_use_case_sensitive_file_names(case_sensitive: bool) -> CaseSensitivity {
+        if case_sensitive {
+            CaseSensitivity::SENSITIVE
+        } else {
+            CaseSensitivity::INSENSITIVE
+        }
+    }
+}
+
+impl MarshalerTo for CaseSensitivity {
+    fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
+        enc.push_str(&self.0.to_string());
+        Ok(())
+    }
+}
 
 // DocumentIdentifier identifies a document by either a file name (plain string) or a URI object.
 // On the wire it is string | { uri: string }.
@@ -615,27 +656,86 @@ proto_json!(marshal DocumentIdentifier {
 });
 
 // Go: proto.go:187 UnmarshalJSONFrom
+// Go: proto.go:299 (*DocumentIdentifier).UnmarshalJSONFrom
+// ts#64159: an empty file name, an object with no uri and a uri that is
+// not a non-empty string are errors; other members are skipped whole.
 impl UnmarshalerFrom for DocumentIdentifier {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
+        let error = |text: String| {
+            Err(wrap_method_error::<Self>(SemanticError::method(
+                ErrorPos::After,
+                text,
+            )))
+        };
+        // PORT: Go reports a method error at the start of the value
+        // (`/openFiles/0`, not `/openFiles/0/uri`). The port reports it after
+        // the value, so an error inside the object first reads the rest of
+        // the object.
+        let finish_object = |dec: &mut JsonDecoder<'_>, value_pending: bool| {
+            if value_pending {
+                dec.skip_value()?;
+            }
+            while dec.peek_kind() != b'}' {
+                dec.read_token()?;
+                dec.skip_value()?;
+            }
+            dec.read_token().map(|_| ())
+        };
+        *self = DocumentIdentifier::default();
         // Try reading as a plain string first
         let tok = dec.read_token()?;
         match tok.kind() {
             b'"' => {
+                if token_string(&tok).is_empty() {
+                    return error("DocumentIdentifier: file name must not be empty".to_string());
+                }
                 self.file_name = token_string(&tok);
                 Ok(())
             }
             b'{' => {
-                // Read the object fields
+                let mut found_uri = false;
                 while dec.peek_kind() != b'}' {
                     let key = dec.read_token()?;
-                    let is_uri = token_string(&key) == "uri";
-                    let val = dec.read_token()?;
-                    if is_uri {
+                    if key.kind() != b'"' {
+                        return error(format!(
+                            "DocumentIdentifier: expected object field name, got {}",
+                            kind_string(key.kind())
+                        ));
+                    }
+                    if token_string(&key) == "uri" {
+                        if found_uri {
+                            finish_object(dec, true)?;
+                            return error(format!(
+                                "DocumentIdentifier: duplicate field {}",
+                                crate::gostd::strconv::quote(&token_string(&key))
+                            ));
+                        }
+                        let val = dec.read_token()?;
+                        if val.kind() != b'"' || token_string(&val).is_empty() {
+                            // A non-string token that opens a value is
+                            // read whole first.
+                            if matches!(val.kind(), b'{' | b'[') {
+                                return error(
+                                    "DocumentIdentifier: uri must be a non-empty string"
+                                        .to_string(),
+                                );
+                            }
+                            finish_object(dec, false)?;
+                            return error(
+                                "DocumentIdentifier: uri must be a non-empty string".to_string(),
+                            );
+                        }
                         self.uri = lsproto::DocumentUri(token_string(&val));
+                        found_uri = true;
+                    } else {
+                        dec.skip_value()?;
                     }
                 }
                 // Consume the closing brace
                 dec.read_token()?;
+                if !found_uri {
+                    return error("DocumentIdentifier: object must contain uri".to_string());
+                }
                 Ok(())
             }
             // Go wraps the error of the method with the type (one token
@@ -687,15 +787,20 @@ fn kind_string(k: u8) -> String {
 }
 
 impl DocumentIdentifier {
-    // Go: proto.go:327 ToFileName
-    pub fn to_file_name(&self) -> String {
+    // Go: proto.go:353 ToFileName
+    // ts#64159: a file name is rooted against `cwd` (Go
+    // `tspath.ToRootedFilePath`). The Go N function ToAbsoluteFileName
+    // (proto.go:344 at 673a5f17d713) is removed by ts#64159: this is it.
+    // An empty file name (a missing field) or a URL name with a query or
+    // fragment is a Go panic (`to_rooted_path`).
+    pub fn to_file_name(&self, cwd: &str) -> String {
         if !self.uri.0.is_empty() {
             return self.uri.file_name();
         }
-        self.file_name.clone()
+        super::to_rooted_path(&self.file_name, cwd)
     }
 
-    // Go: proto.go:337 ToURI
+    // Go: proto.go:363 ToURI
     // ToURI returns the document URI for this identifier. An explicitly provided URI
     // is returned as-is; a file name is first normalized to an absolute path against
     // cwd before being converted to a URI.
@@ -703,18 +808,7 @@ impl DocumentIdentifier {
         if !self.uri.0.is_empty() {
             return self.uri.clone();
         }
-        lsconv::file_name_to_document_uri(&tspath::get_normalized_absolute_path(
-            &self.file_name,
-            cwd,
-        ))
-    }
-
-    // Go: proto.go:344 ToAbsoluteFileName
-    pub fn to_absolute_file_name(&self, cwd: &str) -> String {
-        if !self.uri.0.is_empty() {
-            return self.uri.file_name();
-        }
-        tspath::get_normalized_absolute_path(&self.file_name, cwd)
+        lsconv::file_name_to_document_uri(&self.to_file_name(cwd))
     }
 
     // Go: proto.go:351 String
@@ -885,6 +979,12 @@ impl MarshalerTo for EnsurePrograms {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CreateSnapshotParams {
     pub snapshot_request_changes_params: SnapshotRequestChangesParams,
+    // UserPreferences configures language service behavior in the new snapshot.
+    // ts#64554 (Go N' api/proto.go:443). PORT: Go nil is `None`.
+    pub user_preferences: Option<crate::ls::lsutil::UserPreferences>,
+    // PrepareAutoImports identifies the file whose auto-import indexes should be ready in the new snapshot.
+    // ts#64554 (Go N' api/proto.go:445)
+    pub prepare_auto_imports: Option<DocumentIdentifier>,
     // FileNotifications describes host file system changes to invalidate while creating the snapshot.
     pub file_notifications: Option<FileNotifications>,
     // FileSystem supplies file contents and directory listings for the new snapshot.
@@ -897,6 +997,9 @@ impl UnmarshalerFrom for CreateSnapshotParams {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         let is_object = unmarshal_struct_fields(dec, "api.CreateSnapshotParams", |name, dec| {
             match name {
+                // ts#64554
+                "userPreferences" => json_unmarshal_decode(dec, &mut self.user_preferences)?,
+                "prepareAutoImports" => json_unmarshal_decode(dec, &mut self.prepare_auto_imports)?,
                 "fileNotifications" => json_unmarshal_decode(dec, &mut self.file_notifications)?,
                 "fileSystem" => json_unmarshal_decode(dec, &mut self.file_system)?,
                 _ => {
@@ -923,6 +1026,14 @@ impl MarshalerTo for CreateSnapshotParams {
         let mut first = true;
         self.snapshot_request_changes_params
             .marshal_members(enc, &mut first)?;
+        // ts#64554
+        marshal_field_omitempty(enc, &mut first, "userPreferences", &self.user_preferences)?;
+        marshal_field_omitempty(
+            enc,
+            &mut first,
+            "prepareAutoImports",
+            &self.prepare_auto_imports,
+        )?;
         marshal_field_omitempty(
             enc,
             &mut first,
@@ -1673,6 +1784,20 @@ pub static UNMARSHALERS: LazyLock<FxHashMap<Method, Unmarshaler>> = LazyLock::ne
         Method::RELEASE_SOURCE_FILE,
         unmarshaller_for::<ReleaseSourceFileParams>,
     );
+    // ts#64518
+    m.insert(
+        Method::RETAIN_SOURCE_FILE,
+        unmarshaller_for::<RetainSourceFileParams>,
+    );
+    m.insert(
+        Method::GET_CACHED_SOURCE_FILE,
+        unmarshaller_for::<GetCachedSourceFileParams>,
+    );
+    // ts#64571
+    m.insert(
+        Method::GET_SYMBOL_OF_DECLARATION,
+        unmarshaller_for::<GetSymbolOfDeclarationParams>,
+    );
     m.insert(Method::INITIALIZE, no_params);
     // ts#64204
     m.insert(
@@ -2154,6 +2279,23 @@ pub static UNMARSHALERS: LazyLock<FxHashMap<Method, Unmarshaler>> = LazyLock::ne
     // ts#63945
     m.insert(
         Method::GET_TARGET_SYMBOL,
+        unmarshaller_for::<CheckerSymbolParams>,
+    );
+    // ts#64598
+    m.insert(
+        Method::GET_MERGED_SYMBOL,
+        unmarshaller_for::<CheckerSymbolParams>,
+    );
+    m.insert(
+        Method::GET_SYMBOL_OF_NODE,
+        unmarshaller_for::<CheckerNodeParams>,
+    );
+    m.insert(
+        Method::GET_SYMBOL_OF_DECLARATION_FOR_CHECKER,
+        unmarshaller_for::<CheckerNodeParams>,
+    );
+    m.insert(
+        Method::GET_PARENT_OF_SYMBOL_FOR_CHECKER,
         unmarshaller_for::<CheckerSymbolParams>,
     );
     // ts#64264
@@ -2869,6 +3011,74 @@ proto_json!(both ReleaseSourceFileParams {
     lease: "lease" plain,
 });
 
+// Go: proto.go:930 SourceFileDescriptor (ts#64518)
+// The complete identity of an ordinary cached source file: its parse cache
+// key and the node ID of the exact AST that the client saw.
+// PORT: ts#64159 types FileName and Path (`tspath.RootedFilePath`,
+// `tspath.PathKey`); the port keeps strings.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceFileDescriptor {
+    pub file_name: String,
+    pub path: String,
+    pub content_hash: String,
+    pub parse_options_key: String,
+    pub script_kind: ScriptKind,
+    pub node_id: String,
+}
+
+proto_json!(both SourceFileDescriptor {
+    file_name: "fileName" plain,
+    path: "path" plain,
+    content_hash: "contentHash" plain,
+    parse_options_key: "parseOptionsKey" plain,
+    script_kind: "scriptKind" plain,
+    node_id: "nodeId" plain,
+});
+
+// Go: proto.go:939 RetainSourceFileParams (ts#64518)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RetainSourceFileParams {
+    pub file: SourceFileDescriptor,
+}
+
+proto_json!(both RetainSourceFileParams {
+    file: "file" plain,
+});
+
+// Go: proto.go:943 RetainSourceFileResponse (ts#64518)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RetainSourceFileResponse {
+    pub lease: SourceFileLeaseID,
+}
+
+proto_json!(marshal RetainSourceFileResponse {
+    lease: "lease" plain,
+});
+
+// Go: proto.go:949 GetCachedSourceFileParams (ts#64518)
+// GetCachedSourceFileParams address an ordinary cached source file by its complete identity,
+// independent of any snapshot or lease.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GetCachedSourceFileParams {
+    pub file: SourceFileDescriptor,
+}
+
+proto_json!(both GetCachedSourceFileParams {
+    file: "file" plain,
+});
+
+// Go: proto.go:953 GetSymbolOfDeclarationParams (ts#64571)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GetSymbolOfDeclarationParams {
+    pub file: SourceFileDescriptor,
+    pub index: u32,
+}
+
+proto_json!(both GetSymbolOfDeclarationParams {
+    file: "file" plain,
+    index: "index" plain,
+});
+
 // Go: proto.go:897 ProfileParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProfileParams {
@@ -2973,11 +3183,13 @@ proto_json!(both GetDefaultProjectForFileParams {
     file: "file" plain,
 });
 
-// Go: proto.go:971 ProjectResponse
+// Go: proto.go:1032 ProjectResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectResponse {
     pub id: project::ID,
-    pub config_file_name: String,
+    // ts#64159: Go `*tspath.RootedFilePath` with omitempty; only a
+    // configured project has it.
+    pub config_file_name: Option<String>,
     // ts#63935
     pub current_directory: String,
     // ts#64204
@@ -2994,7 +3206,7 @@ impl MarshalerTo for ProjectResponse {
         write_object_start(enc);
         let mut first = true;
         marshal_field(enc, &mut first, "id", &self.id)?;
-        marshal_field(enc, &mut first, "configFileName", &self.config_file_name)?;
+        marshal_field_omitempty(enc, &mut first, "configFileName", &self.config_file_name)?;
         marshal_field(enc, &mut first, "currentDirectory", &self.current_directory)?;
         marshal_field(enc, &mut first, "dirty", &self.dirty)?;
         marshal_field(
@@ -3043,39 +3255,15 @@ pub fn new_config_file_response(
         project_references: parsed_command_line.project_references().to_vec(),
         type_acquisition: parsed_command_line.type_acquisition().cloned(),
         compile_on_save,
-        raw: to_protocol_json_value(&parsed_command_line.raw),
+        // ts#64457 (Go N' proto.go:1067). PORT: a nil list in `Raw`
+        // marshals as `[]`, as the removed toProtocolJSONValue made it.
+        raw: parsed_command_line.raw.clone(),
         errors,
     })
 }
 
-// Go: proto.go:1011 toProtocolJSONValue
-// PORT: ts#64457 removes the Go function with the watch options (Go passes
-// `Raw` through). Only its watch kind cases are gone here; the api lane ports
-// the rest of that change.
-pub fn to_protocol_json_value(
-    value: &tsoptions::CompilerOptionsValue,
-) -> tsoptions::CompilerOptionsValue {
-    use crate::frontend::tsoptions::CompilerOptionsValue;
-    match value {
-        CompilerOptionsValue::Map(value) => {
-            let mut result = IndexMap::with_capacity(value.len());
-            for (key, child) in value {
-                result.insert(key.clone(), to_protocol_json_value(child));
-            }
-            CompilerOptionsValue::Map(result)
-        }
-        CompilerOptionsValue::List(value) => {
-            let mut result = Vec::with_capacity(value.len());
-            for child in value {
-                result.push(to_protocol_json_value(child));
-            }
-            CompilerOptionsValue::List(result)
-        }
-        // Go `case []any` makes a non-nil slice, also for a nil `[]any`.
-        CompilerOptionsValue::NilList => CompilerOptionsValue::List(Vec::new()),
-        value => value.clone(),
-    }
-}
+// Go: proto.go:1011 toProtocolJSONValue (at 673a5f17d713; removed by
+// ts#64457 with the watch options: Go N' passes `Raw` through).
 
 // Go: proto.go:1036 NewProjectResponse
 // PORT: Go shares the `*core.CompilerOptions` pointer; the response keeps
@@ -3085,9 +3273,10 @@ pub fn new_project_response(p: &project::Project) -> ProjectResponse {
         panic!("NewProjectResponse called with unloaded project");
     };
     // ts#64204: the config file name of a configured project only.
-    let mut config_file_name = String::new();
+    // ts#64159: nil (omitted) for other projects.
+    let mut config_file_name = None;
     if p.kind == project::Kind::CONFIGURED {
-        config_file_name = p.config_file_name();
+        config_file_name = Some(p.config_file_name());
     }
     ProjectResponse {
         id: p.id(),
@@ -3190,52 +3379,91 @@ proto_json!(both GetSymbolsAtLocationsParams {
     locations: "locations" plain,
 });
 
-// Go: proto.go:1093 SymbolResponse
+// Go: proto.go:1130 SymbolResponse
+// ts#64518: `reference` names the symbol and its owner; `parent` and
+// `exportSymbol` are compact references.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SymbolResponse {
-    pub id: SymbolID,
-    // Project is the project in which the symbol was first observed. It is the
-    // default project for follow-up lookups whose results can vary by project.
-    pub project: project::ID,
+    pub reference: SymbolReference,
     pub name: String,
     pub flags: u32,
     pub check_flags: u32,
     pub declarations: Vec<NodeHandle>,
     pub value_declaration: NodeHandle,
-    pub parent: SymbolID,
-    pub export_symbol: SymbolID,
+    pub parent: Option<CompactSymbolReference>,
+    pub export_symbol: Option<CompactSymbolReference>,
 }
 
 proto_json!(marshal SymbolResponse {
-    id: "id" plain,
-    project: "project" plain,
+    reference: "reference" plain,
     name: "name" plain,
     flags: "flags" plain,
     check_flags: "checkFlags" plain,
     declarations: "declarations" omitempty,
     value_declaration: "valueDeclaration" omitempty,
-    parent: "parent" omitzero,
-    export_symbol: "exportSymbol" omitzero,
+    parent: "parent" omitempty,
+    export_symbol: "exportSymbol" omitempty,
 });
 
-// Go: proto.go:1107 symbolHandles
-pub fn symbol_handles(symbols: &SymbolArena, symbol_list: &[SymbolId]) -> Vec<SymbolID> {
-    if symbol_list.is_empty() {
-        return Vec::new();
-    }
-    let mut handles = Vec::with_capacity(symbol_list.len());
-    for &t in symbol_list {
-        handles.push(symbol_handle(symbols, t));
-    }
-    handles
+// Go: proto.go:1141 SymbolOwnerKind (ts#64518)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SymbolOwnerKind(pub u32);
+
+impl SymbolOwnerKind {
+    // Go: proto.go:1143
+    pub const FILE: SymbolOwnerKind = SymbolOwnerKind(0);
+    pub const SNAPSHOT: SymbolOwnerKind = SymbolOwnerKind(1);
 }
 
-// Go: proto.go:1118 GetTypeOfSymbolParams
+handle_json!(uint: SymbolOwnerKind);
+
+// Go: proto.go:1148 SymbolOwner and proto.go:1156 SymbolReference (ts#64518)
+// SymbolReference identifies a symbol and its server-resolvable owner.
+// PORT: Go `SymbolReference` embeds `SymbolOwner`, whose fields JSON v2
+// inlines (`kind`, `file`, `snapshot`, `project`, then `id`). Nothing else
+// uses `SymbolOwner`, so the port has one flat struct.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SymbolReference {
+    pub kind: SymbolOwnerKind,
+    pub file: Option<SourceFileDescriptor>,
+    pub snapshot: SnapshotID,
+    pub project: project::ID,
+    pub id: SymbolID,
+}
+
+proto_json!(both SymbolReference {
+    kind: "kind" plain,
+    file: "file" omitempty,
+    snapshot: "snapshot" omitzero,
+    project: "project" omitempty,
+    id: "id" plain,
+});
+
+// Go: proto.go:1165 CompactSymbolReference (ts#64518)
+// CompactSymbolReference is embedded in other responses. It identifies a cached
+// symbol without repeating its owning file's full descriptor: File is the owning source file's
+// node ID, or empty for a symbol owned by the response's snapshot. When the client has not cached
+// the symbol, it fetches a full SymbolResponse through the corresponding property method.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CompactSymbolReference {
+    pub id: SymbolID,
+    pub file: String,
+}
+
+proto_json!(marshal CompactSymbolReference {
+    id: "id" plain,
+    file: "file" omitempty,
+});
+
+// Go: proto.go:1107 symbolHandles (at 673a5f17d713; removed by ts#64518)
+
+// Go: proto.go:1170 GetTypeOfSymbolParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetTypeOfSymbolParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    // ts#64518
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both GetTypeOfSymbolParams {
@@ -3244,12 +3472,13 @@ proto_json!(both GetTypeOfSymbolParams {
     symbol: "symbol" plain,
 });
 
-// Go: proto.go:1124 GetTypesOfSymbolsParams
+// Go: proto.go:1176 GetTypesOfSymbolsParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetTypesOfSymbolsParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbols: Vec<SymbolID>,
+    // ts#64518
+    pub symbols: Vec<SymbolReference>,
 }
 
 proto_json!(both GetTypesOfSymbolsParams {
@@ -3258,7 +3487,7 @@ proto_json!(both GetTypesOfSymbolsParams {
     symbols: "symbols" plain,
 });
 
-// Go: proto.go:1130 TypeResponse
+// Go: proto.go:1182 TypeResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TypeResponse {
     pub id: TypeID,
@@ -3322,10 +3551,11 @@ pub struct TypeResponse {
 
     // TypeAlias data
     pub alias_type_arguments: Vec<TypeID>,
-    pub alias_symbol: SymbolID,
+    // ts#64518
+    pub alias_symbol: Option<CompactSymbolReference>,
 
     // Symbol associated with structured types
-    pub symbol: SymbolID,
+    pub symbol: Option<CompactSymbolReference>,
 }
 
 impl MarshalerTo for TypeResponse {
@@ -3384,14 +3614,14 @@ impl MarshalerTo for TypeResponse {
             "aliasTypeArguments",
             &self.alias_type_arguments,
         )?;
-        marshal_field_omitzero(enc, &mut first, "aliasSymbol", &self.alias_symbol)?;
-        marshal_field_omitzero(enc, &mut first, "symbol", &self.symbol)?;
+        marshal_field_omitempty(enc, &mut first, "aliasSymbol", &self.alias_symbol)?;
+        marshal_field_omitempty(enc, &mut first, "symbol", &self.symbol)?;
         write_object_end(enc);
         Ok(())
     }
 }
 
-// Go: proto.go:1196 newTypeResponse
+// Go: proto.go:1248 newTypeResponse
 // PORT: Go reads the type through its pointer; the port reads it from the
 // checker arena that owns `t`.
 pub fn new_type_response(c: &Checker, t: TypeId, id: TypeID) -> TypeResponse {
@@ -3402,15 +3632,10 @@ pub fn new_type_response(c: &Checker, t: TypeId, id: TypeID) -> TypeResponse {
         ..TypeResponse::default()
     };
 
-    if ty.symbol().is_some() {
-        resp.symbol = symbol_handle(&c.symbols, ty.symbol());
-    }
-
+    // ts#64518: the symbol and alias symbol references are set by
+    // `SnapshotData::new_type_response`.
     if let Some(alias) = ty.alias() {
         resp.alias_type_arguments = type_handles(alias.type_arguments());
-        if alias.symbol().is_some() {
-            resp.alias_symbol = symbol_handle(&c.symbols, alias.symbol());
-        }
     }
 
     let flags = ty.flags();
@@ -3540,15 +3765,16 @@ proto_json!(marshal ConstantValueResponse {
     value: "value" plain,
 });
 
-// Go: proto.go:1325 SignatureResponse
+// Go: proto.go:1370 SignatureResponse
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SignatureResponse {
     pub id: SignatureID,
     pub flags: u32,
     pub declaration: NodeHandle,
     pub type_parameters: Vec<TypeID>,
-    pub parameters: Vec<SymbolID>,
-    pub this_parameter: SymbolID,
+    // ts#64518
+    pub parameters: Vec<CompactSymbolReference>,
+    pub this_parameter: Option<CompactSymbolReference>,
     pub target: SignatureID,
 }
 
@@ -3558,7 +3784,7 @@ proto_json!(marshal SignatureResponse {
     declaration: "declaration" omitempty,
     type_parameters: "typeParameters" omitempty,
     parameters: "parameters" omitempty,
-    this_parameter: "thisParameter" omitzero,
+    this_parameter: "thisParameter" omitempty,
     target: "target" omitzero,
 });
 
@@ -3883,18 +4109,15 @@ proto_json!(both GetTypePropertyParams {
 });
 
 // GetSymbolPropertyParams is used for all symbol sub-property endpoints.
-// Go: proto.go:1468 GetSymbolPropertyParams
+// Go: proto.go:1513 GetSymbolPropertyParams
 #[derive(Clone, Debug, Default, PartialEq)]
+// ts#64518: only the symbol reference, which names its snapshot and project.
 pub struct GetSymbolPropertyParams {
-    pub snapshot: SnapshotID,
-    pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both GetSymbolPropertyParams {
-    snapshot: "snapshot" plain,
-    project: "project" plain,
-    symbol: "objectId" plain,
+    symbol: "symbol" plain,
 });
 
 // GetSignaturePropertyParams is used for all signature sub-property endpoints.
@@ -3944,12 +4167,12 @@ proto_json!(both GetContextualTypeForArgumentParams {
 });
 
 // GetTypeOfSymbolAtLocationParams returns the narrowed type of a symbol at a specific location.
-// Go: proto.go:1496 GetTypeOfSymbolAtLocationParams
+// Go: proto.go:1539 GetTypeOfSymbolAtLocationParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetTypeOfSymbolAtLocationParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
     pub location: NodeHandle,
 }
 
@@ -3961,13 +4184,13 @@ proto_json!(both GetTypeOfSymbolAtLocationParams {
 });
 
 // GetReferencesToSymbolInFileParams are the parameters for the getReferencesToSymbolInFile method.
-// Go: proto.go:1504 GetReferencesToSymbolInFileParams
+// Go: proto.go:1547 GetReferencesToSymbolInFileParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetReferencesToSymbolInFileParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
     pub file: DocumentIdentifier,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both GetReferencesToSymbolInFileParams {
@@ -4361,11 +4584,12 @@ handle_json!(string: ImportAdderActionKind);
 // Go: proto.go:1688 ImportAdderActionKindImportSymbol (tsgo#3881)
 pub const IMPORT_ADDER_ACTION_KIND_IMPORT_SYMBOL: &str = "importSymbol";
 
-// Go: proto.go:1691 ImportAdderAction (tsgo#3881)
+// Go: proto.go:1734 ImportAdderAction (tsgo#3881)
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportAdderAction {
     pub kind: ImportAdderActionKind,
-    pub symbol: SymbolID,
+    // ts#64518
+    pub symbol: Option<SymbolReference>,
     pub is_valid_type_only_use_site: Option<bool>,
 }
 
@@ -4623,12 +4847,12 @@ proto_json!(both CheckerNodeParams {
 });
 
 // GetMemberInModuleExportsParams are parameters for getMemberInModuleExports.
-// Go: proto.go:1802 GetMemberInModuleExportsParams
+// Go: proto.go:1845 GetMemberInModuleExportsParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GetMemberInModuleExportsParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
     pub name: String,
 }
 
@@ -4640,12 +4864,12 @@ proto_json!(both GetMemberInModuleExportsParams {
 });
 
 // CheckerSymbolParams are parameters for checker methods that operate on a symbol.
-// Go: proto.go:1817 CheckerSymbolParams
+// Go: proto.go:1860 CheckerSymbolParams
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CheckerSymbolParams {
     pub snapshot: SnapshotID,
     pub project: project::ID,
-    pub symbol: SymbolID,
+    pub symbol: SymbolReference,
 }
 
 proto_json!(both CheckerSymbolParams {

@@ -418,7 +418,7 @@ child_test! {
             ),
         ));
         assert_eq!(response.projects.len(), 1);
-        assert_eq!(response.projects[0].config_file_name, "/tsconfig.json");
+        assert_eq!(response.projects[0].config_file_name.as_deref(), Some("/tsconfig.json"));
 
         let snapshot = snapshot_of(&session, response.snapshot);
         let (contents, ok) = snapshot.read_file("/src/index.ts");

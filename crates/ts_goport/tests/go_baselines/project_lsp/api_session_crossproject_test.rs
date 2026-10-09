@@ -8,6 +8,15 @@
 //! it gets Go's answer also for a file version bound after it was made, and
 //! B's next answers do not change.
 //!
+//! ts#64518 (Go N' api/session.go:777 checkerSetup.resolveSymbolHandle): a
+//! binder symbol is now file-owned. Its reference names its source file,
+//! and a checker resolves it only through a file of its own program, so B
+//! answers a symbol of x.ts or m.d.ts (files of A only) with the client
+//! error "source file is not part of the requested program". The tests keep
+//! their names and check that error on B and Go's answers on A. Symbol
+//! tables of a file-owned symbol need no project (Go
+//! resolveSymbolTablePropertyOfSymbol sorts them by declaration).
+//!
 //! PORT: the tests call the session handlers directly.
 
 use std::rc::Rc;
@@ -16,12 +25,13 @@ use ts_goport::api::requestfilesystem::{Kind, RequestFileSystem};
 use ts_goport::api::{
     self, CheckerSymbolParams, CreateSnapshotParams, EnsurePrograms, GetSymbolAtPositionParams,
     GetSymbolOfSourceFileParams, GetSymbolPropertyParams, GetTypeOfSymbolParams, SnapshotID,
-    SnapshotRequestChangesParams, SymbolID, TypeToTypeNodeParams, UpdateSnapshotParams,
+    SnapshotRequestChangesParams, SymbolOwnerKind, SymbolReference, TypeToTypeNodeParams,
+    UpdateSnapshotParams,
 };
 use ts_goport::gostd::Context;
 use ts_goport::project;
 
-use super::api_util::{doc, nil_error, project_program, snapshot_of};
+use super::api_util::{doc, error_contains, nil_error, project_program, snapshot_of};
 use super::projecttestutil::{self, files};
 use super::requestfilesystem_test::files as request_files;
 use super::util::{bg, text};
@@ -80,7 +90,7 @@ impl Api {
             created
                 .projects
                 .iter()
-                .find(|p| p.config_file_name == config)
+                .find(|p| p.config_file_name.as_deref() == Some(config))
                 .unwrap_or_else(|| panic!("no project {config}"))
                 .id
                 .clone()
@@ -148,7 +158,7 @@ impl Api {
     }
 
     /// The symbol at the first `name` in `file`, on `project`.
-    fn symbol(&self, project: &project::ID, file: &str, text: &str, name: &str) -> SymbolID {
+    fn symbol(&self, project: &project::ID, file: &str, text: &str, name: &str) -> SymbolReference {
         nil_error(self.session.handle_get_symbol_at_position(
             &self.ctx,
             &GetSymbolAtPositionParams {
@@ -159,20 +169,36 @@ impl Api {
             },
         ))
         .expect("a symbol")
-        .id
+        .reference
     }
 
-    /// Go `typeToString(getTypeOfSymbol(symbol))` on `project`.
-    fn type_text(&self, project: &project::ID, symbol: SymbolID) -> String {
-        let t = nil_error(self.session.handle_get_type_of_symbol(
+    /// Go `getTypeOfSymbol(symbol)` on `project`.
+    fn type_of(
+        &self,
+        project: &project::ID,
+        symbol: &SymbolReference,
+    ) -> Result<Option<api::TypeResponse>, ts_goport::gostd::GoError> {
+        self.session.handle_get_type_of_symbol(
             &self.ctx,
             &GetTypeOfSymbolParams {
                 snapshot: self.snapshot,
                 project: project.clone(),
-                symbol,
+                symbol: symbol.clone(),
             },
-        ))
-        .expect("a type");
+        )
+    }
+
+    /// ts#64518: `project` has no file that owns `symbol`.
+    fn rejects(&self, project: &project::ID, symbol: &SymbolReference) {
+        error_contains(
+            self.type_of(project, symbol),
+            "source file is not part of the requested program",
+        );
+    }
+
+    /// Go `typeToString(getTypeOfSymbol(symbol))` on `project`.
+    fn type_text(&self, project: &project::ID, symbol: &SymbolReference) -> String {
+        let t = nil_error(self.type_of(project, symbol)).expect("a type");
         let text = nil_error(self.session.handle_type_to_string(
             &self.ctx,
             &TypeToTypeNodeParams {
@@ -188,19 +214,23 @@ impl Api {
     }
 
     /// Go `getFullyQualifiedName(symbol)` on `project`.
-    fn qualified_name(&self, project: &project::ID, symbol: SymbolID) -> String {
-        nil_error(self.session.handle_get_fully_qualified_name(
+    fn qualified_name(
+        &self,
+        project: &project::ID,
+        symbol: &SymbolReference,
+    ) -> Result<String, ts_goport::gostd::GoError> {
+        self.session.handle_get_fully_qualified_name(
             &self.ctx,
             &CheckerSymbolParams {
                 snapshot: self.snapshot,
                 project: project.clone(),
-                symbol,
+                symbol: symbol.clone(),
             },
-        ))
+        )
     }
 
     /// The symbol of source file `file`, on `project`.
-    fn file_symbol(&self, project: &project::ID, file: &str) -> SymbolID {
+    fn file_symbol(&self, project: &project::ID, file: &str) -> SymbolReference {
         nil_error(self.session.handle_get_symbol_of_source_file(
             &self.ctx,
             &GetSymbolOfSourceFileParams {
@@ -210,21 +240,14 @@ impl Api {
             },
         ))
         .expect("a symbol")
-        .id
+        .reference
     }
 
-    /// The (id, name, project) of each answer of Go `getExportsOfSymbol`
-    /// (`exports`) or `getMembersOfSymbol` of `symbol` on `project`.
-    fn table(
-        &self,
-        project: &project::ID,
-        symbol: SymbolID,
-        exports: bool,
-    ) -> Vec<(SymbolID, String, String)> {
+    /// The (reference, name) of each answer of Go `getExportsOfSymbol`
+    /// (`exports`) or `getMembersOfSymbol` of `symbol`.
+    fn table(&self, symbol: &SymbolReference, exports: bool) -> Vec<(SymbolReference, String)> {
         let params = GetSymbolPropertyParams {
-            snapshot: self.snapshot,
-            project: project.clone(),
-            symbol,
+            symbol: symbol.clone(),
         };
         let answers = if exports {
             self.session
@@ -237,7 +260,7 @@ impl Api {
             .into_iter()
             .map(|answer| {
                 let answer = answer.expect("a symbol");
-                (answer.id, answer.name, answer.project.0)
+                (answer.reference, answer.name)
             })
             .collect()
     }
@@ -263,13 +286,15 @@ child_test! {
     // reads, and B's API checker is made after it. The port read the
     // declarations of `f` past B's copy of the lineage and panicked
     // (index out of bounds), then answered `any`. Go answers the type.
+    // ts#64518: B rejects the file-owned `f` (module header).
     fn symbol_of_later_file_version_on_new_api_checker() {
         let mut api = Api::new();
         api.edit_x();
         let f = api.symbol(&api.a, X_TS, X_EDITED, "f =");
-        assert_eq!(api.type_text(&api.b, f), F_TYPE);
-        assert_eq!(api.type_text(&api.b, f), F_TYPE);
-        assert_eq!(api.type_text(&api.a, f), F_TYPE);
+        assert_eq!(f.kind, SymbolOwnerKind::FILE);
+        api.rejects(&api.b, &f);
+        api.rejects(&api.b, &f);
+        assert_eq!(api.type_text(&api.a, &f), F_TYPE);
         api.close();
     }
 }
@@ -282,15 +307,16 @@ child_test! {
     fn symbol_of_later_file_version_on_older_api_checker() {
         let mut api = Api::new();
         let g = api.symbol(&api.b, B_TS, B_TEXT, "g =");
-        assert_eq!(api.type_text(&api.b, g), G_TYPE);
+        assert_eq!(api.type_text(&api.b, &g), G_TYPE);
         api.edit_x();
         let f = api.symbol(&api.a, X_TS, X_EDITED, "f =");
+        // ts#64518: B rejects the file-owned `f` (module header).
         for _ in 0..2 {
-            assert_eq!(api.type_text(&api.b, f), F_TYPE);
+            api.rejects(&api.b, &f);
         }
         let g = api.symbol(&api.b, B_TS, B_TEXT, "g =");
-        assert_eq!(api.type_text(&api.b, g), G_TYPE);
-        assert_eq!(api.type_text(&api.a, f), F_TYPE);
+        assert_eq!(api.type_text(&api.b, &g), G_TYPE);
+        assert_eq!(api.type_text(&api.a, &f), F_TYPE);
         api.close();
     }
 }
@@ -304,32 +330,45 @@ child_test! {
     fn names_of_later_file_version_on_older_api_checker() {
         let mut api = Api::new();
         let g = api.symbol(&api.b, B_TS, B_TEXT, "g =");
-        assert_eq!(api.type_text(&api.b, g), G_TYPE);
+        assert_eq!(api.type_text(&api.b, &g), G_TYPE);
         api.edit_x();
         let f = api.symbol(&api.a, X_TS, X_EDITED, "f =");
-        assert_eq!(api.qualified_name(&api.b, f), r#""/home/projects/p/x".f"#);
+        // ts#64518: B rejects the file-owned `f` (module header).
+        error_contains(
+            api.qualified_name(&api.b, &f),
+            "source file is not part of the requested program",
+        );
+        assert_eq!(
+            nil_error(api.qualified_name(&api.a, &f)),
+            r#""/home/projects/p/x".f"#
+        );
         let x = api.file_symbol(&api.a, X_TS);
-        let exports = api.table(&api.b, x, true);
-        let names: Vec<_> = exports.iter().map(|(_, name, _)| name.as_str()).collect();
+        let exports = api.table(&x, true);
+        let names: Vec<_> = exports.iter().map(|(_, name)| name.as_str()).collect();
         assert_eq!(names, ["f", "K"]);
-        // The project where each symbol was first seen, as Go.
-        assert_eq!(exports[0].2, api.a.0);
-        assert_eq!(exports[1].2, api.b.0);
-        let k = exports[1].0;
-        let members = api.table(&api.b, k, false);
+        // ts#64518: file-owned answers name their file, not a project.
+        for (reference, _) in &exports {
+            assert_eq!(reference.kind, SymbolOwnerKind::FILE);
+            assert!(reference.project.0.is_empty() && reference.file.is_some());
+        }
+        let k = exports[1].0.clone();
+        let members = api.table(&k, false);
         assert_eq!(members[1].1, "q");
         // The name of `#p` holds the id of its class `K`, as on A.
-        assert!(members[0].1.ends_with(&format!("#{}@#p", k.0)), "{}", members[0].1);
-        assert_eq!(api.table(&api.a, k, false), members);
-        assert_eq!(api.type_text(&api.b, f), F_TYPE);
-        assert_eq!(api.type_text(&api.b, members[1].0), "number");
+        assert!(members[0].1.ends_with(&format!("#{}@#p", k.id.0)), "{}", members[0].1);
+        assert_eq!(api.table(&k, false), members);
+        api.rejects(&api.b, &f);
+        api.rejects(&api.b, &members[1].0);
         let v = api.symbol(&api.a, M_TS, M_EDITED, "v:");
-        assert_eq!(api.qualified_name(&api.b, v), r#""m".v"#);
-        assert_eq!(api.qualified_name(&api.a, v), r#""m".v"#);
-        assert_eq!(api.type_text(&api.a, f), F_TYPE);
-        assert_eq!(api.type_text(&api.a, members[1].0), "number");
+        error_contains(
+            api.qualified_name(&api.b, &v),
+            "source file is not part of the requested program",
+        );
+        assert_eq!(nil_error(api.qualified_name(&api.a, &v)), r#""m".v"#);
+        assert_eq!(api.type_text(&api.a, &f), F_TYPE);
+        assert_eq!(api.type_text(&api.a, &members[1].0), "number");
         let g = api.symbol(&api.b, B_TS, B_TEXT, "g =");
-        assert_eq!(api.type_text(&api.b, g), G_TYPE);
+        assert_eq!(api.type_text(&api.b, &g), G_TYPE);
         api.close();
     }
 }
@@ -339,17 +378,19 @@ child_test! {
     // each edit. B catches up to each new x.ts version, and frees the
     // versions that died with the released snapshots, so the chunks that
     // it holds do not grow with the edits (it gained 2 or more per edit
-    // without the frees).
+    // without the frees). ts#64518: B now rejects the file-owned `f`, so
+    // it does not catch up, and its chunks still do not grow.
     fn older_api_checker_frees_dead_versions_when_it_catches_up() {
         let mut api = Api::new();
         let g = api.symbol(&api.b, B_TS, B_TEXT, "g =");
-        assert_eq!(api.type_text(&api.b, g), G_TYPE);
+        assert_eq!(api.type_text(&api.b, &g), G_TYPE);
         let mut chunks = Vec::new();
         for n in 0..30 {
             let text = format!("{X_EDITED}// {n}\n");
             api.edit_x_and_release(&text);
             let f = api.symbol(&api.a, X_TS, &text, "f =");
-            assert_eq!(api.type_text(&api.b, f), F_TYPE);
+            // ts#64518: B rejects the file-owned `f` (module header).
+            api.rejects(&api.b, &f);
             chunks.push(api.b_live_chunks());
         }
         assert!(chunks[29] <= chunks[4] + 4, "{chunks:?}");

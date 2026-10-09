@@ -10,17 +10,19 @@ use crate::gostd::context;
 use std::io::Write;
 use std::sync::Arc;
 
-// Go: cmd/tsc/api.go:17 apiFlags (tsgo#4712)
+// Go: cmd/tsc/api.go:19 apiFlags (tsgo#4712)
 struct ApiFlags {
     cwd: String,
     pipe_path: String,
     callbacks: String,
+    // ts#64447
+    case_sensitive: bool,
     async_: bool,
     timing: bool,
     run_external_code: bool,
 }
 
-// Go: cmd/tsc/api.go:26 parseAPIFlags (tsgo#4712)
+// Go: cmd/tsc/api.go:29 parseAPIFlags (tsgo#4712)
 // PORT: Go `StringVar` and `BoolVar` write into `result` as the flags are
 // parsed. The port's flag set has only `String` and `Bool`, so the values
 // are read into the result after the parse. The flag order and texts are
@@ -36,7 +38,13 @@ fn parse_api_flags(args: &[String]) -> Result<ApiFlags, GoError> {
     let callbacks = flags.string(
         "callbacks",
         "",
-        "comma-separated list of FS callbacks to enable (readFile,fileExists,directoryExists,getAccessibleEntries,realpath)",
+        "comma-separated list of FS callbacks and defaults to enable",
+    );
+    // ts#64447
+    let case_sensitive = flags.bool(
+        "useCaseSensitiveFileNames",
+        crate::frontend::vfs::osvfs_fs().use_case_sensitive_file_names(),
+        "treat filesystem paths as case-sensitive",
     );
     let async_ = flags.bool(
         "async",
@@ -58,6 +66,7 @@ fn parse_api_flags(args: &[String]) -> Result<ApiFlags, GoError> {
         cwd: cwd.borrow().clone(),
         pipe_path: pipe_path.borrow().clone(),
         callbacks: callbacks.borrow().clone(),
+        case_sensitive: case_sensitive.get(),
         async_: async_.get(),
         timing: timing.get(),
         run_external_code: run_external_code.get(),
@@ -80,7 +89,7 @@ impl contentmapper::Spawner for OsSystemSpawner {
     }
 }
 
-// Go: cmd/tsc/api.go:41 runAPI
+// Go: cmd/tsc/api.go:45 runAPI
 pub fn run_api(args: &[String]) -> i32 {
     let Ok(flags) = parse_api_flags(args) else {
         return 2;
@@ -99,10 +108,16 @@ pub fn run_api(args: &[String]) -> i32 {
     // `ExitStatusInvalidProject_OutputsSkipped` when the current directory
     // cannot be read; `new_os_system` prints the same text and returns that
     // status, which is returned here as the exit code.
-    let content_mapper_spawner: Rc<dyn contentmapper::Spawner> = match tsc::new_os_system() {
-        Ok(sys) => Rc::new(OsSystemSpawner(sys)),
-        Err(status) => return status.code(),
-    };
+    // ts#64159: the system's current directory roots `--cwd` (Go N'
+    // cmd/tsc/api.go:62).
+    let (content_mapper_spawner, system_cwd): (Rc<dyn contentmapper::Spawner>, String) =
+        match tsc::new_os_system() {
+            Ok(sys) => {
+                let cwd = tsc::System::get_current_directory(&sys);
+                (Rc::new(OsSystemSpawner(sys)), cwd)
+            }
+            Err(status) => return status.code(),
+        };
 
     // PORT: Go `In io.ReadCloser`, `Out io.WriteCloser` and `Err io.Writer`
     // are nil-able interfaces (`None`).
@@ -110,10 +125,13 @@ pub fn run_api(args: &[String]) -> i32 {
         in_: None,
         out: None,
         err: Some(Box::new(stdio::Stderr)),
-        cwd: flags.cwd,
+        // Go: tspath.ToRootedDirectoryPath(flags.cwd, system.cwd). An empty
+        // `--cwd=` is a Go panic.
+        cwd: crate::api::to_rooted_path(&flags.cwd, &system_cwd),
         default_library_path,
         pipe_path: String::new(),
         callbacks: callbacks_list,
+        use_case_sensitive_file_names: Some(flags.case_sensitive),
         async_: flags.async_,
         collect_timing: flags.timing,
         run_external_code: flags.run_external_code,

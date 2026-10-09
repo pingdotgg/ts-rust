@@ -401,10 +401,16 @@ impl AstDecoder<'_> {
         let text = self.get_string(text_idx);
         let file_name = self.get_string(file_name_idx);
         let path = self.get_string(path_idx);
+        // ts#64159 (Go N' api/encoder/decoder.go:270): the path is a
+        // canonical path key and the file name a rooted normalized path.
+        if !crate::api::try_path_key_from_canonical(&path) {
+            return Err(errors::new(format!(
+                "invalid source file path {}",
+                crate::gostd::strconv::quote_bytes(self.get_string_bytes(path_idx))
+            )));
+        }
         // ts#64216
-        if crate::frontend::tspath::get_encoded_root_length(&file_name) == 0
-            || file_name != crate::frontend::tspath::normalize_path(&file_name)
-        {
+        if !crate::api::try_rooted_path_from_normalized(&file_name) {
             // Go `%q` of the name's bytes (`file_name` has U+FFFD for
             // bytes that are not valid UTF-8).
             return Err(errors::new(format!(

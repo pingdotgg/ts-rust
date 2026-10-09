@@ -544,6 +544,18 @@ pub fn source_file_hash(source_file: Node) -> String {
     format!("{:016x}{:016x}", h.hi, h.lo)
 }
 
+/// Go `SourceFileHash(sourceFile)` of the file of a parse record that the
+/// caller holds (a lease, ts#64518). A lease's file can be in no program, so
+/// the hash comes from the record, as `encode_parsed_source_file` reads it.
+pub fn parsed_source_file_hash(parsed: &ParsedSourceFile) -> String {
+    let h = if parsed.hash.get().is_some() {
+        parse_cache_hash(parsed)
+    } else {
+        source_file_content_hash(parsed.root)
+    };
+    format!("{:016x}{:016x}", h.hi, h.lo)
+}
+
 // Go: api/encoder/encoder.go:318 encodeParseOptions
 /// encodeParseOptions encodes the per-file ExternalModuleIndicatorOptions as a uint32 bitmask.
 fn encode_parse_options(opts: ExternalModuleIndicatorOptions) -> u32 {
@@ -740,6 +752,13 @@ fn encode_source_file_of(
 pub fn set_source_file_lease(data: &mut [u8], lease: u64) {
     data[HEADER_OFFSET_SOURCE_FILE_LEASE..HEADER_OFFSET_SOURCE_FILE_LEASE + 8]
         .copy_from_slice(&lease.to_le_bytes());
+}
+
+// Go: api/encoder/encoder.go:439 SetSourceFileID (ts#64518)
+/// SetSourceFileID sets the source file node ID used to validate remote references.
+pub fn set_source_file_id(data: &mut [u8], id: u64) {
+    data[HEADER_OFFSET_SOURCE_FILE_ID..HEADER_OFFSET_SOURCE_FILE_ID + 8]
+        .copy_from_slice(&id.to_le_bytes());
 }
 
 // Go: api/encoder/encoder.go:442 EncodeNode

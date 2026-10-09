@@ -19,7 +19,7 @@ use std::cell::Cell;
 use std::io::{Read, Write};
 use std::time::Duration;
 
-// Go: server.go:17 StdioServerOptions
+// Go: server.go:18 StdioServerOptions
 // StdioServerOptions configures the STDIO-based API server.
 // PORT: Go `io.ReadCloser` / `io.WriteCloser` / `io.Writer` are boxed
 // `Read` / `Write` values; a nil one is `None`. `In` and `Async` are Rust
@@ -39,6 +39,9 @@ pub struct StdioServerOptions {
     // Callbacks specifies which filesystem operations should be delegated
     // to the client (e.g., "readFile", "fileExists"). Empty means no callbacks.
     pub callbacks: Vec<String>,
+    // UseCaseSensitiveFileNames overrides the base filesystem's case sensitivity.
+    // PORT: the Go `*bool` is `Option<bool>` (ts#64447).
+    pub use_case_sensitive_file_names: Option<bool>,
     // Async enables JSON-RPC protocol with async connection handling.
     // When false (default), uses MessagePack protocol with sync connection.
     pub async_: bool,
@@ -53,7 +56,7 @@ pub struct StdioServerOptions {
     pub content_mapper_spawner: Option<Rc<dyn contentmapper::Spawner>>,
 }
 
-// Go: server.go:46 StdioServer
+// Go: server.go:49 StdioServer
 // StdioServer runs an API session over STDIO using MessagePack protocol.
 // This is the entry point for the synchronous STDIO-based API used by
 // native TypeScript tooling integration.
@@ -61,7 +64,7 @@ pub struct StdioServer {
     options: StdioServerOptions,
 }
 
-// Go: server.go:51 NewStdioServer
+// Go: server.go:54 NewStdioServer
 // NewStdioServer creates a new STDIO-based API server.
 // PORT: Go keeps the `*StdioServerOptions` pointer; the server owns the
 // options here (they hold the stdin and stdout handles).
@@ -134,7 +137,7 @@ impl<F: FnMut()> Drop for Defer<F> {
 }
 
 impl StdioServer {
-    // Go: server.go:62 Run
+    // Go: server.go:65 Run
     // Run starts the server and blocks until the connection closes.
     // PORT: `&mut self` because Accept moves the stdin and stdout handles
     // out of the options.
@@ -162,10 +165,17 @@ impl StdioServer {
 
         let mut fs: Rc<dyn Fs> = bundled::wrap_fs_exported(vfs::osvfs_fs());
 
-        // Wrap the base FS with callbackFS if callbacks are requested
+        // Wrap the base FS when callbacks or an explicit case-sensitivity setting are requested.
+        // ts#64447
         let mut callback_fs: Option<Rc<CallbackFS>> = None;
-        if !self.options.callbacks.is_empty() {
-            let cfs = new_callback_fs(fs.clone(), &self.options.callbacks);
+        if !self.options.callbacks.is_empty()
+            || self.options.use_case_sensitive_file_names.is_some()
+        {
+            let cfs = new_callback_fs(
+                fs.clone(),
+                &self.options.callbacks,
+                self.options.use_case_sensitive_file_names,
+            );
             fs = cfs.clone();
             callback_fs = Some(cfs);
         }
