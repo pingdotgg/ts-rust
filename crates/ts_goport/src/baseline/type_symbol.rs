@@ -322,8 +322,10 @@ impl TypeWriterWalker {
         let had_error_baseline = self.had_error_baseline;
 
         self.with_type_checker_for_current_file(move |file_checker| {
-            let (ctx, put_ctx) = get_emit_context();
-            let result = write_type_or_symbol_with_checker(
+            // ts#64649 (type_symbol_baseline.go:353): a new emit context per
+            // call, not a pooled one that is reset before each node builder.
+            let ctx = new_emit_context();
+            write_type_or_symbol_with_checker(
                 file_checker,
                 &ctx,
                 current_source_file,
@@ -332,10 +334,7 @@ impl TypeWriterWalker {
                 is_symbol_walk,
                 line,
                 source_text,
-            );
-            // Go: `defer putCtx()`.
-            put_ctx();
-            result
+            )
         })
     }
 }
@@ -398,7 +397,6 @@ fn write_type_or_symbol_with_checker(
                 .intrinsic_name()
                 .to_string();
         } else {
-            ctx.reset();
             let builder = Rc::new(RefCell::new(new_node_builder(file_checker, Rc::clone(ctx))));
             let type_format_flags = TypeFormatFlags::NO_TRUNCATION
                 | TypeFormatFlags::ALLOW_UNIQUE_ES_SYMBOL_TYPE
