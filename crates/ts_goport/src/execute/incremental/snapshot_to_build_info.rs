@@ -439,8 +439,12 @@ impl ToBuildInfo<'_> {
     }
 
     // Go: incremental/snapshottobuildinfo.go:291 setCompilerOptions
-    // PORT: Go tests each option field with `reflect.Value.IsZero`; see
-    // `is_zero_compiler_option_value`.
+    // PORT: ts#64457 makes Go call the generated
+    // `tsoptions.ForEachCompilerOptionAffectingBuildInfo`
+    // (options_generated.go:465), which skips unset values. The port keeps
+    // `for_each_compiler_option_value` with the `affects_build_info` filter
+    // and `is_zero_compiler_option_value`: the same 67 options in the same
+    // order (checked at fed0bf24149f).
     fn set_compiler_options(&mut self) {
         let options = self.snapshot.options;
         let field_values = compiler_options_field_values(options);

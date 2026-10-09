@@ -1287,7 +1287,9 @@ impl Watcher {
         let mut config_file_paths = vec![self.config_file_name.clone()];
         config_file_paths.extend(config_parse_result.extended_source_files().iter().cloned());
         self.config_file_paths = config_file_paths;
-        // PORT: Go `reflect.DeepEqual` is `PartialEq` (see `ParsedOptions`).
+        // PORT: ts#64457 makes Go call `ParsedOptions.Equals`
+        // (tsoptions/parsedoptions.go:21) in place of `reflect.DeepEqual`.
+        // Both are `PartialEq` here (see `ParsedOptions`).
         if self.config.parsed_config != config_parse_result.parsed_config {
             self.config_modified = true;
         }
