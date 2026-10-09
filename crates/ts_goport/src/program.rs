@@ -3601,6 +3601,9 @@ fn start_checkers(count: usize) -> CheckerPool {
 /// each with its own `WorkerIds`, as a worker would make it.
 #[cfg(target_family = "wasm")]
 fn start_checkers(count: usize) -> CheckerPool {
+    // First, as on native: the carry of the last pool becomes this thread's
+    // ids, and each checker starts from them (`id_seed`).
+    let carry_from = symbol_id_carry_start(count);
     let checkers = (0..count)
         .map(|index| {
             let mut ids = WorkerIds(id_seed().into());
@@ -3610,7 +3613,7 @@ fn start_checkers(count: usize) -> CheckerPool {
         .collect();
     CheckerPool {
         checkers,
-        carry_from: symbol_id_carry_start(count),
+        carry_from,
     }
 }
 
