@@ -124,8 +124,11 @@ diagnostics and with them. Each time is the sum for the five T3 Code projects. L
 | `bun check`, then `effect-tsgo diagnostics`     |  37.60s |       3.7× | 1.78× slower        | `███████████`                              |
 | `tsc` 6 + `@effect/language-service`            | 138.63s |   baseline | 6.58× slower        | `████████████████████████████████████████` |
 
-`bun check` is the fastest when you do not need the Effect diagnostics. It does not have them, so
-an Effect project needs a second pass. `tsc-rs` gets them from its one check.
+`bun check` is the fastest when you do not need the Effect diagnostics: 1.29× faster than
+`tsc-rs` in total. On `packages/client-runtime`, `tsc-rs` is a little faster. `bun check` does not
+have the Effect diagnostics, so an Effect project needs a second pass. `tsc-rs` gets them from its
+one check, which makes it 4.5× faster than `bun check` plus `effect-tsgo diagnostics`. See
+[Why `bun check` is faster](#why-bun-check-is-faster).
 
 Errors. `tsc-rs`, `tsc` 7 + `@effect/tsgo` and the `effect-tsgo diagnostics` pass report the same
 221 Effect diagnostics. `tsc` 6 uses the JavaScript Effect plugin
@@ -160,10 +163,20 @@ faster.
 | [tRPC](https://github.com/trpc/trpc/tree/d756e591a5e37ef20b8d75ecd4d736c195497289) (server package) | 209k | 1.10s | 0.16s (6.8×) | 0.08s (13.6×) | 0.12s (9.1×)\* |
 | **Geometric mean** | | | **7.1×** | **13.4×** | **20.9×** |
 
-Compared with `tsc` 7, `tsc-rs` is 1.89× faster and `bun check` is 2.95× faster (geometric
-means). `bun check` is the fastest on every app except tRPC.
-
 \* `bun check` reports errors that no other checker reports: 3 on Sentry and 2 on tRPC.
+
+Compared with `tsc` 7, `tsc-rs` is 1.89× faster and `bun check` is 2.95× faster (geometric
+means). `bun check` is the fastest on every app except tRPC. Compared with `tsc-rs` 0.2.0,
+`bun check` is 1.56× faster (geometric mean; it was 1.83× with 0.1.0):
+
+| App | `bun check` vs `tsc-rs` |
+| --- | --- |
+| VS Code | 2.16× faster |
+| Sentry | 1.20× faster |
+| Playwright | 1.63× faster |
+| TypeORM | 1.61× faster |
+| Excalidraw | 3.16× faster |
+| tRPC | 1.48× slower |
 
 Each config checks with 0 errors under `tsc` 7.0.2. The other differences:
 
@@ -197,6 +210,23 @@ Two apps are not in the table:
 The scripts are in [scripts/bench-apps](scripts/bench-apps): `setup.sh <dir>`, then
 `run.sh <dir>` and `summary.py <dir>`, and `t3code.sh <dir>` for T3 Code. To time a new `tsc-rs`
 only, run `run.sh` and `t3code.sh` with `TOOLS=tsc-rs`.
+
+### Why `bun check` is faster
+
+The lead of `bun check` is all in the check step. Its checkers share one type store on all cores.
+`tsc` 7 runs 4 checkers, and each one makes its own copies of the types it needs: on T3 Code
+`apps/server`, 57% of the types. `tsc-rs` keeps the `tsc` 7 model, because its goal is output that
+is identical to `tsc` 7. More checkers or one shared store would change that output, so `tsc-rs`
+does not copy them.
+
+Per thread, `tsc-rs` is not slower. On T3 Code it was 1.5× to 7× faster per thread than
+`bun check`, and on 28 other open-source repos the two did about the same check work per thread.
+`tsc-rs` also loads and parses files as fast as `bun check` or faster.
+
+The output is not the same. `bun check` gave output identical to `tsc` 7 on 37 of 60 open-source
+repos, and `tsc-rs` on all 60. `bun check` also reports errors that `tsc` 7 does not, for example
+TS2749 on T3 Code `apps/server`. These numbers are from our studies of 2026-10-07 and 2026-10-08,
+with `tsc-rs` 0.1.0 and R179 on Linux.
 
 ## Known problems
 
