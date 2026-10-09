@@ -733,10 +733,36 @@ pub fn symbol_owner_file(symbols: &SymbolArena, symbol: SymbolId) -> Option<Node
 
 // Go: api/session.go:241 newFileSymbolResponse (ts#64518)
 pub fn new_file_symbol_response(symbols: &SymbolArena, symbol: SymbolId) -> SymbolResponse {
+    file_symbol_response(symbols, symbol, new_source_file_descriptor)
+}
+
+/// `new_file_symbol_response` of a symbol of the file that a lease holds.
+/// PORT: Go reads the descriptor from the `*ast.SourceFile`. A leased file
+/// can be in no program (`createSourceFile`), so the descriptor comes from
+/// the lease's parse record, as in `handle_get_cached_source_file`.
+pub fn new_leased_file_symbol_response(
+    symbols: &SymbolArena,
+    symbol: SymbolId,
+    parsed: &crate::frontend::parser::ParsedSourceFile,
+) -> SymbolResponse {
+    file_symbol_response(symbols, symbol, |file| {
+        go_assert!(
+            file == parsed.root,
+            "File-owned symbol belongs to another source file"
+        );
+        new_parsed_source_file_descriptor(parsed)
+    })
+}
+
+fn file_symbol_response(
+    symbols: &SymbolArena,
+    symbol: SymbolId,
+    descriptor_of: impl FnOnce(Node) -> SourceFileDescriptor,
+) -> SymbolResponse {
     let file = symbol_owner_file(symbols, symbol);
     go_assert!(file.is_some(), "Expected a file-owned symbol");
     let file = file.unwrap_or(Node::NIL);
-    let descriptor = new_source_file_descriptor(file);
+    let descriptor = descriptor_of(file);
     let reference = SymbolReference {
         id: symbol_handle(symbols, symbol),
         kind: SymbolOwnerKind::FILE,
@@ -1641,6 +1667,10 @@ impl ipc::Handler for Session {
             m if m == Method::GET_CACHED_SOURCE_FILE.0 => {
                 self.handle_get_cached_source_file(assert_params(&parsed))
             }
+            // ts#64571
+            m if m == Method::GET_SYMBOL_OF_DECLARATION.0 => self
+                .handle_get_symbol_of_declaration(assert_params(&parsed))
+                .map(to_any),
             m if m == Method::INITIALIZE.0 => self.handle_initialize(ctx).map(to_any),
             // ts#64204
             m if m == Method::CREATE_SNAPSHOT.0 => self

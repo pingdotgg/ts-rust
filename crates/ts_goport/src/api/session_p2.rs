@@ -176,6 +176,49 @@ impl Session {
         }
     }
 
+    // Go: api/session.go:2164 handleGetSymbolOfDeclaration (ts#64571)
+    // PORT: the binder symbol is read from a copy of the binder lineage, as
+    // in `resolve_symbol_reference`.
+    pub fn handle_get_symbol_of_declaration(
+        &self,
+        params: &GetSymbolOfDeclarationParams,
+    ) -> Result<SymbolResponse, GoError> {
+        let client_error = |text: String| {
+            Err(errors::errorf(
+                format!("{}: {text}", *ERR_CLIENT_ERROR),
+                vec![ERR_CLIENT_ERROR.clone()],
+            ))
+        };
+        let lease = self.acquire_cached_source_file(&params.file)?;
+        // Go: defer lease.Release()
+        let lease = LeaseGuard(Some(lease));
+        let source_file = lease
+            .0
+            .as_ref()
+            .map_or(Node::NIL, |lease| lease.source_file());
+
+        let table = encoder::get_node_index_table(source_file);
+        if params.index == 0 || params.index as usize >= table.nodes.len() {
+            return client_error(format!(
+                "declaration node index {} is out of range",
+                params.index
+            ));
+        }
+        let node = table.nodes[params.index as usize];
+        if node.is_nil() || !is_declaration(node) {
+            return client_error(format!("node index {} is not a declaration", params.index));
+        }
+        let symbol = node.symbol();
+        if symbol.is_nil() {
+            return client_error(format!(
+                "declaration node index {} has no binder symbol",
+                params.index
+            ));
+        }
+        let symbols = crate::program::lineage_for_checker();
+        Ok(lease.file_symbol_response(&symbols, symbol))
+    }
+
     // Go: api/session.go:3318 resolveSymbolPropertyOfSymbol
     // resolveSymbolTablePropertyOfSymbol resolves a symbol property of type `Symbol` and returns a symbol response.
     // ts#64518: the symbol comes from its reference, and a file-owned answer
@@ -188,13 +231,15 @@ impl Session {
         let resolved = self.resolve_symbol_reference(&params.symbol)?;
         match &resolved {
             ResolvedSymbolReference::File {
-                symbols, symbol, ..
+                symbols,
+                symbol,
+                _lease: lease,
             } => {
                 let result = getter(symbols, *symbol);
                 if result.is_nil() {
                     return Ok(None);
                 }
-                Ok(Some(new_file_symbol_response(symbols, result)))
+                Ok(Some(lease.file_symbol_response(symbols, result)))
             }
             ResolvedSymbolReference::Snapshot {
                 sd,
@@ -226,7 +271,9 @@ impl Session {
         let resolved = self.resolve_symbol_reference(&params.symbol)?;
         let (sd, project, checker, symbol) = match &resolved {
             ResolvedSymbolReference::File {
-                symbols, symbol, ..
+                symbols,
+                symbol,
+                _lease: lease,
             } => {
                 let symbol_table = getter(symbols, *symbol);
                 if symbol_table.is_nil() || symbols.len(symbol_table) == 0 {
@@ -262,7 +309,7 @@ impl Session {
                 }
                 return Ok(subs
                     .into_iter()
-                    .map(|sub| Some(new_file_symbol_response(symbols, sub)))
+                    .map(|sub| Some(lease.file_symbol_response(symbols, sub)))
                     .collect());
             }
             ResolvedSymbolReference::Snapshot {
@@ -3347,6 +3394,19 @@ pub enum ResolvedSymbolReference {
 
 /// Go `defer lease.Release()`: releases the lease when it drops.
 pub struct LeaseGuard(Option<Rc<project::SourceFileLease>>);
+
+impl LeaseGuard {
+    /// Go `newFileSymbolResponse(symbol)` for a symbol of the leased file
+    /// (`new_leased_file_symbol_response`).
+    fn file_symbol_response(&self, symbols: &SymbolArena, symbol: SymbolId) -> SymbolResponse {
+        match &self.0 {
+            Some(lease) => {
+                new_leased_file_symbol_response(symbols, symbol, lease.parsed_source_file())
+            }
+            None => new_file_symbol_response(symbols, symbol),
+        }
+    }
+}
 
 impl Drop for LeaseGuard {
     fn drop(&mut self) {

@@ -305,6 +305,8 @@ impl Method {
     // ts#64518
     pub const RETAIN_SOURCE_FILE: Method = Method(Cow::Borrowed("retainSourceFile"));
     pub const GET_CACHED_SOURCE_FILE: Method = Method(Cow::Borrowed("getCachedSourceFile"));
+    // ts#64571
+    pub const GET_SYMBOL_OF_DECLARATION: Method = Method(Cow::Borrowed("getSymbolOfDeclaration"));
 
     // ts#63937
     pub const BATCH_REQUESTS: Method = Method(Cow::Borrowed("batchRequests"));
@@ -1702,6 +1704,11 @@ pub static UNMARSHALERS: LazyLock<FxHashMap<Method, Unmarshaler>> = LazyLock::ne
         Method::GET_CACHED_SOURCE_FILE,
         unmarshaller_for::<GetCachedSourceFileParams>,
     );
+    // ts#64571
+    m.insert(
+        Method::GET_SYMBOL_OF_DECLARATION,
+        unmarshaller_for::<GetSymbolOfDeclarationParams>,
+    );
     m.insert(Method::INITIALIZE, no_params);
     // ts#64204
     m.insert(
@@ -2952,6 +2959,18 @@ pub struct GetCachedSourceFileParams {
 
 proto_json!(both GetCachedSourceFileParams {
     file: "file" plain,
+});
+
+// Go: proto.go:953 GetSymbolOfDeclarationParams (ts#64571)
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GetSymbolOfDeclarationParams {
+    pub file: SourceFileDescriptor,
+    pub index: u32,
+}
+
+proto_json!(both GetSymbolOfDeclarationParams {
+    file: "file" plain,
+    index: "index" plain,
 });
 
 // Go: proto.go:897 ProfileParams

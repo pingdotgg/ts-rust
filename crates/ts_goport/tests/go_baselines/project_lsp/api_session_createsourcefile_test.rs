@@ -1,5 +1,5 @@
 //! Port of Go `internal/api/session_createsourcefile_test.go` (ts#64216,
-//! ts#64434, ts#64518).
+//! ts#64434, ts#64518, ts#64571).
 //!
 //! PORT: the tests are in `project_lsp` because they use `projecttestutil`
 //! and `child_test!`. Each Go subtest is one `#[test]`, so each one sets up
@@ -20,7 +20,8 @@ use std::rc::Rc;
 
 use ts_goport::api::{
     self, CreateSourceFileFromFileParams, CreateSourceFileOptions, CreateSourceFileParams,
-    ReleaseSourceFileParams, RetainSourceFileParams, SourceFileDescriptor, SourceFileLeaseID,
+    GetSymbolOfDeclarationParams, ReleaseSourceFileParams, RetainSourceFileParams,
+    SourceFileDescriptor, SourceFileLeaseID, SymbolOwnerKind,
 };
 use ts_goport::ast;
 use ts_goport::flags::ScriptKind;
@@ -235,6 +236,49 @@ child_test! {
             session.handle_retain_source_file(&RetainSourceFileParams { file: descriptor }),
             "source file is not available",
         );
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_createsourcefile_test.go:170 TestCreateSourceFile/declaration symbol lookup (ts#64571)
+child_test! {
+    fn declaration_symbol_lookup() {
+        let (project_session, session) = setup();
+        let created = nil_error(session.create_source_file(
+            "/src/symbols.ts",
+            "function present() {}\nimport {} from './missing';",
+            &CreateSourceFileOptions::default(),
+        ));
+        let source_file = created.source_file();
+        let table = api::encoder::get_node_index_table(source_file);
+        let descriptor = api::new_parsed_source_file_descriptor(created.parsed_source_file());
+
+        let present = nil_error(session.handle_get_symbol_of_declaration(
+            &GetSymbolOfDeclarationParams {
+                file: descriptor.clone(),
+                index: table.get_index(source_file.statements().get(0)),
+            },
+        ));
+        assert_eq!(present.name, "present");
+        assert_eq!(present.reference.kind, SymbolOwnerKind::FILE);
+
+        error_contains(
+            session.handle_get_symbol_of_declaration(&GetSymbolOfDeclarationParams {
+                file: descriptor.clone(),
+                index: table.get_index(source_file.statements().get(1)),
+            }),
+            "has no binder symbol",
+        );
+
+        error_contains(
+            session.handle_get_symbol_of_declaration(&GetSymbolOfDeclarationParams {
+                file: descriptor,
+                index: 0,
+            }),
+            "out of range",
+        );
+        created.release();
         session.close();
         project_session.close();
     }
