@@ -14,13 +14,15 @@
 //!   (`ipc/conn_sync.go:55`) runs the request inline in Go too, so it ends
 //!   right after the answer.
 //! - `--lsp`: Go's `Run` (lsp/server.go:859) returns once its dispatch loop
-//!   is back in `requestQueue.Get`; the async part of a request and an API
-//!   session run on other goroutines, and `main` exits while they run. The
-//!   port runs that work on the dispatch thread and waited for it.
+//!   is back in `requestQueue.Get`; the async part of a request
+//!   (server.go:1017) and an API session (server.go:2305) run on other
+//!   goroutines, and `main` exits while they run. The port runs that work on
+//!   the dispatch thread and waited for it.
 //!
-//! A request that the test holds open reads its tsconfig.json from a FIFO:
-//! the read waits until the test writes the text, and the test's open for
-//! writing returns once tsgo has opened the FIFO.
+//! A request that the test holds open reads a file from a FIFO (a
+//! tsconfig.json, or the source map of a .d.ts): the read waits until the
+//! test writes the text, and the test's open for writing returns once tsgo
+//! has opened the FIFO.
 #![cfg(target_os = "linux")]
 
 use std::io::{Read, Write};
@@ -30,12 +32,22 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, Signal, kill_process};
 
 /// The longest wait for a step that ends in milliseconds when it works.
 const LIMIT: Duration = Duration::from_secs(20);
+
+/// How an LSP run ends on each event while Go's goroutine work runs (Go
+/// cmd/tsc/lsp.go:69 prints the error of `Run` and returns 1): the signal
+/// (None: the end of stdin), the exit code and stderr.
+const LSP_ENDS: [(Option<Signal>, i32, &str); 3] = [
+    (Some(Signal::INT), 1, "context canceled\n"),
+    (Some(Signal::TERM), 1, "context canceled\n"),
+    (None, 0, ""),
+];
 
 #[test]
 fn watch_ends_soon_after_sigint_or_sigterm() {
@@ -51,16 +63,18 @@ fn watch_ends_soon_after_sigint_or_sigterm() {
         tsgo.wait_stdout("Watching for file changes");
         let start = Instant::now();
         tsgo.signal(signal);
-        let status = tsgo
+        let (status, exited) = tsgo
             .wait_exit(LIMIT)
             .expect("tsgo -w did not end after the signal");
-        took.push(start.elapsed());
+        took.push(exited - start);
         assert_eq!(status.code(), Some(0), "{signal:?}: {status:?}");
         assert_eq!(tsgo.stderr(), "", "{signal:?}");
     }
     took.sort();
-    // The 50 ms wait gave 29 to 42 ms in the median on zbook; Go and the
-    // select give 2 to 5 ms.
+    // From the signal to the first `try_wait` that sees the exit, the
+    // median on zbook is 1 to 4 ms (Go: about 5 ms). The old wait with a
+    // 50 ms timeout gives 50 to 53 ms: its wait starts when tsgo prints the
+    // line above.
     assert!(
         took[3] < Duration::from_millis(25),
         "median {:?}, all {took:?}",
@@ -99,7 +113,7 @@ fn api_signal_during_a_request() {
         drop(writer);
         tsgo.wait_stdout(answered);
         if ends_after_answer {
-            let status = tsgo.wait_exit(LIMIT).expect("the sync API did not end");
+            let (status, _) = tsgo.wait_exit(LIMIT).expect("the sync API did not end");
             assert_eq!(status.code(), Some(0), "sync: {status:?}");
         } else {
             assert!(
@@ -107,7 +121,7 @@ fn api_signal_during_a_request() {
                 "the async API ended after the answer; Go waits in the read"
             );
             tsgo.close_stdin();
-            let status = tsgo
+            let (status, _) = tsgo
                 .wait_exit(LIMIT)
                 .expect("the async API did not end at EOF");
             assert_eq!(status.code(), Some(0), "async: {status:?}");
@@ -118,27 +132,12 @@ fn api_signal_during_a_request() {
 
 #[test]
 fn lsp_ends_at_once_while_an_api_session_request_runs() {
-    // (event, exit code, stderr)
-    let cases: [(Option<Signal>, i32, &str); 3] = [
-        (Some(Signal::INT), 1, "context canceled\n"),
-        (Some(Signal::TERM), 1, "context canceled\n"),
-        (None, 0, ""),
-    ];
-    for (signal, code, stderr) in cases {
+    for (signal, code, stderr) in LSP_ENDS {
         let dir = TempDir::new("lsp");
         dir.write("src/a.ts", "export const a = 1;\n");
         dir.write("other/src/b.ts", "export const b = 1;\n");
         let config = dir.fifo("other/tsconfig.json");
-        let mut tsgo = Tsgo::start(&["--lsp", "--stdio"], &dir.0);
-        tsgo.answer_server_requests();
-        let root = format!("file://{}", dir.0.display());
-        tsgo.send(&frame(&format!(
-            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"processId":null,"rootUri":"{root}","capabilities":{{}}}}}}"#
-        )));
-        tsgo.wait_stdout(r#""id":1,"result""#);
-        tsgo.send(&frame(
-            r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
-        ));
+        let mut tsgo = Tsgo::start_lsp(&dir.0);
         let socket = SocketPath::new();
         tsgo.send(&frame(&format!(
             r#"{{"jsonrpc":"2.0","id":2,"method":"custom/initializeAPISession","params":{{"pipe":"{}"}}}}"#,
@@ -154,15 +153,42 @@ fn lsp_ends_at_once_while_an_api_session_request_runs() {
         // The API request now waits in the read of the FIFO, on the
         // dispatch thread. The writer stays open, so the read does not end.
         let writer = open_fifo_writer(&config);
-        match signal {
-            Some(signal) => tsgo.signal(signal),
-            None => tsgo.close_stdin(),
-        }
-        let status = tsgo
-            .wait_exit(LIMIT)
-            .unwrap_or_else(|| panic!("{signal:?}: the LSP waited for the API request"));
-        assert_eq!(status.code(), Some(code), "{signal:?}: {status:?}");
-        assert_eq!(tsgo.stderr(), stderr, "{signal:?}");
+        tsgo.end_lsp(signal, code, stderr, "the API request");
+        drop(writer);
+    }
+}
+
+#[test]
+fn lsp_ends_at_once_while_the_async_part_of_a_request_runs() {
+    // The definition of `b` is in lib/b.d.ts. Go maps it to its source in
+    // the async part of the request (ls/source_map.go getMappedLocation,
+    // on the goroutine of server.go:1017), which reads lib/b.d.ts.map.
+    let a = "import { b } from '../lib/b';\nexport const a: number = b;\n";
+    for (signal, code, stderr) in LSP_ENDS {
+        let dir = TempDir::new("lspdef");
+        dir.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"strict":true},"include":["src"]}"#,
+        );
+        dir.write("src/a.ts", a);
+        dir.write(
+            "lib/b.d.ts",
+            "export declare const b: number;\n//# sourceMappingURL=b.d.ts.map\n",
+        );
+        let map = dir.fifo("lib/b.d.ts.map");
+        let mut tsgo = Tsgo::start_lsp(&dir.0);
+        let uri = format!("file://{}/src/a.ts", dir.0.display());
+        let text = a.replace('\n', "\\n");
+        tsgo.send(&frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","languageId":"typescript","version":1,"text":"{text}"}}}}}}"#
+        )));
+        tsgo.send(&frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":25}}}}}}"#
+        )));
+        // The async part now waits in the read of the map. The writer stays
+        // open, so the read does not end.
+        let writer = open_fifo_writer(&map);
+        tsgo.end_lsp(signal, code, stderr, "the async part of the definition");
         drop(writer);
     }
 }
@@ -176,6 +202,9 @@ struct Tsgo {
     stderr: Arc<Mutex<Vec<u8>>>,
     status: Option<ExitStatus>,
     answer: Arc<Mutex<bool>>,
+    /// The threads that read stdout and stderr. They end at the end of the
+    /// pipes.
+    readers: Vec<JoinHandle<()>>,
 }
 
 impl Tsgo {
@@ -192,10 +221,11 @@ impl Tsgo {
         let stdout = Arc::new(Mutex::new(Vec::new()));
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let answer = Arc::new(Mutex::new(false));
+        let mut readers = Vec::new();
         {
             let mut out = child.stdout.take().unwrap();
             let (stdout, stdin, answer) = (stdout.clone(), stdin.clone(), answer.clone());
-            std::thread::spawn(move || {
+            readers.push(std::thread::spawn(move || {
                 let mut buf = vec![0; 65536];
                 let mut answered = 0;
                 while let Ok(n) = out.read(&mut buf) {
@@ -208,16 +238,16 @@ impl Tsgo {
                         answered = answer_requests(&stdout, answered, &stdin);
                     }
                 }
-            });
+            }));
         }
         {
             let mut err = child.stderr.take().unwrap();
             let stderr = stderr.clone();
-            std::thread::spawn(move || {
+            readers.push(std::thread::spawn(move || {
                 let mut buf = Vec::new();
                 let _ = err.read_to_end(&mut buf);
                 stderr.lock().unwrap().extend_from_slice(&buf);
-            });
+            }));
         }
         Tsgo {
             child,
@@ -226,7 +256,40 @@ impl Tsgo {
             stderr,
             status: None,
             answer,
+            readers,
         }
+    }
+
+    /// `tsgo --lsp --stdio` in `dir`, initialized, with a client that
+    /// answers the server's requests.
+    fn start_lsp(dir: &Path) -> Tsgo {
+        let mut tsgo = Tsgo::start(&["--lsp", "--stdio"], dir);
+        tsgo.answer_server_requests();
+        let root = format!("file://{}", dir.display());
+        tsgo.send(&frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"processId":null,"rootUri":"{root}","capabilities":{{}}}}}}"#
+        )));
+        tsgo.wait_stdout(r#""id":1,"result""#);
+        tsgo.send(&frame(
+            r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+        ));
+        tsgo
+    }
+
+    /// Ends an LSP run by `signal` (None: the end of stdin) while `work`
+    /// runs, and checks that the run ends at once with `code` and `stderr`
+    /// (`LSP_ENDS`). The run must not wait for `work`, which the test holds
+    /// open.
+    fn end_lsp(&mut self, signal: Option<Signal>, code: i32, stderr: &str, work: &str) {
+        match signal {
+            Some(signal) => self.signal(signal),
+            None => self.close_stdin(),
+        }
+        let (status, _) = self
+            .wait_exit(LIMIT)
+            .unwrap_or_else(|| panic!("{signal:?}: the LSP waited for {work}"));
+        assert_eq!(status.code(), Some(code), "{signal:?}: {status:?}");
+        assert_eq!(self.stderr(), stderr, "{signal:?}");
     }
 
     /// Answers each LSP request of the server with a null result, as an
@@ -267,15 +330,20 @@ impl Tsgo {
         }
     }
 
-    /// The exit status, or None when tsgo still runs after `limit`.
-    fn wait_exit(&mut self, limit: Duration) -> Option<ExitStatus> {
+    /// The exit status and the time when `try_wait` first saw the exit, or
+    /// None when tsgo still runs after `limit`. On an exit it also waits
+    /// for the reader threads, so stdout and stderr are whole.
+    fn wait_exit(&mut self, limit: Duration) -> Option<(ExitStatus, Instant)> {
         let end = Instant::now() + limit;
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
+                let exited = Instant::now();
                 self.status = Some(status);
-                // The reader threads end at the end of the pipes.
-                std::thread::sleep(Duration::from_millis(20));
-                return Some(status);
+                let end = exited + LIMIT;
+                while !self.readers.iter().all(JoinHandle::is_finished) && Instant::now() < end {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                return Some((status, exited));
             }
             if Instant::now() >= end {
                 return None;
