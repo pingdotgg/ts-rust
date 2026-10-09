@@ -83,14 +83,19 @@ fn check_files(files: &[(&str, String)], pad: usize, extra: &[&str]) -> String {
         r#"{{"compilerOptions":{{"noLib":true,"skipLibCheck":true,"strict":true,"noEmit":true}},"files":[{}]}}"#,
         names.join(",")
     );
+    let mut all = files.to_vec();
+    all.push(("a.ts", a_ts(pad)));
+    all.push(("tsconfig.json", tsconfig));
+    tsc_p(&all, extra)
+}
+
+/// The diagnostics of `tsc -p tsconfig.json --pretty false` plus `extra`
+/// on `files` (name and text; `tsconfig.json` is one of them).
+fn tsc_p(files: &[(&str, String)], extra: &[&str]) -> String {
     let input = TscInput {
         files: files
             .iter()
             .map(|(name, text)| (format!("{PROJECT}/{name}"), text.clone().into()))
-            .chain([
-                (format!("{PROJECT}/a.ts"), a_ts(pad).into()),
-                (format!("{PROJECT}/tsconfig.json"), tsconfig.into()),
-            ])
             .collect(),
         ..Default::default()
     };
@@ -280,5 +285,226 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
                 sys.output_text()
             );
         },
+    );
+}
+
+// followups38 items 2 and 4 (R186 reviewer item 1). In
+// `c.valueSymbolLinks.Get(s).f = <call>` Go reads the links of the new
+// symbol `s` (and gives its id) before the call on the right side, and a
+// `links := c.valueSymbolLinks.Get(s)` comes right after `s` is made.
+// `binder.GetSymbolNameForPrivateIdentifier` gives the class its id. Each
+// test below puts the first id of `u` on the right side of one such site
+// (or after the private name site), with Go's id of `u` at a digit boundary
+// (10 or 100, `--checkers 1`). With the old order `u` gets one id less, so
+// its late-bound name is one byte shorter and one more member shows. The
+// expected texts are the output of `tsgo-oracle-673a5f17d713 -p
+// tsconfig.json --pretty false --checkers 1` on the same files, and a debug
+// build of Go at the same pin gave the id of `u`.
+//
+// The other sites have no case that changes the output:
+// - padObjectLiteralType: the implied type of the binding pattern
+//   (getTypeFromObjectBindingPattern) reads the type of each element first.
+// - the `args` symbol of combineUnionOrIntersectionParameters: the loop
+//   before it reads the type at each position of the shorter signature, so
+//   the right side can only give ids to tuple element symbols.
+// - createSymbolWithType: each caller reads the links of the source first,
+//   except getUndefinedProperty and createCombinedSymbolForOverloadFailure.
+//   Their sources (object literal properties, parameters) are never the
+//   symbol of a unique symbol.
+// - the JSX children symbol: the right side can give ids, but only to the
+//   element and `length` symbols of a new tuple target (createTupleType).
+//   No name holds their ids.
+// - the contextual type of `this.#x = ...`: the checker checks the left side
+//   `this.#x` first, and lookupSymbolForPrivateIdentifierDeclaration gives
+//   the class its id there.
+// - reportUnmatchedProperty: the error then prints the source class, which
+//   gives it its id in the old order too, and nothing between gives an id.
+
+/// The diagnostics of `--checkers 1` for one site. `decl.d.ts` holds `u`
+/// and `decl` (not checked: skipLibCheck). `a.ts` holds `fill` declarations
+/// that take one id each, `site`, and `xq`: a type that holds `[key]` and a
+/// pad of `pad` letters `p`. `z.ts` holds `after`, checked after `a.ts`.
+fn check_site(
+    decl: &str,
+    site: &str,
+    after: Option<&str>,
+    key: &str,
+    fill: usize,
+    pad: usize,
+) -> String {
+    let fillers: String = (0..fill)
+        .map(|i| format!("declare const zf{i}: number;\n"))
+        .collect();
+    let mut files = vec![
+        ("globals.d.ts", GLOBALS.to_string()),
+        (
+            "decl.d.ts",
+            format!("declare const u: unique symbol;\n{decl}"),
+        ),
+        (
+            "a.ts",
+            format!(
+                "{fillers}{site}declare const xq: {{ [{key}]: void; {}: number; {}q: string }};\nconst nq: number = xq;\n",
+                "p".repeat(pad),
+                members(20)
+            ),
+        ),
+    ];
+    if let Some(after) = after {
+        files.push(("z.ts", after.to_string()));
+    }
+    let names: Vec<String> = files
+        .iter()
+        .map(|(name, _)| format!("\"{name}\""))
+        .collect();
+    let tsconfig = format!(
+        r#"{{"compilerOptions":{{"noLib":true,"skipLibCheck":true,"strict":true,"noEmit":true,"target":"es2020"}},"files":[{}]}}"#,
+        names.join(",")
+    );
+    files.push(("tsconfig.json", tsconfig));
+    tsc_p(&files, &["--checkers", "1"])
+}
+
+/// Go's error on `xq` at `line` of `a.ts` (`check_site`): with the id of
+/// the key at the boundary, the members up to `w13` show.
+fn site_error(line: usize, key: &str, pad: usize) -> String {
+    format!(
+        "a.ts({line},7): error TS2322: Type '{{ [{key}]: void; {}: number; {}... 6 more ...; q: string; }}' is not assignable to type 'number'.\n",
+        "p".repeat(pad),
+        members(14)
+    )
+}
+
+#[test]
+fn binding_pattern_symbols_get_ids_before_their_types() {
+    // getTypeFromObjectBindingPattern: `b` gets id 9, then its default `u`
+    // gets 10.
+    let site = "function f({ a, b = u }) { return [a, b]; }\n";
+    assert_eq!(
+        check_site("", site, None, "u", 2, 11),
+        "a.ts(3,14): error TS7031: Binding element 'a' implicitly has an 'any' type.\n".to_string()
+            + &site_error(5, "u", 11)
+    );
+}
+
+#[test]
+fn spread_symbols_get_ids_before_their_union_type() {
+    // getSpreadType: the merged `a` gets its id before the union of
+    // `typeof u` and `string`.
+    let decl = "declare const l: { a: typeof u };\ndeclare const r: { a?: string };\n";
+    assert_eq!(
+        check_site(decl, "const s = { ...l, ...r };\n", None, "u", 89, 10),
+        site_error(92, "u", 10)
+    );
+}
+
+#[test]
+fn partial_spread_symbols_get_ids_before_their_types() {
+    // tryMergeUnionOfObjectTypeAndEmptyObject: the optional `a` gets its id
+    // before the type of `o.a`.
+    let decl = "declare const o: { a: typeof u } | undefined;\n";
+    assert_eq!(
+        check_site(decl, "const s = { ...o };\n", None, "u", 1, 11),
+        site_error(4, "u", 11)
+    );
+}
+
+#[test]
+fn spread_symbol_copies_get_ids_before_their_types() {
+    // getSpreadSymbol: the copy of the readonly `a` gets its id before the
+    // type of `o.a`.
+    let decl = "declare const o: { readonly a: typeof u };\n";
+    assert_eq!(
+        check_site(decl, "const s = { ...o };\n", None, "u", 1, 11),
+        site_error(4, "u", 11)
+    );
+}
+
+#[test]
+fn object_literal_properties_get_ids_before_the_pattern_error() {
+    // checkObjectLiteral: `zz` gets its id before the error text prints the
+    // implied type of the pattern, which gives `u` its id.
+    let decl = "declare const v: { k: typeof u };\n";
+    assert_eq!(
+        check_site(decl, "const { a = v } = { a: 1, zz: 2 };\n", None, "u", 87, 10),
+        "a.ts(88,27): error TS2353: Object literal may only specify known properties, and 'zz' does not exist in type '{ a?: { k: unique symbol; } | undefined; }'.\n".to_string()
+            + &site_error(90, "u", 10)
+    );
+}
+
+#[test]
+fn reverse_mapped_properties_get_ids_before_their_source() {
+    // resolveReverseMappedTypeMembers: the inferred `s` gets its id before
+    // `C.s`, the unique symbol whose id the key `[C.s]` holds.
+    let decl = "declare class C { static readonly s: unique symbol; }
+type Box<T> = { v: T };
+declare function un<T>(x: { [K in keyof T]: Box<T[K]> }): T;
+";
+    assert_eq!(
+        check_site(decl, "const r = un(C);\n", None, "C.s", 89, 8),
+        "a.ts(90,14): error TS2345: Argument of type 'typeof C' is not assignable to parameter of type '{ readonly s: Box<unknown>; prototype: Box<unknown>; }'.
+  Types of property 's' are incompatible.
+    Type 'typeof C.s' is not assignable to type 'Box<unknown>'.
+"
+        .to_string()
+            + &site_error(92, "C.s", 8)
+    );
+}
+
+#[test]
+fn import_attribute_symbols_get_ids_before_their_values() {
+    // checkImportAttributesExpression: `type` gets its id before its value
+    // `u` (an error, but Go checks it).
+    let decl = "interface ImportAttributes { type?: unknown }\n";
+    let site = "import { k } from \"./z\" with { type: u };\n";
+    assert_eq!(
+        check_site(decl, site, Some("export const k = 1;\n"), "u", 3, 11),
+        "a.ts(4,25): error TS2823: Import attributes are only supported when the '--module' option is set to 'esnext', 'node18', 'node20', 'nodenext', or 'preserve'.
+a.ts(4,38): error TS2858: Import attribute values must be string literal expressions.
+"
+        .to_string()
+            + &site_error(6, "u", 11)
+    );
+}
+
+#[test]
+fn private_name_lookups_give_the_class_its_id() {
+    // The return type of `m` checks `this.#x`
+    // (lookupSymbolForPrivateIdentifierDeclaration), which gives `C` its id
+    // before `u`. Go gives `C` its id when it binds `z.ts`; the port does
+    // not, so the class must get it at this site. `C` is checked after `u`.
+    let after = "class C {\n  #x = 1;\n  m() { return this.#x; }\n}\n";
+    assert_eq!(
+        check_site(
+            "declare const i: C;\n",
+            "const r = i.m();\n",
+            Some(after),
+            "u",
+            88,
+            10
+        ),
+        site_error(91, "u", 10)
+    );
+}
+
+#[test]
+fn private_name_assertion_calls_give_the_class_its_id() {
+    // The return type of `m` narrows `v` through the assertion call
+    // `this.#a(v)` (getTypeOfDottedName), which gives `C` its id before `u`.
+    let after = "class C {
+  #a(x: unknown): asserts x is number {}
+  m(v: unknown) { this.#a(v); return v; }
+}
+";
+    assert_eq!(
+        check_site(
+            "declare const i: C;\n",
+            "const r = i.m(0);\n",
+            Some(after),
+            "u",
+            87,
+            10
+        ),
+        site_error(90, "u", 10)
     );
 }
