@@ -17,8 +17,11 @@ use std::time::SystemTime;
 use crate::emitter::emitter::EmitOnly;
 use crate::emitter::program_emit::{self, EmitOptions, WriteFile, WriteFileData};
 use crate::frontend::compiler::{NewProgram, ProgramOptions, new_compiler_host};
-use crate::frontend::tsoptions::{ParsedCommandLine, ParsedOptions, get_default_lib_file_name};
-use crate::frontend::tspath::{combine_paths, get_normalized_absolute_path};
+use crate::frontend::tsoptions::{get_default_lib_file_name, new_parsed_command_line};
+use crate::frontend::tspath::{
+    ComparePathsOptions, combine_paths, file_extension_is, get_encoded_root_length,
+    get_normalized_absolute_path, get_root_length, has_trailing_directory_separator,
+};
 use crate::frontend::vfs::{Entries, FileInfo, Fs, FsError};
 use crate::gostd::Context;
 use crate::gostd::strconv::quote;
@@ -63,6 +66,8 @@ pub struct Output {
 // Go: transpile/transpile.go:47 inputDirectory
 // inputDirectory is the synthetic current directory used to root the
 // single input file created for transpilation.
+// PORT: Go N' `tspath.RootedDirectoryPathFromNormalized("/")` (ts#64159);
+// the port keeps the text.
 const INPUT_DIRECTORY: &str = "/";
 
 // Go: transpile/transpile.go:51 libDirectory
@@ -166,7 +171,7 @@ fn transpile_worker(
             file_name = "module.ts".to_string();
         }
     }
-    let input_file_name = get_normalized_absolute_path(&file_name, INPUT_DIRECTORY);
+    let input_file_name = to_rooted_file_path(&file_name, INPUT_DIRECTORY);
 
     let mut files = FxHashMap::default();
     files.insert(input_file_name.clone(), input.to_string());
@@ -176,25 +181,35 @@ fn transpile_worker(
     // The default lib name depends on the configured target.
     if declaration {
         let lib_file_name = get_default_lib_file_name(&opts);
+        // ts#64159: Go `libDirectory.ResolveFile(libFileName)`; a default
+        // lib file name appends with no normalization, as here.
         files.insert(
             combine_paths(LIB_DIRECTORY, &[lib_file_name.as_str()]),
             BAREBONES_LIB_CONTENT.to_string(),
         );
     }
 
-    let fs: Rc<dyn Fs> = Rc::new(TranspileFs { files });
+    let program_fs = TranspileFs { files };
+    let case_sensitive = program_fs.use_case_sensitive_file_names();
+    let fs: Rc<dyn Fs> = Rc::new(program_fs);
     // tsgo#4712: the 6th argument is the content mapper project (Go nil).
+    // PORT: Go N' `NewCompilerHost` has no current directory (ts#64159): the
+    // program reads the base directory of its config. The port's host keeps
+    // one, the same "/".
     let host = new_compiler_host(INPUT_DIRECTORY, fs, LIB_DIRECTORY, None, None, None);
 
-    // tsgo#4712: Go `core.ParsedOptions` moved to `tsoptions.ParsedOptions`.
-    let config = Rc::new(ParsedCommandLine {
-        parsed_config: ParsedOptions {
-            file_names: vec![input_file_name.clone()],
-            compiler_options: Rc::new(opts),
-            ..ParsedOptions::default()
+    // ts#64159: the config has the base directory "/" and the file system's
+    // case sensitivity (`tsoptions.NewParsedCommandLine`). N left both
+    // unset.
+    let config = Rc::new(new_parsed_command_line(
+        Rc::new(opts),
+        vec![input_file_name.clone()],
+        None,
+        ComparePathsOptions {
+            use_case_sensitive_file_names: case_sensitive,
+            current_directory: INPUT_DIRECTORY.to_string(),
         },
-        ..ParsedCommandLine::default()
-    });
+    ));
     // PORT: Go `compiler.NewProgram`. The frontend program parses with no
     // current program and then becomes a program version.
     let np: Rc<NewProgram> = {
@@ -237,7 +252,7 @@ fn transpile_worker(
                       _data: &mut WriteFileData|
                       -> Result<(), String> {
                     let mut written = written.lock().unwrap_or_else(PoisonError::into_inner);
-                    if file_name.ends_with(".map") {
+                    if file_extension_is(file_name, ".map") {
                         go_assert!(
                             written.source_map_text.is_none(),
                             "Unexpected multiple source map outputs, file: {file_name}"
@@ -285,6 +300,56 @@ fn transpile_worker(
     };
     program::release_program(version);
     output
+}
+
+// Go: tspath/rooted_path.go:120 ToRootedFilePath (ts#64159), through
+// ToRootedPath (:29)
+// ToRootedFilePath resolves fileName against currentDirectory, normalizes it,
+// and gives it file intent.
+// PORT: Go `tspath.RootedFilePath` is a `String`. Go N' normalizes with
+// `getNormalizedAbsolutePathFromDirectory`; for a rooted, normalized current
+// directory it gives the same text as `GetNormalizedAbsolutePath`. Lane-local
+// (with `has_rooted_url_suffix` and `has_url_root`, also in
+// `contentmapper/hostimpl.rs`) until `tspath` has the rooted path helpers of
+// ts#64159.
+fn to_rooted_file_path(file_name: &str, current_directory: &str) -> String {
+    if file_name.is_empty() {
+        go_panic("path must not be empty".to_string());
+    }
+    if has_rooted_url_suffix(file_name) {
+        go_panic("path must not contain a URL query or fragment".to_string());
+    }
+    if get_encoded_root_length(file_name) == 0
+        && has_url_root(current_directory)
+        && file_name.contains(['?', '#'])
+    {
+        go_panic("relative URL path must not contain a query or fragment".to_string());
+    }
+    let mut normalized = get_normalized_absolute_path(file_name, current_directory);
+    if get_encoded_root_length(&normalized) == 0 || has_rooted_url_suffix(&normalized) {
+        go_panic("path must be rooted".to_string());
+    }
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if get_root_length(&normalized) == normalized.len()
+        && !has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    normalized
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    if !has_url_root(path) {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, after)| after);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: tspath/rooted_path.go:114 hasURLRoot (ts#64159)
+fn has_url_root(path: &str) -> bool {
+    get_encoded_root_length(path) < 0 && path.contains("://")
 }
 
 // Go: transpile/options_generated.go:7 setOptionsForTranspile (ts#64457)
@@ -345,7 +410,8 @@ struct TranspileFs {
 }
 
 impl Fs for TranspileFs {
-    // Go: transpile/fs.go:18 transpileFS.UseCaseSensitiveFileNames
+    // Go: transpile/fs.go:18 transpileFS.UseCaseSensitiveFileNames (at 673a5f17d713;
+    // ts#64159 makes it CaseSensitivity, transpile/fs.go:19, CaseSensitive)
     fn use_case_sensitive_file_names(&self) -> bool {
         true
     }
@@ -448,6 +514,31 @@ mod tests {
             },
             r#"unexpected realpath request for "/src/module.ts""#,
         );
+    }
+
+    /// ts#64159 (transpile.go:136 `ToRootedFilePath`): the input name is a
+    /// rooted file path, and a URL with a query or fragment is not one.
+    // PORT: not in Go; the panic text is Go N' output (cmap lane probe).
+    #[test]
+    fn test_transpile_rejects_url_file_name_with_query_or_fragment() {
+        let transpile = |file_name: &str| {
+            let options = Options {
+                file_name: file_name.to_string(),
+                ..Options::default()
+            };
+            transpile_module(&crate::gostd::context::background(), "export {};", options)
+        };
+        for file_name in [
+            "https://example.com/a.ts?x=1",
+            "https://example.com/a.ts#frag",
+        ] {
+            assert_panics(
+                || {
+                    transpile(file_name);
+                },
+                "path must not contain a URL query or fragment",
+            );
+        }
     }
 
     // Go: options_test.go:12 TestTranspileConditionalOptions (ts#64457)

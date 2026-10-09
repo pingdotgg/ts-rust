@@ -51,6 +51,39 @@ fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+// Go: tspath/rooted_path.go:134 TryRootedFilePathFromAbsolute (ts#64159)
+// TryRootedFilePathFromAbsolute validates and normalizes an absolute path,
+// including converting platform directory separators to '/', then gives it
+// file intent.
+// PORT: Go `tspath.RootedFilePath` is a `String`; `None` is Go `ok == false`.
+// Lane-local (with `has_rooted_url_suffix`, also in `transpile.rs`) until
+// `tspath` has the rooted path helpers of ts#64159.
+fn try_rooted_file_path_from_absolute(file_name: &str) -> Option<String> {
+    // Go: tspath/rooted_path.go:58 TryRootedPathFromAbsolute
+    if has_rooted_url_suffix(file_name) || !tspath::path_is_absolute(file_name) {
+        return None;
+    }
+    let mut path = tspath::get_normalized_absolute_path(file_name, "");
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if tspath::get_root_length(&path) == path.len()
+        && !tspath::has_trailing_directory_separator(&path)
+    {
+        path.push('/');
+    }
+    Some(path)
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    // Go: tspath/rooted_path.go:114 hasURLRoot
+    let has_url_root = tspath::get_encoded_root_length(path) < 0 && path.contains("://");
+    if !has_url_root {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, after)| after);
+    after_scheme.contains(['?', '#'])
+}
+
 // Go: contentmapper/hostimpl.go:30 initializeTimeoutSeconds
 const INITIALIZE_TIMEOUT_SECONDS: i32 = 5;
 
@@ -1737,15 +1770,18 @@ impl HostImpl {
         }
         let mut entry = entry.borrow_mut();
         entry.config_identity = result.config_identity.clone();
-        for file_name in &result.watched_files {
-            if !tspath::path_is_absolute(file_name) {
+        // ts#64159: a watched file is kept as a rooted file path, normalized.
+        // A URL with a query or fragment is not one.
+        entry.watched_files = vec![String::new(); result.watched_files.len()];
+        for (i, file_name) in result.watched_files.iter().enumerate() {
+            let Some(typed_file_name) = try_rooted_file_path_from_absolute(file_name) else {
                 return Err(ProjectError {
                     kind: ProjectErrorKind::NON_ABSOLUTE_WATCHED_FILE,
                 }
                 .to_go_error());
-            }
+            };
+            entry.watched_files[i] = typed_file_name;
         }
-        entry.watched_files = result.watched_files.clone();
         entry.option_diagnostics = Vec::with_capacity(result.option_diagnostics.len());
         for diagnostic in &result.option_diagnostics {
             let mut path = vec![OptionPathSegment::default(); diagnostic.path.len()];
@@ -4723,6 +4759,9 @@ mod tests {
         let project_b_watched_files = project_b.watched_files().expect("watched files");
         assert_eq!(project_a_watched_files.len(), 1);
         assert_eq!(project_b_watched_files.len(), 1);
+        // ts#64159 (host_test.go:1049)
+        assert_eq!(project_a_watched_files[0], "/repo/a/mapper.config.js");
+        assert_eq!(project_b_watched_files[0], "/repo/b/mapper.config.js");
 
         project_a
             .transform(&dynamic_b, request("/repo/a/file.ext", "x"))
@@ -4849,6 +4888,53 @@ mod tests {
             ProjectErrorKind::NON_ABSOLUTE_WATCHED_FILE
         );
         let _ = host.close();
+    }
+
+    /// ts#64159 (hostimpl.go:690 `TryRootedFilePathFromAbsolute`): a watched
+    /// file is normalized, and a URL with a query or fragment is rejected.
+    // PORT: not in Go; Go has no test of either case.
+    #[test]
+    fn test_project_watched_files_are_rooted_file_paths() {
+        let watched_files = |files: &[&str]| -> std::result::Result<Vec<String>, GoError> {
+            let mapper_process = Arc::new(RecordingMapper {
+                watched_files: Some(files.iter().map(|f| (*f).to_string()).collect()),
+                dynamic_config: true,
+                ..Default::default()
+            });
+            let host = new_host(
+                &test_ctx(),
+                recording_spawner(&mapper_process),
+                locale::DEFAULT,
+            );
+            let project_mapper = dynamic_mapper("", &[]);
+            let project = host
+                .project(project_spec(
+                    "/repo/tsconfig.json",
+                    &[&project_mapper],
+                    &default_options(),
+                ))
+                .expect("project");
+            let result = project.watched_files();
+            let _ = host.close();
+            result
+        };
+        assert_eq!(
+            watched_files(&["/repo/a/../b//mapper.config.js", "c:\\repo\\x.js", "c:"])
+                .expect("watched files"),
+            ["/repo/b/mapper.config.js", "c:/", "c:/repo/x.js"]
+        );
+        for file in [
+            "file:///repo/mapper.config.js?v=1",
+            "file:///repo/mapper.config.js#a",
+        ] {
+            let err = watched_files(&[file]).expect_err(file);
+            assert_eq!(
+                errors::as_type::<ProjectError>(&err)
+                    .unwrap_or_else(|| panic!("expected ProjectError, got {err:?}"))
+                    .kind,
+                ProjectErrorKind::NON_ABSOLUTE_WATCHED_FILE
+            );
+        }
     }
 
     // Go: host_test.go:1135 TestDynamicProjectRequiresConfigIdentity
