@@ -1128,11 +1128,14 @@ impl Snapshot {
             open_files.insert(path.clone(), overlay.file_name());
         }
         let mut prepare_auto_imports = tspath::Path::default();
+        let mut prepare_auto_imports_file_name = String::new();
         if !change.resource_request.auto_imports.0.is_empty() {
             prepare_auto_imports = change
                 .resource_request
                 .auto_imports
                 .path(self.use_case_sensitive_file_names());
+            // ts#64554: snapshot.go:653, :662
+            prepare_auto_imports_file_name = change.resource_request.auto_imports.file_name();
         }
         let mut old_auto_imports = self.auto_imports.clone();
         if old_auto_imports.is_none() {
@@ -1149,6 +1152,7 @@ impl Snapshot {
                 ctx,
                 autoimport::RegistryChange {
                     requested_file: prepare_auto_imports,
+                    requested_file_name: prepare_auto_imports_file_name,
                     open_files,
                     changed: change.file_changes.changed.clone(),
                     created: change.file_changes.created.clone(),
