@@ -2220,3 +2220,41 @@ child_test! {
         }
     }
 }
+
+child_test! {
+    // Go: session_test.go:1746 TestSessionCloseDoesNotBlockOnIdleCacheCleanTimer (ts#64624)
+    // TestSessionCloseDoesNotBlockOnIdleCacheCleanTimer guards against a
+    // regression where the idle disk cache clean timer was never stored on the
+    // session, so Close could never find and cancel it, and would instead block
+    // until the timer's full delay elapsed.
+    // PORT: Go runs the test in a synctest bubble. The port's timer function
+    // runs on the session's thread, so Close never waits for it; the test
+    // also checks that Close stopped the stored timer.
+    fn session_close_does_not_block_on_idle_cache_clean_timer() {
+        const INDEX: &str = "/home/projects/TS/p1/src/index.ts";
+        let (session, _) = projecttestutil::setup(files(&[
+            (
+                "/home/projects/TS/p1/tsconfig.json",
+                r#"{
+			"compilerOptions": { "noLib": true }
+		}"#,
+            ),
+            (INDEX, "export const x = 1;"),
+        ]));
+
+        // DidOpenFile schedules the idle cache clean timer.
+        open(&session, &format!("file://{INDEX}"), "export const x = 1;");
+        assert!(session.idle_cache_clean_timer.borrow().is_some());
+
+        let start = Instant::now();
+        session.close();
+        // Close must return without needing the fake clock to advance past
+        // the idle cache clean delay; if it does, the timer leaked.
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "Close took {elapsed:?}, want well under the idle cache clean delay"
+        );
+        assert!(session.idle_cache_clean_timer.borrow().is_none());
+    }
+}
