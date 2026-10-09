@@ -90,3 +90,38 @@ fn queue_closed_queue_rejects_new_tasks() {
         "Task should not execute after queue is closed"
     );
 }
+
+// Go: queue_test.go:93 TestQueue/CloseWaitsForActiveTasks (ts#64544)
+// PORT: the Go task blocks on a channel while Close runs on another
+// goroutine. Here the task goes on after a timer (`Queue::hold`, as the
+// session's debounced tasks do), and Close must not return before it ends.
+#[test]
+fn queue_close_waits_for_active_tasks() {
+    use std::time::Duration;
+    use ts_goport::gostd;
+
+    let q = background::new_queue();
+    let started = Rc::new(Cell::new(false));
+    let finished = Rc::new(Cell::new(false));
+
+    let (s, f, q2) = (started.clone(), finished.clone(), q.clone());
+    q.enqueue(&context::background(), move |_ctx| {
+        s.set(true);
+        let mut hold = Some(q2.hold());
+        gostd::local::after_func(
+            Duration::from_millis(100),
+            Box::new(move || {
+                f.set(true);
+                hold.take();
+            }),
+        );
+    });
+    gostd::local::run_pending();
+    assert!(started.get(), "the task did not start");
+
+    q.close();
+    assert!(
+        finished.get(),
+        "Close returned before the active task completed"
+    );
+}

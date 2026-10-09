@@ -610,7 +610,8 @@ fn change_program_file_not_in_tsconfig_root_files(workspace_dir: &str) {
     let program_before = program(&session, &p1_uri("src/index.ts"));
     session.wait_for_background_tasks();
 
-    assert!(utils.watches_file("/home/projects/ts/x.ts"));
+    // ts#64544: the lookup watcher keeps the spelling of the file's directory.
+    assert!(utils.watches_file("/home/projects/TS/x.ts"));
 
     utils
         .fs()

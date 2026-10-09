@@ -249,7 +249,7 @@ pub struct Project {
     // Only set before actually loading config file to get actual project references
     pub potential_project_references: Option<Rc<FxHashSet<tspath::Path>>>,
 
-    pub program_files_watch: Option<Rc<WatchedFiles<Option<Rc<RefCell<FxHashSet<tspath::Path>>>>>>>,
+    pub program_files_watch: Option<Rc<WatchedFiles<Option<SeenFiles>>>>,
     pub typings_watch: Option<Rc<WatchedFiles<PatternsAndIgnored>>>,
     // tsgo#4712. PORT: Go `*collections.Set[tspath.Path]` (nil until the
     // first program) is `Option<Rc<FxHashSet<..>>>`.
@@ -933,9 +933,7 @@ impl Project {
     }
 
     // Go: project/project.go:593 Project.CloneWatchers
-    pub fn clone_watchers(
-        &self,
-    ) -> Option<Rc<WatchedFiles<Option<Rc<RefCell<FxHashSet<tspath::Path>>>>>>> {
+    pub fn clone_watchers(&self) -> Option<Rc<WatchedFiles<Option<SeenFiles>>>> {
         let host = self
             .host
             .as_ref()

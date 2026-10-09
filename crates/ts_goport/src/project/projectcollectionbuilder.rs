@@ -275,8 +275,27 @@ impl ProjectCollectionBuilder {
         }
     }
 
-    // Go: project/projectcollectionbuilder.go:186 HandleAPIRequest
+    // Go: project/projectcollectionbuilder.go:188 HandleAPIRequest
+    // ts#64544: a failed request leaves the API state as it was before the
+    // request (Go: `defer` restores `previousAPIState`).
+    // PORT: Go clones `b.apiState` first because the builder shares it with
+    // the base collection. The port's builder has its own copy
+    // (`new_project_collection_builder`), so only the restore is ported.
     pub fn handle_api_request(
+        self: &Rc<Self>,
+        api_request: &APISnapshotRequest,
+        logger: Option<Rc<logging::LogTree>>,
+    ) -> Result<(), GoError> {
+        let previous_api_state = self.api_state.borrow().clone();
+        let result = self.handle_api_request_worker(api_request, logger);
+        if result.is_err() {
+            *self.api_state.borrow_mut() = previous_api_state;
+        }
+        result
+    }
+
+    /// PORT: the body of Go `HandleAPIRequest` after its deferred restore.
+    fn handle_api_request_worker(
         self: &Rc<Self>,
         api_request: &APISnapshotRequest,
         logger: Option<Rc<logging::LogTree>>,

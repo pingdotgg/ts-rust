@@ -234,11 +234,19 @@ pub fn new_server(opts: ServerOptions) -> Rc<Server> {
         builtin_watcher: RefCell::new(None),
         session: RefCell::new(None),
         api_sessions: RefCell::new(None),
+        stopping_api_sessions: RefCell::new(Vec::new()),
+        close_session_after_api_sessions: Cell::new(false),
         client: None,
         init_complete: Cell::new(false),
         compiler_options_for_inferred_projects: RefCell::new(None),
         parse_cache,
-        npm_install: npm_install.map(Arc::from),
+        // PORT: ts#64544 gives Go `NpmInstall` a ctx, which cmd/tsc/lsp.go
+        // passes to `exec.CommandContext` (npm is killed when the session
+        // closes). `ServerOptions.npm_install` (set by cmd/tsgo/lsp.rs, a
+        // build lane file) does not take it yet, so it is dropped here.
+        npm_install: npm_install.map(|npm_install| -> ata::NpmInstallFunc {
+            Arc::new(move |_ctx: &Context, cwd: &str, args: &[String]| npm_install(cwd, args))
+        }),
         spawn,
         content_mapper_extensions_registered: Cell::new(false),
         cpu_profiler: crate::pprof::CpuProfiler::default(),
@@ -411,6 +419,77 @@ pub struct ApiAccepted {
     rwc: Option<Arc<dyn ipc::ReadWriteCloser>>,
 }
 
+// Go: server.go:255 apiSessionState (ts#64544)
+// PORT: `mu` is dropped (dispatch thread). Go's `transport` stays with the
+// accept thread, which closes it after `Accept` (see `stop`). The rest of
+// the accept goroutine runs on the dispatch thread (`serve_api_connection`),
+// so `done` is `ended`, set when that rest has finished.
+pub struct ApiSessionState {
+    session: Rc<api::Session>,
+    cancel: CancelFunc,
+    // PORT: Go makes `apiCtx` in `handleInitializeAPISession` and the
+    // goroutine reads it; the state keeps it for `serve_api_connection`.
+    api_ctx: Context,
+    connection: RefCell<Option<Arc<dyn ipc::ReadWriteCloser>>>,
+    stopped: Cell<bool>,
+    ended: Cell<bool>,
+    // PORT: the state of the running connection (`run_api_connection`),
+    // for `stop`.
+    conn_state: RefCell<Option<Rc<ApiConnState>>>,
+}
+
+impl ApiSessionState {
+    // Go: server.go:266 apiSessionState.attachConnection
+    fn attach_connection(&self, connection: Arc<dyn ipc::ReadWriteCloser>) -> bool {
+        if self.stopped.get() {
+            let _ = connection.close();
+            return false;
+        }
+        *self.connection.borrow_mut() = Some(connection);
+        true
+    }
+
+    // Go: server.go:277 apiSessionState.stop
+    // PORT: Go also closes the transport, which ends a pending `Accept`. The
+    // port's listener holds its lock while it waits in accept, so a close
+    // from the dispatch thread would wait for a client. When no client has
+    // connected yet, the accept thread waits until the process exits; the
+    // connection it may still accept finds no session
+    // (`serve_api_connection`) and is closed. Go then waits for `done`:
+    // - Without a connection, the port runs the end of the goroutine here
+    //   (`apiSession.Close()`; the caller removed the session). Go also logs
+    //   the accept error of the closed transport; the port does not.
+    // - With a connection, the connection waits for its next message below
+    //   on this thread's stack (an LSP message that it serves called this),
+    //   so the port cannot wait. Closing the connection ends its wait, and
+    //   `serve_api_connection` runs the end of the goroutine afterwards;
+    //   Shutdown closes the project session then
+    //   (`Server::close_session_after_api_sessions`).
+    // - When an API request below waits for the answer of a call to the
+    //   client, its wait keeps the LSP requests that need the session
+    //   (`ApiConnProtocol`), and Go's dispatch goroutine would still be
+    //   blocked on them. Ending the wait would serve them on the session
+    //   that Shutdown closes, so the port leaves this connection and ends
+    //   it with the dispatch loop (exit), as before ts#64544.
+    fn stop(&self) {
+        let waits_for_client = self
+            .conn_state
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.calls.get() > 0);
+        if !self.stopped.replace(true) && !waits_for_client {
+            (self.cancel)();
+            if let Some(connection) = self.connection.borrow().as_ref() {
+                let _ = connection.close();
+            }
+        }
+        if !self.ended.get() && self.connection.borrow().is_none() {
+            self.session.close();
+            self.ended.set(true);
+        }
+    }
+}
+
 // Go: server.go:171 Server (the fields that other threads use)
 pub struct ServerShared {
     pub background_ctx: OnceLock<Context>,
@@ -498,7 +577,14 @@ pub struct Server {
 
     // apiSessions holds active API sessions keyed by their ID
     // PORT: `apiSessionsMu` is dropped (dispatch thread). `None` is Go's nil map.
-    pub api_sessions: RefCell<Option<FxHashMap<String, Rc<api::Session>>>>,
+    pub api_sessions: RefCell<Option<FxHashMap<String, Rc<ApiSessionState>>>>,
+    // PORT: the API sessions that `close_api_sessions` stopped while their
+    // connection still ran below on the dispatch thread's stack. Go's
+    // `stop` waits for them before Shutdown closes the project session; the
+    // port closes the project session when the last of them has ended
+    // (`close_session_after_api_sessions`).
+    pub stopping_api_sessions: RefCell<Vec<Rc<ApiSessionState>>>,
+    pub close_session_after_api_sessions: Cell<bool>,
 
     // Test options for initializing session
     pub client: Option<Rc<dyn project::Client>>,
@@ -3739,7 +3825,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1788 handleShutdown
+    // Go: server.go:1827 handleShutdown
     pub fn handle_shutdown(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -3750,7 +3836,15 @@ impl Server {
         if let Some(builtin_watcher) = builtin_watcher {
             builtin_watcher.close();
         }
-        self.session_ref().close();
+        // ts#64544
+        self.close_api_sessions();
+        if self.stopping_api_sessions.borrow().is_empty() {
+            self.session_ref().close();
+        } else {
+            // PORT: an API connection still runs below (see
+            // `stopping_api_sessions`); the session closes when it ends.
+            self.close_session_after_api_sessions.set(true);
+        }
         Ok(lsproto::ShutdownResponse::default())
     }
 
@@ -4328,7 +4422,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2116 handleCompletionItemResolve
+    // Go: server.go:2156 handleCompletionItemResolve
     pub fn handle_completion_item_resolve(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4339,9 +4433,26 @@ impl Server {
         let Some(data) = params.data.clone() else {
             return Err(errors::new("completion item data is nil"));
         };
-        let language_service = self
-            .session_ref()
-            .get_language_service(ctx, &lsconv::file_name_to_document_uri(&data.file_name))?;
+        // ts#64544: the file name must be absolute, and a dynamic one must
+        // decode to a URI (server.go:2163).
+        if !tspath::path_is_absolute(&data.file_name) {
+            return Err(errors::new(
+                "completion item data fileName must be absolute",
+            ));
+        }
+        let uri = if tspath::is_dynamic_file_name(&data.file_name) {
+            match lsproto::try_dynamic_file_name_to_document_uri(&data.file_name) {
+                Some(uri) => uri,
+                None => {
+                    return Err(errors::new(
+                        "completion item data fileName must be a valid dynamic path",
+                    ));
+                }
+            }
+        } else {
+            lsconv::file_name_to_document_uri(&data.file_name)
+        };
+        let language_service = self.session_ref().get_language_service(ctx, &uri)?;
         self.recover_guard(
             req_msg,
             || Ok(None),
@@ -4683,7 +4794,7 @@ impl Server {
         ls.provide_semantic_tokens_range(ctx, &params.text_document.uri, params.range)
     }
 
-    // Go: server.go:2280 handleInitializeAPISession
+    // Go: server.go:2333 handleInitializeAPISession
     // PORT: `apiSessionsMu` is dropped (dispatch thread).
     pub fn handle_initialize_api_session(
         self: &Rc<Self>,
@@ -4715,6 +4826,23 @@ impl Server {
             }
         };
 
+        // ts#64544: the session's state is stored before its goroutine starts.
+        let (api_ctx, api_cancel) = context::with_cancel(&self.shared.background_ctx());
+        let state = Rc::new(ApiSessionState {
+            session: api_session.clone(),
+            cancel: api_cancel,
+            api_ctx,
+            connection: RefCell::new(None),
+            stopped: Cell::new(false),
+            ended: Cell::new(false),
+            conn_state: RefCell::new(None),
+        });
+        self.api_sessions
+            .borrow_mut()
+            .as_mut()
+            .expect("created above")
+            .insert(api_session.id(), state);
+
         // Start accepting connections in the background
         // PORT: `transport.Accept()` runs on its own thread. The connection
         // reads the project session, which lives on the dispatch thread, so
@@ -4745,12 +4873,6 @@ impl Server {
                 });
         }
 
-        self.api_sessions
-            .borrow_mut()
-            .as_mut()
-            .expect("created above")
-            .insert(api_session.id(), api_session.clone());
-
         Ok(Some(lsproto::InitializeAPISessionResult {
             session_id: api_session.id(),
             pipe: pipe_path,
@@ -4762,21 +4884,30 @@ impl Server {
     /// dispatch thread. It returns when the connection ends. Meanwhile the
     /// connection runs the dispatch loop whenever it waits for a message
     /// (`ApiConnProtocol`), so LSP messages are served as in Go.
+    /// ts#64544: a session that `close_api_sessions` stopped is gone from
+    /// `api_sessions`, so a connection that its accept thread still gave is
+    /// closed (Go `attachConnection` returns false).
     fn serve_api_connection(self: &Rc<Self>, accepted: ApiAccepted) {
-        let api_session = self
+        let state = self
             .api_sessions
             .borrow()
             .as_ref()
             .and_then(|api_sessions| api_sessions.get(&accepted.session_id).cloned());
-        let Some(api_session) = api_session else {
+        let Some(state) = state else {
             if let Some(rwc) = accepted.rwc {
                 let _ = rwc.close();
             }
             return;
         };
+        let api_session = state.session.clone();
         let lsp_panic = match accepted.rwc {
-            Some(rwc) => self.run_api_connection(&api_session, rwc),
-            None => None,
+            Some(rwc) if state.attach_connection(rwc.clone()) => {
+                let lsp_panic = self.run_api_connection(&state, rwc.clone());
+                // Go: defer rwc.Close() (ts#64544)
+                let _ = rwc.close();
+                lsp_panic
+            }
+            _ => None,
         };
         // PORT: when the server ends while the connection waits, Go's
         // process exits and this defer never runs (the project session may
@@ -4785,6 +4916,12 @@ impl Server {
             // Go: defer { apiSession.Close(); s.removeAPISession(apiSession.ID()) }
             api_session.close();
             self.remove_api_session(&api_session.id());
+        }
+        // Go: defer apiCancel(); defer close(state.done)
+        (state.cancel)();
+        state.ended.set(true);
+        if !self.dispatch_ended() {
+            self.close_session_after_api_sessions();
         }
         if let Some(payload) = lsp_panic {
             std::panic::resume_unwind(payload);
@@ -4806,12 +4943,15 @@ impl Server {
     /// again after the cleanup.
     fn run_api_connection(
         self: &Rc<Self>,
-        api_session: &Rc<api::Session>,
+        session_state: &ApiSessionState,
         rwc: Arc<dyn ipc::ReadWriteCloser>,
     ) -> Option<Box<dyn Any + Send>> {
-        // Create a cancellable context for the API connection
-        let (api_ctx, api_cancel) = context::with_cancel(&self.shared.background_ctx());
+        // ts#64544: the context is the session state's.
+        let api_session = &session_state.session;
+        let api_ctx = &session_state.api_ctx;
+        let api_cancel = &session_state.cancel;
         let state = Rc::new(ApiConnState::default());
+        *session_state.conn_state.borrow_mut() = Some(state.clone());
         let lsp_panic = Rc::new(RefCell::new(None));
 
         // Run the connection with panic recovery
@@ -4836,7 +4976,7 @@ impl Server {
             // PORT: when the dispatch loop ended while the connection
             // waited (stdin EOF while a call to the client waits), Go's
             // process exits before this goroutine logs the error.
-            if let Err(api_err) = conn.run(&api_ctx)
+            if let Err(api_err) = conn.run(api_ctx)
                 && !self.dispatch_ended()
             {
                 self.logger.errorf(&format!(
@@ -4859,12 +4999,10 @@ impl Server {
             // Close the underlying connection
             let _ = rwc.close();
         }
-        // Go: defer apiCancel()
-        api_cancel();
         lsp_panic.take()
     }
 
-    // Go: server.go:2349 generateAPIPipePath
+    // Go: server.go:2410 generateAPIPipePath
     // PORT: Go `rand.Uint64()`; the port has no rand crate and takes 64
     // random bits from std's randomly keyed hasher.
     pub fn generate_api_pipe_path(&self) -> String {
@@ -4880,10 +5018,46 @@ impl Server {
         ipc::generate_pipe_path(&format!("tsgo-api-{now:x}-{rnd:x}"))
     }
 
-    // Go: server.go:2356 removeAPISession
+    // Go: server.go:2417 removeAPISession
     pub fn remove_api_session(&self, id: &str) {
         if let Some(api_sessions) = self.api_sessions.borrow_mut().as_mut() {
             api_sessions.remove(id);
+        }
+    }
+
+    // Go: server.go:2423 closeAPISessions (ts#64544)
+    // PORT: Go ranges over the map (random order); the port stops the
+    // sessions in ID order.
+    pub fn close_api_sessions(&self) {
+        let mut api_sessions: Vec<(String, Rc<ApiSessionState>)> = self
+            .api_sessions
+            .borrow_mut()
+            .as_mut()
+            .map(|api_sessions| api_sessions.drain().collect())
+            .unwrap_or_default();
+        api_sessions.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (_, state) in api_sessions {
+            state.stop();
+            if !state.ended.get() {
+                self.stopping_api_sessions.borrow_mut().push(state);
+            }
+        }
+    }
+
+    /// PORT: the rest of Go's Shutdown after `closeAPISessions` waited for
+    /// the API sessions: closes the project session when Shutdown left it
+    /// open and no stopped API connection runs any more.
+    fn close_session_after_api_sessions(&self) {
+        if !self.close_session_after_api_sessions.get() {
+            return;
+        }
+        self.stopping_api_sessions
+            .borrow_mut()
+            .retain(|state| !state.ended.get());
+        if self.stopping_api_sessions.borrow().is_empty() {
+            self.close_session_after_api_sessions.set(false);
+            self.session_ref().close();
         }
     }
 
@@ -5130,13 +5304,13 @@ impl ipc::Conn for ApiSessionConn {
 }
 
 impl ata::NpmExecutor for Server {
-    // Go: server.go:2371 NpmInstall
+    // Go: server.go:2446 NpmInstall
     // NpmInstall implements ata.NpmExecutor
-    fn npm_install(&self, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
+    fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
         (self
             .npm_install
             .as_ref()
-            .unwrap_or_else(|| crate::core::go_nil_dereference()))(cwd, args)
+            .unwrap_or_else(|| crate::core::go_nil_dereference()))(ctx, cwd, args)
     }
 
     // PORT: see `ata::NpmExecutor::npm_install_func`.

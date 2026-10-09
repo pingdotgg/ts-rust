@@ -96,8 +96,8 @@ pub struct TypingsInstallerOptions {
 pub trait NpmExecutor {
     // PORT: Go returns `([]byte, error)` and reads the output when the error
     // is non-nil (installWorker logs it), so the result is a pair, not a
-    // `Result`. `None` is Go's nil error.
-    fn npm_install(&self, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>);
+    // `Result`. `None` is Go's nil error. ts#64544 adds `ctx`.
+    fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>);
 
     /// PORT: no Go counterpart. A `Send` form of `npm_install` that ATA runs
     /// on a helper thread (`TypingsInstaller::npm_install`), or `None` to run
@@ -108,7 +108,8 @@ pub trait NpmExecutor {
 }
 
 /// PORT: the `Send` form of `NpmExecutor::npm_install`.
-pub type NpmInstallFunc = Arc<dyn Fn(&str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>;
+pub type NpmInstallFunc =
+    Arc<dyn Fn(&Context, &str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>;
 
 /// PORT: Go `sync.Once` of `TypingsInstaller.initOnce`. `Running` while the
 /// first `init` waits for npm; Go blocks the other callers of `Do` until the
@@ -197,7 +198,12 @@ impl TypingsInstaller {
         // PORT: no Go caller at pin N. Go blocks in `initOnce.Do` while an
         // ATA request runs init; `block_on` runs the dispatch thread's ready
         // work until that request is done.
-        block_on(self.init(&project_id.string(), fs, logger));
+        block_on(self.init(
+            &gostd::context::background(),
+            &project_id.string(),
+            fs,
+            logger,
+        ));
         self.types_registry.borrow().contains_key(name)
     }
 }
@@ -239,9 +245,10 @@ impl TypingsInstaller {
     // file comment).
     pub async fn install_typings_exported(
         &self,
+        ctx: &Context,
         request: &TypingsInstallRequest,
     ) -> Result<TypingsInstallResult, GoError> {
-        let mut result = self.discover_and_install_typings(request).await;
+        let mut result = self.discover_and_install_typings(ctx, request).await;
         if let Ok(result) = &mut result {
             result.typings_files.sort();
             result.files_to_watch.sort();
@@ -256,10 +263,16 @@ impl TypingsInstaller {
     // Go: project/ata/ata.go:121 discoverAndInstallTypings
     pub async fn discover_and_install_typings(
         &self,
+        ctx: &Context,
         request: &TypingsInstallRequest,
     ) -> Result<TypingsInstallResult, GoError> {
-        self.init(&request.project_id.string(), &*request.fs, &request.logger)
-            .await;
+        self.init(
+            ctx,
+            &request.project_id.string(),
+            &*request.fs,
+            &request.logger,
+        )
+        .await;
 
         let (cached_typing_paths, new_typing_names, files_to_watch) = discover_typings(
             &*request.fs,
@@ -279,6 +292,7 @@ impl TypingsInstaller {
             if !filtered_typings.is_empty() {
                 let typings_files = self
                     .install_typings(
+                        ctx,
                         request_id,
                         &cached_typing_paths,
                         &filtered_typings,
@@ -311,6 +325,7 @@ impl TypingsInstaller {
     // ts#64319: no project ID or typings info parameters.
     pub async fn install_typings(
         &self,
+        ctx: &Context,
         request_id: i32,
         currently_cached_typings: &[String],
         filtered_typings: &[String],
@@ -338,7 +353,7 @@ impl TypingsInstaller {
         }
 
         let (package_names, ok) = self
-            .install_worker(request_id, &scoped_typings, logger)
+            .install_worker(ctx, request_id, &scoped_typings, logger)
             .await;
         if ok {
             // PORT: Go `%v` of a slice; log text is not compared.
@@ -452,6 +467,7 @@ impl TypingsInstaller {
     // ts#64319: no project ID parameter.
     pub async fn install_worker(
         &self,
+        ctx: &Context,
         request_id: i32,
         package_names: &[String],
         logger: &dyn logging::Logger,
@@ -461,9 +477,8 @@ impl TypingsInstaller {
             "ATA:: #{request_id} with cwd: {} arguments: {package_names:?}",
             self.typings_location
         ));
-        let ctx = gostd::context::background();
         let err = install_npm_packages_async(
-            &ctx,
+            ctx,
             package_names,
             &self.concurrency_semaphore,
             &self.semaphore_waiters,
@@ -475,7 +490,9 @@ impl TypingsInstaller {
                     "--save-dev".to_string(),
                     format!("--user-agent=\"typesInstaller/{}\"", crate::core::version()),
                 ]);
-                let (output, err) = self.npm_install(&self.typings_location, &npm_args).await;
+                let (output, err) = self
+                    .npm_install(ctx, &self.typings_location, &npm_args)
+                    .await;
                 if let Some(err) = err {
                     // PORT: Go `%s` of a `[]byte`.
                     logger.log(&format!(
@@ -497,9 +514,9 @@ impl TypingsInstaller {
     /// blocks in `exec.Cmd.Output`). When npm ends, the thread posts the
     /// result to this thread once, and the post wakes the request. Without
     /// it, npm runs in the first poll.
-    async fn npm_install(&self, cwd: &str, args: &[String]) -> NpmResult {
+    async fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> NpmResult {
         let Some(npm_install) = self.host.npm_install_func() else {
-            return self.host.npm_install(cwd, args);
+            return self.host.npm_install(ctx, cwd, args);
         };
         // The result, and the waker of the request while it waits.
         let state: Rc<RefCell<(Option<NpmResult>, Option<Waker>)>> = Rc::default();
@@ -524,11 +541,11 @@ impl TypingsInstaller {
                 }
             }))
         };
-        let (cwd, args) = (cwd.to_string(), args.to_vec());
+        let (ctx, cwd, args) = (ctx.clone(), cwd.to_string(), args.to_vec());
         crate::core::GoThread::new()
             .name("ata-npm".to_string())
             .spawn(move || {
-                let _ = tx.send(npm_install(&cwd, &args));
+                let _ = tx.send(npm_install(&ctx, &cwd, &args));
                 post.post();
             });
         poll_fn(|cx| {
@@ -864,7 +881,13 @@ impl TypingsInstaller {
     // is `Done`, as Go's `Do` blocks. The body sets `Done` and wakes the
     // waiters, oldest first, when it ends, also on a panic (Go marks the
     // Once done even if the body panics).
-    pub async fn init(&self, project_id: &str, fs: &dyn vfs::Fs, logger: &dyn logging::Logger) {
+    pub async fn init(
+        &self,
+        ctx: &Context,
+        project_id: &str,
+        fs: &dyn vfs::Fs,
+        logger: &dyn logging::Logger,
+    ) {
         match self.init_once.get() {
             OnceState::Done => return,
             OnceState::Running => {
@@ -917,6 +940,7 @@ impl TypingsInstaller {
         logger.log("ATA:: Updating types-registry@latest npm package...");
         let (_, err) = self
             .npm_install(
+                ctx,
                 &self.typings_location,
                 &[
                     "install".to_string(),
@@ -1253,24 +1277,32 @@ mod npm_thread_tests {
     }
 
     impl NpmExecutor for GatedNpm {
-        fn npm_install(&self, _cwd: &str, _args: &[String]) -> (Vec<u8>, Option<GoError>) {
+        fn npm_install(
+            &self,
+            _ctx: &Context,
+            _cwd: &str,
+            _args: &[String],
+        ) -> (Vec<u8>, Option<GoError>) {
             panic!("npm ran on the dispatch thread");
         }
 
         fn npm_install_func(&self) -> Option<NpmInstallFunc> {
             let (calls, gate) = (self.calls.clone(), self.gate.clone());
-            Some(Arc::new(move |cwd: &str, args: &[String]| {
-                calls.lock().unwrap().push(args.join(" "));
-                let (open, cond) = &*gate;
-                drop(
-                    cond.wait_while(open.lock().unwrap(), |open| !*open)
-                        .unwrap(),
-                );
-                let dir = std::path::Path::new(cwd).join("node_modules/types-registry");
-                std::fs::create_dir_all(&dir).unwrap();
-                std::fs::write(dir.join("index.json"), r#"{"entries":{"left-pad":{}}}"#).unwrap();
-                (Vec::new(), None)
-            }))
+            Some(Arc::new(
+                move |_ctx: &Context, cwd: &str, args: &[String]| {
+                    calls.lock().unwrap().push(args.join(" "));
+                    let (open, cond) = &*gate;
+                    drop(
+                        cond.wait_while(open.lock().unwrap(), |open| !*open)
+                            .unwrap(),
+                    );
+                    let dir = std::path::Path::new(cwd).join("node_modules/types-registry");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("index.json"), r#"{"entries":{"left-pad":{}}}"#)
+                        .unwrap();
+                    (Vec::new(), None)
+                },
+            ))
         }
     }
 
@@ -1342,7 +1374,13 @@ mod npm_thread_tests {
         for polls in &polls {
             let (ti, fs, done) = (ti.clone(), host.fs.clone(), done.clone());
             run_task(counted(polls.clone(), async move {
-                ti.init("p", &*fs, &None::<Rc<dyn logging::Logger>>).await;
+                ti.init(
+                    &gostd::context::background(),
+                    "p",
+                    &*fs,
+                    &None::<Rc<dyn logging::Logger>>,
+                )
+                .await;
                 assert_eq!(ti.init_once.get(), OnceState::Done);
                 done.set(done.get() + 1);
             }));
@@ -1378,7 +1416,8 @@ mod npm_thread_tests {
             let (ti, cwd, done) = (ti.clone(), cwd.clone(), done.clone());
             run_task(counted(polls.clone(), async move {
                 let args = [format!("t{i}")];
-                let npm = ti.npm_install(&cwd, &args);
+                let ctx = gostd::context::background();
+                let npm = ti.npm_install(&ctx, &cwd, &args);
                 let (_, err) =
                     throttled(&ti.concurrency_semaphore, &ti.semaphore_waiters, npm).await;
                 assert!(err.is_none());

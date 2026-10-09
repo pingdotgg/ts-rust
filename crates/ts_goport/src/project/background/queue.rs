@@ -49,6 +49,8 @@ pub struct TaskHold {
 
 impl Queue {
     // Go: project/background/queue.go:20 Enqueue
+    // ts#64544: Go now adds the task to `wg` before it releases `mu`, so a
+    // Close that comes in between waits for it. One thread here: no change.
     pub fn enqueue(&self, ctx: &Context, fn_: impl FnOnce(&Context) + 'static) {
         if self.closed.get() {
             return;
@@ -83,7 +85,7 @@ impl Queue {
         }
     }
 
-    // Go: project/background/queue.go:44 Wait
+    // Go: project/background/queue.go:47 Wait
     // Wait waits for all active tasks to complete.
     // It does not prevent new tasks from being enqueued while waiting.
     pub fn wait(&self) {
@@ -101,8 +103,10 @@ impl Queue {
         }
     }
 
-    // Go: project/background/queue.go:48 Close
+    // Go: project/background/queue.go:51 Close
+    // ts#64544: Close waits for the tasks that are running.
     pub fn close(&self) {
         self.closed.set(true);
+        self.wait();
     }
 }

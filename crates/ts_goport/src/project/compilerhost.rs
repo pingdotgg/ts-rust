@@ -641,7 +641,7 @@ impl compiler::CompilerHost for CompilerHost {
                             .seen_files
                             .borrow()
                             .as_ref()
-                            .map(|seen| seen.borrow().clone());
+                            .map(|seen| seen.borrow().keys().cloned().collect());
                         let missing = tracked
                             .missing_directories
                             .as_ref()
@@ -827,7 +827,9 @@ fn check_ahead_call(
 /// Notes the side effects of `call` (`accept_ahead_answer`).
 fn replay_ahead_call(source_fs: &SourceFS, load: &AheadCheck, call: &AheadCall) {
     match call {
-        AheadCall::FileExists { path, .. } => source_fs.track_path(path),
+        // The call was noted only when the name was its path
+        // (`resolve_ahead::AheadFs::note_call`).
+        AheadCall::FileExists { path, .. } => source_fs.track_path(path.as_str(), path),
         AheadCall::DirectoryExists {
             path,
             exists: false,

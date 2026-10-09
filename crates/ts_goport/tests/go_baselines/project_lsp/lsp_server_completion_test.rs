@@ -719,3 +719,90 @@ child_test! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Go `internal/lsp/server_completion_internal_test.go` (ts#64544)
+// PORT: Go tests package `lsp` from inside with `&Server{}`. The port makes
+// a server that never runs (`lsp::new_server`) and calls the handler, which
+// is `pub`. The tests are here so that no new test module is needed.
+// ---------------------------------------------------------------------------
+
+mod completion_internal {
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use ts_goport::frontend::bundled;
+    use ts_goport::gostd::{GoError, context, errors};
+    use ts_goport::lsp::{self, lsproto};
+
+    use crate::support::vfstest::{MapFile, MapFs};
+
+    /// A reader at end of input (the server never runs).
+    struct NoInput;
+
+    impl lsp::Reader for NoInput {
+        fn read(&mut self) -> (Option<lsproto::Message>, Option<GoError>) {
+            (None, Some(errors::EOF.clone()))
+        }
+    }
+
+    /// A writer that drops every message (the server never runs).
+    struct NoOutput;
+
+    impl lsp::Writer for NoOutput {
+        fn write(&mut self, _msg: &lsproto::Message) -> Result<(), GoError> {
+            Ok(())
+        }
+    }
+
+    /// Go `server := &Server{}`; `server.handleCompletionItemResolve(ctx,
+    /// &lsproto.CompletionItem{Data: &lsproto.CompletionItemData{FileName:
+    /// fileName}}, nil)` gives an error with `message`.
+    pub(super) fn assert_resolve_error(file_name: &str, message: &str) {
+        let server = lsp::new_server(lsp::ServerOptions {
+            in_: Box::new(NoInput),
+            out: Box::new(NoOutput),
+            err: Box::new(std::io::sink()),
+            cwd: "/".to_string(),
+            fs: bundled::wrap_fs(MapFs::from_map(Vec::<(String, MapFile)>::new(), false).fs()),
+            default_library_path: bundled::lib_path(),
+            typings_location: String::new(),
+            parse_cache: None,
+            npm_install: None,
+            spawn: None,
+            progress_delay: Duration::ZERO,
+            set_parent_process_id: None,
+        });
+        let item = lsproto::CompletionItem {
+            data: Some(lsproto::CompletionItemData {
+                file_name: file_name.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let req = Rc::new(lsproto::RequestMessage::default());
+        match server.handle_completion_item_resolve(&context::background(), Some(&item), &req) {
+            Ok(_) => panic!("{file_name}: no error"),
+            Err(err) => assert_eq!(err.error(), message, "{file_name}"),
+        }
+    }
+}
+
+child_test! {
+    // Go: server_completion_internal_test.go:11 TestCompletionItemResolveRejectsInvalidFileName (ts#64544)
+    fn completion_item_resolve_rejects_invalid_file_name() {
+        for (file_name, message) in [
+            ("relative.ts", "completion item data fileName must be absolute"),
+            (
+                "^/invalid",
+                "completion item data fileName must be a valid dynamic path",
+            ),
+            (
+                "^/~ts-uri~/scheme/authority/~ts-uri-escape~zz~",
+                "completion item data fileName must be a valid dynamic path",
+            ),
+        ] {
+            completion_internal::assert_resolve_error(file_name, message);
+        }
+    }
+}

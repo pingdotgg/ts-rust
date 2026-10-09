@@ -1342,6 +1342,11 @@ pub fn has_open_file_within(
     false
 }
 
+/// PORT: Go `*collections.SyncMap[tspath.Path, string]` of
+/// `sourceFS.seenFiles` (ts#64544): each seen path with the file name that
+/// it was last seen as.
+pub type SeenFiles = Rc<RefCell<FxHashMap<tspath::Path, String>>>;
+
 // Go: project/snapshotfs.go:769 sourceFS
 // sourceFS is a vfs.FS that sources files from a FileSource and tracks seen files.
 // PORT: Go `*sourceFS` is shared (`Rc<SourceFS>`, also as `Rc<dyn vfs::Fs>`).
@@ -1351,7 +1356,7 @@ pub struct SourceFS {
     pub tracking: Cell<bool>,
     pub to_path: Rc<dyn Fn(&str) -> tspath::Path>,
     pub missing_directories: Option<Rc<RefCell<FxHashSet<tspath::Path>>>>,
-    pub seen_files: RefCell<Option<Rc<RefCell<FxHashSet<tspath::Path>>>>>,
+    pub seen_files: RefCell<Option<SeenFiles>>,
     pub source: RefCell<Rc<dyn FileSource>>,
 }
 
@@ -1369,7 +1374,7 @@ pub fn new_source_fs(
         source: RefCell::new(source),
     };
     if tracking {
-        fs.seen_files = RefCell::new(Some(Rc::new(RefCell::new(FxHashSet::default()))));
+        fs.seen_files = RefCell::new(Some(Rc::new(RefCell::new(FxHashMap::default()))));
         fs.missing_directories = Some(Rc::new(RefCell::new(FxHashSet::default())));
     }
     Rc::new(fs)
@@ -1409,12 +1414,7 @@ impl SourceFS {
             return;
         }
         let path = (self.to_path)(file_name);
-        self.seen_files
-            .borrow()
-            .as_ref()
-            .unwrap_or_else(|| crate::core::go_nil_dereference())
-            .borrow_mut()
-            .insert(path);
+        self.track_path(file_name, &path);
     }
 
     // Go: project/snapshotfs.go:803 sourceFS.SeenFile
@@ -1423,14 +1423,14 @@ impl SourceFS {
         let Some(seen_files) = seen_files.as_ref() else {
             return false;
         };
-        let seen = seen_files.borrow().contains(path);
+        let seen = seen_files.borrow().contains_key(path);
         seen
     }
 
     // Go: project/snapshotfs.go:810 sourceFS.SeenFileOrMissingParentDirectory
     pub fn seen_file_or_missing_parent_directory(&self, path: &tspath::Path) -> bool {
         if let Some(seen_files) = self.seen_files.borrow().as_ref() {
-            if seen_files.borrow().contains(path) {
+            if seen_files.borrow().contains_key(path) {
                 return true;
             }
         }
@@ -1499,8 +1499,10 @@ impl SourceFS {
 // (project/compilerhost.rs): the side effects of `vfs::Fs::file_exists`
 // and `vfs::Fs::directory_exists` with the path made already.
 impl SourceFS {
-    /// `track` of a name whose path is `path`.
-    pub fn track_path(&self, path: &tspath::Path) {
+    /// `track` of `file_name`, whose path is `path`.
+    /// ts#64544: Go `seenFiles.Store(path, fileName)` keeps the last name
+    /// that the path was seen as.
+    pub fn track_path(&self, file_name: &str, path: &tspath::Path) {
         if !self.tracking.get() {
             return;
         }
@@ -1509,8 +1511,15 @@ impl SourceFS {
             .as_ref()
             .unwrap_or_else(|| crate::core::go_nil_dereference())
             .borrow_mut();
-        if !seen_files.contains(path) {
-            seen_files.insert(path.clone());
+        match seen_files.get_mut(path) {
+            Some(seen_name) => {
+                if seen_name != file_name {
+                    *seen_name = file_name.to_string();
+                }
+            }
+            None => {
+                seen_files.insert(path.clone(), file_name.to_string());
+            }
         }
     }
 
@@ -1590,7 +1599,7 @@ impl vfs::Fs for SourceFS {
         // PORT: Go makes the path twice (`Track` and the source call); the
         // port makes it once, with the same `to_path`.
         let file_path = (self.to_path)(path);
-        self.track_path(&file_path);
+        self.track_path(path, &file_path);
         self.source().file_exists(path, &file_path)
     }
 

@@ -1,6 +1,14 @@
 //! Port of Go `internal/project/watch_test.go`.
 
-use ts_goport::project::{WatchedFiles, get_path_components_for_watching};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
+use ts_goport::frontend::tspath;
+use ts_goport::project::{
+    PatternsAndIgnored, SeenFiles, WatchedFiles, create_resolution_lookup_glob_mapper,
+    get_path_components_for_watching,
+};
 
 fn components(path: &str) -> Vec<String> {
     get_path_components_for_watching(path, "")
@@ -39,4 +47,81 @@ fn nil_watched_files_clone() {
         result.is_none(),
         "clone on a nil `WatchedFiles` should return nil"
     );
+}
+
+/// Go `var files collections.SyncMap[tspath.Path, string]` with
+/// `files.Store(tspath.ToPath(fileName, "/", useCaseSensitiveFileNames), fileName)`.
+fn seen_files(file_names: &[&str], use_case_sensitive_file_names: bool) -> Option<SeenFiles> {
+    let mut files = FxHashMap::default();
+    for file_name in file_names {
+        files.insert(
+            tspath::to_path(file_name, "/", use_case_sensitive_file_names),
+            file_name.to_string(),
+        );
+    }
+    Some(Rc::new(RefCell::new(files)))
+}
+
+/// Go `createResolutionLookupGlobMapper("/Workspace", "/Lib", "/Project", useCaseSensitiveFileNames)(&files)`.
+fn lookup_globs(file_names: &[&str], use_case_sensitive_file_names: bool) -> PatternsAndIgnored {
+    create_resolution_lookup_glob_mapper(
+        "/Workspace",
+        "/Lib",
+        "/Project",
+        use_case_sensitive_file_names,
+    )(&seen_files(file_names, use_case_sensitive_file_names))
+}
+
+// Go: watch_test.go:32 TestResolutionLookupWatcherPreservesIncludedDirectorySpelling (ts#64544)
+#[test]
+fn resolution_lookup_watcher_preserves_included_directory_spelling() {
+    let result = lookup_globs(
+        &[
+            "/Workspace/src/index.ts",
+            "/Project/src/index.ts",
+            "/Lib/lib.d.ts",
+        ],
+        false,
+    );
+    assert_eq!(
+        result.patterns_inside_workspace,
+        ["/Workspace/**/*", "/Project/**/*", "/Lib/**/*"]
+    );
+}
+
+// Go: watch_test.go:57 TestResolutionLookupWatcherPreservesNodeModulesSpelling (ts#64544)
+#[test]
+fn resolution_lookup_watcher_preserves_node_modules_spelling() {
+    let result = lookup_globs(&["/External/Node_Modules/pkg/index.ts"], false);
+    assert_eq!(
+        result.patterns_inside_workspace,
+        ["/External/Node_Modules/**/*"]
+    );
+}
+
+// Go: watch_test.go:74 TestResolutionLookupWatcherAggregatesUsingHostCaseSensitivity (ts#64544)
+#[test]
+fn resolution_lookup_watcher_aggregates_using_host_case_sensitivity() {
+    for (name, use_case_sensitive_file_names) in
+        [("case sensitive", true), ("case insensitive", false)]
+    {
+        let result = lookup_globs(
+            &["/External/Lib/src/a.ts", "/external/LIB/test/b.ts"],
+            use_case_sensitive_file_names,
+        );
+        if use_case_sensitive_file_names {
+            assert_eq!(
+                result.directories_outside_workspace,
+                ["/External/Lib/src", "/external/LIB/test"],
+                "{name}"
+            );
+        } else {
+            assert_eq!(result.directories_outside_workspace.len(), 1, "{name}");
+            let directory = &result.directories_outside_workspace[0];
+            assert!(
+                directory == "/External/Lib" || directory == "/external/LIB",
+                "{name}: {directory}"
+            );
+        }
+    }
 }

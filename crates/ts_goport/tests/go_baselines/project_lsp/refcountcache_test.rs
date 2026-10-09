@@ -18,13 +18,13 @@ use ts_goport::gostd::GoError;
 use ts_goport::lsp::lsproto;
 use ts_goport::options::Tristate;
 use ts_goport::project::{
-    APICreateProgramRequest, APISnapshotRequest, ConfiguredProjectID, ContentMappedParseCache,
-    ContentMappedParseCacheKey, FileChangeSummary, FileHandle, HashedSourceFile, ParseCache,
-    ParseCacheKey, ProgramUpdateKind, RefCountCacheEntry, RefCountCacheOptions, ResourceRequest,
-    Session, SnapshotChange, UpdateReason, acquire_bound,
+    APICreateProgramRequest, APIReconfigureProgramRequest, APISnapshotRequest, ConfiguredProjectID,
+    ContentMappedParseCache, ContentMappedParseCacheKey, FileChangeSummary, FileHandle,
+    HashedSourceFile, ParseCache, ParseCacheKey, ProgramUpdateKind, RefCountCacheEntry,
+    RefCountCacheOptions, ResourceRequest, Session, SnapshotChange, UpdateReason, acquire_bound,
     content_mapped_parse_cache_key_for_duplicate, content_mapped_parse_cache_key_for_file,
     new_cached_file_handle, new_content_mapped_parse_cache, new_overlay, new_parse_cache,
-    new_parse_cache_key, new_ref_count_cache, set_source_file_hash,
+    new_parse_cache_key, new_ref_count_cache, new_synthetic_project_id, set_source_file_hash,
 };
 
 use super::projecttestutil::{FileMap, files};
@@ -912,5 +912,79 @@ child_test! {
         program_snapshot.deref();
         base_snapshot.deref();
         session.close();
+    }
+}
+
+child_test! {
+    // Go: refcountcache_test.go:705 TestRefCountingCaches/failed API update preserves API references (ts#64544)
+    fn failed_api_update_preserves_api_references() {
+        const CONFIG_FILE_NAME: &str = "/project/tsconfig.json";
+        let session = setup(files(&[
+            (CONFIG_FILE_NAME, r#"{"compilerOptions":{"noLib":true},"files":["index.ts"]}"#),
+            ("/project/index.ts", "export const value = 1;"),
+        ]));
+
+        let ctx = bg();
+        let snapshot = session
+            .api_update(
+                &ctx,
+                FileChangeSummary::default(),
+                Some(&APISnapshotRequest {
+                    open_projects: Some(FxHashSet::from_iter([CONFIG_FILE_NAME.to_string()])),
+                    ..Default::default()
+                }),
+            )
+            .unwrap_or_else(|err| panic!("APIUpdate: {}", err.error()));
+        snapshot.deref();
+
+        let config_path = (session.to_path)(CONFIG_FILE_NAME);
+
+        let failed = session.api_update(
+            &ctx,
+            FileChangeSummary::default(),
+            Some(&APISnapshotRequest {
+                close_projects: Some(FxHashSet::from_iter([config_path.clone()])),
+                reconfigure_programs: vec![APIReconfigureProgramRequest {
+                    program_id: new_synthetic_project_id(999),
+                    api_create_program_request: Default::default(),
+                }],
+                ..Default::default()
+            }),
+        );
+        let err = match failed {
+            Ok(_) => panic!("the API update did not fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.error().contains("synthetic program not found for reconfiguration"),
+            "{}",
+            err.error()
+        );
+
+        let snapshot = session.snapshot();
+        let api_state = &snapshot.project_collection.api_state;
+        assert_eq!(api_state.open_projects.get(&config_path).copied(), Some(1));
+
+        // Go: defer session.Close()
+        session.close();
+    }
+}
+
+child_test! {
+    // Go: refcountcache_test.go:737 TestRefCountingCaches/session close releases the current snapshot (ts#64544)
+    fn session_close_releases_the_current_snapshot() {
+        const FILE_NAME: &str = "/project/index.ts";
+        let session = setup(files(&[(FILE_NAME, "export const value = 1;")]));
+        open(&session, &format!("file://{FILE_NAME}"), "export const value = 1;");
+
+        let program = inferred_program(&session);
+        let source_file = program.get_source_file(FILE_NAME).expect("source file");
+        let key = key(&source_file);
+        assert!(session.parse_cache.has(&key));
+
+        session.close();
+
+        assert!(!session.parse_cache.has(&key));
+        assert_eq!(session.program_counter.len(), 0);
     }
 }

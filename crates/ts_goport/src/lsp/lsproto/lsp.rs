@@ -39,30 +39,123 @@ impl DocumentUri {
 
         // Leave all other URIs escaped so we can round-trip them.
 
-        let Some((scheme, mut path)) = uri.split_once(':') else {
+        let Some((scheme, path)) = uri.split_once(':') else {
             crate::core::go_panic(format!("invalid URI: {uri}"));
         };
 
+        // ts#64544: a query or fragment is encoded with the last segment.
+        let (mut path, suffix) = match path.find(['?', '#']) {
+            Some(suffix_start) => (&path[..suffix_start], &path[suffix_start..]),
+            None => (path, ""),
+        };
+
         let mut authority = "ts-nul-authority";
+        let mut has_authority = false;
+        let mut has_path = true;
         if let Some(rest) = path.strip_prefix("//") {
-            let Some((a, p)) = rest.split_once('/') else {
-                crate::core::go_panic(format!("invalid URI: {uri}"));
-            };
-            authority = a;
-            path = p;
+            has_authority = true;
+            match rest.split_once('/') {
+                Some((a, p)) => {
+                    authority = a;
+                    path = p;
+                }
+                None => {
+                    authority = rest;
+                    path = "";
+                    has_path = false;
+                }
+            }
         }
 
-        format!("^/{scheme}/{authority}/{path}")
+        let encoded_authority = if !has_authority {
+            authority.to_string()
+        } else if authority == "ts-nul-authority" {
+            tspath::force_encode_dynamic_uri_path_segment(authority, false)
+        } else {
+            tspath::encode_dynamic_uri_path(authority)
+        };
+        let encoded_path = if has_path {
+            tspath::encode_dynamic_uri_path_with_suffix(path, suffix)
+        } else {
+            tspath::encode_dynamic_uri_no_path(suffix)
+        };
+
+        format!(
+            "{}{scheme}/{encoded_authority}/{encoded_path}",
+            tspath::DYNAMIC_URI_FILE_NAME_PREFIX
+        )
     }
 
-    // Go: lsp.go:52 Path
+    // Go: lsp.go:52 Path (at 673a5f17d713; ts#64159 renames it PathKey,
+    // lsp.go:81)
+    // ts#64544: an encoded dynamic file name keeps its case, and its bare
+    // root ends with "/" (Go `canonicalDynamicFileName`, removed by ts#64159;
+    // `tspath::to_path` gives the same key).
     pub fn path(&self, use_case_sensitive_file_names: bool) -> tspath::Path {
         let file_name = self.file_name();
         tspath::to_path(&file_name, "", use_case_sensitive_file_names)
     }
 }
 
-// Go: lsp.go:57 fixWindowsURIPath
+// Go: lsp.go:85 DynamicFileNameToDocumentUri (ts#64544)
+#[must_use]
+pub fn dynamic_file_name_to_document_uri(file_name: &str) -> DocumentUri {
+    match dynamic_file_name_to_document_uri_worker(file_name, false) {
+        Some(uri) => uri,
+        None => crate::core::go_panic(format!("invalid file name: {file_name}")),
+    }
+}
+
+// Go: lsp.go:93 TryDynamicFileNameToDocumentUri (ts#64544)
+// `None` is Go's `ok == false`: the name is not a valid dynamic file name.
+#[must_use]
+pub fn try_dynamic_file_name_to_document_uri(file_name: &str) -> Option<DocumentUri> {
+    dynamic_file_name_to_document_uri_worker(file_name, true)
+}
+
+// Go: lsp.go:97 dynamicFileNameToDocumentUri (ts#64544)
+// It decodes the encoded names (`^/~ts-uri~/...`) and takes the literal
+// names (`^/<scheme>/...`) as they are.
+fn dynamic_file_name_to_document_uri_worker(file_name: &str, strict: bool) -> Option<DocumentUri> {
+    let encoded = tspath::is_encoded_dynamic_file_name(file_name);
+    let start = if encoded {
+        tspath::DYNAMIC_URI_FILE_NAME_PREFIX.len()
+    } else {
+        2
+    };
+    let (scheme, rest) = file_name[start..].split_once('/')?;
+    if strict && scheme.is_empty() {
+        return None;
+    }
+    let (authority, uri_path) = rest.split_once('/')?;
+    let has_authority = authority != "ts-nul-authority";
+    let authority: Cow<'_, str> = if !encoded {
+        Cow::Borrowed(authority)
+    } else if strict {
+        Cow::Owned(tspath::try_decode_dynamic_uri_path_segment(authority)?)
+    } else {
+        Cow::Owned(tspath::decode_dynamic_uri_path_segment(authority))
+    };
+    if encoded
+        && has_authority
+        && let Some(suffix) = tspath::decode_dynamic_uri_no_path(uri_path)
+    {
+        return Some(DocumentUri(format!("{scheme}://{authority}{suffix}")));
+    }
+    let uri_path: Cow<'_, str> = if !encoded {
+        Cow::Borrowed(uri_path)
+    } else if strict {
+        Cow::Owned(tspath::try_decode_dynamic_uri_path(uri_path)?)
+    } else {
+        Cow::Owned(tspath::decode_dynamic_uri_path(uri_path))
+    };
+    if !has_authority {
+        return Some(DocumentUri(format!("{scheme}:{uri_path}")));
+    }
+    Some(DocumentUri(format!("{scheme}://{authority}/{uri_path}")))
+}
+
+// Go: lsp.go:144 fixWindowsURIPath
 pub fn fix_windows_uri_path(path: &str) -> String {
     if let Some(rest) = path.strip_prefix('/') {
         let bytes = rest.as_bytes();

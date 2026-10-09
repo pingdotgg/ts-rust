@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::ThreadId;
 
 use ts_goport::frontend::json_ext::LspAny;
+use ts_goport::gostd::Context;
 use ts_goport::ls::lsutil;
 use ts_goport::lsp::lsproto;
 use ts_goport::project::Session;
@@ -152,7 +153,7 @@ child_test! {
         let thread_calls: Arc<Mutex<Vec<(ThreadId, Vec<String>)>>> = Arc::default();
         let log = Arc::clone(&thread_calls);
         *utils.npm_executor().npm_install_on_thread.borrow_mut() =
-            Some(Arc::new(move |cwd: &str, args: &[String]| {
+            Some(Arc::new(move |_ctx: &Context, cwd: &str, args: &[String]| {
                 log.lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push((std::thread::current().id(), args.to_vec()));

@@ -127,6 +127,8 @@ pub struct Session {
     pub options: Rc<SessionOptions>,
     pub logger: Option<Rc<dyn logging::Logger>>,
     pub background_ctx: Context,
+    // ts#64544: cancels `background_ctx` on Close.
+    pub background_cancel: gostd::context::CancelFunc,
     pub to_path: Rc<dyn Fn(&str) -> tspath::Path>,
     pub client: Option<Rc<dyn Client>>,
     pub start_time: Instant,
@@ -205,6 +207,13 @@ pub struct Session {
     // cache cleans. The timer resets on any file event (open, close,
     // change, save, watch) and fires after 30 seconds of inactivity.
     pub idle_cache_clean_timer: RefCell<Option<gostd::local::LocalTimer>>,
+    // ts#64544. PORT: Go `idleCacheCleanWG` is dropped: the timer function
+    // runs on the dispatch thread, so it never runs while Close waits.
+    pub idle_cache_clean_closed: Cell<bool>,
+    // PORT: Go sets `snapshot` to nil in Close (ts#64544). The port keeps
+    // the released snapshot in `snapshot` and records the release here, so
+    // that a second Close does not release it again.
+    pub snapshot_released: Cell<bool>,
 
     // performanceTelemetryCancel cancels the periodic performance telemetry ticker.
     pub performance_telemetry_cancel: RefCell<Option<gostd::context::CancelFunc>>,
@@ -252,6 +261,8 @@ pub fn new_session(init: &SessionInit) -> Rc<Session> {
     // (`ast::free_file_versions`).
     crate::ast::set_editor_process();
     let snapshot_host = new_snapshot_host(init);
+    // ts#64544
+    let (background_ctx, background_cancel) = gostd::context::with_cancel(&init.background_ctx);
     let mut session_logger = init.logger.clone();
     if session_logger.is_none() {
         session_logger = logging::new_nop_logger();
@@ -260,7 +271,8 @@ pub fn new_session(init: &SessionInit) -> Rc<Session> {
         snapshot_host: snapshot_host.clone(),
         options: init.options.clone(),
         logger: session_logger,
-        background_ctx: init.background_ctx.clone(),
+        background_ctx,
+        background_cancel,
         to_path: snapshot_host.to_path.clone(),
         client: init.client.clone(),
         npm_executor: init.npm_executor.clone(),
@@ -301,6 +313,8 @@ pub fn new_session(init: &SessionInit) -> Rc<Session> {
         warm_auto_import_queued: Cell::new(false),
         warm_auto_import_slow: Cell::new(false),
         idle_cache_clean_timer: RefCell::new(None),
+        idle_cache_clean_closed: Cell::new(false),
+        snapshot_released: Cell::new(false),
         performance_telemetry_cancel: RefCell::new(None),
         seen_projects: RefCell::new(FxHashSet::default()),
         watches: new_watch_registry(),
@@ -348,15 +362,20 @@ impl crate::frontend::module::ResolutionHost for Session {
     }
 }
 
-// Go: project/session.go:1827 NpmInstall
+// Go: project/session.go:1866 NpmInstall
 // PORT: Go `NpmInstall` implements `ata.NpmExecutor`. With this impl and
 // `module::ResolutionHost`, `Session` is an `ata::TypingsInstallerHost`.
 impl ata::NpmExecutor for Session {
-    fn npm_install(&self, cwd: &str, npm_install_args: &[String]) -> (Vec<u8>, Option<GoError>) {
+    fn npm_install(
+        &self,
+        ctx: &Context,
+        cwd: &str,
+        npm_install_args: &[String],
+    ) -> (Vec<u8>, Option<GoError>) {
         self.npm_executor
             .as_ref()
             .unwrap_or_else(|| crate::core::go_nil_dereference())
-            .npm_install(cwd, npm_install_args)
+            .npm_install(ctx, cwd, npm_install_args)
     }
 
     // PORT: see `ata::NpmExecutor::npm_install_func`.
@@ -1121,8 +1140,17 @@ impl WarmAutoImportPreempt {
 pub const IDLE_CACHE_CLEAN_DELAY: Duration = Duration::from_secs(30);
 
 impl Session {
-    // Go: project/session.go:663 scheduleIdleCacheClean
+    // Go: project/session.go:661 scheduleIdleCacheClean
+    // ts#64544: no timer after Close. ts#64624: the timer is stored, so
+    // cancelIdleCacheClean and closeIdleCacheClean stop it (the port stored
+    // it before).
+    // PORT: Go clears `idleCacheCleanTimer` only when it is still this timer
+    // (a stopped timer's function may already wait for the lock). A stopped
+    // `LocalTimer` never runs, so the port clears it always.
     pub fn schedule_idle_cache_clean(self: &Rc<Self>) {
+        if self.idle_cache_clean_closed.get() {
+            return;
+        }
         if let Some(timer) = self.idle_cache_clean_timer.borrow().as_ref() {
             timer.stop();
         }
@@ -1158,12 +1186,20 @@ impl Session {
         *self.idle_cache_clean_timer.borrow_mut() = Some(timer);
     }
 
-    // Go: project/session.go:694 cancelIdleCacheClean
+    // Go: project/session.go:706 cancelIdleCacheClean
     pub fn cancel_idle_cache_clean(&self) {
         let timer = self.idle_cache_clean_timer.borrow_mut().take();
         if let Some(timer) = timer {
             timer.stop();
         }
+    }
+
+    // Go: project/session.go:717 closeIdleCacheClean (ts#64544)
+    // PORT: Go then waits for a timer function that already runs
+    // (`idleCacheCleanWG`); on the dispatch thread none can be running.
+    pub fn close_idle_cache_clean(&self) {
+        self.idle_cache_clean_closed.set(true);
+        self.cancel_idle_cache_clean();
     }
 }
 
@@ -2955,7 +2991,9 @@ impl Session {
         Ok(())
     }
 
-    // Go: project/session.go:1683 Close
+    // Go: project/session.go:1710 Close
+    // ts#64544: Close cancels the background context, waits for the
+    // background tasks and releases the current snapshot.
     pub fn close(&self) {
         // Cancel any pending scheduled snapshot update
         self.cancel_scheduled_snapshot_update();
@@ -2964,10 +3002,18 @@ impl Session {
         // Cancel any pending auto-import cache warming
         self.cancel_warm_auto_import_cache();
         // Cancel any pending idle cache clean
-        self.cancel_idle_cache_clean();
+        self.close_idle_cache_clean();
         // Cancel periodic performance telemetry
         self.stop_performance_telemetry();
+        (self.background_cancel)();
         self.background_queue.close();
+
+        // Go: s.snapshot = nil; snapshot.Deref() (see `snapshot_released`).
+        if !self.snapshot_released.replace(true) {
+            let snapshot = self.snapshot.borrow().clone();
+            snapshot.deref();
+        }
+
         self.snapshot_host.close();
     }
 
@@ -3493,7 +3539,9 @@ impl Session {
             }
             let s = self.clone();
             self.background_queue
-                .enqueue(&self.background_context(), move |_ctx| {
+                .enqueue(&self.background_context(), move |ctx| {
+                    // ts#64544: the request's npm calls get the task's context.
+                    let ctx = ctx.clone();
                     let mut log_tree: Option<Rc<logging::LogTree>> = None;
                     if s.options.logging_enabled {
                         log_tree = logging::new_log_tree(&format!(
@@ -3553,7 +3601,9 @@ impl Session {
                     // hold keeps this task running until the future ends.
                     let hold = s.background_queue.hold();
                     ata::run_task(Box::pin(async move {
-                        let result = typings_installer.install_typings_exported(&request).await;
+                        let result = typings_installer
+                            .install_typings_exported(&ctx, &request)
+                            .await;
                         if let Some(client) = s.client.as_ref() {
                             client.progress_finish(
                                 diag::Installing_types_for_0,
