@@ -3147,39 +3147,15 @@ pub fn new_config_file_response(
         project_references: parsed_command_line.project_references().to_vec(),
         type_acquisition: parsed_command_line.type_acquisition().cloned(),
         compile_on_save,
-        raw: to_protocol_json_value(&parsed_command_line.raw),
+        // ts#64457 (Go N' proto.go:1067). PORT: a nil list in `Raw`
+        // marshals as `[]`, as the removed toProtocolJSONValue made it.
+        raw: parsed_command_line.raw.clone(),
         errors,
     })
 }
 
-// Go: proto.go:1011 toProtocolJSONValue
-// PORT: ts#64457 removes the Go function with the watch options (Go passes
-// `Raw` through). Only its watch kind cases are gone here; the api lane ports
-// the rest of that change.
-pub fn to_protocol_json_value(
-    value: &tsoptions::CompilerOptionsValue,
-) -> tsoptions::CompilerOptionsValue {
-    use crate::frontend::tsoptions::CompilerOptionsValue;
-    match value {
-        CompilerOptionsValue::Map(value) => {
-            let mut result = IndexMap::with_capacity(value.len());
-            for (key, child) in value {
-                result.insert(key.clone(), to_protocol_json_value(child));
-            }
-            CompilerOptionsValue::Map(result)
-        }
-        CompilerOptionsValue::List(value) => {
-            let mut result = Vec::with_capacity(value.len());
-            for child in value {
-                result.push(to_protocol_json_value(child));
-            }
-            CompilerOptionsValue::List(result)
-        }
-        // Go `case []any` makes a non-nil slice, also for a nil `[]any`.
-        CompilerOptionsValue::NilList => CompilerOptionsValue::List(Vec::new()),
-        value => value.clone(),
-    }
-}
+// Go: proto.go:1011 toProtocolJSONValue (at 673a5f17d713; removed by
+// ts#64457 with the watch options: Go N' passes `Raw` through).
 
 // Go: proto.go:1036 NewProjectResponse
 // PORT: Go shares the `*core.CompilerOptions` pointer; the response keeps
