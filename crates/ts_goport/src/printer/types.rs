@@ -238,6 +238,8 @@ pub type EmitSymbolTracker = Option<Rc<dyn SymbolTracker>>;
 // PORT: Go `GetConstantValue` returns `any` (string, float64 or nil); that is
 // `Option<LiteralValue>`. Go `*ast.SourceFile` results are `Node`
 // (`Node::NIL` for nil).
+// ts#64649: a resolver belongs to one emit context (`emit_context`), and the
+// node construction methods use it instead of taking one.
 // Go: printer/emitresolver.go:76 EmitResolver
 pub trait EmitResolver {
     // Go binder.ReferenceResolver (embedded)
@@ -254,6 +256,10 @@ pub trait EmitResolver {
     /// PORT: not in Go. Go `make(ast.SymbolTable)` plus `table[name] = symbol`; tables live in the checker arena.
     fn make_symbol_table(&self, entries: &[(&str, SymbolId)]) -> SymbolTable;
 
+    /// Go `EmitContext()` (ts#64649).
+    // PORT: Go returns nil for a resolver with no context, and its callers
+    // panic on nil. Here every resolver has a context.
+    fn emit_context(&self) -> &Rc<EmitContext>;
     fn is_referenced_alias_declaration(&self, node: Node) -> bool;
     fn is_value_alias_declaration(&self, node: Node) -> bool;
     fn is_top_level_value_import_equals_with_entity_name(&self, node: Node) -> bool;
@@ -324,7 +330,6 @@ pub trait EmitResolver {
     // Node construction for declaration emit
     fn create_type_of_declaration(
         &self,
-        emit_context: &EmitContext,
         declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -333,7 +338,6 @@ pub trait EmitResolver {
     ) -> Node;
     fn create_return_type_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -342,22 +346,15 @@ pub trait EmitResolver {
     ) -> Node;
     fn create_type_parameters_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Vec<Node>;
-    fn create_literal_const_value(
-        &self,
-        emit_context: &EmitContext,
-        node: Node,
-        tracker: EmitSymbolTracker,
-    ) -> Node;
+    fn create_literal_const_value(&self, node: Node, tracker: EmitSymbolTracker) -> Node;
     fn create_type_of_expression(
         &self,
-        emit_context: &EmitContext,
         expression: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -366,7 +363,6 @@ pub trait EmitResolver {
     ) -> Node;
     fn create_late_bound_index_signatures(
         &self,
-        emit_context: &EmitContext,
         container: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -375,7 +371,6 @@ pub trait EmitResolver {
     ) -> Vec<Node>;
     fn try_js_type_node_to_type_node(
         &self,
-        emit_context: &EmitContext,
         type_node: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -408,7 +403,8 @@ pub trait EmitHost {
     fn is_emit_blocked(&self, file: &str) -> bool;
     fn write_file(&self, file_name: &str, text: &str) -> Result<(), String>;
     fn get_emit_module_format_of_file(&self, file: Node) -> ModuleKind;
-    fn get_emit_resolver(&self) -> Rc<dyn EmitResolver>;
+    // ts#64649: Go `GetEmitResolver()` became `NewEmitResolver(emitContext)`.
+    fn new_emit_resolver(&self, emit_context: Rc<EmitContext>) -> Rc<dyn EmitResolver>;
     fn is_source_file_from_external_library(&self, file: Node) -> bool;
 }
 

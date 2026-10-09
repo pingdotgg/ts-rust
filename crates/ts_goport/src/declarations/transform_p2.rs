@@ -156,7 +156,7 @@ impl DeclarationTransformer {
 
     // Go: transformers/declarations/transform.go:827 DeclarationTransformer.transformTypeParameterDeclaration
     pub(super) fn transform_type_parameter_declaration(&mut self, input: Node) -> Node {
-        if is_private_method_type_parameter(&*self.host, input)
+        if is_private_method_type_parameter(&*self.resolver, input)
             && (input.default_type().is_some() || input.constraint().is_some())
         {
             let ec = self.emit_context.clone();
@@ -377,7 +377,7 @@ impl DeclarationTransformer {
         let ec = self.emit_context.clone();
         let modifiers = self.ensure_modifiers(input);
         let is_private = !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(input), ModifierFlags::PRIVATE)
             .is_empty();
         let parameters = self.update_accessor_param_list(input, is_private);
@@ -401,7 +401,7 @@ impl DeclarationTransformer {
         let ec = self.emit_context.clone();
         let modifiers = self.ensure_modifiers(input);
         let is_private = !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(input), ModifierFlags::PRIVATE)
             .is_empty();
         let parameters = self.update_accessor_param_list(input, is_private);
@@ -528,7 +528,7 @@ impl DeclarationTransformer {
     pub(super) fn transform_method_signature_declaration(&mut self, input: Node) -> Node {
         let ec = self.emit_context.clone();
         if !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(input), ModifierFlags::PRIVATE)
             .is_empty()
         {
@@ -556,7 +556,7 @@ impl DeclarationTransformer {
     pub(super) fn transform_method_declaration(&mut self, input: Node) -> Node {
         let ec = self.emit_context.clone();
         if !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(input), ModifierFlags::PRIVATE)
             .is_empty()
         {
@@ -758,9 +758,9 @@ impl DeclarationTransformer {
         let mut initializer = Node::NIL;
         if is_primitive_literal_value(unwrap_parenthesized_expression(expression), true) {
             let tracker: EmitSymbolTracker = Some(self.tracker.clone());
-            initializer =
-                self.resolver
-                    .create_literal_const_value(&ec, ec.parse_node(assignment), tracker);
+            initializer = self
+                .resolver
+                .create_literal_const_value(ec.parse_node(assignment), tracker);
         }
         if initializer.is_nil() {
             type_ = self.ensure_type(assignment, false);

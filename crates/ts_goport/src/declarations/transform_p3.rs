@@ -187,7 +187,7 @@ impl DeclarationTransformer {
         let ec = self.emit_context.clone();
         if !ignore_private
             && !self
-                .host
+                .resolver
                 .get_effective_declaration_flags(ec.parse_node(node), ModifierFlags::PRIVATE)
                 .is_empty()
         {
@@ -222,7 +222,6 @@ impl DeclarationTransformer {
                         js_flags.without(NodeBuilderFlags::WRITE_CLASS_EXPRESSION_AS_TYPE_LITERAL);
                 }
                 let res = self.resolver.try_js_type_node_to_type_node(
-                    &ec,
                     node.type_(),
                     self.enclosing_declaration,
                     js_flags,
@@ -259,7 +258,6 @@ impl DeclarationTransformer {
         // PORT: Go starts `typeNode` at nil and assigns it in each branch.
         let type_node = if has_inferred_type(node) {
             self.resolver.create_type_of_declaration(
-                &ec,
                 node,
                 self.enclosing_declaration,
                 flags,
@@ -268,7 +266,6 @@ impl DeclarationTransformer {
             )
         } else if is_function_like(node) {
             self.resolver.create_return_type_of_signature_declaration(
-                &ec,
                 node,
                 self.enclosing_declaration,
                 flags,
@@ -291,7 +288,7 @@ impl DeclarationTransformer {
 
     // Go: transformers/declarations/transform.go:1701 DeclarationTransformer.shouldPrintWithInitializer
     pub(crate) fn should_print_with_initializer(&mut self, node: Node) -> bool {
-        can_have_literal_initializer(&*self.host, node)
+        can_have_literal_initializer(&*self.resolver, node)
             && node.initializer().is_some()
             && self
                 .resolver
@@ -589,7 +586,7 @@ impl DeclarationTransformer {
         if is_import_equals_declaration(statement)
             || (parse_node.is_some()
                 && !self
-                    .host
+                    .resolver
                     .get_effective_declaration_flags(parse_node, ModifierFlags::DEFAULT)
                     .is_empty())
             || !can_have_modifiers(statement)
@@ -682,7 +679,6 @@ impl DeclarationTransformer {
         }
 
         let late_indexes = self.resolver.create_late_bound_index_signatures(
-            &ec,
             class_node,
             self.enclosing_declaration,
             DECLARATION_EMIT_NODE_BUILDER_FLAGS,
@@ -761,7 +757,6 @@ impl DeclarationTransformer {
                 ));
 
                 let type_of_expression = self.resolver.create_type_of_expression(
-                    &ec,
                     extends_clause.expression(),
                     input,
                     DECLARATION_EMIT_NODE_BUILDER_FLAGS,

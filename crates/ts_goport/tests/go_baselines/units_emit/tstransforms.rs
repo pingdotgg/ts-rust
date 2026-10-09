@@ -6,7 +6,7 @@ use super::childprog::{in_child, install_map_fs, new_program, source_file};
 use super::emittestutil::check_emit;
 use super::parsetestutil::{check_diagnostics, parse_type_script_published};
 use crate::support::vfstest::MapFs;
-use ts_goport::checker::emit_resolver_p1::get_emit_resolver_of_shared_checker;
+use ts_goport::checker::emit_resolver_p1::new_emit_resolver_of_shared_checker;
 use ts_goport::gostd::context;
 use ts_goport::prelude::*;
 use ts_goport::program::ls_program;
@@ -48,6 +48,9 @@ impl TransformReferenceResolver for NilResolver {
 
 #[allow(unused_variables)]
 impl ts_goport::printer::EmitResolver for NilResolver {
+    fn emit_context(&self) -> &Rc<EmitContext> {
+        nil_emit_resolver()
+    }
     fn get_referenced_export_container(&self, node: Node, prefix_locals: bool) -> Node {
         nil_emit_resolver()
     }
@@ -188,7 +191,6 @@ impl ts_goport::printer::EmitResolver for NilResolver {
     }
     fn create_type_of_declaration(
         &self,
-        emit_context: &EmitContext,
         declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -199,7 +201,6 @@ impl ts_goport::printer::EmitResolver for NilResolver {
     }
     fn create_return_type_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -210,7 +211,6 @@ impl ts_goport::printer::EmitResolver for NilResolver {
     }
     fn create_type_parameters_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -219,17 +219,11 @@ impl ts_goport::printer::EmitResolver for NilResolver {
     ) -> Vec<Node> {
         nil_emit_resolver()
     }
-    fn create_literal_const_value(
-        &self,
-        emit_context: &EmitContext,
-        node: Node,
-        tracker: EmitSymbolTracker,
-    ) -> Node {
+    fn create_literal_const_value(&self, node: Node, tracker: EmitSymbolTracker) -> Node {
         nil_emit_resolver()
     }
     fn create_type_of_expression(
         &self,
-        emit_context: &EmitContext,
         expression: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -240,7 +234,6 @@ impl ts_goport::printer::EmitResolver for NilResolver {
     }
     fn create_late_bound_index_signatures(
         &self,
-        emit_context: &EmitContext,
         container: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -251,7 +244,6 @@ impl ts_goport::printer::EmitResolver for NilResolver {
     }
     fn try_js_type_node_to_type_node(
         &self,
-        emit_context: &EmitContext,
         type_node: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -409,7 +401,7 @@ const IMPORT_ELISION: &[(&str, &str, &str, &str, bool)] = &[
     ("ExportAssignment#2", "type x = any; export default x;", "", "", false),
 ];
 
-// Go: transformers/tstransforms/importelision_test.go:181 TestImportElision
+// Go: transformers/tstransforms/importelision_test.go:185 TestImportElision
 // PORT: Go makes a checker for a fake `checker.Program` that holds the
 // parsed files and resolves "other" to the other file. The port has no such
 // seam, so each row is a real program on a map file system, in one child
@@ -455,11 +447,14 @@ fn test_import_elision() {
                 let compiler_options: &'static CompilerOptions = Box::leak(Box::default());
 
                 let (c, release) = ls_program::get_type_checker(&p, &context::background());
-                let emit_resolver = get_emit_resolver_of_shared_checker(&c);
-                let emit_resolver: Rc<dyn ts_goport::printer::EmitResolver> = emit_resolver;
+                // ts#64649 (importelision_test.go:266, :267): the resolver of a new
+                // emit context, and the transforms use that context.
+                let emit_context = new_emit_context();
+                let emit_resolver: Rc<dyn ts_goport::printer::EmitResolver> =
+                    new_emit_resolver_of_shared_checker(&c, Rc::clone(&emit_context));
 
                 let opts = TransformOptions {
-                    context: new_emit_context(),
+                    context: emit_context,
                     compiler_options,
                     resolver: Rc::new(EmitResolverReferenceResolver(Rc::clone(&emit_resolver))),
                     emit_resolver,

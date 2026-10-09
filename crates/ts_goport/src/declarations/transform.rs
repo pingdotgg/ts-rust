@@ -25,9 +25,7 @@ use crate::ast::visitor::syntax_list_children;
 use crate::checker::nodebuilder_types::{InternalNodeBuilderFlags, NodeBuilderFlags};
 use crate::frontend::tspath;
 use crate::prelude::*;
-use crate::printer::{
-    CommentRange, EmitContext, EmitResolver, SymbolAccessibilityResult, new_emit_context,
-};
+use crate::printer::{CommentRange, EmitContext, EmitResolver, SymbolAccessibilityResult};
 use crate::transformers::utilities::is_original_node_single_line;
 
 // Go: transformers/declarations/transform.go:23 ReferencedFilePair
@@ -120,20 +118,21 @@ pub struct DeclarationTransformer {
     pub(crate) in_class_expression_declaration: bool,
 }
 
-// Go: transformers/declarations/transform.go:103 NewDeclarationTransformer
+// Go: transformers/declarations/transform.go:99 NewDeclarationTransformer
 // TODO: Convert to transformers.TransformerFactory signature to allow more automatic composition with other transforms
-// PORT: a nil Go `context` is `None` (Go `NewTransformer` then makes a new
-// emit context). Go stores `reportExpandoFunctionErrors` as a closure on the
-// state; it is `SymbolTrackerSharedState::report_expando_function_errors`.
-// The Go visitor fields are built on demand (see the struct comment).
+// ts#64649: takes the emit resolver, and the emit context is the resolver's.
+// Go panics when the resolver or its context is nil; neither is nil here.
+// PORT: Go stores `reportExpandoFunctionErrors` as a closure on the state;
+// it is `SymbolTrackerSharedState::report_expando_function_errors`. The Go
+// visitor fields are built on demand (see the struct comment).
 pub fn new_declaration_transformer(
     host: Rc<dyn DeclarationEmitHost>,
-    context: Option<Rc<EmitContext>>,
+    resolver: Rc<dyn EmitResolver>,
     compiler_options: &'static CompilerOptions,
     declaration_file_path: &str,
     declaration_map_path: &str,
 ) -> DeclarationTransformer {
-    let resolver = host.get_emit_resolver();
+    let emit_context = resolver.emit_context().clone();
     let state = Rc::new(RefCell::new(SymbolTrackerSharedState {
         late_marked_statements: Vec::new(),
         diagnostics: Vec::new(),
@@ -150,8 +149,6 @@ pub fn new_declaration_transformer(
         state.clone(),
     ));
     // TODO: Use new host GetOutputPathsFor method instead of passing in entrypoint paths (which will also better support bundled emit)
-    // Go: transformers/transformer.go:14 Transformer.NewTransformer
-    let emit_context = context.unwrap_or_else(new_emit_context);
     DeclarationTransformer {
         emit_context,
         host,

@@ -384,7 +384,7 @@ impl DeclarationTransformer {
     pub(crate) fn ensure_type_params(&mut self, node: Node, params: NodeList) -> NodeList {
         let ec = self.emit_context.clone();
         if !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(node), ModifierFlags::PRIVATE)
             .is_empty()
         {
@@ -415,7 +415,6 @@ impl DeclarationTransformer {
             let nodes = self
                 .resolver
                 .create_type_parameters_of_signature_declaration(
-                    &ec,
                     node,
                     self.enclosing_declaration,
                     DECLARATION_EMIT_NODE_BUILDER_FLAGS,
@@ -441,7 +440,7 @@ impl DeclarationTransformer {
     pub(crate) fn update_param_list(&mut self, node: Node, params: NodeList) -> NodeList {
         let ec = self.emit_context.clone();
         if !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(node), ModifierFlags::PRIVATE)
             .is_empty()
             || params.nodes().is_empty()
@@ -502,11 +501,9 @@ impl DeclarationTransformer {
                 self.tracker.report_inference_fallback(node);
             }
             let ec = self.emit_context.clone();
-            return self.resolver.create_literal_const_value(
-                &ec,
-                ec.parse_node(node),
-                emit_tracker(self),
-            );
+            return self
+                .resolver
+                .create_literal_const_value(ec.parse_node(node), emit_tracker(self));
         }
         Node::NIL
     }

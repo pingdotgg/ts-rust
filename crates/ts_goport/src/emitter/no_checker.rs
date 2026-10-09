@@ -3,12 +3,18 @@
 //! `emitter::js_emit_needs_checker` sends a JS part there only when its
 //! transforms make no emit resolver call. Every method panics, so a call
 //! that the rule misses ends the run (exit 70). It can never give an output
-//! that differs from the checker thread's.
+//! that differs from the checker thread's. The one exception is
+//! `emit_context` (ts#64649): the script transforms read their emit context
+//! from the resolver (Go emitter.go:118), and that needs no checker.
 
 use crate::prelude::*;
 
-/// An emit resolver whose every method panics (see the file comment).
-pub struct NoCheckerEmitResolver;
+/// An emit resolver whose every method except `emit_context` panics (see
+/// the file comment).
+pub struct NoCheckerEmitResolver {
+    /// The emit context that the resolver was made for.
+    pub emit_context: Rc<EmitContext>,
+}
 
 /// The panic of every `NoCheckerEmitResolver` method.
 fn no_checker(method: &str) -> ! {
@@ -16,6 +22,10 @@ fn no_checker(method: &str) -> ! {
 }
 
 impl crate::printer::EmitResolver for NoCheckerEmitResolver {
+    fn emit_context(&self) -> &Rc<EmitContext> {
+        &self.emit_context
+    }
+
     fn get_referenced_export_container(&self, _node: Node, _prefix_locals: bool) -> Node {
         no_checker("get_referenced_export_container")
     }
@@ -194,7 +204,6 @@ impl crate::printer::EmitResolver for NoCheckerEmitResolver {
 
     fn create_type_of_declaration(
         &self,
-        _emit_context: &EmitContext,
         _declaration: Node,
         _enclosing_declaration: Node,
         _flags: NodeBuilderFlags,
@@ -206,7 +215,6 @@ impl crate::printer::EmitResolver for NoCheckerEmitResolver {
 
     fn create_return_type_of_signature_declaration(
         &self,
-        _emit_context: &EmitContext,
         _signature_declaration: Node,
         _enclosing_declaration: Node,
         _flags: NodeBuilderFlags,
@@ -218,7 +226,6 @@ impl crate::printer::EmitResolver for NoCheckerEmitResolver {
 
     fn create_type_parameters_of_signature_declaration(
         &self,
-        _emit_context: &EmitContext,
         _signature_declaration: Node,
         _enclosing_declaration: Node,
         _flags: NodeBuilderFlags,
@@ -228,18 +235,12 @@ impl crate::printer::EmitResolver for NoCheckerEmitResolver {
         no_checker("create_type_parameters_of_signature_declaration")
     }
 
-    fn create_literal_const_value(
-        &self,
-        _emit_context: &EmitContext,
-        _node: Node,
-        _tracker: EmitSymbolTracker,
-    ) -> Node {
+    fn create_literal_const_value(&self, _node: Node, _tracker: EmitSymbolTracker) -> Node {
         no_checker("create_literal_const_value")
     }
 
     fn create_type_of_expression(
         &self,
-        _emit_context: &EmitContext,
         _expression: Node,
         _enclosing_declaration: Node,
         _flags: NodeBuilderFlags,
@@ -251,7 +252,6 @@ impl crate::printer::EmitResolver for NoCheckerEmitResolver {
 
     fn create_late_bound_index_signatures(
         &self,
-        _emit_context: &EmitContext,
         _container: Node,
         _enclosing_declaration: Node,
         _flags: NodeBuilderFlags,
@@ -263,7 +263,6 @@ impl crate::printer::EmitResolver for NoCheckerEmitResolver {
 
     fn try_js_type_node_to_type_node(
         &self,
-        _emit_context: &EmitContext,
         _type_node: Node,
         _enclosing_declaration: Node,
         _flags: NodeBuilderFlags,

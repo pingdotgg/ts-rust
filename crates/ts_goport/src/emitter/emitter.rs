@@ -173,7 +173,7 @@ impl Emitter {
         // resolver (`host.NewEmitResolver`) here for both outputs.
         // PORT: the JS and d.ts parts of a file can run apart (the emit pool
         // and the twins, `program_emit`), so each part makes its own context
-        // (`get_emit_context`) and its own resolver for that context in
+        // (`new_emit_context`) and its own resolver for that context in
         // `transform_js_file` and `transform_declaration_file`. The script
         // transforms make no node builder request, so the d.ts part's
         // resolver caches its node builder for the whole d.ts emit, as Go's
@@ -191,13 +191,8 @@ impl Emitter {
     // #4712: takes the source file, and adds the supplemental references
     // transformer.
     // ts#64649: takes the emit resolver of this emit.
-    // PORT: the declaration transformer still reads its resolver from its
-    // host (`get_emit_resolver`), so it gets this host with `emit_resolver`
-    // (`EmitHost::with_emit_resolver`), and the context that the resolver
-    // was made for, so its node builder requests use the cached builder.
     fn get_declaration_transformers(
         &self,
-        emit_context: &Rc<EmitContext>,
         emit_resolver: Rc<dyn EmitResolver>,
         source_file: Node,
         declaration_file_path: &str,
@@ -205,11 +200,10 @@ impl Emitter {
     ) -> Vec<Box<dyn DeclarationTransformerLike>> {
         let force_dts_emit = self.emit_only == EmitOnly::BuilderSignature
             || self.force_emit && self.emit_only == EmitOnly::Dts;
-        let host = self.host.with_emit_resolver(emit_resolver);
         let mut transformers: Vec<Box<dyn DeclarationTransformerLike>> = Vec::with_capacity(2);
         transformers.push(Box::new(crate::declarations::new_declaration_transformer(
-            host.clone(),
-            Some(emit_context.clone()),
+            self.host.clone(),
+            emit_resolver,
             options(),
             declaration_file_path,
             declaration_map_path,
@@ -217,7 +211,7 @@ impl Emitter {
         // PORT: Go passes the source file, and the transformer reads its
         // `SupplementalSourceFiles()`. The Rust transformer takes that list.
         transformers.push(Box::new(new_supplemental_references_transformer(
-            host,
+            self.host.clone(),
             source_file_supplemental_source_files(source_file).to_vec(),
             declaration_file_path,
             force_dts_emit,
@@ -229,7 +223,6 @@ impl Emitter {
     // ts#64649: takes the emit resolver of this emit.
     fn run_script_transformers(
         &self,
-        emit_context: &Rc<EmitContext>,
         emit_resolver: Rc<dyn EmitResolver>,
         mut source_file: Node,
     ) -> Node {
@@ -241,7 +234,7 @@ impl Emitter {
                 false,
             )
         });
-        for mut transformer in get_script_transformers(emit_context, emit_resolver, source_file) {
+        for mut transformer in get_script_transformers(emit_resolver, source_file) {
             source_file = transformer.transform_source_file(source_file);
         }
         source_file
@@ -251,7 +244,6 @@ impl Emitter {
     // ts#64649: takes the emit resolver of this emit.
     fn run_declaration_transformers(
         &self,
-        emit_context: &Rc<EmitContext>,
         emit_resolver: Rc<dyn EmitResolver>,
         mut source_file: Node,
         declaration_file_path: &str,
@@ -267,7 +259,6 @@ impl Emitter {
         });
         let mut diags = Vec::new();
         for mut transformer in self.get_declaration_transformers(
-            emit_context,
             emit_resolver,
             source_file,
             declaration_file_path,
@@ -341,12 +332,12 @@ impl Emitter {
             )
         });
 
-        // Go `putEmitContext()` is the `reset` at the end of `print_js_file`.
-        let (emit_context, _) = get_emit_context();
-        // ts#64649 (emitter.go:51): the emit resolver of this context.
+        // ts#64649 (emitter.go:50, :51, :186): a new emit context (no pool) and
+        // the emit resolver of that context.
+        let emit_context = new_emit_context();
         let emit_resolver = self.host.new_emit_resolver(emit_context.clone());
 
-        let source_file = self.run_script_transformers(&emit_context, emit_resolver, source_file);
+        let source_file = self.run_script_transformers(emit_resolver, source_file);
         Some(JsPrint {
             source_file,
             emit_context,
@@ -383,7 +374,7 @@ impl Emitter {
                 // !!!
                 ..PrintHandlers::default()
             },
-            Some(emit_context.clone()),
+            Some(emit_context),
         );
 
         // PORT: not in Go. Size the output buffer once. JS output is close to
@@ -402,8 +393,6 @@ impl Emitter {
             options,
             should_emit_source_maps,
         );
-        // Go `putEmitContext()`.
-        emit_context.reset();
     }
 
     /// PORT: not in Go. The d.ts part of a split file (`emit_only` is
@@ -483,12 +472,12 @@ impl Emitter {
             )
         });
 
-        let (emit_context, put_emit_context) = get_emit_context();
-        // ts#64649 (emitter.go:51): the emit resolver of this context. It
-        // caches one node builder for the declaration transforms.
+        // ts#64649 (emitter.go:50, :51, :224): a new emit context (no pool) and
+        // the emit resolver of that context. The resolver caches one node
+        // builder for the declaration transforms.
+        let emit_context = new_emit_context();
         let emit_resolver = self.host.new_emit_resolver(emit_context.clone());
         let (source_file, diags) = self.run_declaration_transformers(
-            &emit_context,
             emit_resolver,
             source_file,
             declaration_file_path,
@@ -509,7 +498,6 @@ impl Emitter {
                 ))
         {
             self.emit_result.emit_skipped = true;
-            put_emit_context();
             return None;
         }
 
@@ -517,7 +505,6 @@ impl Emitter {
             !diags.is_empty() && !self.force_emit && self.emit_only != EmitOnly::BuilderSignature;
         if decl_blocked {
             self.emit_result.emit_skipped = true;
-            put_emit_context();
             return None;
         }
 
@@ -589,7 +576,7 @@ impl Emitter {
                 Some((Some(original_source.clone()), mapped))
             }));
         }
-        let mut printer = new_printer(printer_options, print_handlers, Some(emit_context.clone()));
+        let mut printer = new_printer(printer_options, print_handlers, Some(emit_context));
 
         let declaration_map_options = CompilerOptions {
             source_map: if emit_declaration_map {
@@ -618,8 +605,6 @@ impl Emitter {
             &declaration_map_options,
             should_emit_source_maps,
         );
-        // Go `putEmitContext()`.
-        emit_context.reset();
     }
 
     // Go: compiler/emitter.go:315 emitter.printSourceFile
@@ -1034,17 +1019,15 @@ fn may_have_enum_declaration(source_file: Node) -> bool {
 }
 
 // Go: compiler/emitter.go:114 getScriptTransformers
-// ts#64649: takes the emit resolver, and Go reads the emit context from it
-// (`emitResolver.EmitContext()`).
-// PORT: the printer `EmitResolver` trait has no `emit_context` yet (the emit
-// lane's ts#64649 part), and the pool's resolver has none, so the context
-// is a parameter. The caller made `emit_resolver` for it.
+// ts#64649: takes the emit resolver, and reads the emit context from it. Go
+// panics when the resolver or its context is nil; neither is nil here.
 pub fn get_script_transformers(
-    emit_context: &Rc<EmitContext>,
     emit_resolver: Rc<dyn EmitResolver>,
     source_file: Node,
 ) -> Vec<TransformerBox> {
     use crate::transformers::{estransforms, inliners, jsxtransforms, tstransforms};
+
+    let emit_context = emit_resolver.emit_context().clone();
 
     let mut tx: Vec<TransformerBox> = Vec::new();
     let options = options();
@@ -1062,7 +1045,7 @@ pub fn get_script_transformers(
     };
 
     let opts = TransformOptions {
-        context: emit_context.clone(),
+        context: emit_context,
         compiler_options: options,
         resolver: reference_resolver,
         emit_resolver,

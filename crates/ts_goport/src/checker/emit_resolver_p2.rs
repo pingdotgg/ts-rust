@@ -481,25 +481,25 @@ impl EmitResolver {
     // and requires giving it access to a lot of context it's otherwise not required to have, which also further complicates the API
     // and likely reduces performance. There's probably some refactoring that could be done here to simplify this.
 
-    // Go: checker/emitresolver.go:950 CreateReturnTypeOfSignatureDeclaration
+    // Go: checker/emitresolver.go:640 CreateReturnTypeOfSignatureDeclaration
     pub fn create_return_type_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Node {
-        let original = emit_context.parse_node(signature_declaration);
+        let original = self.emit_context().parse_node(signature_declaration);
         if original.is_nil() {
-            return emit_context
+            return self
+                .emit_context()
                 .factory
                 .new_keyword_type_node(SyntaxKind::AnyKeyword);
         }
 
         self.with_checker(|c| {
-            let request_node_builder = self.node_builder(c, emit_context);
+            let request_node_builder = self.node_builder(c);
             c.node_builder_serialize_return_type_for_signature(
                 &request_node_builder,
                 original,
@@ -511,23 +511,22 @@ impl EmitResolver {
         })
     }
 
-    // Go: checker/emitresolver.go:962 CreateTypeParametersOfSignatureDeclaration
+    // Go: checker/emitresolver.go:651 CreateTypeParametersOfSignatureDeclaration
     pub fn create_type_parameters_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Vec<Node> {
-        let original = emit_context.parse_node(signature_declaration);
+        let original = self.emit_context().parse_node(signature_declaration);
         if original.is_nil() {
             return Vec::new();
         }
 
         self.with_checker(|c| {
-            let request_node_builder = self.node_builder(c, emit_context);
+            let request_node_builder = self.node_builder(c);
             c.node_builder_serialize_type_parameters_for_signature(
                 &request_node_builder,
                 original,
@@ -539,25 +538,25 @@ impl EmitResolver {
         })
     }
 
-    // Go: checker/emitresolver.go:974 CreateTypeOfDeclaration
+    // Go: checker/emitresolver.go:662 CreateTypeOfDeclaration
     pub fn create_type_of_declaration(
         &self,
-        emit_context: &EmitContext,
         declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Node {
-        let original = emit_context.parse_node(declaration);
+        let original = self.emit_context().parse_node(declaration);
         if original.is_nil() {
-            return emit_context
+            return self
+                .emit_context()
                 .factory
                 .new_keyword_type_node(SyntaxKind::AnyKeyword);
         }
 
         self.with_checker(|c| {
-            let request_node_builder = self.node_builder(c, emit_context);
+            let request_node_builder = self.node_builder(c);
             // // Get type of the symbol if this is the valid symbol otherwise get type at location
             let symbol = c.get_symbol_of_declaration(declaration);
             c.node_builder_serialize_type_for_declaration(
@@ -572,14 +571,9 @@ impl EmitResolver {
         })
     }
 
-    // Go: checker/emitresolver.go:988 CreateLiteralConstValue
-    pub fn create_literal_const_value(
-        &self,
-        emit_context: &EmitContext,
-        node: Node,
-        tracker: EmitSymbolTracker,
-    ) -> Node {
-        let node = emit_context.parse_node(node);
+    // Go: checker/emitresolver.go:675 CreateLiteralConstValue
+    pub fn create_literal_const_value(&self, node: Node, tracker: EmitSymbolTracker) -> Node {
+        let node = self.emit_context().parse_node(node);
         let t = self.with_checker(|c| {
             let symbol = c.get_symbol_of_declaration(node);
             c.get_type_of_symbol(symbol)
@@ -593,7 +587,7 @@ impl EmitResolver {
             self.with_checker(|c| (c.ty(t).flags, c.ty(t).symbol, c.true_type, c.false_type));
         if t_flags.intersects(TypeFlags::ENUM_LIKE) {
             enum_result = self.with_checker(|c| {
-                let request_node_builder = self.node_builder(c, emit_context);
+                let request_node_builder = self.node_builder(c);
                 c.node_builder_symbol_to_expression(
                     &request_node_builder,
                     t_symbol,
@@ -607,11 +601,13 @@ impl EmitResolver {
             // What about regularTrueType/regularFalseType - since those aren't fresh, we never make initializers from them
             // TODO: handle those if this function is ever used for more than initializers in declaration emit
         } else if t == true_type {
-            enum_result = emit_context
+            enum_result = self
+                .emit_context()
                 .factory
                 .new_keyword_expression(SyntaxKind::TrueKeyword);
         } else if t == false_type {
-            enum_result = emit_context
+            enum_result = self
+                .emit_context()
                 .factory
                 .new_keyword_expression(SyntaxKind::FalseKeyword);
         }
@@ -622,7 +618,7 @@ impl EmitResolver {
             return Node::NIL; // non-literal type
         }
         let value = self.with_checker(|c| c.ty(t).as_literal_type().value.clone());
-        let factory = &emit_context.factory;
+        let factory = &self.emit_context().factory;
         match value {
             Some(LiteralValue::String(value)) => {
                 factory.new_string_literal(value, TokenFlags::NONE)
@@ -665,25 +661,25 @@ impl EmitResolver {
         }
     }
 
-    // Go: checker/emitresolver.go:1049 CreateTypeOfExpression
+    // Go: checker/emitresolver.go:735 CreateTypeOfExpression
     pub fn create_type_of_expression(
         &self,
-        emit_context: &EmitContext,
         expression: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Node {
-        let expression = emit_context.parse_node(expression);
+        let expression = self.emit_context().parse_node(expression);
         if expression.is_nil() {
-            return emit_context
+            return self
+                .emit_context()
                 .factory
                 .new_keyword_type_node(SyntaxKind::AnyKeyword);
         }
 
         self.with_checker(|c| {
-            let request_node_builder = self.node_builder(c, emit_context);
+            let request_node_builder = self.node_builder(c);
             c.node_builder_serialize_type_for_expression(
                 &request_node_builder,
                 expression,
@@ -695,17 +691,16 @@ impl EmitResolver {
         })
     }
 
-    // Go: checker/emitresolver.go:1061 CreateLateBoundIndexSignatures
+    // Go: checker/emitresolver.go:746 CreateLateBoundIndexSignatures
     pub fn create_late_bound_index_signatures(
         &self,
-        emit_context: &EmitContext,
         container: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Vec<Node> {
-        let container = emit_context.parse_node(container);
+        let container = self.emit_context().parse_node(container);
         self.with_checker(|c| {
             let sym = container.symbol();
             let sym_type = c.get_type_of_symbol(sym);
@@ -721,8 +716,8 @@ impl EmitResolver {
                     c.get_index_infos_of_index_symbol(instance_index_symbol, &sibling_symbols);
             }
 
-            let request_node_builder = self.node_builder(c, emit_context);
-            let factory = &emit_context.factory;
+            let request_node_builder = self.node_builder(c);
+            let factory = &self.emit_context().factory;
 
             let mut result: Vec<Node> = Vec::new();
             for (i, info_list) in [static_infos, instance_infos].into_iter().enumerate() {
@@ -1010,19 +1005,18 @@ impl EmitResolver {
         c.get_properties_of_type(t).to_vec()
     }
 
-    // Go: checker/emitresolver.go:1272 TryJSTypeNodeToTypeNode
+    // Go: checker/emitresolver.go:957 TryJSTypeNodeToTypeNode
     pub fn try_js_type_node_to_type_node(
         &self,
-        emit_context: &EmitContext,
         type_node: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
         internal_flags: InternalNodeBuilderFlags,
         tracker: EmitSymbolTracker,
     ) -> Node {
-        let type_node = emit_context.parse_node(type_node);
+        let type_node = self.emit_context().parse_node(type_node);
         self.with_checker(|c| {
-            let request_node_builder = self.node_builder(c, emit_context);
+            let request_node_builder = self.node_builder(c);
             c.node_builder_try_js_type_node_to_type_node(
                 &request_node_builder,
                 type_node,
