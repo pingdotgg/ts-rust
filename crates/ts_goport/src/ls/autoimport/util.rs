@@ -395,7 +395,7 @@ pub fn add_package_json_dependencies(
     });
 }
 
-// Go: ls/autoimport/util.go:253 getPackageRealpathFuncs
+// Go: ls/autoimport/util.go:252 getPackageRealpathFuncs
 // getPackageRealpathFuncs returns functions to transform between symlink and realpath for files within a package.
 // It calls FS.Realpath once per package directory and uses prefix substitution for files within that directory,
 // avoiding expensive realpath syscalls for each file. For files outside the package (e.g. re-exported
@@ -409,6 +409,11 @@ pub fn get_package_realpath_funcs(
 ) -> (Rc<dyn Fn(&str) -> String>, Rc<dyn Fn(&str) -> String>) {
     let real_package_dir = fs.realpath(package_dir);
     let is_symlinked = real_package_dir != package_dir;
+    // Go: replacePrefix (ts#64544, at 59f5b0233 util.go:256)
+    fn replace_prefix(file_name: &str, prefix: &str, replacement: &str) -> String {
+        let relative = file_name.strip_prefix(prefix).unwrap_or(file_name);
+        tspath::combine_paths(replacement, &[relative.trim_start_matches(['/', '\\'])])
+    }
     // Cache of package-directory-level symlink→realpath prefix mappings for
     // external packages encountered via re-exports. Keyed by the node_modules
     // package directory (e.g. "/app/node_modules/dep"), so all files under
@@ -423,31 +428,42 @@ pub fn get_package_realpath_funcs(
         Rc::new(move |file_name: &str| -> String {
             // Fast path: files within the package use prefix substitution.
             if is_symlinked {
-                if let Some(after) = file_name.strip_prefix(package_dir.as_str()) {
-                    return format!("{real_package_dir}{after}");
+                // ts#64544: only at a component boundary, so a sibling "pkg2"
+                // of "pkg" is not inside the package.
+                if let Some(relative) = file_name.strip_prefix(package_dir.as_str())
+                    && (relative.is_empty() || relative.starts_with(['/', '\\']))
+                {
+                    return replace_prefix(file_name, &package_dir, &real_package_dir);
                 }
             }
             // Files outside the package (e.g. re-exports into symlinked deps):
             // find the node_modules package directory, resolve it once, and cache.
-            let pkg_dir = module::parse_node_module_from_path(file_name, false /*isFolder*/);
-            if pkg_dir.is_empty() {
+            let mut file_package_dir = module::node_module_package_root_for_file(file_name);
+            if file_package_dir.is_empty() {
                 return file_name.to_string();
             }
-            let cached = dir_cache.borrow().get(&pkg_dir).cloned();
+            // The wrapped FS also calls Realpath while traversing directories.
+            // The two parses differ only when the path may be a package root,
+            // so establish its kind before using the package cache.
+            let directory_package = module::node_module_package_root_for_directory(file_name);
+            if directory_package != file_package_dir && fs.directory_exists(file_name) {
+                file_package_dir = directory_package;
+            }
+            let cached = dir_cache.borrow().get(&file_package_dir).cloned();
             if let Some(real_dir) = cached {
-                if real_dir == pkg_dir {
+                if real_dir == file_package_dir {
                     return file_name.to_string();
                 }
-                return format!("{real_dir}{}", &file_name[pkg_dir.len()..]);
+                return replace_prefix(file_name, &file_package_dir, &real_dir);
             }
-            let real_dir = fs.realpath(&pkg_dir);
+            let real_dir = fs.realpath(&file_package_dir);
             dir_cache
                 .borrow_mut()
-                .insert(pkg_dir.clone(), real_dir.clone());
-            if real_dir == pkg_dir {
+                .insert(file_package_dir.clone(), real_dir.clone());
+            if real_dir == file_package_dir {
                 return file_name.to_string();
             }
-            format!("{real_dir}{}", &file_name[pkg_dir.len()..])
+            replace_prefix(file_name, &file_package_dir, &real_dir)
         })
     };
     if !is_symlinked {
@@ -463,8 +479,8 @@ pub fn get_package_realpath_funcs(
     let to_symlink: Rc<dyn Fn(&str) -> String> = {
         let package_dir = package_dir.to_string();
         Rc::new(move |file_name: &str| -> String {
-            if let Some(after) = file_name.strip_prefix(real_package_dir.as_str()) {
-                return format!("{package_dir}{after}");
+            if file_name.starts_with(real_package_dir.as_str()) {
+                return replace_prefix(file_name, &real_package_dir, &package_dir);
             }
             file_name.to_string()
         })

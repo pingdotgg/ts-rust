@@ -62,7 +62,7 @@ fn text(s: &str) -> MapFile {
     MapFile::from(s)
 }
 
-// Go: util_test.go:100 TestGetPackageRealpathFuncs_FollowsNodeModulesSymlinks
+// Go: util_test.go:101 TestGetPackageRealpathFuncs_FollowsNodeModulesSymlinks
 #[test]
 fn get_package_realpath_funcs_follows_node_modules_symlinks() {
     let fs = vfstest::from_map(
@@ -72,9 +72,16 @@ fn get_package_realpath_funcs_follows_node_modules_symlinks() {
                 "/real/bin/pkg/index.d.ts",
                 text("export declare const a: number;"),
             ),
+            // ts#64544: util_test.go:116
+            ("/real/bin/pkg/node_modules/.package-lock.json", text("{}")),
             (
                 "/real/bin/pkg/node_modules/dep",
                 vfstest::symlink("/real/dep"),
+            ),
+            // ts#64544: util_test.go:118
+            (
+                "/real/bin/pkg/node_modules/@scope/dep",
+                vfstest::symlink("/real/scoped-dep"),
             ),
             (
                 "/real/dep/index.d.ts",
@@ -84,11 +91,24 @@ fn get_package_realpath_funcs_follows_node_modules_symlinks() {
                 "/real/dep/src/utils/helper.d.ts",
                 text("export declare const c: number;"),
             ),
+            // ts#64544: util_test.go:121
+            (
+                "/real/scoped-dep/index.d.ts",
+                text("export declare const d: number;"),
+            ),
         ],
         true,
     );
 
     let (to_realpath, _) = get_package_realpath_funcs(fs, "/symlink-bin/pkg");
+
+    // ts#64544: util_test.go:126
+    // Files directly within node_modules must not seed a cache entry that
+    // prevents a later package-root directory from following its symlink.
+    assert_eq!(
+        to_realpath("/real/bin/pkg/node_modules/.package-lock.json"),
+        "/real/bin/pkg/node_modules/.package-lock.json"
+    );
 
     // Files inside the package should be converted via string replacement (fast path).
     assert_eq!(
@@ -97,12 +117,41 @@ fn get_package_realpath_funcs_follows_node_modules_symlinks() {
         "package files should be converted via prefix replacement"
     );
 
+    // ts#64544: util_test.go:142
+    // A sibling whose name starts with the package name is not inside the package.
+    assert_eq!(
+        to_realpath("/symlink-bin/pkg2/index.d.ts"),
+        "/symlink-bin/pkg2/index.d.ts",
+        "sibling package paths must not use prefix replacement"
+    );
+
     // Files outside the package (e.g. node_modules symlinks) should be resolved via
     // fs.Realpath so the cache key is the canonical realpath, not the symlink path.
     assert_eq!(
         to_realpath("/real/bin/pkg/node_modules/dep/index.d.ts"),
         "/real/dep/index.d.ts",
         "node_modules symlinks must be followed so the same file gets a consistent cache key"
+    );
+
+    // ts#64544: util_test.go:159
+    // The module resolver also uses toRealpath while traversing directories.
+    assert_eq!(
+        to_realpath("/real/bin/pkg/node_modules/dep"),
+        "/real/dep",
+        "package-root directories should follow their node_modules symlink"
+    );
+
+    // ts#64544: util_test.go:167
+    // Walking the scope directory first must not seed a cache entry that
+    // prevents a nested scoped package from following its symlink.
+    assert_eq!(
+        to_realpath("/real/bin/pkg/node_modules/@scope"),
+        "/real/bin/pkg/node_modules/@scope"
+    );
+    assert_eq!(
+        to_realpath("/real/bin/pkg/node_modules/@scope/dep"),
+        "/real/scoped-dep",
+        "scoped package-root directories should follow their node_modules symlink"
     );
 
     // Files in subdirectories of an already-resolved external package should
@@ -114,7 +163,7 @@ fn get_package_realpath_funcs_follows_node_modules_symlinks() {
     );
 }
 
-// Go: util_test.go:155 TestGetPackageRealpathFuncs_DuplicateCacheKeys
+// Go: util_test.go:197 TestGetPackageRealpathFuncs_DuplicateCacheKeys
 #[test]
 fn get_package_realpath_funcs_duplicate_cache_keys() {
     let fs = vfstest::from_map(
@@ -170,7 +219,7 @@ fn get_package_realpath_funcs_duplicate_cache_keys() {
     );
 }
 
-// Go: util_test.go:195 TestGetPackageRealpathFuncs_NonSymlinkedPackageWithSymlinkedDeps
+// Go: util_test.go:237 TestGetPackageRealpathFuncs_NonSymlinkedPackageWithSymlinkedDeps
 #[test]
 fn get_package_realpath_funcs_non_symlinked_package_with_symlinked_deps() {
     let fs = vfstest::from_map(
