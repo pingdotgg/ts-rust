@@ -525,13 +525,20 @@ pub fn diagnostic_to_string_builder(
     };
     builder.push('\n');
     if diagnostic.file() != file {
-        builder.push_str(&ensure_path_is_non_module_name(
-            &get_relative_path_from_directory(
-                &get_directory_path(&source_file_info(file).path),
-                &source_file_info(diagnostic.file()).path,
-                &ComparePathsOptions::default(),
-            ),
-        ));
+        // ts#64159: the file names (not the path keys), compared without
+        // case; a file on another root keeps its absolute name
+        // (snapshot.go:411).
+        let diagnostic_file_name = source_file_file_name(diagnostic.file());
+        match relative_path_from_directory(
+            &get_directory_path(source_file_file_name(file)),
+            diagnostic_file_name,
+            false,
+        ) {
+            Some(relative_path) => {
+                builder.push_str(&ensure_path_is_non_module_name(&relative_path));
+            }
+            None => builder.push_str(diagnostic_file_name),
+        }
     }
     if diagnostic.file().is_some() {
         // PORT: Go writes byte offsets (see `go_text_range`).

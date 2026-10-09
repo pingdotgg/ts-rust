@@ -3,11 +3,16 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 use ts_goport::execute::tsc::Writer;
-use ts_goport::execute::watchmanager::{WatchManager, new_dir_watch_set, new_watch_manager};
+use ts_goport::execute::watchmanager::{
+    WatchBackend, WatchDirectoryRequest, WatchManager, new_dir_watch_set, new_watch_manager,
+};
 use ts_goport::frontend::tspath::ComparePathsOptions;
+use ts_goport::fswatch;
+use ts_goport::gostd::GoError;
 
 // Go: watchmanager_test.go:11 caseSensitiveOpts
 fn case_sensitive_opts() -> ComparePathsOptions {
@@ -188,7 +193,11 @@ fn test_dir_watch_set_dirs() {
 /// `NewWatchManager(io.Discard, func(dir string) bool { return existing[dir] })`).
 fn watch_manager_with_existing_dirs(existing: &'static [&'static str]) -> WatchManager {
     let discard: Writer = Rc::new(RefCell::new(std::io::sink()));
-    new_watch_manager(discard, Box::new(move |dir: &str| existing.contains(&dir)))
+    new_watch_manager(
+        discard,
+        Box::new(move |dir: &str| existing.contains(&dir)),
+        true,
+    )
 }
 
 /// Go `map[string]bool{...}` literal.
@@ -265,9 +274,97 @@ fn test_resolve_desired_dirs_ancestor_fallback() {
 #[test]
 fn test_resolve_desired_dirs_skips_non_disk_paths() {
     let discard: Writer = Rc::new(RefCell::new(std::io::sink()));
-    let wm = new_watch_manager(discard, Box::new(|_: &str| true));
+    let wm = new_watch_manager(discard, Box::new(|_: &str| true), true);
 
     let resolved = wm.resolve_desired_dirs(&dir_map([("bundled:///libs", false), ("/app", true)]));
 
     assert_eq!(resolved, dir_map([("/app", true)]));
+}
+
+// Go: watchmanager_test.go:204 TestResolveDesiredDirsDeduplicatesCaseInsensitiveAncestors (ts#64159)
+#[test]
+fn test_resolve_desired_dirs_deduplicates_case_insensitive_ancestors() {
+    let discard: Writer = Rc::new(RefCell::new(std::io::sink()));
+    let manager = new_watch_manager(
+        discard,
+        Box::new(|dir: &str| dir.eq_ignore_ascii_case("/home/repo/project/src")),
+        false,
+    );
+    let resolved = manager.resolve_desired_dirs(&dir_map([
+        ("/home/Repo/Project/Src/missing/a", false),
+        ("/home/repo/project/src/missing/b", true),
+    ]));
+
+    assert_eq!(resolved.len(), 1);
+    for (dir, recursive) in &resolved {
+        assert!(dir.eq_ignore_ascii_case("/home/repo/project/src"));
+        assert!(!recursive);
+    }
+}
+
+// Go: watchmanager_test.go:221 recordingWatchBackend
+#[derive(Default)]
+struct RecordingWatchBackend {
+    requests: RefCell<Vec<WatchDirectoryRequest>>,
+}
+
+/// Go `io.NopCloser(strings.NewReader(""))`.
+struct NopWatch;
+
+impl fswatch::Watch for NopWatch {
+    fn close(&self) -> Result<(), GoError> {
+        Ok(())
+    }
+    fn unexported(&self) {}
+}
+
+impl WatchBackend for RecordingWatchBackend {
+    fn watch_directory(
+        &self,
+        dir: &str,
+        fn_: fswatch::WatchCallback,
+        recursive: bool,
+        ignore: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
+    ) -> Result<Box<dyn fswatch::Watch>, GoError> {
+        let mut closers = self.watch_directories(vec![WatchDirectoryRequest {
+            dir: dir.to_string(),
+            callback: fn_,
+            recursive,
+            ignore,
+        }])?;
+        Ok(closers.remove(0))
+    }
+
+    // Go: watchmanager_test.go:225 recordingWatchBackend.WatchDirectories
+    fn watch_directories(
+        &self,
+        requests: Vec<WatchDirectoryRequest>,
+    ) -> Result<Vec<Box<dyn fswatch::Watch>>, GoError> {
+        let closers = requests
+            .iter()
+            .map(|_| Box::new(NopWatch) as Box<dyn fswatch::Watch>)
+            .collect();
+        self.requests.borrow_mut().extend(requests);
+        Ok(closers)
+    }
+}
+
+// Go: watchmanager_test.go:235 TestReconcileWatchesIgnoresCaseOnlySpellingChanges (ts#64159)
+#[test]
+fn test_reconcile_watches_ignores_case_only_spelling_changes() {
+    let discard: Writer = Rc::new(RefCell::new(std::io::sink()));
+    let mut manager = new_watch_manager(discard, Box::new(|_: &str| true), false);
+    let backend = Rc::new(RecordingWatchBackend::default());
+    manager.set_backend(backend.clone());
+
+    manager
+        .reconcile_watches(&dir_map([("/Repo", false)]))
+        .unwrap();
+    manager
+        .reconcile_watches(&dir_map([("/repo", false)]))
+        .unwrap();
+
+    let requests = backend.requests.borrow();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].dir, "/Repo");
 }

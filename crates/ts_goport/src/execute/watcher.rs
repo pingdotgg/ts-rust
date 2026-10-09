@@ -335,9 +335,11 @@ pub fn create_watcher(
 ) -> Watcher {
     // PORT: Go passes the method value `sys.FS().DirectoryExists`.
     let fs = sys.fs();
+    let use_case_sensitive_file_names = fs.use_case_sensitive_file_names();
     let mut wm = new_watch_manager(
         sys.writer(),
         Box::new(move |path: &str| fs.directory_exists(path)),
+        use_case_sensitive_file_names,
     );
     // Go: if t, ok := testing.(CommandLineTestingWithWatchBackend); ok { wm.SetBackend(t.WatchBackend()) }
     if let Some(backend) = test_watch_backend() {
@@ -728,7 +730,6 @@ impl Watcher {
     ) -> bool {
         let case_sensitive = self.sys.fs().use_case_sensitive_file_names();
         let cwd = self.sys.get_current_directory();
-        let opts = self.compare_paths_options();
         let content_mapper_watched_files = self.content_mapper_watched_paths(&cwd, case_sensitive);
         for event_path in changed_paths.keys() {
             let p = to_path(event_path, &cwd, case_sensitive);
@@ -748,7 +749,7 @@ impl Watcher {
                 return true;
             }
             if self.sys.fs().directory_exists(event_path)
-                && self.wm.borrow().is_path_under_watch(event_path, &opts)
+                && self.wm.borrow().is_path_under_watch(event_path)
             {
                 return true;
             }

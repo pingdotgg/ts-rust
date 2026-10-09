@@ -298,7 +298,13 @@ fn list_files(input: &EmitInput, emit_result: &EmitResult) {
         }
     }
     if options.explain_files.is_true() {
-        crate::program::explain_files(&mut *input.writer.borrow_mut(), &input.config_locale());
+        // ts#64159: the names are relative to the system's current directory
+        // (execute/tsc/emit.go:156).
+        crate::program::explain_files_relative_to(
+            &mut *input.writer.borrow_mut(),
+            &input.config_locale(),
+            &input.sys.get_current_directory(),
+        );
     } else if options.list_files.is_true() || options.list_files_only.is_true() {
         for file in source_files() {
             write_str(&input.writer, &format!("{}\n", source_file_file_name(file)));

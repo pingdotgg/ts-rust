@@ -1765,13 +1765,22 @@ impl BuildInfo {
                 compare_path_options.use_case_sensitive_file_names,
             )
         };
+        // ts#64159: the reader keeps the spelling of each root
+        // (buildInfo.go:612 rootFileNames, :615 toFileName).
+        let mut root_file_names: FxHashMap<Path, String> =
+            FxHashMap::with_capacity_and_hasher(file_count, Default::default());
+        let to_file_name = |file_name: &str| -> String {
+            get_normalized_absolute_path(file_name, build_info_directory)
+        };
 
         // Create map from resolvedRoot to Root
         for resolved in self.resolved_root.iter().flatten() {
             let resolved_root = self.file_name(resolved.resolved);
             let root = self.file_name(resolved.root);
             if !resolved_root.is_empty() && !root.is_empty() {
-                resolved_to_root.insert(to_path_fn(resolved_root), to_path_fn(root));
+                let root_path = to_path_fn(root);
+                resolved_to_root.insert(to_path_fn(resolved_root), root_path.clone());
+                root_file_names.insert(root_path, to_file_name(root));
             }
         }
 
@@ -1784,6 +1793,7 @@ impl BuildInfo {
                 root_to_resolved.insert(root_path.clone(), resolved_root_path.clone());
             } else {
                 root_to_resolved.insert(resolved_root_path.clone(), resolved_root_path.clone());
+                root_file_names.insert(resolved_root_path.clone(), to_file_name(resolved_root));
             }
             if let Some(file_info) = file_info {
                 resolved_root_file_infos.insert(resolved_root_path, file_info.clone());
@@ -1805,6 +1815,7 @@ impl BuildInfo {
 
         BuildInfoRootInfoReader {
             resolved_root_file_infos,
+            root_file_names,
             root_to_resolved,
         }
     }
@@ -1833,6 +1844,8 @@ fn get_normalized_paths(
 #[derive(Clone, Debug, Default)]
 pub struct BuildInfoRootInfoReader {
     pub resolved_root_file_infos: FxHashMap<Path, BuildInfoFileInfo>,
+    /// ts#64159 (Go `rootFileNames`): the file name of each root path.
+    pub root_file_names: FxHashMap<Path, String>,
     pub root_to_resolved: FxIndexMap<Path, Path>,
 }
 
@@ -1859,6 +1872,15 @@ impl BuildInfoRootInfoReader {
     // Go: incremental/buildInfo.go:594 Roots
     pub fn roots(&self) -> impl Iterator<Item = &Path> {
         self.root_to_resolved.keys()
+    }
+
+    // Go: incremental/buildInfo.go:690 RootFileName (ts#64159)
+    /// The file name of the root `path`, as the build info spells it.
+    #[must_use]
+    pub fn root_file_name(&self, path: &Path) -> &str {
+        self.root_file_names
+            .get(path)
+            .expect("root file name not found")
     }
 }
 
@@ -1947,6 +1969,46 @@ mod tests {
                 .map(|()| decoded);
             assert_eq!(got, go_order(data.as_bytes()), "{data}");
         }
+    }
+
+    // Go: incremental/buildinfo_path_test.go:10 TestBuildInfoPathJSONRoundTrip (ts#64159)
+    // PORT: Go `BuildInfoPath` is a `String` here.
+    #[test]
+    fn test_build_info_path_json_round_trip() {
+        let build_info = BuildInfo {
+            root: Some(vec![BuildInfoRoot {
+                non_incremental: "./src/root.ts".to_string(),
+                ..Default::default()
+            }]),
+            package_jsons: Some(vec!["./package.json".to_string()]),
+            missing_package_jsons: Some(vec!["../package.json".to_string()]),
+            file_names: Some(vec![
+                "./src/root.ts".to_string(),
+                "lib.es5.d.ts".to_string(),
+            ]),
+            latest_changed_dts_file: "./dist/root.d.ts".to_string(),
+            ..Default::default()
+        };
+
+        let data = json_marshal(&build_info, &[]).unwrap();
+        assert_eq!(
+            data,
+            r#"{"root":["./src/root.ts"],"packageJsons":["./package.json"],"missingPackageJsons":["../package.json"],"fileNames":["./src/root.ts","lib.es5.d.ts"],"latestChangedDtsFile":"./dist/root.d.ts"}"#
+        );
+
+        let mut round_tripped = BuildInfo::default();
+        json_unmarshal(data.as_bytes(), &mut round_tripped, &[]).unwrap();
+        assert_eq!(round_tripped.root, build_info.root);
+        assert_eq!(round_tripped.package_jsons, build_info.package_jsons);
+        assert_eq!(
+            round_tripped.missing_package_jsons,
+            build_info.missing_package_jsons
+        );
+        assert_eq!(round_tripped.file_names, build_info.file_names);
+        assert_eq!(
+            round_tripped.latest_changed_dts_file,
+            build_info.latest_changed_dts_file
+        );
     }
 
     #[test]

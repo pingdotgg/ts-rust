@@ -203,7 +203,7 @@ impl Orchestrator {
                 let bi = task.build_info_entry.clone();
                 if let Some(bi) = bi {
                     if let Some(build_info) = &bi.build_info {
-                        let build_info_dir = get_directory_path(bi.path.as_str());
+                        let build_info_dir = get_directory_path(&bi.file_name);
                         for file_name in build_info.file_names.iter().flatten() {
                             let fp = self.to_path(
                                 &self.resolve_build_info_file_name(file_name, &build_info_dir),
@@ -260,11 +260,10 @@ impl Orchestrator {
         }
 
         if !*needs_update {
-            let opts = &self.compare_paths_options;
             let fs = CompilerHost::fs(&*self.host);
             for event_path in changed_paths.keys() {
                 if fs.directory_exists(event_path)
-                    && self.wm.borrow().is_path_under_watch(event_path, opts)
+                    && self.wm.borrow().is_path_under_watch(event_path)
                 {
                     self.range_task(&mut |_path: &Path, task: &Rc<RefCell<BuildTask>>| {
                         task.borrow_mut().reset_status();
@@ -383,7 +382,7 @@ impl Orchestrator {
             let bi = task.build_info_entry.clone();
             if let Some(bi) = bi {
                 if let Some(build_info) = &bi.build_info {
-                    let build_info_dir = get_directory_path(bi.path.as_str());
+                    let build_info_dir = get_directory_path(&bi.file_name);
                     let roots: FxHashSet<Path> = resolved
                         .file_names()
                         .iter()

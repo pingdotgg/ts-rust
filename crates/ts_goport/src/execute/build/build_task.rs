@@ -78,6 +78,9 @@ pub struct UpstreamTask {
 #[derive(Clone)]
 pub struct BuildInfoEntry {
     pub build_info: Option<Rc<BuildInfo>>,
+    /// ts#64159 (Go `fileName`, buildtask.go:39): the absolute build info
+    /// file name. `path` is its path key.
+    pub file_name: String,
     pub path: Path,
     pub m_time: Option<SystemTime>,
     pub dts_time: Option<Option<SystemTime>>,
@@ -1587,10 +1590,12 @@ impl BuildTask {
             let root: &Path = &root;
             if !seen_roots.contains(root) {
                 // File was root file when project was built but its not any more
+                // ts#64159: the message names the root as the build info
+                // spells it, not its path key (buildtask.go:470).
                 return UpToDateStatus::with_data(
                     UpToDateStatusType::OutOfDateRoots,
                     UpToDateStatusData::InputOutputName(InputOutputName {
-                        input: root.as_str().to_string(),
+                        input: reader.root_file_name(root).to_string(),
                         output: build_info_path,
                     }),
                 );
@@ -2146,6 +2151,10 @@ impl BuildTask {
         }
         self.build_info_entry = Some(BuildInfoEntry {
             build_info: build_info.clone(),
+            file_name: get_normalized_absolute_path(
+                build_info_file_name,
+                &orchestrator.compare_paths_options().current_directory,
+            ),
             path,
             m_time,
             dts_time: None,
@@ -2176,6 +2185,10 @@ impl BuildTask {
         };
         self.build_info_entry = Some(BuildInfoEntry {
             build_info,
+            file_name: get_normalized_absolute_path(
+                build_info_file_name,
+                &orchestrator.compare_paths_options().current_directory,
+            ),
             path: orchestrator.to_path(build_info_file_name),
             m_time: Some(m_time),
             dts_time,
@@ -2217,9 +2230,11 @@ impl BuildTask {
         let Some(build_info) = entry.build_info.as_ref() else {
             crate::core::go_nil_dereference()
         };
+        // ts#64159: the name resolves against the build info file's
+        // directory, not its path key's (buildtask.go:899).
         let dts_time = orchestrator.get_m_time(&get_normalized_absolute_path(
             &build_info.latest_changed_dts_file,
-            &get_directory_path(entry.path.as_str()),
+            &get_directory_path(&entry.file_name),
         ));
         entry.dts_time = Some(dts_time);
         dts_time

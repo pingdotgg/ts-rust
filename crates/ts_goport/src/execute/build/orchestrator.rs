@@ -1437,9 +1437,11 @@ impl BuildInfoPrefetch {
 pub fn new_orchestrator(opts: Options) -> Orchestrator {
     // PORT: Go passes the method value `opts.Sys.FS().DirectoryExists`.
     let fs = opts.sys.fs();
+    let use_case_sensitive_file_names = fs.use_case_sensitive_file_names();
     let wm = new_watch_manager(
         opts.sys.writer(),
         Box::new(move |path: &str| fs.directory_exists(path)),
+        use_case_sensitive_file_names,
     );
     // Go: the `comparePathsOptions` field of the `Orchestrator` literal.
     let compare_paths_options = ComparePathsOptions {

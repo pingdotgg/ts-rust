@@ -30,6 +30,9 @@ use crate::gostd::errors;
 /// (`Arc::ptr_eq`). Go sets `closer` after the watch starts, so it sits in a
 /// `Mutex` (`None` is a nil closer).
 pub struct WatchedDir {
+    /// ts#64159: the spelling of the watched directory (the map key is its
+    /// path key).
+    pub dir: String,
     pub closer: Mutex<Option<Box<dyn fswatch::Watch>>>,
     pub recursive: bool,
 }
@@ -43,10 +46,18 @@ impl WatchedDir {
     }
 }
 
-// Go: watchmanager.go:20 dirWatchUpdate
+// Go: watchmanager.go:21 dirWatchUpdate
+// ts#64159: `key` is the path key of `dir`.
+#[derive(Clone)]
 struct DirWatchUpdate {
+    key: String,
     dir: String,
     recursive: bool,
+}
+
+/// Go `CaseSensitivity.PathKey` of a rooted, normalized directory.
+fn path_key(dir: &str, use_case_sensitive_file_names: bool) -> String {
+    tspath::to_path(dir, "", use_case_sensitive_file_names).0
 }
 
 // Go: watchmanager.go:33 WatchManager
@@ -69,6 +80,8 @@ pub struct WatchManager {
     /// comment).
     pub warn_writer: Writer,
     pub dir_exists: Box<dyn Fn(&str) -> bool>,
+    /// Go `caseSensitivity` (ts#64159): `true` is case-sensitive.
+    pub use_case_sensitive_file_names: bool,
 
     /// PORT: the fields the callback thread shares (see the file comment).
     pub shared: Arc<WatchManagerShared>,
@@ -80,7 +93,8 @@ pub struct WatchManagerShared {
     /// Go `mu`. Go locks it in `Lock` and unlocks it in `Unlock`.
     pub mu: GoMutex,
     /// Go `watchedDirs` (guarded by `mu` in Go; the `Mutex` is Rust's
-    /// data lock, taken only for short reads and writes).
+    /// data lock, taken only for short reads and writes). ts#64159: keyed
+    /// by the path key of the directory.
     pub watched_dirs: Mutex<FxHashMap<String, Arc<WatchedDir>>>,
     /// Go `doCycleCh` (see `DoCycleCh`).
     pub do_cycle_ch: DoCycleCh,
@@ -181,16 +195,19 @@ impl DoCycleCh {
     }
 }
 
-// Go: watchmanager.go:50 NewWatchManager
+// Go: watchmanager.go:53 NewWatchManager
+// ts#64159: the watches are keyed by path key under `use_case_sensitive_file_names`.
 pub fn new_watch_manager(
     warn_writer: Writer,
     dir_exists: Box<dyn Fn(&str) -> bool>,
+    use_case_sensitive_file_names: bool,
 ) -> WatchManager {
     WatchManager {
         backend: None,
         debug_log: None,
         warn_writer,
         dir_exists,
+        use_case_sensitive_file_names,
         shared: Arc::new(WatchManagerShared {
             mu: GoMutex::default(),
             watched_dirs: Mutex::new(FxHashMap::default()),
@@ -278,24 +295,24 @@ impl WatchManager {
     // Go: watchmanager.go:180 WatchManager.createDirWatchRequest
     fn create_dir_watch_request(
         &self,
-        dir: &str,
+        update: &DirWatchUpdate,
         entry: &Arc<WatchedDir>,
     ) -> WatchDirectoryRequest {
         let shared = self.shared.clone();
         let identity = entry.clone();
-        let cb_dir = dir.to_string();
+        let key = update.key.clone();
         // PORT: the callback runs on the fswatch debouncer thread; it logs
         // to stdout when DebugLog was set when the watch was made (Go reads
         // DebugLog at event time; callers set it before the first watch).
         let debug_log = self.debug_log.is_some();
         WatchDirectoryRequest {
-            dir: dir.to_string(),
+            dir: update.dir.clone(),
             recursive: entry.recursive,
             ignore: Some(Arc::new(should_ignore_watch_path)),
             callback: Arc::new(move |events: Vec<fswatch::Event>, err: Option<GoError>| {
                 if let Some(e) = &err {
                     if errors::is(e, &fswatch::ERR_WATCH_TERMINATED) {
-                        shared.handle_watch_terminated(debug_log, &cb_dir, &identity);
+                        shared.handle_watch_terminated(debug_log, &key, &identity);
                         return;
                     }
                 }
@@ -309,7 +326,8 @@ impl WatchManager {
         &self,
         desired_dirs: &FxHashMap<String, bool>,
     ) -> FxHashMap<String, bool> {
-        let mut resolved: FxHashMap<String, bool> =
+        // ts#64159: ancestors that differ only in case are one watch.
+        let mut resolved_by_path: FxHashMap<String, DirWatchUpdate> =
             FxHashMap::with_capacity_and_hasher(desired_dirs.len(), Default::default());
         for (dir, recursive) in desired_dirs {
             // ts#64366: Only directories on disk can be watched. The embedded libs (bundled:///libs) exist in the FS but not on disk.
@@ -351,11 +369,24 @@ impl WatchManager {
                     );
                 }
             }
-            if let Some(existing) = resolved.get(&watch_dir).copied() {
-                resolved.insert(watch_dir, existing || watch_recursive);
+            let key = path_key(&watch_dir, self.use_case_sensitive_file_names);
+            if let Some(existing) = resolved_by_path.get_mut(&key) {
+                existing.recursive = existing.recursive || watch_recursive;
             } else {
-                resolved.insert(watch_dir, watch_recursive);
+                resolved_by_path.insert(
+                    key.clone(),
+                    DirWatchUpdate {
+                        key,
+                        dir: watch_dir,
+                        recursive: watch_recursive,
+                    },
+                );
             }
+        }
+        let mut resolved: FxHashMap<String, bool> =
+            FxHashMap::with_capacity_and_hasher(resolved_by_path.len(), Default::default());
+        for watch in resolved_by_path.into_values() {
+            resolved.insert(watch.dir, watch.recursive);
         }
         resolved
     }
@@ -369,56 +400,71 @@ impl WatchManager {
             return Ok(());
         }
 
+        // ts#64159: the watches are keyed by path key, so a change of case
+        // only does not close and open a watch.
+        let mut desired_by_path: FxHashMap<String, DirWatchUpdate> =
+            FxHashMap::with_capacity_and_hasher(desired_dirs.len(), Default::default());
+        for (dir, recursive) in desired_dirs {
+            let key = path_key(dir, self.use_case_sensitive_file_names);
+            if let Some(existing) = desired_by_path.get_mut(&key) {
+                existing.recursive = existing.recursive || *recursive;
+            } else {
+                desired_by_path.insert(
+                    key.clone(),
+                    DirWatchUpdate {
+                        key,
+                        dir: dir.clone(),
+                        recursive: *recursive,
+                    },
+                );
+            }
+        }
+
         let mut additions: Vec<DirWatchUpdate> = Vec::new();
         let mut changes: Vec<DirWatchUpdate> = Vec::new();
 
         let watched_dirs: FxHashMap<String, Arc<WatchedDir>> =
             self.shared.watched_dirs.lock().unwrap().clone();
-        let mut on_added = |dir: &String, recursive: &bool| {
-            let recursive = *recursive;
-            if let Some(debug_log) = &self.debug_log {
-                write_str(
-                    debug_log,
-                    &format!("[watch] watching directory {dir} (recursive={recursive})\n"),
-                );
-            }
-            additions.push(DirWatchUpdate {
-                dir: dir.clone(),
-                recursive,
-            });
-        };
-        let mut on_removed = |dir: &String, wd: &Arc<WatchedDir>| {
-            if let Some(debug_log) = &self.debug_log {
-                write_str(
-                    debug_log,
-                    &format!("[watch] closing stale dir watch: {dir}\n"),
-                );
-            }
-            wd.close_closer();
-            self.shared.watched_dirs.lock().unwrap().remove(dir);
-        };
-        let mut on_changed = |dir: &String, wd: &Arc<WatchedDir>, recursive: &bool| {
-            let recursive = *recursive;
+        let mut on_added = |_key: &String, desired: &DirWatchUpdate| {
             if let Some(debug_log) = &self.debug_log {
                 write_str(
                     debug_log,
                     &format!(
-                        "[watch] recreating dir watch {dir} (recursive {}→{recursive})\n",
-                        wd.recursive
+                        "[watch] watching directory {} (recursive={})\n",
+                        desired.dir, desired.recursive
+                    ),
+                );
+            }
+            additions.push(desired.clone());
+        };
+        let mut on_removed = |key: &String, wd: &Arc<WatchedDir>| {
+            if let Some(debug_log) = &self.debug_log {
+                write_str(
+                    debug_log,
+                    &format!("[watch] closing stale dir watch: {}\n", wd.dir),
+                );
+            }
+            wd.close_closer();
+            self.shared.watched_dirs.lock().unwrap().remove(key);
+        };
+        let mut on_changed = |key: &String, wd: &Arc<WatchedDir>, desired: &DirWatchUpdate| {
+            if let Some(debug_log) = &self.debug_log {
+                write_str(
+                    debug_log,
+                    &format!(
+                        "[watch] recreating dir watch {} (recursive {}→{})\n",
+                        wd.dir, wd.recursive, desired.recursive
                     ),
                 );
             }
             wd.close_closer();
-            self.shared.watched_dirs.lock().unwrap().remove(dir);
-            changes.push(DirWatchUpdate {
-                dir: dir.clone(),
-                recursive,
-            });
+            self.shared.watched_dirs.lock().unwrap().remove(key);
+            changes.push(desired.clone());
         };
-        core_ls_ext::diff_maps_func::<String, Arc<WatchedDir>, bool>(
+        core_ls_ext::diff_maps_func::<String, Arc<WatchedDir>, DirWatchUpdate>(
             &watched_dirs,
-            desired_dirs,
-            |wd: &Arc<WatchedDir>, recursive: &bool| wd.recursive == *recursive,
+            &desired_by_path,
+            |wd: &Arc<WatchedDir>, desired: &DirWatchUpdate| wd.recursive == desired.recursive,
             Some(&mut on_added),
             Some(&mut on_removed),
             Some(&mut on_changed),
@@ -436,10 +482,11 @@ impl WatchManager {
         let mut entries: Vec<Arc<WatchedDir>> = Vec::with_capacity(updates.len());
         for update in &updates {
             let entry = Arc::new(WatchedDir {
+                dir: update.dir.clone(),
                 closer: Mutex::new(None),
                 recursive: update.recursive,
             });
-            requests.push(self.create_dir_watch_request(&update.dir, &entry));
+            requests.push(self.create_dir_watch_request(update, &entry));
             entries.push(entry);
         }
         let backend = self.backend.as_ref().expect("watchmanager: backend is set");
@@ -456,7 +503,7 @@ impl WatchManager {
                 }
                 let mut watched_dirs = self.shared.watched_dirs.lock().unwrap();
                 for (update, entry) in updates.into_iter().zip(entries) {
-                    watched_dirs.insert(update.dir, entry);
+                    watched_dirs.insert(update.key, entry);
                 }
                 return Ok(());
             }
@@ -477,11 +524,19 @@ impl WatchManager {
         Err(err)
     }
 
-    // Go: watchmanager.go:345 WatchManager.IsPathUnderWatch
-    pub fn is_path_under_watch(&self, path: &str, opts: &tspath::ComparePathsOptions) -> bool {
+    // Go: watchmanager.go:373 WatchManager.IsPathUnderWatch
+    // ts#64159: Go `CaseSensitivity.ContainsPath` on the watched spelling,
+    // under the manager's case sensitivity.
+    pub fn is_path_under_watch(&self, path: &str) -> bool {
         let watched_dirs = self.shared.watched_dirs.lock().unwrap();
-        for dir in watched_dirs.keys() {
-            if tspath::contains_path(dir, path, opts) {
+        for watch in watched_dirs.values() {
+            if tspath::relative_path_within_directory(
+                &watch.dir,
+                path,
+                self.use_case_sensitive_file_names,
+            )
+            .is_some()
+            {
                 return true;
             }
         }
@@ -576,18 +631,19 @@ impl WatchManagerShared {
 
     // Go: watchmanager.go:147 WatchManager.handleWatchTerminated
     // PORT: runs on the fswatch callback thread (see onWatchEvents).
-    pub fn handle_watch_terminated(&self, debug_log: bool, dir: &str, identity: &Arc<WatchedDir>) {
+    // ts#64159: `key` is the path key of the watch.
+    pub fn handle_watch_terminated(&self, debug_log: bool, key: &str, identity: &Arc<WatchedDir>) {
         if debug_log {
-            write_stdout(&format!("[watch] watch terminated: {dir}\n"));
+            write_stdout(&format!("[watch] watch terminated: {}\n", identity.dir));
         }
         let mut stale_closer: Option<Arc<WatchedDir>> = None;
         self.mu.lock();
         {
             let mut watched_dirs = self.watched_dirs.lock().unwrap();
-            if let Some(wd) = watched_dirs.get(dir) {
+            if let Some(wd) = watched_dirs.get(key) {
                 if Arc::ptr_eq(wd, identity) {
                     stale_closer = Some(wd.clone());
-                    watched_dirs.remove(dir);
+                    watched_dirs.remove(key);
                 }
             }
         }
@@ -626,9 +682,10 @@ pub fn new_dir_watch_set(opts: tspath::ComparePathsOptions) -> DirWatchSet {
 }
 
 impl DirWatchSet {
-    // Go: watchmanager.go:309 DirWatchSet.canonical
+    // Go: watchmanager.go:309 DirWatchSet.canonical (at 673a5f17d713;
+    // ts#64159 uses CaseSensitivity.PathKey, watchmanager.go:339 in Set)
     fn canonical(&self, dir: &str) -> String {
-        tspath::get_canonical_file_name(dir, self.opts.use_case_sensitive_file_names)
+        path_key(dir, self.opts.use_case_sensitive_file_names)
     }
 
     // Go: watchmanager.go:313 DirWatchSet.Set (ts#64210)
