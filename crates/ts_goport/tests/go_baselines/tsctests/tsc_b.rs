@@ -2137,6 +2137,36 @@ fn tsc_project_references_inputs() -> Vec<TscInput> {
             command_line_args: argv(&["--p", "project"]),
             ..Default::default()
         },
+        // ts#64544 (tsc_test.go:4401)
+        TscInput {
+            sub_scenario: "incremental nested triple-slash reference to composite project source"
+                .to_string(),
+            files: files! {
+                "/home/src/workspaces/solution/utils/index.ts" => "interface ReferencedType {}",
+                "/home/src/workspaces/solution/utils/index.d.ts" => "interface ReferencedType {}",
+                "/home/src/workspaces/solution/utils/tsconfig.json" => dedent(r#"
+				{
+					"compilerOptions": {
+						"composite": true
+					}
+				}"#),
+                "/home/src/workspaces/solution/project/src/index.ts" => "/// <reference path=\"../../utils/index.ts\" />\nlet value: ReferencedType;",
+                "/home/src/workspaces/solution/project/tsconfig.json" => dedent(r#"
+				{
+					"compilerOptions": {
+						"disableSourceOfProjectReferenceRedirect": true,
+						"incremental": true
+					},
+					"files": ["src/index.ts"],
+					"references": [
+						{ "path": "../utils" }
+					]
+				}"#),
+            },
+            cwd: "/home/src/workspaces/solution".to_string(),
+            command_line_args: argv(&["--p", "project"]),
+            ..Default::default()
+        },
         TscInput {
             sub_scenario: "when project reference is not built".to_string(),
             files: files! {

@@ -870,7 +870,64 @@ fn content_mapper_build_watch_symlinked_manifest_change() {
     );
 }
 
-// Go: contentmapper_watch_test.go:411 TestContentMapperBuildWatchSymlinkedManifestDelete (ts#63936)
+// Go: contentmapper_watch_test.go:411 TestContentMapperWatchManifestChangeIgnoresCase (ts#64544)
+#[test]
+fn content_mapper_watch_manifest_change_ignores_case() {
+    run_test_in_child(
+        "tsctests::contentmapper_watch::content_mapper_watch_manifest_change_ignores_case",
+        || {
+            const MANIFEST_TARGET: &str = "/home/src/workspaces/Mapper/package.json";
+            const MANIFEST_EVENT: &str = "/home/src/workspaces/mapper/package.json";
+            let input = TscInput {
+                ignore_case: true,
+                files: file_map([
+                    (
+                        "/home/src/workspaces/project/tsconfig.json",
+                        r#"{
+				"contentMappers": [{ "package": "mapper", "extensions": [".vue"] }]
+			}"#
+                        .into(),
+                    ),
+                    (
+                        "/home/src/workspaces/project/app.vue",
+                        "export const app = 1;".into(),
+                    ),
+                    (
+                        "/home/src/workspaces/project/node_modules/mapper",
+                        symlink("/home/src/workspaces/Mapper"),
+                    ),
+                    (
+                        MANIFEST_TARGET,
+                        contentmappertest::package_json(contentmappertest::VERBATIM_MAPPER).into(),
+                    ),
+                ]),
+                ..Default::default()
+            };
+            let (test_sys, sys) =
+                new_recording_system(&input, contentmappertest::new_spawner(), None);
+            let (ctx, cancel) = context::with_cancel(&context::background());
+
+            let result = command_line_with(&ctx, &sys, &["--watch", "--runExternalCode"]);
+            assert_eq!(sys.spawner.spawns(), 1);
+            assert_eq!(sys.spawner.closes(), 0);
+
+            let updated_manifest = contentmappertest::package_json(
+                contentmappertest::VERBATIM_MAPPER,
+            )
+            .replacen(r#""version": "1.0.0""#, r#""version": "2.0.0""#, 1);
+            test_sys.write_file_no_error(MANIFEST_EVENT, &updated_manifest);
+            send_updates(&test_sys, &[MANIFEST_EVENT]);
+            let mut w = result.watcher.expect("result.Watcher");
+            w.do_cycle();
+
+            assert_eq!(sys.spawner.spawns(), 2);
+            assert_eq!(sys.spawner.closes(), 1);
+            cancel();
+        },
+    );
+}
+
+// Go: contentmapper_watch_test.go:447 TestContentMapperBuildWatchSymlinkedManifestDelete (ts#63936)
 #[test]
 fn content_mapper_build_watch_symlinked_manifest_delete() {
     run_test_in_child(

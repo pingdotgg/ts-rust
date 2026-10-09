@@ -1228,18 +1228,31 @@ impl Watcher {
 
     // Go: execute/watcher.go:621 (*Watcher).contentMapperManifestChanged
     // PORT: Go looks up the map by key; the order does not matter.
+    // ts#64544: the event paths and the manifest compare by path key, so a
+    // manifest event with other casing counts on a case-insensitive file
+    // system.
     fn content_mapper_manifest_changed(
         &self,
         changed_paths: &FxHashMap<String, fswatch::EventKind>,
     ) -> bool {
+        let compare_paths_options = self.compare_paths_options();
+        let to_key = |path: &str| {
+            to_path(
+                path,
+                &compare_paths_options.current_directory,
+                compare_paths_options.use_case_sensitive_file_names,
+            )
+        };
+        let mut changed_path_keys: Option<FxHashSet<Path>> = None;
         for mapper in self.config.content_mappers() {
             if mapper.package_directory.is_empty() || !mapper.contribution_id.is_empty() {
                 continue;
             }
+            let changed_path_keys = changed_path_keys
+                .get_or_insert_with(|| changed_paths.keys().map(|path| to_key(path)).collect());
             // ts#63936: `package_directory` is already a real path.
-            if changed_paths
-                .contains_key(&combine_paths(&mapper.package_directory, &["package.json"]))
-            {
+            let manifest_path = combine_paths(&mapper.package_directory, &["package.json"]);
+            if changed_path_keys.contains(&to_key(&manifest_path)) {
                 return true;
             }
         }
