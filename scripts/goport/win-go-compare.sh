@@ -6,12 +6,12 @@
 # usage: win-go-compare.sh <tsc.exe> <go tsc.exe> <dir>
 #
 # The scenarios are the Windows path forms that a Linux run does not reach: backslash and absolute
-# arguments, a lower-case drive letter, CRLF sources, a junction node_modules (as pnpm and npm
-# workspaces make), a path over 260 characters, a non-ASCII file name, -b --verbose, emit with
-# source maps, --pretty and --pretty false errors, --showConfig and --init. Each side runs in a new
-# copy of the scenario tree at the same path, from the same exe path (<dir>/bin/tsc.exe, with the
-# lib files when they are next to the given exe), so the paths in the output are equal. The clock
-# in the -b --verbose output is masked.
+# arguments, a lower-case drive letter, a \\?\ path, CRLF sources, a junction node_modules (as pnpm
+# and npm workspaces make), a path over 260 characters, a non-ASCII file name, -b --verbose, emit
+# with source maps, --pretty and --pretty false errors, --showConfig and --init. Each side runs in a
+# new copy of the scenario tree at the same path, from the same exe path (<dir>/bin/tsc.exe, with
+# the lib files when they are next to the given exe), so the paths in the output are equal. The
+# clock in the -b --verbose output is masked.
 set -euo pipefail
 [[ $# == 3 ]] || { sed -n '2,15p' "$0" >&2; exit 2; }
 command -v cygpath > /dev/null || { echo "error: Windows (Git Bash) only" >&2; exit 2; }
@@ -60,12 +60,13 @@ scenarios() {
   printf 'import { a } from "../a";\nexport const b: string = a;\n' > "$work/build/b/index.ts"
 
   # long: a project dir whose files have paths over 260 characters.
-  long=$work/long
+  long=long
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do long+=/segment-$i-abcdefghijklmnop; done
-  mkdir -p "$long"
-  printf '{ "compilerOptions": { "outDir": "out", "declaration": true } }\n' > "$long/tsconfig.json"
-  printf 'export const x: number = 1;\nexport const y: string = x;\n' > "$long/index.ts"
-  echo "$long" > "$dir/long-path"
+  mkdir -p "$work/$long"
+  printf '{ "compilerOptions": { "outDir": "out", "declaration": true } }\n' > "$work/$long/tsconfig.json"
+  printf 'export const x: number = 1;\nexport const y: string = x;\n' > "$work/$long/index.ts"
+  # The path under $work, with backslashes.
+  echo "${long//\//\\}" > "$dir/long-path"
 
   mkdir -p "$work/init"
 }
@@ -89,13 +90,15 @@ side() {
   scenarios
   local errs_win long_win
   errs_win=$(cygpath -w "$work/errs/tsconfig.json")
-  long_win=$(cygpath -w "$(cat "$dir/long-path")")
+  # cygpath -w gives a long path the \\?\ prefix; this one is a plain C:\... path.
+  long_win="$(cygpath -w "$work")\\$(cat "$dir/long-path")"
   run version "$work" --version
   run errs "$work" -p errs --pretty false
   run errs-pretty "$work" -p errs --pretty
   run errs-backslash "$work" -p 'errs\tsconfig.json' --pretty false
   run errs-absolute "$work/emit" -p "$errs_win" --pretty false
   run errs-lower-drive "$work/emit" -p "${errs_win,}" --pretty false
+  run errs-verbatim "$work/emit" -p "\\\\?\\$errs_win" --pretty false
   run errs-file-args "$work" --noEmit --pretty false "$(cygpath -w "$work/errs/lf.ts")" 'errs\crlf.ts'
   run list-files "$work" --listFilesOnly --lib es5 "${errs_win%tsconfig.json}lf.ts"
   run show-config "$work" -p 'errs\tsconfig.json' --showConfig
