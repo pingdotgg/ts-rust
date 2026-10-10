@@ -551,16 +551,18 @@ fn end_read_loop(tsgo: &mut Tsgo, end: &str) {
 }
 
 /// Starts a held request: a project with a second project p2 whose
-/// tsconfig.json is a FIFO, a build orchestrator, a build (id 7) and a
-/// cleanBuild (id 8) that waits for its removeFile of a.js, then
-/// createSnapshot of p2 (id 3), which runs nested in that wait and reads
-/// the FIFO. Returns tsgo, the project, the removeFile id and the FIFO.
+/// tsconfig.json is a FIFO, a build orchestrator, module resolver 1, a
+/// build (id 7) and a cleanBuild (id 8) that waits for its removeFile of
+/// a.js, then createSnapshot of p2 (id 3), which runs nested in that wait
+/// and reads the FIFO. Returns tsgo, the project, the removeFile id and the
+/// FIFO.
 fn held_clean_build(prefix: &str, what: &str) -> (Tsgo, TempDir, String, std::fs::File) {
     let dir = project(prefix);
     dir.write("p2/src/c.ts", "export const c: number = 3;\n");
     let config = dir.fifo("p2/tsconfig.json");
     let mut tsgo = api_async(&dir, &["--callbacks", "removeFile"]);
     let orchestrator = tsgo.build_orchestrator(&dir.0);
+    tsgo.module_resolver();
     tsgo.send_json(&build(7, "build", orchestrator));
     tsgo.expect_answer(7, r#""result""#, what);
     tsgo.send_json(&build(8, "cleanBuild", orchestrator));
@@ -830,6 +832,84 @@ fn api_async_held_request_keeps_its_reply_at_the_end() {
             closed
         };
         tsgo.expect_answer(3, nested, &what);
+    }
+}
+
+/// The answer of resolveModuleName (id 6) when its callback request went
+/// out before the end of the read loop and the end was EOF or a read
+/// error with no signal: Go's `closePendingCalls` closed its channel
+/// before `cancelHandlers` cancelled the request's context, so the error
+/// is `ipc: connection closed` (with the read error), not
+/// `context canceled`. Checks 1 resolveMod request too.
+fn expect_resolver_closed(tsgo: &Tsgo, end: &str, what: &str) {
+    let failed = r#""message":"resolveModuleName callback failed: ipc: connection closed"#;
+    let answer = tsgo.expect_answer(6, failed, what);
+    let rest = if end == "bad" {
+        r"\njsontext: "
+    } else {
+        r#"""#
+    };
+    assert!(
+        answer.contains(&format!("{failed}{rest}")),
+        "{what}: {answer}"
+    );
+    assert_eq!(
+        tsgo.callbacks("resolveMod"),
+        1,
+        "{what}: {:?}",
+        tsgo.messages()
+    );
+}
+
+/// resolveModuleName sent with a request that reads a FIFO, in one write,
+/// then EOF with no signal: the port runs it after that request. Go ran it
+/// at once, so its callback request went out before the end.
+#[test]
+fn api_async_resolver_queued_behind_a_blocked_request() {
+    let what = "--api --async, resolveModuleName queued behind a FIFO request, EOF";
+    let dir = project("queuedresolve");
+    dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+    let config = dir.fifo("p2/tsconfig.json");
+    let mut tsgo = api_async(&dir, &[]);
+    let resolver = tsgo.module_resolver();
+    let mut both = frame(&create_snapshot(3, &dir.0.join("p2")));
+    both.extend(frame(&resolve_module_name(6, resolver, &dir.0)));
+    tsgo.send(&both);
+    let mut writer = open_fifo_writer(&config);
+    tsgo.expect_alive(what);
+    tsgo.close_stdin();
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    writer.write_all(FIFO_TEXT).unwrap();
+    drop(writer);
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(3, r#""result""#, what);
+    expect_resolver_closed(&tsgo, "eof", what);
+}
+
+/// resolveModuleName read while a held request waits (during the hold),
+/// then EOF or a read error with no signal: the port runs it after the
+/// nested request, with the time that it waited as its lag (Go clock). Go
+/// ran it at once, so its callback request went out before the end.
+#[test]
+fn api_async_resolver_read_during_a_hold() {
+    for end in ["eof", "bad"] {
+        let what = format!("--api --async, cleanBuild held, resolveModuleName read, {end}");
+        let (mut tsgo, dir, _call, mut writer) = held_clean_build("holdresolve", &what);
+        tsgo.send_json(&resolve_module_name(6, 1, &dir.0));
+        tsgo.expect_alive(&what);
+        end_read_loop(&mut tsgo, end);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        writer.write_all(FIFO_TEXT).unwrap();
+        drop(writer);
+        if end == "bad" {
+            tsgo.expect_end_with_stderr(start, &what, 1, "jsontext: unexpected EOF");
+        } else {
+            tsgo.expect_end(start, &what, 0, "");
+        }
+        tsgo.expect_answer(8, r#""result""#, &what);
+        expect_resolver_closed(&tsgo, end, &what);
     }
 }
 
