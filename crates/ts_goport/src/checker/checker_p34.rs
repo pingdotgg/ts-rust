@@ -542,9 +542,34 @@ impl Checker {
         {
             return false;
         }
+        // PERF: a resolved type reads its members below; the rest is out of
+        // line (with the switch on, the Go body of #64475).
+        if !self
+            .ty(t)
+            .object_flags
+            .intersects(ObjectFlags::MEMBERS_RESOLVED)
+        {
+            return self.is_function_object_type_of_unresolved(t);
+        }
+        self.is_function_object_type_of_resolved(t)
+    }
+
+    /// `is_function_object_type` of a type whose members are not resolved.
+    #[inline(never)]
+    fn is_function_object_type_of_unresolved(&mut self, t: TypeId) -> bool {
+        if self.lazy_members {
+            return self.is_function_object_type_lazy(t);
+        }
+        self.resolve_structured_type_members(t);
+        self.is_function_object_type_of_resolved(t)
+    }
+
+    /// `is_function_object_type` of a resolved type.
+    #[inline]
+    fn is_function_object_type_of_resolved(&mut self, t: TypeId) -> bool {
         // We do a quick check for a "bind" property before performing the more expensive subtype
         // check. This gives us a quicker out in the common case where an object type is not a function.
-        let resolved = self.resolve_structured_type_members(t);
+        let resolved = self.ty(t).as_structured_type();
         let has_signatures = !resolved.signatures().is_empty();
         let members = resolved.members;
         if has_signatures {

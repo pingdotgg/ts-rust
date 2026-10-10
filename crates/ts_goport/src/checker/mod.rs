@@ -53,6 +53,7 @@ pub mod inference_p2;
 pub mod jsdoc;
 pub mod jsx_p1;
 pub mod jsx_p2;
+pub mod lazy_members;
 pub mod links;
 pub mod mapper;
 pub mod nameresolver;
