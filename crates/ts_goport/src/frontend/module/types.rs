@@ -44,6 +44,14 @@ pub trait Resolver {
         resolution_mode: ResolutionMode,
         redirected_reference: Option<&dyn ModuleResolvedProjectReference>,
     ) -> (Rc<ResolvedTypeReferenceDirective>, Vec<DiagAndArgs>);
+    // Go: module/types.go:38 Resolver.GetResolutionData (ts#64519)
+    fn get_resolution_data(&self) -> Rc<ResolutionData>;
+
+    // Go: module/types.go:38 GetPackageScopeForPath, :39 PackageJsonCacheEntries
+    // and :40 ResolvePackageDirectory (at 673a5f17d713; ts#64519 removes them
+    // from the interface, module/types.go:38 GetResolutionData)
+    // PORT: kept until the program takes Go N' `Program.newResolver`
+    // (program.go:191): the program still asks its loader's resolver.
     fn get_package_scope_for_path(&self, directory: &str) -> Option<Rc<InfoCacheEntry>>;
     fn package_json_cache_entries(
         &self,
@@ -131,6 +139,10 @@ impl Resolver for DefaultResolver {
         )
     }
 
+    fn get_resolution_data(&self) -> Rc<ResolutionData> {
+        DefaultResolver::get_resolution_data(self)
+    }
+
     fn get_package_scope_for_path(&self, directory: &str) -> Option<Rc<InfoCacheEntry>> {
         DefaultResolver::get_package_scope_for_path(self, directory)
     }
@@ -160,6 +172,13 @@ impl Resolver for DefaultResolver {
 
     fn release_caches(&self) {
         self.caches.release();
+        // A package.json cache that another resolver or a program shares
+        // stays.
+        if Rc::strong_count(&self.resolution_data) == 1
+            && Rc::strong_count(&self.package_json_info_cache) == 1
+        {
+            self.package_json_info_cache.clear();
+        }
     }
 
     fn as_default_resolver(&self) -> Option<&DefaultResolver> {

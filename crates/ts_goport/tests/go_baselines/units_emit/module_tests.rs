@@ -113,6 +113,112 @@ fn test_resolve_module_name_trailing_slash() {
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
+// Go: module/resolver_test.go:83 TestResolutionDataCaches (ts#64519)
+/// A resolver that `ResolutionData::new_resolver` makes starts with empty
+/// resolution caches. A cloned `ResolutionData` shares the package.json
+/// entries that the original had, and the later entries of each stay apart.
+#[test]
+fn test_resolution_data_caches() {
+    let package = [
+        (
+            "/src/node_modules/pkg/package.json",
+            r#"{"name":"pkg","types":"index.d.ts"}"#,
+        ),
+        (
+            "/src/node_modules/pkg/index.d.ts",
+            "export const value: number;",
+        ),
+    ];
+    let old_host: Rc<dyn ResolutionHost> = Rc::new(ResolutionHostStub {
+        fs: vfstest::from_map(package, true),
+        cwd: "/".to_string(),
+    });
+    let new_host: Rc<dyn ResolutionHost> = Rc::new(ResolutionHostStub {
+        fs: vfstest::from_map(
+            package.into_iter().chain([
+                ("/new/package.json", r#"{"name":"new"}"#),
+                ("/missing-first/package.json", r#"{"name":"missing-first"}"#),
+            ]),
+            true,
+        ),
+        cwd: "/".to_string(),
+    });
+    let resolver = new_resolver(ResolverOptions {
+        host: Some(old_host.clone()),
+        compiler_options: Some(Rc::new(CompilerOptions {
+            module: ModuleKind::NODE_NEXT,
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    let (resolved, _, err) =
+        resolver.resolve_module_name("pkg", "/src/index.ts", ModuleKind::COMMON_JS, None);
+    assert!(err.is_none());
+    assert!(resolved.is_resolved());
+    let (cached, _, err) =
+        resolver.resolve_module_name("pkg", "/src/index.ts", ModuleKind::COMMON_JS, None);
+    assert!(err.is_none());
+    assert!(Arc::ptr_eq(&cached, &resolved));
+
+    let _ = resolver.resolve_type_reference_directive(
+        "missing",
+        "/src/index.ts",
+        ModuleKind::COMMON_JS,
+        None,
+    );
+    let mut paths = IndexMap::new();
+    paths.insert("alias/*".to_string(), Some(vec!["./*".to_string()]));
+    resolver.get_parsed_patterns_for_paths(&Rc::new(CompilerOptions {
+        paths: Some(paths),
+        ..Default::default()
+    }));
+    let sizes = |resolver: &DefaultResolver| {
+        (
+            resolver.caches.module_resolution_cache.cache.borrow().len(),
+            resolver
+                .caches
+                .type_ref_directive_resolution_cache
+                .cache
+                .borrow()
+                .len(),
+            resolver
+                .caches
+                .parsed_patterns_for_paths
+                .cache
+                .borrow()
+                .len(),
+        )
+    };
+    assert_eq!(sizes(&resolver), (1, 1, 1));
+
+    let data = resolver.get_resolution_data();
+    let rebound = data.new_resolver(old_host);
+    assert_eq!(sizes(&rebound), (0, 0, 0));
+
+    let clone = Rc::new(data.as_ref().clone()).new_resolver(new_host);
+    assert_eq!(sizes(&clone), (0, 0, 0));
+    let scope = |resolver: &DefaultResolver, directory: &str| {
+        resolver.get_package_scope_for_path(directory)
+    };
+    let exists = |resolver: &DefaultResolver, directory: &str| {
+        scope(resolver, directory).is_some_and(|entry| entry.exists())
+    };
+    let package_scope = scope(&clone, "/src/node_modules/pkg").expect("package scope");
+    assert!(Rc::ptr_eq(
+        &package_scope,
+        &scope(&resolver, "/src/node_modules/pkg").expect("package scope"),
+    ));
+    assert!(exists(&clone, "/new"));
+    assert!(!exists(&resolver, "/new"));
+    assert!(!exists(&resolver, "/missing-first"));
+    assert!(exists(&clone, "/missing-first"));
+}
+
+// Go: module/resolver_test.go:42 TestResolverSharedData (ts#64519)
+// Not ported: it checks by reflection that the Go `ResolutionData` holds no
+// function, interface or channel. The Rust `ResolutionData` fields are plain
+// data and an `Rc<InfoCache>`; it has no host field.
+
 /// The cwd of the dynamic resolver tests (ts#64544).
 const DYNAMIC_ROOT: &str = "^/~ts-uri~/custom/ts-nul-authority/";
 

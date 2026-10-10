@@ -169,7 +169,14 @@ impl module::Resolver for CallbackModuleResolver {
         )
     }
 
+    // Go: api/module_resolution.go:134 callbackModuleResolver.GetResolutionData (ts#64519)
+    fn get_resolution_data(&self) -> Rc<module::ResolutionData> {
+        self.fallback_resolver.get_resolution_data()
+    }
+
     // Go: api/module_resolution.go callbackModuleResolver.GetPackageScopeForPath
+    // (at 673a5f17d713; removed by ts#64519)
+    // PORT: kept with `module::Resolver::get_package_scope_for_path`.
     fn get_package_scope_for_path(
         &self,
         directory: &str,

@@ -1298,7 +1298,7 @@ os_child_test! {
             .expect("the default resolver");
         for name in [&broken, &not_installed] {
             assert!(
-                resolver.caches.package_json_info_cache.get(name).is_none(),
+                resolver.package_json_info_cache.get(name).is_none(),
                 "the loader looked up {name} itself"
             );
         }

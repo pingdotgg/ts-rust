@@ -157,7 +157,7 @@ impl TypeRefDirectiveResolutionCache {
 // map), and the entry holds the options `Rc` that owns it.
 #[derive(Default)]
 pub struct ParsedPatternsCache {
-    cache: RefCell<FxHashMap<usize, (Rc<CompilerOptions>, Rc<ParsedPatterns>)>>,
+    pub cache: RefCell<FxHashMap<usize, (Rc<CompilerOptions>, Rc<ParsedPatterns>)>>,
 }
 
 impl ParsedPatternsCache {
@@ -189,13 +189,92 @@ impl ParsedPatternsCache {
     }
 }
 
-// Go: module/cache.go:62 caches (at 673a5f17d713; removed by ts#64519, not ported yet)
+// Go: module/cache.go:63 ResolutionData (ts#64519)
+/// The part of a resolver that a program keeps and that later resolvers
+/// share (`new_resolver`): the options and the package.json cache. It holds
+/// no host and no resolution caches.
 // PORT: Go `*packagejson.InfoCache` is shared between resolvers
 // (`ResolverOptions.PackageJsonCache`), so it is `Rc<InfoCache>`. `InfoCache`
-// has interior mutability, like the Go `SyncMap`.
-pub struct Caches {
-    pub package_json_info_cache: Rc<InfoCache>,
+// has interior mutability, like the Go `SyncMap`. Go shares the
+// `*ResolutionData`; here it is `Rc<ResolutionData>`.
+pub struct ResolutionData {
+    pub compiler_options: Rc<CompilerOptions>,
+    pub typings_location: String,
+    pub project_name: String,
+    // tsgo#4712: the content mapper extensions.
+    pub extra_extensions: Vec<String>,
 
+    pub package_json_info_cache: Rc<InfoCache>,
+}
+
+// Go: module/cache.go:72 newResolutionData (ts#64519)
+// PORT: Go keeps a nil `CompilerOptions` and panics at its first use; this
+// panics now (as `new_resolver` did).
+pub(crate) fn new_resolution_data(opts: &ResolverOptions) -> ResolutionData {
+    let host = opts.host.as_ref().expect("module.NewResolver: nil Host");
+    ResolutionData {
+        compiler_options: opts
+            .compiler_options
+            .clone()
+            .expect("module.NewResolver: nil CompilerOptions"),
+        typings_location: opts.typings_location.clone(),
+        project_name: opts.project_name.clone(),
+        extra_extensions: opts.extra_extensions.clone(),
+        package_json_info_cache: opts.package_json_cache.clone().unwrap_or_else(|| {
+            Rc::new(new_info_cache(
+                host.get_current_directory(),
+                host.fs().use_case_sensitive_file_names(),
+            ))
+        }),
+    }
+}
+
+// Go: module/cache.go:86 (*ResolutionData).Clone (ts#64519)
+/// The same data with a copy of the package.json cache table
+/// (`InfoCache::clone`).
+impl Clone for ResolutionData {
+    fn clone(&self) -> Self {
+        ResolutionData {
+            compiler_options: self.compiler_options.clone(),
+            typings_location: self.typings_location.clone(),
+            project_name: self.project_name.clone(),
+            extra_extensions: self.extra_extensions.clone(),
+            package_json_info_cache: Rc::new(self.package_json_info_cache.as_ref().clone()),
+        }
+    }
+}
+
+impl ResolutionData {
+    // Go: module/cache.go:97 (*ResolutionData).PackageJsonCacheEntries (ts#64519)
+    // PORT: the loader's resolver also lists the package.json lookups of the
+    // parse worker answers that it took
+    // (`DefaultResolver::package_json_cache_entries`). They are in its
+    // `Caches`, not here.
+    pub fn package_json_cache_entries(
+        &self,
+        mut f: impl FnMut(&Path, PackageJsonCacheEntry<'_>) -> bool,
+    ) {
+        self.package_json_info_cache.range(|key, entry| {
+            f(
+                key,
+                PackageJsonCacheEntry {
+                    package_directory: &entry.package_directory,
+                    directory_exists: entry.directory_exists,
+                    exists: entry.exists(),
+                },
+            )
+        });
+    }
+}
+
+// Go: module/resolver.go:335 DefaultResolver (the caches; ts#64519 moves
+// them there from module/cache.go:62 caches at 673a5f17d713)
+// PORT: the Go fields `moduleResolutionCache`, `typeRefDirectiveResolutionCache`
+// and `parsedPatternsForPaths` of `DefaultResolver`, with the Rust-only
+// caches of the parallel load. Each resolver has its own; a resolver that
+// `ResolutionData::new_resolver` makes starts empty.
+#[derive(Default)]
+pub struct Caches {
     pub module_resolution_cache: ModuleResolutionCache,
     pub type_ref_directive_resolution_cache: TypeRefDirectiveResolutionCache,
 
@@ -575,28 +654,8 @@ pub struct AheadStats {
 }
 
 impl Caches {
-    // PORT: Go zero `caches` with only `packageJsonInfoCache` set
-    // (`NewResolver` with a shared `PackageJsonCache`).
-    #[must_use]
-    pub fn with_package_json_info_cache(package_json_info_cache: Rc<InfoCache>) -> Caches {
-        Caches {
-            package_json_info_cache,
-            module_resolution_cache: ModuleResolutionCache::default(),
-            type_ref_directive_resolution_cache: TypeRefDirectiveResolutionCache::default(),
-            parsed_patterns_for_paths: ParsedPatternsCache::default(),
-            shared: None,
-            package_json_log: RefCell::new(Vec::new()),
-            worker_package_jsons: RefCell::new(Vec::new()),
-            worker_package_json_reads: None,
-            worker_lookups: RefCell::new(Vec::new()),
-            ahead: RefCell::new(None),
-        }
-    }
-
-    /// Drops the cached resolutions and package.json entries when no
-    /// program uses this resolver any more
-    /// (`NewProgram::release_resolver_caches`). A package.json cache that
-    /// another resolver shares stays.
+    /// Drops the cached resolutions when no program uses this resolver any
+    /// more (`DefaultResolver::release_caches`).
     // PORT: not in Go. Go's GC frees the resolver with its last program.
     pub fn release(&self) {
         let modules = std::mem::take(&mut *self.module_resolution_cache.cache.borrow_mut());
@@ -613,9 +672,6 @@ impl Caches {
             worker_package_jsons,
             worker_lookups,
         )));
-        if Rc::strong_count(&self.package_json_info_cache) == 1 {
-            self.package_json_info_cache.clear();
-        }
     }
 }
 
@@ -1604,6 +1660,18 @@ impl Caches {
         }
     }
 
+    /// Keeps the file system lookups of a worker answer that the loader's
+    /// resolver took (`worker_lookups`).
+    pub fn note_worker_lookups(&self, lookups: &Option<Arc<[StatLookup]>>) {
+        if let Some(lookups) = lookups.as_ref().filter(|lookups| !lookups.is_empty()) {
+            self.worker_lookups.borrow_mut().push(lookups.clone());
+        }
+    }
+}
+
+// PORT: the loader's resolver; the package.json cache is in its
+// `ResolutionData` (ts#64519).
+impl DefaultResolver {
     /// The loader's resolver: keeps the read of each lookup of
     /// `package_jsons` that has one, the lookups of the package scope walk
     /// of a file's metadata that a parse worker made, in its package.json
@@ -1628,28 +1696,10 @@ impl Caches {
             read.adopt(&self.package_json_info_cache);
         }
     }
-
-    /// Keeps the file system lookups of a worker answer that the loader's
-    /// resolver took (`worker_lookups`).
-    pub fn note_worker_lookups(&self, lookups: &Option<Arc<[StatLookup]>>) {
-        if let Some(lookups) = lookups.as_ref().filter(|lookups| !lookups.is_empty()) {
-            self.worker_lookups.borrow_mut().push(lookups.clone());
-        }
-    }
 }
 
-// Go: module/cache.go:74 newCaches (at 673a5f17d713; removed by ts#64519, not ported yet)
-#[must_use]
-pub fn new_caches(
-    current_directory: &str,
-    use_case_sensitive_file_names: bool,
-    _options: &CompilerOptions,
-) -> Caches {
-    Caches::with_package_json_info_cache(Rc::new(new_info_cache(
-        current_directory,
-        use_case_sensitive_file_names,
-    )))
-}
+// Go: module/cache.go:74 newCaches (at 673a5f17d713; removed by ts#64519,
+// which makes it newResolutionData, module/cache.go:72 `new_resolution_data`)
 
 // Go: module/cache.go:101 getRedirectConfigName
 #[must_use]
@@ -1814,7 +1864,7 @@ mod tests {
         resolve(&loader, &dir, NAMES);
         // Every answer came from a worker, so the loader made no lookup.
         let mut own = 0;
-        loader.caches.package_json_info_cache.range(|_, _| {
+        loader.package_json_info_cache.range(|_, _| {
             own += 1;
             true
         });
@@ -1872,7 +1922,7 @@ mod tests {
         // The loader's own read of b comes before the adoption.
         assert_eq!(name("b").as_deref(), Some("b-loader"));
         std::fs::remove_dir_all(&root).unwrap();
-        loader.caches.adopt_worker_package_jsons(&[
+        loader.adopt_worker_package_jsons(&[
             lookup(first),
             lookup(second),
             lookup(Arc::new(read("b", "b-worker"))),

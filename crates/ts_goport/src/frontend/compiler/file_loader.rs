@@ -459,7 +459,7 @@ pub fn process_all_program_files(
             .as_ref()
             .and_then(|resolver| resolver.as_default_resolver())
     {
-        shared.end_package_json_reads(&resolver.caches.package_json_info_cache);
+        shared.end_package_json_reads(&resolver.package_json_info_cache);
     }
 
     // PORT: Go ts#64519 keeps the loader and the host in a
@@ -1917,7 +1917,7 @@ impl FileLoader {
             .as_ref()
             .and_then(|resolver| resolver.as_default_resolver())
         {
-            resolver.caches.adopt_worker_package_jsons(package_jsons);
+            resolver.adopt_worker_package_jsons(package_jsons);
         }
     }
 
@@ -3345,7 +3345,7 @@ export const a: T | Dep | number = x + (h as never);
             .as_ref()
             .and_then(|resolver| resolver.as_default_resolver())
             .expect("the default resolver");
-        let cache = &resolver.caches.package_json_info_cache;
+        let cache = &resolver.package_json_info_cache;
         assert!(adopted > 0, "no worker package.json taken");
         // A lookup of the load asked for the entry (a read that no lookup
         // asks for stays a pending read, which `contains_key` does not see).
@@ -3510,7 +3510,7 @@ export const a: T | Dep | number = x + (h as never);
                 .as_ref()
                 .and_then(|resolver| resolver.as_default_resolver())
                 .expect("the default resolver");
-            let cache = &resolver.caches.package_json_info_cache;
+            let cache = &resolver.package_json_info_cache;
             let package_json = format!("{cwd}/node_modules/lib/package.json");
             // The loader took the answer for "lib" and did not read the file.
             let loader_read = cache.contains_key(&cache.key(&package_json));
@@ -4114,6 +4114,9 @@ export const a: T | Dep | number = x + (h as never);
                 resolution_mode,
                 redirected_reference,
             )
+        }
+        fn get_resolution_data(&self) -> Rc<ResolutionData> {
+            self.0.get_resolution_data()
         }
         fn get_package_scope_for_path(&self, directory: &str) -> Option<Rc<InfoCacheEntry>> {
             self.0.get_package_scope_for_path(directory)

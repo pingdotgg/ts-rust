@@ -243,7 +243,7 @@ pub(super) fn update_program_version(
     // PORT: Go watch gives `UpdateProgram` a host whose cache no longer has
     // the changed file. A new cached host over the OS file system reads it
     // again.
-    let host_cwd = old_np.get_current_directory();
+    let host_cwd = old_np.host().get_current_directory();
     // #4712: no content mapper project (see `load_config`).
     let host = new_cached_fs_compiler_host(
         &host_cwd,
@@ -343,7 +343,14 @@ pub(super) fn new_program_version(
     // first load. `build_program` makes the new version current for its
     // state.
     let _scope = crate::core::enter_program(None);
-    build_program(np, Entry::Version, np.get_current_directory(), previous)
+    // The path keys of the frontend program are made against the host's
+    // current directory, as the loader made them (`NewProgram::to_path`).
+    build_program(
+        np,
+        Entry::Version,
+        np.host().get_current_directory(),
+        previous,
+    )
 }
 
 thread_local! {
@@ -1449,7 +1456,8 @@ impl GoSharedState {
             .collect();
         Self {
             has_emit_blocking_diagnostics,
-            current_directory: p.get_current_directory(),
+            // The directory of the program's path keys (`NewProgram::to_path`).
+            current_directory: p.host().get_current_directory(),
             use_case_sensitive_file_names: p.use_case_sensitive_file_names(),
             // #4712
             content_mapper_extensions: p.command_line().content_mapper_extensions(),
