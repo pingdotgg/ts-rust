@@ -1,6 +1,6 @@
 # Classic TypeScript language-service compatibility
 
-Status: Approved. Implementation pending. The current WebAssembly editor API does not satisfy this contract.
+Status: Approved. Private runtime implementation started. The current WebAssembly editor API does not satisfy this contract.
 
 ## Required calling code
 
@@ -69,6 +69,7 @@ fallback. None meets this contract.
 - [x] Read authoritative factory, host and language-service declarations.
 - [x] Prove the current declarations fail factory and service assignability.
 - [x] Compare direct Rust bindings and native-session transport designs.
+- [x] Implement a private synchronous channel and snapshot/version host bridge.
 - [ ] Prove synchronous loading, host callbacks, reentrancy and adequate stack in Node and browsers.
 - [ ] Bind versions, snapshots, options, cancellation, registry sharing and custom host callbacks.
 - [ ] Preserve program/source-file/node/symbol/type/signature identity and lifetime across edits.
@@ -80,6 +81,30 @@ The first runtime gate creates a service from an ordinary host, returns a diagno
 source-file object, observes a version change, and checks the retained old source file. Include
 the existing deep-expression fixture on this synchronous path. The first result-record gate
 checks quick info and completions with documentation, tags, modifiers and symbol identities.
+
+## First runtime unit
+
+`service-channel.js` calls the existing WASM ABI synchronously after a compiled module is available.
+`classic-host.js` captures the supplied host's snapshots and tracks script and project versions.
+It refreshes roots and configuration through an internal compiler-argument translator. The full
+classic compiler-option translation and public method facade remain to be implemented. The shared
+WASI bridge lives in `runtime.js`; the existing asynchronous compiler and editor entries use it too.
+
+The private unit checks synchronous returns, dependency edits, unchanged snapshot reuse, option
+and root changes, newly created dependencies after a project-version change, isolation, disposal
+and callback failures. These checks operate on private LSP results and retained host snapshots.
+They do not establish TypeScript result objects, `Diagnostic.file`, or `getProgram` compatibility.
+
+With Rust 1.93's size profile and no Binaryen optimization, the module is 7,376,814 bytes. The basic
+private sequence passes on Chromium and WebKit main threads and workers. Chromium rejects the
+18 MB release-profile module when synchronously creating an instance on its main thread, so
+browser synchronous-instantiation checks must use the distributable size profile.
+
+The synchronous stack gate fails on Node 22: classic TypeScript handles a 5,000-term addition
+expression, while this Rust channel raises `RangeError: Maximum call stack size exceeded` in both
+release and size profiles. Both handle the 100- and 1,000-term controls. The existing asynchronous
+Node service's large-stack worker passes the 5,000-term case. The synchronous replacement needs
+a verified stack solution before this gate can pass; a worker promise would change the contract.
 
 To run the declaration check, install the reference into a temporary directory and pass its
 package directory to `npm run check:typescript-api --prefix npm/wasm -- <reference-directory>`.

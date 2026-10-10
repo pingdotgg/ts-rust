@@ -230,6 +230,14 @@ fn command(service: &mut Option<Service>, request: &Value) -> Result<String, Ser
                 .invalidate();
             Ok("null".into())
         }
+        Some("configure") => {
+            let args: Vec<String> = serde_json::from_value(request["args"].clone())
+                .map_err(|error| error.to_string())?;
+            let service = service.as_mut().ok_or("language service is disposed")?;
+            service.invalidate();
+            service.args = args;
+            Ok("null".into())
+        }
         Some("request") => {
             let method = request["method"]
                 .as_str()
