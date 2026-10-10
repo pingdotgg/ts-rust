@@ -256,6 +256,7 @@ child_test! {
                     create_programs: Some(vec![Some(CreateSnapshotProgramParams {
                         root_files: vec![doc(ROOT)],
                         compiler_options: no_lib_node_next(),
+                        compiler_options_input: None,
                         options: Some(CreateProgramOptions {
                             module_resolver: resolver,
                             ..Default::default()
@@ -361,6 +362,7 @@ child_test! {
                     create_programs: Some(vec![Some(CreateSnapshotProgramParams {
                         root_files: vec![doc(ROOT), doc(STATIC_TARGET), doc(CALLBACK_TARGET)],
                         compiler_options: compiler_options(),
+                        compiler_options_input: None,
                         options: Some(CreateProgramOptions {
                             module_resolver: resolver,
                             ..Default::default()
@@ -582,6 +584,7 @@ child_test! {
                             create_programs: Some(vec![Some(CreateSnapshotProgramParams {
                                 root_files: vec![doc("/src/index.ts")],
                                 compiler_options: no_lib_node_next(),
+                                compiler_options_input: None,
                                 options: Some(CreateProgramOptions {
                                     module_resolver: resolver,
                                     ..Default::default()

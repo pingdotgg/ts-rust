@@ -4,15 +4,36 @@
 use super::Subtests;
 use ts_goport::api::{
     DiagnosticPositionResponse, DiagnosticSourceLineResponse, DocumentIdentifier, EnsurePrograms,
-    new_diagnostic_response, to_rooted_path,
+    TranspileOptions, new_diagnostic_response, to_rooted_path,
 };
 use ts_goport::ast::{TextRange, new_diagnostic, source_file_get_position_map};
 use ts_goport::diag;
-use ts_goport::flags::ScriptKind;
+use ts_goport::flags::{ModuleKind, ScriptKind};
 use ts_goport::frontend::json::json_unmarshal;
 use ts_goport::frontend::parser::{SourceFileParseOptions, parse_source_file};
-use ts_goport::frontend::tspath;
+use ts_goport::frontend::{tsoptions, tspath};
 use ts_goport::project;
+
+// Go: api/proto_test.go:18 TestCompilerOptionsInput (ts#64159)
+// PORT: Go `Finalize` also returns diagnostics (always none); the port's
+// `finalize_raw_compiler_options` returns only the options.
+#[test]
+fn test_compiler_options_input() {
+    let mut options = TranspileOptions::default();
+    json_unmarshal(
+        br#"{"compilerOptions":{"module":1,"outDir":"dist"}}"#,
+        &mut options,
+        &[],
+    )
+    .unwrap_or_else(|err| panic!("unmarshal: {err}"));
+    let input = options
+        .compiler_options_input
+        .as_ref()
+        .expect("CompilerOptionsInput != nil");
+    let compiler_options = tsoptions::finalize_raw_compiler_options(&input.values, "/project");
+    assert_eq!(compiler_options.module, ModuleKind::COMMON_JS);
+    assert_eq!(compiler_options.out_dir, "/project/dist");
+}
 
 // Go: api/proto_test.go:30 TestDocumentIdentifierUnmarshalJSON (ts#64159 cases)
 #[test]

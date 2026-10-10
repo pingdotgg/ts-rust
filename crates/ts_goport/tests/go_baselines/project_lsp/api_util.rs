@@ -51,6 +51,7 @@ pub fn program_params(
     CreateSnapshotProgramParams {
         root_files: names.iter().map(|name| doc(name)).collect(),
         compiler_options,
+        compiler_options_input: None,
         options: None,
     }
 }

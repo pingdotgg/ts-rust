@@ -156,6 +156,7 @@ child_test! {
                     ..Default::default()
                 }],
                 compiler_options: no_lib(),
+                compiler_options_input: None,
                 options: None,
             }]),
         ));
@@ -226,6 +227,7 @@ child_test! {
                             id: program_id.clone(),
                             root_files: vec![doc("/home/projects/p/b.ts")],
                             compiler_options: no_lib_strict(),
+                            compiler_options_input: None,
                             options: None,
                         })],
                         ..Default::default()
@@ -459,6 +461,100 @@ child_test! {
         ));
         let codes: Vec<i32> = diagnostics.iter().map(|diagnostic| diagnostic.code).collect();
         assert_eq!(codes, vec![6306]);
+        session.close();
+        project_session.close();
+    }
+}
+
+/// Go `json.Unmarshal(data, &changes)` with `assert.NilError`.
+fn unmarshal_changes(data: &str) -> SnapshotRequestChangesParams {
+    let mut changes = SnapshotRequestChangesParams::default();
+    json_unmarshal(data.as_bytes(), &mut changes, &[])
+        .unwrap_or_else(|err| panic!("unmarshal: {err:?}"));
+    changes
+}
+
+// PORT: no Go test. ts#64159 (Go N' api/session.go:1569-1573): the JSON
+// `compilerOptions` of a created program are finalized against the session's
+// current directory ("/" here). The np-suite test "createProgram resolves raw
+// compiler option paths" checks the same through the client.
+child_test! {
+    fn create_snapshot_finalizes_raw_compiler_options() {
+        let (project_session, _) = projecttestutil::setup(files(&[(
+            "/home/projects/p/a.ts",
+            "export const a = 1;",
+        )]));
+        let session = api::new_lsp_session(project_session.clone(), None);
+        assert_eq!(session.get_current_directory(), "/");
+
+        let response = nil_error(session.handle_create_snapshot(
+            &bg(),
+            &CreateSnapshotParams {
+                snapshot_request_changes_params: unmarshal_changes(
+                    r#"{"createPrograms":[{"rootFiles":["/home/projects/p/a.ts"],"compilerOptions":{"noLib":true,"outDir":"dist","paths":{"*a":["/src/first.ts"],"*":["/src/fallback.ts"]},"rootDirs":["src","generated"],"tsBuildInfoFile":"cache/build.tsbuildinfo"}}]}"#,
+                ),
+                ..Default::default()
+            },
+        ));
+        let options = response.projects[0].compiler_options.as_ref().unwrap();
+        assert_eq!(options.no_lib, Tristate::True);
+        assert_eq!(options.out_dir, "/dist");
+        assert_eq!(
+            options.root_dirs,
+            Some(vec!["/src".to_string(), "/generated".to_string()])
+        );
+        assert_eq!(options.ts_build_info_file, "/cache/build.tsbuildinfo");
+        let paths = options.paths.as_ref().expect("paths");
+        assert_eq!(
+            paths.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["*a", "*"]
+        );
+        assert_eq!(paths["*a"], Some(vec!["/src/first.ts".to_string()]));
+        session.close();
+        project_session.close();
+    }
+}
+
+// PORT: no Go test. ts#64159 (Go N' api/session.go:1610-1614): the JSON
+// `compilerOptions` of a reconfigured program are finalized as for a created
+// one.
+child_test! {
+    fn update_snapshot_finalizes_raw_compiler_options() {
+        let (project_session, _) = projecttestutil::setup(files(&[
+            ("/home/projects/p/a.ts", "export const a = 1;"),
+            ("/home/projects/p/b.ts", "export const b = 2;"),
+        ]));
+        let session = api::new_lsp_session(project_session.clone(), None);
+
+        let created = nil_error(session.handle_create_snapshot(
+            &bg(),
+            &create_programs(vec![program_params(&["/home/projects/p/a.ts"], no_lib())]),
+        ));
+        let program_id =
+            created.operation.as_ref().unwrap().created_programs.as_ref().unwrap()[0].clone();
+        assert_eq!(
+            created.projects[0].compiler_options.as_ref().unwrap().out_dir,
+            ""
+        );
+
+        let reconfigured = nil_error(session.handle_update_snapshot(
+            &bg(),
+            &UpdateSnapshotParams {
+                snapshot: created.snapshot,
+                changes: Some(CreateSnapshotParams {
+                    snapshot_request_changes_params: unmarshal_changes(&format!(
+                        r#"{{"reconfigurePrograms":[{{"id":"{}","rootFiles":["/home/projects/p/b.ts"],"compilerOptions":{{"noLib":true,"strict":true,"outDir":"out","rootDir":"${{configDir}}/src"}}}}]}}"#,
+                        program_id.0
+                    )),
+                    ..Default::default()
+                }),
+            },
+        ));
+        assert_eq!(reconfigured.projects[0].id, program_id.as_id());
+        let options = reconfigured.projects[0].compiler_options.as_ref().unwrap();
+        assert_eq!(options.strict, Tristate::True);
+        assert_eq!(options.out_dir, "/out");
+        assert_eq!(options.root_dir, "/src");
         session.close();
         project_session.close();
     }

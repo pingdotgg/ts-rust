@@ -128,6 +128,7 @@ fn create_no_lib_program(name: &str) -> Option<Vec<Option<CreateSnapshotProgramP
             no_lib: Tristate::True,
             ..Default::default()
         },
+        compiler_options_input: None,
         options: None,
     })])
 }
@@ -639,6 +640,7 @@ child_test! {
                                 strict: Tristate::True,
                                 ..Default::default()
                             },
+                            compiler_options_input: None,
                             options: None,
                         })],
                         ..Default::default()

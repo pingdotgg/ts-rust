@@ -1119,11 +1119,88 @@ impl<V: MarshalerTo> MarshalerTo for SortedMapJSON<'_, V> {
     }
 }
 
-// Go: proto.go CreateSnapshotProgramParams (ts#64204, ts#64324)
+// Go: tsoptions/rawcompileroptions.go:16 RawCompilerOptions (ts#64159)
+// RawCompilerOptions is the JSON/API representation of compiler options.
+// Filesystem paths remain strings until Finalize resolves them against a base
+// directory and constructs a CompilerOptions with typed path guarantees.
+// PORT: Go keeps it in tsoptions; the port keeps it with the API protocol, its
+// only user. Go `Finalize` is `tsoptions::finalize_raw_compiler_options` on
+// `values`. A value is the Go `any` of its JSON (`json_value_to_any`). Go
+// decodes an object under any key but "paths" as a `map[string]any`, which
+// `ParseCompilerOptions` does not read as an object (a raw "plugins" entry
+// gets no name). The port keeps every object as a `Map`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RawCompilerOptions {
+    pub values: IndexMap<String, tsoptions::CompilerOptionsValue>,
+}
+
+// Go: tsoptions/rawcompileroptions.go:25 (*RawCompilerOptions).MarshalJSONTo
+impl MarshalerTo for RawCompilerOptions {
+    fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
+        enc.push('{');
+        for (i, (key, value)) in self.values.iter().enumerate() {
+            if i > 0 {
+                enc.push(',');
+            }
+            key.marshal_json_to(enc)?;
+            enc.push(':');
+            AnyJSON(value).marshal_json_to(enc)?;
+        }
+        enc.push('}');
+        Ok(())
+    }
+}
+
+// Go: tsoptions/rawcompileroptions.go:32 (*RawCompilerOptions).UnmarshalJSONFrom
+// PORT: a pointer field (`Option`) is `None` for null before this runs, as in
+// Go. Go reports the non-object error at the value after it skips the rest of
+// it; the port skips the value first.
+impl UnmarshalerFrom for RawCompilerOptions {
+    fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
+        match dec.peek_kind() {
+            b'n' => {
+                dec.read_token()?;
+                return Ok(());
+            }
+            b'{' => {}
+            _ => {
+                dec.skip_value()?;
+                return Err(SemanticError {
+                    wrapped: true,
+                    json_kind: 0,
+                    json_value: String::new(),
+                    go_type: "tsoptions.RawCompilerOptions".to_string(),
+                    pointer: None,
+                    byte_offset: 0,
+                    pos: ErrorPos::After,
+                    err: "cannot unmarshal non-object JSON value into RawCompilerOptions"
+                        .to_string(),
+                }
+                .into_json_error());
+            }
+        }
+        dec.read_token()?;
+        while dec.peek_kind() != b'}' {
+            let mut key = String::new();
+            json_unmarshal_decode(dec, &mut key)?;
+            let mut value = LspAny::Null;
+            json_unmarshal_decode(dec, &mut value)?;
+            self.values.insert(key, json_value_to_any(&value));
+        }
+        dec.read_token()?;
+        Ok(())
+    }
+}
+
+// Go: proto.go:454 CreateSnapshotProgramParams (ts#64204, ts#64324, ts#64159)
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CreateSnapshotProgramParams {
     pub root_files: Vec<DocumentIdentifier>,
+    // Go `json:"-"`: options set in code. The session uses them when
+    // `compiler_options_input` is `None`.
     pub compiler_options: CompilerOptions,
+    // ts#64159: Go `CompilerOptionsInput`, the JSON "compilerOptions".
+    pub compiler_options_input: Option<RawCompilerOptions>,
     pub options: Option<CreateProgramOptions>,
 }
 
@@ -1135,7 +1212,9 @@ impl UnmarshalerFrom for CreateSnapshotProgramParams {
             unmarshal_struct_fields(dec, "api.CreateSnapshotProgramParams", |name, dec| {
                 match name {
                     "rootFiles" => json_unmarshal_decode(dec, &mut self.root_files)?,
-                    "compilerOptions" => json_unmarshal_decode(dec, &mut self.compiler_options)?,
+                    "compilerOptions" => {
+                        json_unmarshal_decode(dec, &mut self.compiler_options_input)?
+                    }
                     "options" => json_unmarshal_decode(dec, &mut self.options)?,
                     _ => return Ok(false),
                 }
@@ -1157,7 +1236,7 @@ impl MarshalerTo for CreateSnapshotProgramParams {
             enc,
             &mut first,
             "compilerOptions",
-            &CompilerOptionsJSON(&self.compiler_options),
+            &self.compiler_options_input,
         )?;
         marshal_field_omitempty(enc, &mut first, "options", &self.options)?;
         write_object_end(enc);
@@ -1165,12 +1244,15 @@ impl MarshalerTo for CreateSnapshotProgramParams {
     }
 }
 
-// Go: proto.go ReconfigureSnapshotProgramParams (ts#64204, ts#64319, ts#64324)
+// Go: proto.go:461 ReconfigureSnapshotProgramParams (ts#64204, ts#64319, ts#64324, ts#64159)
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReconfigureSnapshotProgramParams {
     pub id: project::SyntheticProjectID,
     pub root_files: Vec<DocumentIdentifier>,
+    // Go `json:"-"` (see `CreateSnapshotProgramParams`).
     pub compiler_options: CompilerOptions,
+    // ts#64159: Go `CompilerOptionsInput`, the JSON "compilerOptions".
+    pub compiler_options_input: Option<RawCompilerOptions>,
     pub options: Option<CreateProgramOptions>,
 }
 
@@ -1181,7 +1263,9 @@ impl UnmarshalerFrom for ReconfigureSnapshotProgramParams {
                 match name {
                     "id" => json_unmarshal_decode(dec, &mut self.id)?,
                     "rootFiles" => json_unmarshal_decode(dec, &mut self.root_files)?,
-                    "compilerOptions" => json_unmarshal_decode(dec, &mut self.compiler_options)?,
+                    "compilerOptions" => {
+                        json_unmarshal_decode(dec, &mut self.compiler_options_input)?
+                    }
                     "options" => json_unmarshal_decode(dec, &mut self.options)?,
                     _ => return Ok(false),
                 }
@@ -1204,7 +1288,7 @@ impl MarshalerTo for ReconfigureSnapshotProgramParams {
             enc,
             &mut first,
             "compilerOptions",
-            &CompilerOptionsJSON(&self.compiler_options),
+            &self.compiler_options_input,
         )?;
         marshal_field_omitempty(enc, &mut first, "options", &self.options)?;
         write_object_end(enc);
@@ -2532,13 +2616,16 @@ pub fn json_value_to_any(value: &LspAny) -> tsoptions::CompilerOptionsValue {
     }
 }
 
-// Go: proto.go:789 TranspileOptions (tsgo#4849)
+// Go: proto.go:821 TranspileOptions (tsgo#4849, ts#64159)
 // PORT: Go `*core.CompilerOptions` is `Option<CompilerOptions>` (nil is
-// `None`). Its JSON form is the Go struct default (`CompilerOptionsJSON` to
-// write, the `CompilerOptions` `UnmarshalerFrom` below to read).
+// `None`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TranspileOptions {
+    // Go `json:"-"`: options set in code. `transpile_output` uses them when
+    // `compiler_options_input` is `None`.
     pub compiler_options: Option<CompilerOptions>,
+    // ts#64159: Go `CompilerOptionsInput`, the JSON "compilerOptions".
+    pub compiler_options_input: Option<RawCompilerOptions>,
     pub file_name: String,
     pub report_diagnostics: bool,
 }
@@ -2551,7 +2638,7 @@ impl MarshalerTo for TranspileOptions {
             enc,
             &mut first,
             "compilerOptions",
-            &self.compiler_options.as_ref().map(CompilerOptionsJSON),
+            &self.compiler_options_input,
         )?;
         marshal_field_omitempty(enc, &mut first, "fileName", &self.file_name)?;
         marshal_field_omitempty(
@@ -2569,7 +2656,7 @@ impl UnmarshalerFrom for TranspileOptions {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         let is_object = unmarshal_struct_fields(dec, "api.TranspileOptions", |name, dec| {
             match name {
-                "compilerOptions" => json_unmarshal_decode(dec, &mut self.compiler_options)?,
+                "compilerOptions" => json_unmarshal_decode(dec, &mut self.compiler_options_input)?,
                 "fileName" => json_unmarshal_decode(dec, &mut self.file_name)?,
                 "reportDiagnostics" => json_unmarshal_decode(dec, &mut self.report_diagnostics)?,
                 _ => return Ok(false),
@@ -5525,6 +5612,8 @@ mod unmarshal_error_tests {
     // tsgo#4849: the client sends back the `compilerOptions` that the API
     // wrote (`CompilerOptionsJSON`). Decoding them and writing them again
     // gives the same text. The options are those of the hono-ext traces.
+    // ts#64159: they decode as `RawCompilerOptions`; the finalized options
+    // (absolute paths here) also write the same text.
     #[test]
     fn transpile_compiler_options_round_trip() {
         let options = r#"{"composite":true,"declaration":true,"forceConsistentCasingInFileNames":true,"module":6,"moduleResolution":100,"noUnusedLocals":true,"noUnusedParameters":true,"outDir":"/p/dist/types","paths":{"a/*":["b/*"],"c":["d"]},"rootDir":"/p/src","skipLibCheck":true,"strict":true,"target":9,"types":["node"],"esModuleInterop":true,"configFilePath":"/p/tsconfig.build.json"}"#;
@@ -5538,15 +5627,19 @@ mod unmarshal_error_tests {
             .downcast_ref::<TranspileFromFileParams>()
             .expect("TranspileFromFileParams");
         assert!(params.options.report_diagnostics);
-        let compiler_options = params
+        assert_eq!(params.options.compiler_options, None);
+        let input = params
             .options
-            .compiler_options
+            .compiler_options_input
             .as_ref()
             .expect("compilerOptions");
+        let written = crate::frontend::json::json_marshal(input, &[]).expect("marshal");
+        assert_eq!(written, options);
+        let compiler_options = tsoptions::finalize_raw_compiler_options(&input.values, "/cwd");
         assert_eq!(compiler_options.module, ModuleKind(6));
         assert_eq!(compiler_options.strict, Tristate::True);
         let written =
-            crate::frontend::json::json_marshal(&CompilerOptionsJSON(compiler_options), &[])
+            crate::frontend::json::json_marshal(&CompilerOptionsJSON(&compiler_options), &[])
                 .expect("marshal");
         assert_eq!(written, options);
     }

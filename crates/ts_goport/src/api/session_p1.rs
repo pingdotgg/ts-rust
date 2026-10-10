@@ -2840,6 +2840,13 @@ impl Session {
                     vec![ERR_CLIENT_ERROR.clone()],
                 ));
             };
+            // ts#64159 (Go N' api/session.go:1569-1573): JSON options are
+            // finalized against the current directory. Finalize gives no
+            // diagnostics, so the Go `optionDiagnostics` are left out.
+            let compiler_options = match &program_params.compiler_options_input {
+                Some(input) => tsoptions::finalize_raw_compiler_options(&input.values, &cwd),
+                None => program_params.compiler_options.clone(),
+            };
             let root_file_names: Vec<String> = program_params
                 .root_files
                 .iter()
@@ -2847,7 +2854,7 @@ impl Session {
                 .collect();
             let mut request = project::APICreateProgramRequest {
                 root_file_names,
-                compiler_options: Rc::new(program_params.compiler_options.clone()),
+                compiler_options: Rc::new(compiler_options),
                 ..Default::default()
             };
             if let Some(options) = &program_params.options {
@@ -2896,6 +2903,11 @@ impl Session {
                 ));
             }
             reconfigured_program_ids.insert(program_id.clone());
+            // ts#64159 (Go N' api/session.go:1610-1614): as for createPrograms.
+            let compiler_options = match &program_params.compiler_options_input {
+                Some(input) => tsoptions::finalize_raw_compiler_options(&input.values, &cwd),
+                None => program_params.compiler_options.clone(),
+            };
             let root_file_names: Vec<String> = program_params
                 .root_files
                 .iter()
@@ -2905,7 +2917,7 @@ impl Session {
                 program_id,
                 api_create_program_request: project::APICreateProgramRequest {
                     root_file_names,
-                    compiler_options: Rc::new(program_params.compiler_options.clone()),
+                    compiler_options: Rc::new(compiler_options),
                     ..Default::default()
                 },
             };
@@ -3751,14 +3763,20 @@ impl Session {
         }
     }
 
-    // Go: api/session.go:1830 handleTranspile (tsgo#4849)
+    // Go: api/session.go:2070 handleTranspile (tsgo#4849, ts#64159)
     pub fn handle_transpile(
         &self,
         ctx: &Context,
         params: &TranspileParams,
         declaration: bool,
     ) -> Result<TranspileOutputResponse, GoError> {
-        transpile_output(ctx, &params.input, &params.options, declaration)
+        transpile_output(
+            ctx,
+            &params.input,
+            &params.options,
+            declaration,
+            &self.get_current_directory(),
+        )
     }
 
     // Go: api/session.go:1932 handleTranspileFromFile (tsgo#4849)
@@ -3783,7 +3801,13 @@ impl Session {
         }
         let mut options = params.options.clone();
         options.file_name = file_name;
-        transpile_output(ctx, &input, &options, declaration)
+        transpile_output(
+            ctx,
+            &input,
+            &options,
+            declaration,
+            &self.get_current_directory(),
+        )
     }
 }
 
@@ -3870,15 +3894,25 @@ impl tsoptions::ParseConfigHost for ApiBuildSystem {
     }
 }
 
-// Go: api/session.go:1943 transpileOutput (tsgo#4849)
+// Go: api/session.go:2320 transpileOutput (tsgo#4849, ts#64159)
+// PORT: Go prepends the Finalize diagnostics to the output's; Finalize gives
+// none, so they are left out.
 fn transpile_output(
     ctx: &Context,
     input: &str,
     options: &TranspileOptions,
     declaration: bool,
+    current_directory: &str,
 ) -> Result<TranspileOutputResponse, GoError> {
+    let compiler_options = match &options.compiler_options_input {
+        Some(input) => Some(tsoptions::finalize_raw_compiler_options(
+            &input.values,
+            current_directory,
+        )),
+        None => options.compiler_options.clone(),
+    };
     let transpile_options = transpile::Options {
-        compiler_options: options.compiler_options.clone(),
+        compiler_options,
         file_name: options.file_name.clone(),
         report_diagnostics: options.report_diagnostics,
     };
@@ -5539,5 +5573,42 @@ mod textedit_tests {
             let got = edits.map(|edits| (edits[0].pos, edits[0].end));
             assert_eq!(got, want, "{bytes:?} line {line} {start}..{end}");
         }
+    }
+}
+
+#[cfg(test)]
+mod transpile_tests {
+    use super::*;
+
+    // PORT: no Go test. ts#64159 (Go N' api/session.go:2323-2325): the JSON
+    // `compilerOptions` of a transpile are finalized against the current
+    // directory. A finalized sourceRoot has "/" separators, so the map's
+    // sourceRoot is "x/y/". Go N' writes the same output and map
+    // (`transpileOutput` with these options and "/p").
+    #[test]
+    fn transpile_output_finalizes_raw_compiler_options() {
+        let mut options = TranspileOptions::default();
+        crate::frontend::json::json_unmarshal(
+            br#"{"compilerOptions":{"module":1,"sourceMap":true,"sourceRoot":"x\\y"},"fileName":"/p/a.ts"}"#,
+            &mut options,
+            &[],
+        )
+        .expect("options");
+        let output = transpile_output(
+            &gostd::context::background(),
+            "export const x = 1;\n",
+            &options,
+            false,
+            "/p",
+        )
+        .expect("output");
+        assert_eq!(
+            output.output_text,
+            "\"use strict\";\nObject.defineProperty(exports, \"__esModule\", { value: true });\nexports.x = void 0;\nexports.x = 1;\n//# sourceMappingURL=a.js.map"
+        );
+        assert_eq!(
+            output.source_map_text,
+            r#"{"version":3,"file":"a.js","sourceRoot":"x/y/","sources":["a.ts"],"names":[],"mappings":";;;AAAa,QAAA,CAAC,GAAG,CAAC,CAAC"}"#
+        );
     }
 }
