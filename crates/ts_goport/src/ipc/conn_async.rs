@@ -19,9 +19,10 @@
 //!   the inbox and on `ctx`, as Go's `select` does, so it returns
 //!   `ctx.Err()` at once when `ctx` is done (a signal), and a later `Call`
 //!   writes its request and returns `ctx.Err()`. When the thread ends (Go's
-//!   `Run` returns), the dispatch thread runs the first part of Go's
-//!   deferred function before it handles anything more: `closePendingCalls`
-//!   sets `terminal`, and a later `Call` returns it and writes nothing.
+//!   `Run` returns), it cancels `handlerCtx` (Go's deferred
+//!   `cancelHandlers`), and the dispatch thread runs Go's deferred
+//!   `closePendingCalls` before the next `Call` or `Notify`: `terminal` is
+//!   set, and the call returns it and writes nothing.
 //! - Without it, `run` and `call` read on the dispatch thread, and `Call`
 //!   reads messages itself until its response arrives. A blocked read does
 //!   not wake when `ctx` is done. When a read in `call` fails, the read
