@@ -837,6 +837,7 @@ mod tests {
         let wm = new_watch_manager(
             std::rc::Rc::new(std::cell::RefCell::new(Vec::<u8>::new())),
             Box::new(|_| false),
+            true,
         );
         let mut took = Vec::new();
         for _ in 0..20 {
