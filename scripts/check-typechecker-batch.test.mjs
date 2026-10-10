@@ -1655,9 +1655,16 @@ test("the oracle base of a pin bump is the base bins measured again at the new p
     [g => { g.files["api/api-r131-atB/manifest.json"].value.batteries.qc.oracleSha = GOLDEN_A; resultsShas(g); }, /rebase run api-r131-atB used the oracle a1a1.*, not the batch pin's/],
     [g => { g.state.batch.oracleRebase.lsp.runs[0].resultsSha256 = "e".repeat(64); rebind(g); }, /rebase run lsp-r131-atB \(lsp\/lsp-r131-atB\) has resultsSha256 /],
     [g => { g.state.batch.oracleRebase.lsp.knownDiffs = [{ key: "b1/t1#1", reason: "r" }]; rebind(g); }, /knownDiffs must list each \{key, reason\} once; the LSP has none/],
-    // bump C ruling 1 item 1: the API rebase runs are --wire 3 runs of one API tool, and the entry says so.
-    [g => { delete g.state.batch.oracleRebase.api.wire; rebind(g); }, /batch.oracleRebase.api needs "wire": 3 and toolSha256, the api_oracle.py sha256 of its runs/],
-    [g => { g.state.batch.oracleRebase.api.toolSha256 = "c3"; rebind(g); }, /batch.oracleRebase.api needs "wire": 3 and toolSha256/],
+    // bump C ruling 1 item 1: the API rebase runs are --wire 3 (or, at a protocol 5 pin, --wire 4) runs of one API
+    // tool, and the entry says so.
+    [g => { delete g.state.batch.oracleRebase.api.wire; rebind(g); }, /batch.oracleRebase.api needs "wire": 3 or 4 and toolSha256, the api_oracle.py sha256 of its runs/],
+    [g => { g.state.batch.oracleRebase.api.toolSha256 = "c3"; rebind(g); }, /batch.oracleRebase.api needs "wire": 3 or 4 and toolSha256/],
+    [g => { g.state.batch.oracleRebase.api.wire = 5; g.files["api/api-r131-atB/manifest.json"].value.batteries.qc.wire = 5; resultsShas(g); },
+      /batch.oracleRebase.api needs "wire": 3 or 4 and toolSha256/],
+    [g => { g.state.batch.oracleRebase.api.wire = "4"; g.files["api/api-r131-atB/manifest.json"].value.batteries.qc.wire = "4"; resultsShas(g); },
+      /batch.oracleRebase.api needs "wire": 3 or 4 and toolSha256/],
+    [g => { g.state.batch.oracleRebase.api.wire = 4; resultsShas(g); },
+      /rebase run api-r131-atB \(api\/api-r131-atB\) has batteries without "wire": 4 or api_oracle.py c3c3.*: qc/],
     [g => { delete g.files["api/api-r131-atB/manifest.json"].value.batteries.qc.wire; resultsShas(g); },
       /rebase run api-r131-atB \(api\/api-r131-atB\) has batteries without "wire": 3 or api_oracle.py c3c3.*: qc/],
     [g => { g.files["api/api-r131-atB/manifest.json"].value.batteries.qc.scriptSha = "d".repeat(64); resultsShas(g); },
@@ -1681,6 +1688,17 @@ test("the oracle base of a pin bump is the base bins measured again at the new p
   result = check(f);
   assert.equal(result.verdict, "PASS", result.reasons.join(" "));
   assert.deepEqual([result.oracles.lsp.base, result.oracles.lsp.retained], ["lsp-r131-atB,lsp-r131-atB2", 3]);
+  // bump D: protocol 4 base bins at a protocol 5 pin use --wire 4. The entry and every manifest battery say 4.
+  f = goportFixture();
+  withRebase(f);
+  f.state.batch.oracleRebase.api.wire = 4;
+  f.files["api/api-r131-atB/manifest.json"].value.batteries.qc.wire = 4;
+  resultsShas(f);
+  result = check(f);
+  assert.equal(result.verdict, "PASS", result.reasons.join(" "));
+  f.files["api/api-r131-atB/manifest.json"].value.batteries.qc.wire = 3;
+  resultsShas(f);
+  stopped(f, /rebase run api-r131-atB \(api\/api-r131-atB\) has batteries without "wire": 4 or api_oracle.py c3c3.*: qc/);
 });
 
 test("with oracleRebase the new runs must match Go at the batch pin (ruling 10 condition 3)", () => inTemp(dir => {
