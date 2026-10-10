@@ -778,17 +778,11 @@ mod tests {
         assert!(ch.try_recv());
         assert!(!ch.try_recv());
 
-        let receiver = {
-            let ch = ch.clone();
-            std::thread::spawn(move || ch.recv())
-        };
-        while !ch.state.lock().unwrap().waiting {
-            std::thread::yield_now();
-        }
+        let receiver = waiting_receiver(&ch);
         assert!(ch.try_send());
         assert!(ch.try_send());
         assert!(!ch.try_send());
-        assert!(receiver.join().unwrap());
+        assert_eq!(receiver.recv_timeout(LIMIT), Ok(true));
         assert!(ch.try_recv());
         assert!(!ch.try_recv());
     }
@@ -798,19 +792,13 @@ mod tests {
     #[test]
     fn do_cycle_ch_wake_ends_the_wait() {
         let ch = Arc::new(DoCycleCh::default());
-        let receiver = {
-            let ch = ch.clone();
-            std::thread::spawn(move || ch.recv())
-        };
-        while !ch.state.lock().unwrap().waiting {
-            std::thread::yield_now();
-        }
+        let receiver = waiting_receiver(&ch);
         ch.wake();
-        assert!(!receiver.join().unwrap());
-        assert!(!ch.recv());
+        assert_eq!(receiver.recv_timeout(LIMIT), Ok(false));
+        assert_eq!(recv_on_thread(&ch).recv_timeout(LIMIT), Ok(false));
         ch.reset_wake();
         assert!(ch.try_send());
-        assert!(ch.recv());
+        assert_eq!(recv_on_thread(&ch).recv_timeout(LIMIT), Ok(true));
     }
 
     // Go `selectgo` (runtime/select.go) polls the ready cases in a random
