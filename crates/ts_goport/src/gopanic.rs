@@ -497,8 +497,6 @@ mod tests {
         range.map(Duration::from_millis).collect()
     }
 
-    // Go: runtime/retry.go:14 retryOnEAGAIN: 20 calls while the error is
-    // EAGAIN, with a sleep of 1, 2, ... 20 ms after each, then EAGAIN.
     /// The payload of `f`'s panic.
     fn panic_of(f: impl FnOnce()) -> Box<dyn std::any::Any + Send> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).expect_err("no panic")
@@ -539,6 +537,45 @@ mod tests {
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"write panic"));
     }
 
+    // A plain Rust panic is a Go string panic: Go `printpanicval` puts a
+    // tab after each newline of a recovered string too. The Rust payload is
+    // a `&str` for `panic!("text")` and a `String` for a formatted one.
+    #[test]
+    fn go_after_recover_prints_a_rust_panic_text_as_a_go_string() {
+        let write_panic = || {
+            go_panic("write panic".to_string());
+        };
+        let lines =
+            "panic: handler\n\tpanic [recovered]\n\tpanic: write panic [recovered, repanicked]";
+        let payload = panic_of(|| go_after_recover(&"handler\npanic", write_panic));
+        assert_eq!(repanicked_lines(payload), lines);
+        let handler = panic_of(|| std::panic::panic_any("handler\npanic".to_string()));
+        let payload = panic_of(|| go_after_recover(handler.as_ref(), write_panic));
+        assert_eq!(repanicked_lines(payload), lines);
+    }
+
+    // Go `printpanics` prints the oldest panic first. The text is Go's
+    // stderr (go1.27.1, followups41) for a deferred function that recovers
+    // "first" and calls a function whose deferred function recovers
+    // "second" and panics again.
+    #[test]
+    fn go_after_recover_keeps_the_oldest_recovered_panic_first() {
+        let payload = panic_of(|| {
+            go_after_recover(&"first", || {
+                go_after_recover(&"second", || {
+                    go_panic("write panic".to_string());
+                })
+            })
+        });
+        let panic = payload.downcast_ref::<GoPanic>().expect("a GoPanic");
+        assert_eq!(
+            go_panic_lines(panic),
+            "panic: first [recovered]\n\tpanic: second [recovered]\n\tpanic: write panic"
+        );
+    }
+
+    // Go: runtime/retry.go:14 retryOnEAGAIN: 20 calls while the error is
+    // EAGAIN, with a sleep of 1, 2, ... 20 ms after each, then EAGAIN.
     #[test]
     fn retry_on_eagain_tries_20_times_with_growing_sleeps() {
         let mut calls = 0;
