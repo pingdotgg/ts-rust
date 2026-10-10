@@ -7,7 +7,9 @@ use crate::execute::incremental::build_info::{
     BuildInfoRootInfoReader, build_info_version, content_mapper_identities,
     is_build_info_file_name_default_library, resolve_build_info_file_name,
 };
-use crate::execute::incremental::emit_files::{buffer_early_emit_writes, fs_error_text};
+use crate::execute::incremental::emit_files::{
+    buffer_early_emit_writes, flush_writes_on_this_thread, fs_error_text,
+};
 use crate::execute::incremental::incremental::Host as IncrementalHost;
 use crate::execute::incremental::program::{
     NestedEmitNow, Program as IncrementalProgram, build_info_program,
@@ -1139,18 +1141,27 @@ impl BuildTask {
                     ..EmitOptions::default()
                 });
             }
-            let emitted = emit_and_report_statistics(&EmitInput {
-                sys: &*sys,
-                program_like: &incremental_program,
-                config: Some(&resolved),
-                report_diagnostic,
-                report_error_summary: quiet_diagnostics_reporter(),
-                writer,
-                write_file: Some(write_file),
-                compile_times,
-                testing: orchestrator.testing(),
-                testing_m_times_cache: Some(&*host.m_times),
-            });
+            let emit = || {
+                emit_and_report_statistics(&EmitInput {
+                    sys: &*sys,
+                    program_like: &incremental_program,
+                    config: Some(&resolved),
+                    report_diagnostic,
+                    report_error_summary: quiet_diagnostics_reporter(),
+                    writer,
+                    write_file: Some(write_file),
+                    compile_times,
+                    testing: orchestrator.testing(),
+                    testing_m_times_cache: Some(&*host.m_times),
+                })
+            };
+            // PORT: the buffered writes of the early emit go through this
+            // thread when only it reaches the file system (`DeferredWrites`).
+            let emitted = if deferred_writes.is_some() {
+                flush_writes_on_this_thread(emit)
+            } else {
+                emit()
+            };
             if let Some(deferred_writes) = &deferred_writes {
                 write_deferred(deferred_writes, &*sys.fs());
             }

@@ -24,7 +24,6 @@ use crate::emitter::program_emit::{
 use crate::frontend::prelude::*;
 use crate::program::source_file_may_be_emitted;
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 // Go: incremental/emitfileshandler.go:15 emitUpdate
@@ -55,10 +54,9 @@ pub struct EmitFilesHandler<'a> {
     deleted_pending_kinds: FxIndexSet<Path>,
     emit_updates: FxIndexMap<Path, EmitUpdate>,
     has_emit_diagnostics: bool,
-    /// PORT: not in Go (perf). Where the write callbacks of
-    /// `get_emit_options` keep the writes of an early `tsc -b` emit
-    /// (`buffer_early_emit_writes`); `None` writes at once.
-    buffer: Option<WriteBuffer>,
+    /// PORT: not in Go. Where the write callbacks of `get_emit_options`
+    /// send the writes (`Writes`).
+    writes: Writes,
 }
 
 /// Go `file.Path()` as a `tspath.Path`.
@@ -95,7 +93,7 @@ impl<'a> EmitFilesHandler<'a> {
             deleted_pending_kinds: IndexSet::default(),
             emit_updates: IndexMap::default(),
             has_emit_diagnostics: false,
-            buffer: None,
+            writes: Writes::Direct,
         }
     }
 
@@ -386,23 +384,24 @@ impl<'a> EmitFilesHandler<'a> {
     // compiler host wraps. Without `options.WriteFile`, Go writes with the
     // compiler host file system; the port follows `program::EmitHost`,
     // whose write fails without a callback.
-    // PORT: perf. With `self.buffer`, the callback keeps each write (and
-    // the `differsOnlyInMap` time revert) for `flush_writes`, also without
+    // PORT: perf. With `Writes::Buffer` or `Writes::Replay` (see `Writes`),
+    // the callback keeps each write (and the `differsOnlyInMap` time
+    // revert) for `flush_writes`, or gives the flush's result, also without
     // declarations, where Go passes `options` through.
     fn get_emit_options(&self, options: EmitOptions) -> EmitOptions {
         let writer = OutputWriter {
             write_file: options.write_file.clone(),
-            buffer: self.buffer.clone(),
+            writes: self.writes.clone(),
         };
         let snapshot = self.program.snapshot.borrow();
         if !snapshot.options.get_emit_declarations() {
-            if writer.buffer.is_none() {
+            if matches!(writer.writes, Writes::Direct) {
                 return options;
             }
             return EmitOptions {
                 write_file: Some(Arc::new(
                     move |file_name: &str, text: &str, data: &mut WriteFileData| {
-                        writer.write(file_name, text, data, false)
+                        writer.write(file_name, text, data, false, false)
                     },
                 )),
                 ..options
@@ -438,6 +437,9 @@ impl<'a> EmitFilesHandler<'a> {
         let write_file: WriteFile = Arc::new(
             move |file_name: &str, text: &str, data: &mut WriteFileData| {
                 let mut differs_only_in_map = false;
+                // PORT: not in Go. True when the signature below read
+                // `data.diagnostics` (see `flush_writes`).
+                let mut signature_read_diagnostics = false;
                 if is_declaration_file_name(file_name) && can_use_incremental_state {
                     let mut emit_signature = String::new();
                     // #4699: the file of `data.SourceFile`.
@@ -451,6 +453,7 @@ impl<'a> EmitFilesHandler<'a> {
                         .as_ref()
                         .expect("file info of the emitted file");
                     if info.signature == info.version {
+                        signature_read_diagnostics = true;
                         let signature = compute_signature_with_diagnostics(
                             data.source_file,
                             text,
@@ -489,7 +492,13 @@ impl<'a> EmitFilesHandler<'a> {
                     }
                 }
 
-                writer.write(file_name, text, data, differs_only_in_map)
+                writer.write(
+                    file_name,
+                    text,
+                    data,
+                    differs_only_in_map,
+                    signature_read_diagnostics,
+                )
             },
         );
         EmitOptions {
@@ -588,41 +597,72 @@ struct DtsWriteFile {
     file_info: Option<FileInfo>,
 }
 
+/// PORT: not in Go. Where the `get_emit_options` callback sends a write.
+#[derive(Clone)]
+enum Writes {
+    /// Go: `write_output` at once.
+    Direct,
+    /// Perf: into the buffer, for `flush_writes` (`buffer_early_emit_writes`).
+    Buffer(WriteBuffer),
+    /// The emit again after a failed flush (`finish_emit_files`): the result
+    /// that `flush_writes` had for the file name, with no write.
+    Replay(Arc<FlushFailures>),
+}
+
 /// Where the `get_emit_options` callback writes: `write_file` (Go
-/// `options.WriteFile`) at once, or into `buffer` for `flush_writes`.
+/// `options.WriteFile`), as `writes` says.
 struct OutputWriter {
     write_file: Option<WriteFile>,
-    buffer: Option<WriteBuffer>,
+    writes: Writes,
 }
 
 impl OutputWriter {
+    /// `signature_read_diagnostics`: the callback computed the d.ts
+    /// signature from `data.diagnostics` (see `flush_writes`).
     fn write(
         &self,
         file_name: &str,
         text: &str,
         data: &mut WriteFileData,
         differs_only_in_map: bool,
+        signature_read_diagnostics: bool,
     ) -> Result<(), String> {
-        let Some(buffer) = &self.buffer else {
-            return write_output(
+        match &self.writes {
+            Writes::Buffer(buffer) => {
+                buffer
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(BufferedWrite {
+                        source: path_of(data.source_file),
+                        file_name: file_name.to_string(),
+                        text: text.to_string(),
+                        data: data.clone(),
+                        differs_only_in_map,
+                        signature_read_diagnostics,
+                    });
+                Ok(())
+            }
+            Writes::Replay(failures) => match failures.get(file_name) {
+                None => Ok(()),
+                Some(Some(err)) => Err(err.clone()),
+                // The flush left it out. Go's callback panics before this
+                // write, so does the port's (`diagnostic_to_string_builder`).
+                Some(None) => write_output(
+                    self.write_file.as_ref(),
+                    file_name,
+                    text,
+                    data,
+                    differs_only_in_map,
+                ),
+            },
+            Writes::Direct => write_output(
                 self.write_file.as_ref(),
                 file_name,
                 text,
                 data,
                 differs_only_in_map,
-            );
-        };
-        buffer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(BufferedWrite {
-                source: path_of(data.source_file),
-                file_name: file_name.to_string(),
-                text: text.to_string(),
-                data: data.clone(),
-                differs_only_in_map,
-            });
-        Ok(())
+            ),
+        }
     }
 }
 
@@ -657,19 +697,28 @@ fn write_output(
 /// before the task's turn to write (`buffer_early_emit_writes`).
 type WriteBuffer = Arc<Mutex<Vec<BufferedWrite>>>;
 
-/// One write in a `WriteBuffer`: the source file whose output it is, and
-/// the arguments of `write_output`.
+/// One write in a `WriteBuffer`: the source file whose output it is, the
+/// arguments of `write_output`, and `signature_read_diagnostics` (see
+/// `OutputWriter::write`).
 struct BufferedWrite {
     source: Path,
     file_name: String,
     text: String,
     data: WriteFileData,
     differs_only_in_map: bool,
+    signature_read_diagnostics: bool,
 }
+
+/// What `flush_writes` did not write, by file name: the error text of each
+/// failed write, and `None` for each write that it left out. Every other
+/// write succeeded.
+type FlushFailures = FxHashMap<String, Option<String>>;
 
 thread_local! {
     /// True while `buffer_early_emit_writes` runs its `start`.
     static BUFFER_EARLY_EMIT_WRITES: Cell<bool> = const { Cell::new(false) };
+    /// True while `flush_writes_on_this_thread` runs its `f`.
+    static FLUSH_ON_THIS_THREAD: Cell<bool> = const { Cell::new(false) };
 }
 
 /// PORT: not in Go (perf). Runs `start`, a `Program::start_emit` call, so
@@ -694,20 +743,45 @@ pub(crate) fn buffer_early_emit_writes(start: impl FnOnce()) {
     start();
 }
 
+/// PORT: not in Go. Runs `f` so that `flush_writes` writes on this thread
+/// only. The API build runs a task's emit under it: only its orchestrator
+/// thread reaches the file system (`System::emit_writes_through_osvfs`), so
+/// a write on another thread would wait (build_task.rs `DeferredWrites`),
+/// and the flush would not get its result.
+pub(crate) fn flush_writes_on_this_thread<R>(f: impl FnOnce() -> R) -> R {
+    /// Puts back the flag of the caller when `f` ends, also on a panic.
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FLUSH_ON_THIS_THREAD.set(self.0);
+        }
+    }
+    let _reset = Reset(FLUSH_ON_THIS_THREAD.replace(true));
+    f()
+}
+
 /// The most threads that `flush_writes` writes on.
 const MAX_FLUSH_THREADS: usize = 8;
 
 /// Writes the `writes` of an early emit of the `queued` files with
-/// `write_file` (`write_output`). Go writes each file's outputs on the
-/// goroutine that emits it: the source map, then the JS, then the
-/// declaration map, then the declaration. Here the files' outputs go in
-/// that order, the files in `queued` order, on up to `MAX_FLUSH_THREADS`
-/// threads. False when a write failed; the later writes are left out.
+/// `write_file` (`write_output`), each once. Go writes each file's outputs
+/// on the goroutine that emits it: the source map, then the JS, then the
+/// declaration map, then the declaration; a failed write does not stop the
+/// others. Here the files' outputs go in that order, the files in `queued`
+/// order, on up to `MAX_FLUSH_THREADS` threads (1 under
+/// `flush_writes_on_this_thread`). Returns what it did not write when a
+/// write failed (`FlushFailures`), else `None`.
+///
+/// After a failed write of a file, Go's d.ts callback has the TS5033 in
+/// `data.Diagnostics`. When the callback computes the signature from them
+/// (`signature_read_diagnostics`), Go panics there
+/// (`diagnostic_to_string_builder`) before the write, so this leaves the
+/// write out.
 fn flush_writes(
     mut writes: Vec<BufferedWrite>,
     queued: &[QueuedEmit],
     write_file: Option<&WriteFile>,
-) -> bool {
+) -> Option<FlushFailures> {
     let order: FxHashMap<&Path, usize> = queued
         .iter()
         .enumerate()
@@ -722,30 +796,43 @@ fn flush_writes(
     crate::gostd::slices::stable_sort_by(&mut writes, |a, b| key(a).cmp(&key(b)));
     let files: Vec<&mut [BufferedWrite]> =
         writes.chunk_by_mut(|a, b| a.source == b.source).collect();
-    let threads = MAX_FLUSH_THREADS
-        .min(crate::program::available_cores())
-        .min(files.len().div_ceil(16))
-        .max(1);
+    let threads = if FLUSH_ON_THIS_THREAD.get() {
+        1
+    } else {
+        MAX_FLUSH_THREADS
+            .min(crate::program::available_cores())
+            .min(files.len().div_ceil(16))
+            .max(1)
+    };
     let files = Mutex::new(files.into_iter());
-    let failed = AtomicBool::new(false);
+    let failures = Mutex::new(FlushFailures::default());
     let work = || {
-        while !failed.load(Ordering::Relaxed) {
+        loop {
             let next = files.lock().unwrap_or_else(PoisonError::into_inner).next();
             let Some(file) = next else {
                 break;
             };
+            let mut failed = false;
             for write in file {
-                let written = write_output(
-                    write_file,
-                    &write.file_name,
-                    &write.text,
-                    &mut write.data,
-                    write.differs_only_in_map,
-                );
-                if written.is_err() {
-                    failed.store(true, Ordering::Relaxed);
-                    break;
-                }
+                let result = if failed && write.signature_read_diagnostics {
+                    None
+                } else {
+                    match write_output(
+                        write_file,
+                        &write.file_name,
+                        &write.text,
+                        &mut write.data,
+                        write.differs_only_in_map,
+                    ) {
+                        Ok(()) => continue,
+                        Err(err) => Some(err),
+                    }
+                };
+                failed = true;
+                failures
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(write.file_name.clone(), result);
             }
         }
     };
@@ -763,7 +850,10 @@ fn flush_writes(
         }
         work();
     });
-    !failed.load(Ordering::Relaxed)
+    let failures = failures
+        .into_inner()
+        .unwrap_or_else(PoisonError::into_inner);
+    (!failures.is_empty()).then_some(failures)
 }
 
 // Go: incremental/emitfileshandler.go:252 skipDtsOutputOfComposite
@@ -894,7 +984,10 @@ pub(crate) fn start_emit_files(program: &Program, options: EmitOptions) -> Start
         "start_emit_files: only the emit of all affected files starts early"
     );
     let mut handler = EmitFilesHandler::new(program, false);
-    handler.buffer = BUFFER_EARLY_EMIT_WRITES.get().then(WriteBuffer::default);
+    let buffer = BUFFER_EARLY_EMIT_WRITES.get().then(WriteBuffer::default);
+    if let Some(buffer) = &buffer {
+        handler.writes = Writes::Buffer(buffer.clone());
+    }
     let queued = handler.queue_affected_files(&options);
     let batch = handler.send_emit_batch(&queued, &options);
     StartedEmit {
@@ -903,11 +996,10 @@ pub(crate) fn start_emit_files(program: &Program, options: EmitOptions) -> Start
         queued,
         batch,
         write_file: options.write_file,
-        fingerprint: handler
-            .buffer
+        fingerprint: buffer
             .is_none()
             .then(crate::program::bind_thread_fingerprint),
-        buffer: handler.buffer,
+        buffer,
     }
 }
 
@@ -921,8 +1013,9 @@ pub(crate) fn start_emit_files(program: &Program, options: EmitOptions) -> Start
 /// (`flush_writes`). When a write fails, Go's emitter sees the error at
 /// the write: the file gets a TS5033 diagnostic instead of the output in
 /// `EmittedFiles`, and the declaration signature takes the diagnostic. So
-/// then the files emit again from the start state with direct writes, and
-/// their results replace the buffered emit's.
+/// then the files emit again from the start state, and each write gives
+/// the flush's result without a write (`Writes::Replay`; Go writes each
+/// file once). Their results replace the buffered emit's.
 pub(crate) fn finish_emit_files(
     program: &Program,
     started: StartedEmit,
@@ -954,14 +1047,15 @@ pub(crate) fn finish_emit_files(
         deleted_pending_kinds: started.deleted_pending_kinds,
         emit_updates: IndexMap::default(),
         has_emit_diagnostics: false,
-        buffer: None,
+        writes: Writes::Direct,
     };
     let mut results = started.batch.wait();
     if let Some(buffer) = started.buffer {
         let writes = std::mem::take(&mut *buffer.lock().unwrap_or_else(PoisonError::into_inner));
-        if !flush_writes(writes, &started.queued, options.write_file.as_ref()) {
+        if let Some(failures) = flush_writes(writes, &started.queued, options.write_file.as_ref()) {
             // The callbacks of the buffered emit filled `shared`.
             *handler.shared.lock().expect("emit files lock") = EmitFilesShared::default();
+            handler.writes = Writes::Replay(Arc::new(failures));
             results = handler.send_emit_batch(&started.queued, options).wait();
         }
     }
