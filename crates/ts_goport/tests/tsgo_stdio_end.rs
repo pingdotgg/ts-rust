@@ -280,6 +280,44 @@ fn api_async_signal_then_end_of_stdin() {
     tsgo.expect_end(start, what, 0, "");
 }
 
+/// A signal while request 1 waits for a callback and request 3 reads its
+/// tsconfig.json from a FIFO, then the end of stdin, then the FIFO text.
+/// Request 1 answers `context canceled`: Go's `Call` returned at the
+/// signal, before the end closed its channel (the port runs request 3
+/// nested in request 1's wait, so request 1 answers after it). Request 3
+/// calls back after the end and answers `ipc: connection closed`.
+#[test]
+fn api_async_signal_then_end_of_stdin_while_a_request_reads() {
+    let what = "--api --async, getAccessibleEntries waits, a request reads a FIFO, SIGINT, EOF";
+    let dir = project("cbfifoeof");
+    dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+    let config = dir.fifo("p2/tsconfig.json");
+    let mut tsgo = api_async(&dir, &["--callbacks", "getAccessibleEntries"]);
+    tsgo.send_json(&create_snapshot(1, &dir.0));
+    tsgo.wait_callback("getAccessibleEntries");
+    tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
+    let mut writer = open_fifo_writer(&config);
+    tsgo.signal(Signal::INT);
+    tsgo.expect_alive(what);
+    tsgo.close_stdin();
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    writer
+        .write_all(br#"{"compilerOptions":{"strict":true},"include":["src"]}"#)
+        .unwrap();
+    drop(writer);
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(1, PANIC_CANCELED, what);
+    let answer = tsgo.expect_answer(3, r#""message":"panic: ipc: connection closed\n"#, what);
+    assert!(!answer.contains(r"closed\ncontext"), "{what}: {answer}");
+    assert_eq!(
+        tsgo.callbacks("getAccessibleEntries"),
+        1,
+        "{what}: {:?}",
+        tsgo.messages()
+    );
+}
+
 /// A signal while tsgo waits for a message, then a request that makes
 /// callbacks: the request is the 1 message read after the signal, and it
 /// runs in Phase B, so its callbacks write nothing and fail with

@@ -605,8 +605,10 @@ impl AsyncConn {
             }
             if !self.pending.borrow().contains_key(id) {
                 // Go: a channel that closes after `ctx` is done loses to
-                // `ctx.Done()`. This happens when a nested call ends the read
-                // loop after a signal, or after a request error.
+                // `ctx.Done()`. This happens when the read loop ends after
+                // a signal (at the 1 message read after it, at EOF or at a
+                // read error) while a nested request runs, or after a
+                // request error.
                 if let Some(err) = ctx.err()
                     && !reader.inbox.ended_before_cancel()
                 {
@@ -707,9 +709,11 @@ struct InboxState {
     after_cancel: Option<Message>,
     /// True once the thread ended (Go's `Run` returned).
     ended: bool,
-    /// True when the loop ended at its check of `ctx` (after a signal), not
-    /// at a read (EOF, a read error or a panic).
-    ended_at_ctx: bool,
+    /// True when `ctx` was done when the loop ended: at its check of `ctx`
+    /// (after a signal), or at a read that ended after the signal (EOF, a
+    /// read error or a panic). In Go's `select`, a waiting call's
+    /// `ctx.Done()` then came before its channel closed.
+    ended_after_cancel: bool,
     /// How the loop ended, until `end_read_loop` takes it.
     end: Option<ReadEnd>,
 }
@@ -762,8 +766,8 @@ impl Inbox {
     ///   does.
     /// - The end of a loop that ended before `ctx` was done (EOF, a read
     ///   error): Go's `closePendingCalls` runs before `cancelHandlers`.
-    /// - `ctx` done. After a signal the loop ends only after 1 more
-    ///   message, so `ctx.Done()` comes first.
+    /// - `ctx` done. After a signal the loop ends only at its next read (1
+    ///   more message, EOF or a read error), so `ctx.Done()` comes first.
     fn next_for_call(&self, ctx: &Context) -> CallStep {
         let mut state = lock(&self.state);
         loop {
@@ -775,7 +779,7 @@ impl Inbox {
             if let Some(msg) = next.and_then(|i| state.messages.remove(i)) {
                 return CallStep::Message(msg);
             }
-            if state.ended && !state.ended_at_ctx {
+            if state.ended && !state.ended_after_cancel {
                 return CallStep::Ended;
             }
             if let Some(err) = canceled {
@@ -791,11 +795,11 @@ impl Inbox {
         }
     }
 
-    /// Whether the loop ended before `ctx` was done (not at its check of
-    /// `ctx`).
+    /// Whether the loop ended before `ctx` was done (EOF, a read error or
+    /// a panic before a signal).
     fn ended_before_cancel(&self) -> bool {
         let state = lock(&self.state);
-        state.ended && !state.ended_at_ctx
+        state.ended && !state.ended_after_cancel
     }
 
     /// Wakes `wait` when `ctx` is done, until the result drops.
@@ -817,12 +821,12 @@ impl Inbox {
     }
 
     /// The end of the loop, with the message read after `ctx` was done
-    /// when there is one. `at_ctx`: the loop ended at its check of `ctx`.
-    fn end(&self, after_cancel: Option<Message>, end: ReadEnd, at_ctx: bool) {
+    /// when there is one. `ctx_done`: `ctx` was done when the loop ended.
+    fn end(&self, after_cancel: Option<Message>, end: ReadEnd, ctx_done: bool) {
         let mut state = lock(&self.state);
         state.after_cancel = after_cancel;
         state.ended = true;
-        state.ended_at_ctx = at_ctx;
+        state.ended_after_cancel = ctx_done;
         state.end = Some(end);
         self.ready.notify_all();
     }
@@ -860,27 +864,30 @@ fn start_reader(
         .name("ipc-reader".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn(move || {
-            let (after_cancel, end, at_ctx) = loop {
+            let (after_cancel, end) = loop {
                 // Go: ipc/conn_async.go:83
                 if let Some(err) = ctx.err() {
-                    break (None, ReadEnd::Returned(Err(err)), true);
+                    break (None, ReadEnd::Returned(Err(err)));
                 }
                 // Go: ipc/conn_async.go:87. A panic here is a panic in Go's
                 // `Run`: the dispatch thread resumes it (`run_loop_on_reader`).
                 let msg = match catch_unwind(AssertUnwindSafe(|| protocol.read_message())) {
                     Ok(Ok(msg)) => msg,
-                    Ok(Err(err)) => break (None, ReadEnd::Returned(read_loop_result(err)), false),
-                    Err(payload) => break (None, ReadEnd::Panicked(payload), false),
+                    Ok(Err(err)) => break (None, ReadEnd::Returned(read_loop_result(err))),
+                    Err(payload) => break (None, ReadEnd::Panicked(payload)),
                 };
                 // Go dispatches the message, then checks `ctx` (:83). The
                 // check is here, so the dispatch thread finds the end of the
                 // loop with the message read after a signal.
                 if let Some(err) = ctx.err() {
-                    break (Some(msg), ReadEnd::Returned(Err(err)), true);
+                    break (Some(msg), ReadEnd::Returned(Err(err)));
                 }
                 thread_inbox.push(msg);
             };
-            thread_inbox.end(after_cancel, end, at_ctx);
+            // `ctx` is done also when a read ended after a signal (EOF
+            // while a nested request runs): Go's waiting call returned at
+            // the signal, before this end.
+            thread_inbox.end(after_cancel, end, ctx.err().is_some());
             // Go: the deferred `cancelHandlers` (:73), at once, also while a
             // handler runs. Go runs `closePendingCalls` first; here the
             // dispatch thread runs it when it finds the end (`end_read_loop`),
