@@ -29,8 +29,16 @@ the plugin, as with `@effect/language-service`:
 ```
 
 The rules, options and `@effect-diagnostics` comments are a port of
-[Effect-TS/tsgo](https://github.com/Effect-TS/tsgo) 0.46.1. The editor features of the language
+[Effect-TS/tsgo](https://github.com/Effect-TS/tsgo) 0.51.1. The editor features of the language
 service (quick fixes, refactors, hover, completions) are not ported.
+
+The API stability rules of 0.51.1 read the `@stability` JSDoc tags of Effect 4.
+`unstableApiUsage` (TS377136) and `experimentalApiUsage` (TS377135) report each use of an
+`unstable` or `experimental` API, as warnings by default. `allowedUnstableApis` and
+`allowedExperimentalApis` in the plugin entry allow a module (`effect/cli`) or one export
+(`effect/cli/Command#make`). `apiStabilityLeak` (TS377137, off by default) is for library
+maintainers. So a project on `effect@4` gets TS377136 warnings for its unstable imports, as with
+effect-tsgo 0.51.1. See [the Effect diagnostics doc](https://github.com/pingdotgg/ts-rust/blob/main/docs/effect-diagnostics.md#api-stability-rules).
 
 ## VS Code
 
