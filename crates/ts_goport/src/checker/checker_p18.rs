@@ -498,7 +498,8 @@ impl Checker {
                 .collect();
             declarations.push(member);
             let old_flags = self.sym(symbol).flags;
-            let mut flags = SymbolFlags::NONE;
+            // ts#64518 (Go N' checker.go:16492): the late-bound symbol stays transient.
+            let mut flags = SymbolFlags::TRANSIENT;
             for &d in &declarations {
                 flags |= self.sym(d.symbol()).flags;
             }

@@ -11,7 +11,7 @@ pub trait OutputPathsHost {
     fn use_case_sensitive_file_names(&self) -> bool;
 }
 
-// Go: outputpaths/outputpaths.go:16 OutputPaths
+// Go: outputpaths/outputpaths.go:15 OutputPaths
 #[derive(Clone, Debug, Default)]
 pub struct OutputPaths {
     js_file_path: String,
@@ -21,22 +21,22 @@ pub struct OutputPaths {
 }
 
 impl OutputPaths {
-    // Go: outputpaths/outputpaths.go:25 (*OutputPaths).DeclarationFilePath
+    // Go: outputpaths/outputpaths.go:23 (*OutputPaths).DeclarationFilePath
     pub fn declaration_file_path(&self) -> &str {
         &self.declaration_file_path
     }
 
-    // Go: outputpaths/outputpaths.go:30 (*OutputPaths).JsFilePath
+    // Go: outputpaths/outputpaths.go:28 (*OutputPaths).JsFilePath
     pub fn js_file_path(&self) -> &str {
         &self.js_file_path
     }
 
-    // Go: outputpaths/outputpaths.go:34 (*OutputPaths).SourceMapFilePath
+    // Go: outputpaths/outputpaths.go:32 (*OutputPaths).SourceMapFilePath
     pub fn source_map_file_path(&self) -> &str {
         &self.source_map_file_path
     }
 
-    // Go: outputpaths/outputpaths.go:38 (*OutputPaths).DeclarationMapPath
+    // Go: outputpaths/outputpaths.go:36 (*OutputPaths).DeclarationMapPath
     pub fn declaration_map_path(&self) -> &str {
         &self.declaration_map_path
     }
@@ -54,7 +54,7 @@ impl crate::declarations::OutputPaths for OutputPaths {
     }
 }
 
-// Go: outputpaths/outputpaths.go:41 ForceEmitPaths
+// Go: outputpaths/outputpaths.go:40 ForceEmitPaths
 /// Output paths to compute even when the options turn that output off (#4699).
 /// The API emit and the builder signature emit set them.
 #[derive(Clone, Copy, Debug, Default)]
@@ -64,7 +64,7 @@ pub struct ForceEmitPaths {
     pub declaration_map: bool,
 }
 
-// Go: outputpaths/outputpaths.go:47 GetOutputPathsFor
+// Go: outputpaths/outputpaths.go:46 GetOutputPathsFor
 pub fn get_output_paths_for(
     source_file: &ParsedSourceFile,
     options: &CompilerOptions,
@@ -135,7 +135,7 @@ pub fn get_output_paths_for_file(
     paths
 }
 
-// Go: outputpaths/outputpaths.go:72 ForEachEmittedFile
+// Go: outputpaths/outputpaths.go:69 ForEachEmittedFile
 pub fn for_each_emitted_file(
     host: &dyn OutputPathsHost,
     options: &CompilerOptions,
@@ -163,7 +163,7 @@ pub fn for_each_emitted_file(
     false
 }
 
-// Go: outputpaths/outputpaths.go:81 GetOutputJSFileName
+// Go: outputpaths/outputpaths.go:78 GetOutputJSFileName
 pub fn get_output_js_file_name(
     input_file_name: &str,
     options: &CompilerOptions,
@@ -190,7 +190,7 @@ pub fn get_output_js_file_name(
     String::new()
 }
 
-// Go: outputpaths/outputpaths.go:97 isContentMappedFileName (#4712)
+// Go: outputpaths/outputpaths.go:91 isContentMappedFileName (#4712)
 fn is_content_mapped_file_name(file_name: &str, host: &dyn OutputPathsHost) -> bool {
     !get_longest_extension_from_path(
         file_name,
@@ -200,7 +200,7 @@ fn is_content_mapped_file_name(file_name: &str, host: &dyn OutputPathsHost) -> b
     .is_empty()
 }
 
-// Go: outputpaths/outputpaths.go:101 GetOutputJSFileNameWorker
+// Go: outputpaths/outputpaths.go:95 GetOutputJSFileNameWorker
 pub fn get_output_js_file_name_worker(
     input_file_name: &str,
     options: &CompilerOptions,
@@ -212,7 +212,7 @@ pub fn get_output_js_file_name_worker(
     )
 }
 
-// Go: outputpaths/outputpaths.go:108 GetOutputDeclarationFileNameWorker
+// Go: outputpaths/outputpaths.go:100 GetOutputDeclarationFileNameWorker
 pub fn get_output_declaration_file_name_worker(
     input_file_name: &str,
     options: &CompilerOptions,
@@ -229,7 +229,7 @@ pub fn get_output_declaration_file_name_worker(
     )
 }
 
-// Go: outputpaths/outputpaths.go:116 GetOutputExtension
+// Go: outputpaths/outputpaths.go:109 GetOutputExtension
 pub fn get_output_extension(file_name: &str, jsx: JsxEmit) -> &'static str {
     if file_extension_is(file_name, EXTENSION_JSON) {
         EXTENSION_JSON
@@ -246,7 +246,8 @@ pub fn get_output_extension(file_name: &str, jsx: JsxEmit) -> &'static str {
     }
 }
 
-// Go: outputpaths/outputpaths.go:131 GetDeclarationEmitOutputFilePath
+// Go: outputpaths/outputpaths.go:131 GetDeclarationEmitOutputFilePath (at 673a5f17d713;
+// ts#64159 renames it getDeclarationEmitOutputFilePathForFileName, outputpaths/outputpaths.go:128)
 pub fn get_declaration_emit_output_file_path(
     file: &str,
     options: &CompilerOptions,
@@ -275,7 +276,7 @@ pub fn get_declaration_emit_output_file_path(
     change_to_declaration_extension(&path, host)
 }
 
-// Go: outputpaths/outputpaths.go:148 ChangeToDeclarationExtension (#4712)
+// Go: outputpaths/outputpaths.go:150 ChangeToDeclarationExtension (#4712)
 /// A content mapper extension `.ext` becomes `.d.ext.ts`. Other paths get
 /// their declaration extension (Go `GetDeclarationEmitExtensionForPath`).
 pub fn change_to_declaration_extension(path: &str, host: &dyn OutputPathsHost) -> String {
@@ -297,7 +298,8 @@ pub fn change_to_declaration_extension(path: &str, host: &dyn OutputPathsHost) -
     )
 }
 
-// Go: outputpaths/outputpaths.go:161 GetSourceFilePathInNewDir
+// Go: outputpaths/outputpaths.go:161 GetSourceFilePathInNewDir (at 673a5f17d713;
+// ts#64159 renames it GetSourceFileNameInNewDir, outputpaths/outputpaths.go:178)
 // tsgo#4900: the same as the worker.
 pub fn get_source_file_path_in_new_dir(
     file_name: &str,
@@ -315,7 +317,8 @@ pub fn get_source_file_path_in_new_dir(
     )
 }
 
-// Go: outputpaths/outputpaths.go:165 getOutputPathWithoutChangingExtension
+// Go: outputpaths/outputpaths.go:165 getOutputPathWithoutChangingExtension (at 673a5f17d713;
+// ts#64159 renames it getOutputFileNameWithoutChangingExtension, outputpaths/outputpaths.go:163)
 fn get_output_path_without_changing_extension(
     input_file_name: &str,
     output_directory: &str,
@@ -337,7 +340,8 @@ fn get_output_path_without_changing_extension(
     input_file_name.to_string()
 }
 
-// Go: outputpaths/outputpaths.go:175 GetSourceFilePathInNewDirWorker
+// Go: outputpaths/outputpaths.go:175 GetSourceFilePathInNewDirWorker (at 673a5f17d713;
+// ts#64159 merges it into GetSourceFileNameInNewDir, outputpaths/outputpaths.go:178)
 // tsgo#4900: `TrimFilePathPrefix` cuts the common source directory by runes,
 // not by its byte length.
 pub fn get_source_file_path_in_new_dir_worker(
@@ -358,7 +362,8 @@ pub fn get_source_file_path_in_new_dir_worker(
     }
 }
 
-// Go: outputpaths/outputpaths.go:183 getOwnEmitOutputFilePath
+// Go: outputpaths/outputpaths.go:183 getOwnEmitOutputFilePath (at 673a5f17d713;
+// ts#64159 renames it getOwnEmitOutputFilePathForFileName, outputpaths/outputpaths.go:188)
 fn get_own_emit_output_file_path(
     file_name: &str,
     options: &CompilerOptions,
@@ -381,7 +386,7 @@ fn get_own_emit_output_file_path(
     emit_output_file_path_without_extension + extension
 }
 
-// Go: outputpaths/outputpaths.go:200 GetSourceMapFilePath
+// Go: outputpaths/outputpaths.go:203 GetSourceMapFilePath
 pub fn get_source_map_file_path(js_file_path: &str, options: &CompilerOptions) -> String {
     if options.source_map.is_true() && !options.inline_source_map.is_true() {
         return format!("{js_file_path}.map");
@@ -389,7 +394,7 @@ pub fn get_source_map_file_path(js_file_path: &str, options: &CompilerOptions) -
     String::new()
 }
 
-// Go: outputpaths/outputpaths.go:207 GetBuildInfoFileName
+// Go: outputpaths/outputpaths.go:210 GetBuildInfoFileName
 pub fn get_build_info_file_name(options: &CompilerOptions, opts: &ComparePathsOptions) -> String {
     if !options.is_incremental() && !options.build.is_true() {
         return String::new();
@@ -479,7 +484,7 @@ fn compute_common_source_directory_of_filenames(
     get_path_from_path_components(&common_path_components)
 }
 
-// Go: outputpaths/commonsourcedirectory.go:51 GetComputedCommonSourceDirectory
+// Go: outputpaths/commonsourcedirectory.go:16 GetComputedCommonSourceDirectory
 pub fn get_computed_common_source_directory(
     emitted_files: &[String],
     current_directory: &str,
@@ -496,7 +501,7 @@ pub fn get_computed_common_source_directory(
     common_source_directory
 }
 
-// Go: outputpaths/commonsourcedirectory.go:59 GetCommonSourceDirectory
+// Go: outputpaths/commonsourcedirectory.go:20 GetCommonSourceDirectory
 // PORT: Go `checkSourceFilesBelongToPath` is a nillable callback; its
 // result is unused.
 pub fn get_common_source_directory(

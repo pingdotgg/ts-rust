@@ -831,7 +831,7 @@ impl<'a> Parser<'a> {
             || self.token == SyntaxKind::BigIntLiteral
     }
 
-    // Go: parser/parser.go:6096 isStartOfStatement
+    // Go: parser/parser.go:6127 isStartOfStatement
     pub fn is_start_of_statement(&mut self) -> bool {
         match self.token {
             // 'catch' and 'finally' do not actually indicate that the code is part of a statement,
@@ -871,7 +871,8 @@ impl<'a> Parser<'a> {
             | SyntaxKind::NamespaceKeyword
             | SyntaxKind::TypeKeyword
             | SyntaxKind::GlobalKeyword
-            | SyntaxKind::DeferKeyword => {
+            | SyntaxKind::DeferKeyword
+            | SyntaxKind::SourceKeyword => {
                 // When these don't start a declaration, they're an identifier in an expression statement
                 true
             }
@@ -895,7 +896,7 @@ impl<'a> Parser<'a> {
         self.look_ahead(Parser::scan_start_of_declaration)
     }
 
-    // Go: parser/parser.go:6129 scanStartOfDeclaration
+    // Go: parser/parser.go:6160 scanStartOfDeclaration
     pub fn scan_start_of_declaration(&mut self) -> bool {
         loop {
             match self.token {
@@ -930,7 +931,8 @@ impl<'a> Parser<'a> {
                 // could be legal, it would add complexity for very little gain.
                 SyntaxKind::InterfaceKeyword
                 | SyntaxKind::TypeKeyword
-                | SyntaxKind::DeferKeyword => {
+                | SyntaxKind::DeferKeyword
+                | SyntaxKind::SourceKeyword => {
                     return self.next_token_is_identifier_on_same_line();
                 }
                 SyntaxKind::ModuleKeyword | SyntaxKind::NamespaceKeyword => {
@@ -968,6 +970,7 @@ impl<'a> Parser<'a> {
                 SyntaxKind::ImportKeyword => {
                     self.next_token();
                     return self.token == SyntaxKind::DeferKeyword
+                        || self.token == SyntaxKind::SourceKeyword
                         || self.token == SyntaxKind::StringLiteral
                         || self.token == SyntaxKind::AsteriskToken
                         || self.token == SyntaxKind::OpenBraceToken

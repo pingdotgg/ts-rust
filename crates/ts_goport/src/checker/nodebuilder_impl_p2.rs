@@ -1901,10 +1901,9 @@ impl Checker {
         if !shape_good {
             return false;
         }
-        // TODO: going through emit resolver here is weird. Relayer these APIs.
+        // ts#64649, Go N' nodebuilderimpl.go:2156: the checker method, not the emit resolver.
         let enclosing_declaration = nb_ctx(b).borrow().enclosing_declaration;
-        self.get_emit_resolver()
-            .is_entity_name_visible(self, e.name().expression(), enclosing_declaration, false)
+        self.is_entity_name_visible(e.name().expression(), enclosing_declaration, false)
             .accessibility
             == SymbolAccessibility::ACCESSIBLE
     }

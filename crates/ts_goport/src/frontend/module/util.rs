@@ -25,29 +25,53 @@ pub fn is_applicable_versioned_types_key(key: &str) -> bool {
     range.test(&TYPE_SCRIPT_VERSION)
 }
 
-// Go: module/util.go:28 ParseNodeModuleFromPath
+// Go: module/util.go:28 NodeModulePackageRootForFile (ts#64544)
+#[must_use]
+pub fn node_module_package_root_for_file(resolved: &str) -> String {
+    parse_node_module_package_root(resolved, false /*isDirectory*/)
+}
+
+// Go: module/util.go:32 NodeModulePackageRootForDirectory (ts#64544)
+#[must_use]
+pub fn node_module_package_root_for_directory(resolved: &str) -> String {
+    parse_node_module_package_root(resolved, true /*isDirectory*/)
+}
+
+// Go: module/util.go:28 ParseNodeModuleFromPath (removed by ts#64544, which
+// splits it into NodeModulePackageRootForFile and
+// NodeModulePackageRootForDirectory)
+// PORT: kept for the ls callers (ls/rename.rs, ls/autoimport/util.rs) until
+// the ls lane ports their ts#64544 parts.
 #[must_use]
 pub fn parse_node_module_from_path(resolved: &str, is_folder: bool) -> String {
-    let path = normalize_path(resolved);
+    parse_node_module_package_root(resolved, is_folder)
+}
+
+// Go: module/util.go:36 parseNodeModulePackageRoot (ts#64544)
+fn parse_node_module_package_root(path: &str, is_directory: bool) -> String {
+    let path = normalize_path(path);
     let Some(idx) = path.rfind("/node_modules/") else {
         return String::new();
     };
 
     // PORT: Go `int` indexes are `i32` to match `move_to_next_directory_separator_if_available`.
     let index_after_node_modules = (idx + "/node_modules/".len()) as i32;
-    let mut index_after_package_name =
-        move_to_next_directory_separator_if_available(&path, index_after_node_modules, is_folder);
+    let mut index_after_package_name = move_to_next_directory_separator_if_available(
+        &path,
+        index_after_node_modules,
+        is_directory,
+    );
     if path.as_bytes()[index_after_node_modules as usize] == b'@' {
         index_after_package_name = move_to_next_directory_separator_if_available(
             &path,
             index_after_package_name,
-            is_folder,
+            is_directory,
         );
     }
     path[..index_after_package_name as usize].to_string()
 }
 
-// Go: module/util.go:43 ParsePackageName
+// Go: module/util.go:50 ParsePackageName
 #[must_use]
 pub fn parse_package_name(module_name: &str) -> (String, String) {
     let mut idx: Option<usize> = module_name.find('/');
@@ -65,7 +89,7 @@ pub fn parse_package_name(module_name: &str) -> (String, String) {
     }
 }
 
-// Go: module/util.go:58 MangleScopedPackageName
+// Go: module/util.go:65 MangleScopedPackageName
 #[must_use]
 pub fn mangle_scoped_package_name(package_name: &str) -> String {
     if !package_name.is_empty() && package_name.as_bytes()[0] == b'@' {
@@ -77,7 +101,7 @@ pub fn mangle_scoped_package_name(package_name: &str) -> String {
     package_name.to_string()
 }
 
-// Go: module/util.go:69 UnmangleScopedPackageName
+// Go: module/util.go:76 UnmangleScopedPackageName
 #[must_use]
 pub fn unmangle_scoped_package_name(package_name: &str) -> String {
     if let Some((before, after)) = package_name.split_once("__") {
@@ -86,13 +110,13 @@ pub fn unmangle_scoped_package_name(package_name: &str) -> String {
     package_name.to_string()
 }
 
-// Go: module/util.go:77 GetTypesPackageName
+// Go: module/util.go:84 GetTypesPackageName
 #[must_use]
 pub fn get_types_package_name(package_name: &str) -> String {
     format!("@types/{}", mangle_scoped_package_name(package_name))
 }
 
-// Go: module/util.go:81 GetPackageNameFromTypesPackageName
+// Go: module/util.go:88 GetPackageNameFromTypesPackageName
 #[must_use]
 pub fn get_package_name_from_types_package_name(mangled_name: &str) -> String {
     if let Some(without_at_type_prefix) = mangled_name.strip_prefix("@types/") {
@@ -101,7 +125,7 @@ pub fn get_package_name_from_types_package_name(mangled_name: &str) -> String {
     mangled_name.to_string()
 }
 
-// Go: module/util.go:89 ComparePatternKeys
+// Go: module/util.go:96 ComparePatternKeys
 #[must_use]
 // PORT: lengths and offsets are Go byte counts of the port forms (see
 // `scanner_util::GO_STRING_MARKER`).
@@ -132,7 +156,7 @@ pub fn compare_pattern_keys(a: &str, b: &str) -> i32 {
     0
 }
 
-// Go: module/util.go:125 GetResolutionDiagnostic
+// Go: module/util.go:132 GetResolutionDiagnostic
 // Returns a DiagnosticMessage if we won't include a resolved module due to its extension.
 // The DiagnosticMessage's parameters are the imported module name, and the filename it resolved to.
 // This returns a diagnostic even if the module will be an untyped module.
@@ -209,7 +233,7 @@ pub fn get_resolution_diagnostic(
     }
 }
 
-// Go: module/util.go:178 TryGetJSExtensionForFile
+// Go: module/util.go:189 TryGetJSExtensionForFile
 // TryGetJSExtensionForFile maps TS/JS/DTS extensions to the output JS-side extension.
 // Returns an empty string if the extension is unsupported.
 #[must_use]

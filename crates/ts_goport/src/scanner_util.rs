@@ -841,6 +841,7 @@ static TEXT_TO_KEYWORD: &[(&str, SyntaxKind)] = &[
     ("return", SyntaxKind::ReturnKeyword),
     ("satisfies", SyntaxKind::SatisfiesKeyword),
     ("set", SyntaxKind::SetKeyword),
+    ("source", SyntaxKind::SourceKeyword),
     ("static", SyntaxKind::StaticKeyword),
     ("string", SyntaxKind::StringKeyword),
     ("super", SyntaxKind::SuperKeyword),
@@ -4565,6 +4566,25 @@ mod tests {
         ];
         for (r, expected) in cases {
             assert_eq!(special_casing_mapping(r), expected, "{r:?}");
+        }
+    }
+
+    /// Every kind from FirstKeyword to LastKeyword has its text in both
+    /// keyword tables, as in Go `textToKeyword`. The LS keyword completions
+    /// read each of these kinds through `token_to_string`, so a kind without
+    /// text gives an item with an empty label.
+    #[test]
+    fn every_keyword_kind_has_its_text() {
+        use super::{SyntaxKind, TEXT_TO_KEYWORD, string_to_token, token_to_string};
+        assert_eq!(
+            TEXT_TO_KEYWORD,
+            crate::frontend::scanner::scanner_p1::TEXT_TO_KEYWORD
+        );
+        for i in SyntaxKind::FIRST_KEYWORD as u16..=SyntaxKind::LAST_KEYWORD as u16 {
+            let kind = SyntaxKind::try_from(i).expect("keyword kind");
+            let text = token_to_string(kind);
+            assert!(!text.is_empty(), "{kind:?}");
+            assert_eq!(string_to_token(text), kind, "{text}");
         }
     }
 }

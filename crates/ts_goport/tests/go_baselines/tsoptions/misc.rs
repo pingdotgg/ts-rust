@@ -210,7 +210,22 @@ fn get_wildcard_directories_dot_prefixed_include_with_dot_dir_exclude() {
     assert_eq!(result.into_iter().collect::<HashMap<_, _>>(), expected);
 }
 
-// Go: wildcarddirectories_test.go:9 TestGetWildcardDirectories_NonASCIICharacters
+// Go: wildcarddirectories_test.go:27 TestGetWildcardDirectories_DriveRoot (ts#64159)
+#[test]
+fn get_wildcard_directories_drive_root() {
+    let result = get_wildcard_directories(
+        &["*.ts".to_string()],
+        &[],
+        &ComparePathsOptions {
+            current_directory: "c:/".to_string(),
+            use_case_sensitive_file_names: false,
+        },
+    );
+    let expected: HashMap<String, bool> = HashMap::from([("c:/".to_string(), false)]);
+    assert_eq!(result.into_iter().collect::<HashMap<_, _>>(), expected);
+}
+
+// Go: wildcarddirectories_test.go:39 TestGetWildcardDirectories_NonASCIICharacters
 #[test]
 fn get_wildcard_directories_non_ascii_characters() {
     struct Test {

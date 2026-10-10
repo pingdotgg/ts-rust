@@ -570,6 +570,5 @@ pub(crate) fn get_import_needs_import_default_helper(node: Node) -> bool {
     !get_import_needs_import_star_helper(node)
         && (is_default_import(node)
             || (node.import_clause().is_some()
-                && is_named_imports(node.import_clause().named_bindings())
                 && contains_default_reference(node.import_clause().named_bindings())))
 }

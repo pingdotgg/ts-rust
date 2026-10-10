@@ -1133,8 +1133,13 @@ impl Checker {
         context_flags: ContextFlags,
     ) -> TypeId {
         if is_expression(declaration.parent()) {
+            // Don't contextually type a static property by its own class, its type might still be in-progress and that would cause spurious circularities
+            // (ts#64525, Go N' checker.go:30163)
             let parent_type = self.get_contextual_type(declaration.parent(), context_flags);
-            if parent_type.is_some() {
+            if parent_type.is_some() && {
+                let class_symbol = self.get_symbol_of_declaration(declaration.parent());
+                self.ty(parent_type).symbol != class_symbol
+            } {
                 let symbol = self.get_symbol_of_declaration(declaration);
                 let name = self.sym(symbol).name.clone();
                 return self.get_type_of_property_of_contextual_type(parent_type, &name);

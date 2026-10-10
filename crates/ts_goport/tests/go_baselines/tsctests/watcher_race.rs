@@ -357,7 +357,8 @@ fn build_watch_stops_when_context_is_cancelled() {
             cancel();
 
             let (result_tx, result_rx) = mpsc::sync_channel::<(ExitStatus, bool)>(1);
-            const ARGS: [&str; 4] = ["--build", "--watch", "--watchInterval", "60000"];
+            // ts#64457 removed --watchInterval from these arguments.
+            const ARGS: [&str; 2] = ["--build", "--watch"];
             thread::Builder::new()
                 .stack_size(STACK_SIZE)
                 .spawn(move || {

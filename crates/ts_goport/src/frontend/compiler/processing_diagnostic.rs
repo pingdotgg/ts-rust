@@ -44,7 +44,7 @@ pub struct IncludeExplainingDiagnostic {
 }
 
 impl ProcessingDiagnostic {
-    // Go: processingDiagnostic.go:42 (*processingDiagnostic).toDiagnostic
+    // Go: processingDiagnostic.go:43 (*processingDiagnostic).toDiagnostic
     pub fn to_diagnostic(&self, program: &NewProgram) -> Diagnostic {
         match self.kind {
             ProcessingDiagnosticKind::UNKNOWN_REFERENCE => {
@@ -88,7 +88,7 @@ impl ProcessingDiagnostic {
         }
     }
 
-    // Go: processingDiagnostic.go:27 (*processingDiagnostic).asFileIncludeReason
+    // Go: processingDiagnostic.go:28 (*processingDiagnostic).asFileIncludeReason
     // PORT: Go panics on the failed type assertion; so does this.
     pub fn as_file_include_reason(&self) -> &Rc<FileIncludeReason> {
         match &self.data {
@@ -99,7 +99,7 @@ impl ProcessingDiagnostic {
         }
     }
 
-    // Go: processingDiagnostic.go:38 (*processingDiagnostic).asIncludeExplainingDiagnostic
+    // Go: processingDiagnostic.go:39 (*processingDiagnostic).asIncludeExplainingDiagnostic
     // PORT: Go panics on the failed type assertion; so does this.
     pub fn as_include_explaining_diagnostic(&self) -> &IncludeExplainingDiagnostic {
         match &self.data {
@@ -110,7 +110,7 @@ impl ProcessingDiagnostic {
         }
     }
 
-    // Go: processingDiagnostic.go:67 (*processingDiagnostic).createDiagnosticExplainingFile
+    // Go: processingDiagnostic.go:70 (*processingDiagnostic).createDiagnosticExplainingFile
     pub fn create_diagnostic_explaining_file(&self, program: &NewProgram) -> Diagnostic {
         let diag = self.as_include_explaining_diagnostic();
         // PORT: Go nil slices are `None`, so the `!= nil` checks stay exact.
@@ -167,7 +167,7 @@ impl ProcessingDiagnostic {
                 }
                 include_details
                     .get_or_insert_with(Vec::new)
-                    .push(include_reason.to_diagnostic(program, false).clone());
+                    .push(include_reason.to_diagnostic(program, false, ""));
                 process_related_info(include_reason, preferred_location, related_info);
             };
 

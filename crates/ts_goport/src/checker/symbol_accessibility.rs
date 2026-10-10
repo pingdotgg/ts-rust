@@ -71,12 +71,11 @@ impl Checker {
                 self.get_accessible_symbol_chain(symbol, enclosing_declaration, meaning, false);
             if !accessible_symbol_chain.is_empty() {
                 had_accessible_chain = symbol;
-                let has_accessible_declarations =
-                    self.get_emit_resolver().has_visible_declarations(
-                        self,
-                        accessible_symbol_chain[0],
-                        should_compute_aliases_to_make_visible,
-                    );
+                // ts#64649, Go N' symbolaccessibility.go:40: the checker method.
+                let has_accessible_declarations = self.has_visible_declarations(
+                    accessible_symbol_chain[0],
+                    should_compute_aliases_to_make_visible,
+                );
                 if has_accessible_declarations.is_some() {
                     return has_accessible_declarations;
                 }
@@ -321,21 +320,110 @@ impl Checker {
         if let Some(existing) = &self.symbol_container_links.get(symbol).extended_containers {
             return existing.clone();
         }
-        // No results from files already being imported by this file - expand search (expensive, but not location-specific, so cached)
-        let other_files = source_files();
-        for file in other_files {
+        // No results from files already being imported by this file - expand search (not location-specific, so cached)
+        // ts#64469, Go N' symbolaccessibility.go:211
+        let results = self.get_external_module_containers(symbol);
+        self.symbol_container_links.get(symbol).extended_containers = Some(results.clone());
+        results
+    }
+
+    // Go: checker/symbolaccessibility.go:229 getExternalModuleContainers (ts#64469)
+    pub fn get_external_module_containers(&mut self, symbol: SymbolId) -> Vec<SymbolId> {
+        if self.external_module_containers.is_none() {
+            self.build_external_module_container_index();
+        }
+        let complete = self
+            .external_module_containers
+            .as_ref()
+            .is_some_and(|index| index.complete);
+        if !complete {
+            // Re-entered from an alias resolved while building the index; answer this query without it.
+            return self.scan_external_module_containers(symbol);
+        }
+        let target = self.get_resolved_target(symbol);
+        let parent = self.get_parent_of_symbol(symbol);
+        let index = self
+            .external_module_containers
+            .as_ref()
+            .expect("external module container index");
+        let containers = index
+            .containers_by_target
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
+        let Some(&parent_order) = index.module_order.get(&parent) else {
+            return containers;
+        };
+        // The parent module contains the symbol even when the symbol is absent from its exports.
+        match containers
+            .binary_search_by(|container| index.module_order[container].cmp(&parent_order))
+        {
+            Ok(_) => containers,
+            Err(at) => {
+                let mut containers = containers;
+                containers.insert(at, parent);
+                containers
+            }
+        }
+    }
+
+    // Go: checker/symbolaccessibility.go:253 buildExternalModuleContainerIndex (ts#64469)
+    pub fn build_external_module_container_index(&mut self) {
+        let files = source_files();
+        self.external_module_containers = Some(Box::new(ExternalModuleContainerIndex {
+            complete: false,
+            containers_by_target: FxHashMap::default(),
+            module_order: FxHashMap::with_capacity_and_hasher(files.len(), Default::default()),
+        }));
+        for file in files {
             if !is_external_module(file) {
                 continue;
             }
-            let sym = self.get_symbol_of_declaration(file);
-            let r#ref = self.get_alias_for_symbol_in_container(sym, symbol);
-            if r#ref.is_nil() {
+            let container = self.get_symbol_of_declaration(file);
+            self.external_module_container_index().add_module(container);
+            let exports = self.get_exports_of_symbol(container);
+            for exported in self.symbols.values(exports) {
+                let target = self.get_resolved_target(exported);
+                self.external_module_container_index()
+                    .add(target, container);
+            }
+            let export_equals = self.symbols.get(
+                self.sym(container).exports,
+                INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
+            );
+            if export_equals.is_some() {
+                let target = self.get_resolved_target(export_equals);
+                self.external_module_container_index()
+                    .add(target, container);
+            }
+        }
+        self.external_module_container_index().complete = true;
+    }
+
+    // PORT: Go `c.externalModuleContainers` after the build set it.
+    fn external_module_container_index(&mut self) -> &mut ExternalModuleContainerIndex {
+        self.external_module_containers
+            .as_mut()
+            .expect("external module container index")
+    }
+
+    // Go: checker/symbolaccessibility.go:275 scanExternalModuleContainers (ts#64469)
+    // The search that getAlternativeContainingModules made before ts#64469.
+    pub fn scan_external_module_containers(&mut self, symbol: SymbolId) -> Vec<SymbolId> {
+        let mut containers = Vec::new();
+        for file in source_files() {
+            if !is_external_module(file) {
                 continue;
             }
-            results.push(sym);
+            let container = self.get_symbol_of_declaration(file);
+            if self
+                .get_alias_for_symbol_in_container(container, symbol)
+                .is_some()
+            {
+                containers.push(container);
+            }
         }
-        self.symbol_container_links.get(symbol).extended_containers = Some(results.clone());
-        results
+        containers
     }
 
     // Go: checker/symbolaccessibility.go:226 getVariableDeclarationOfObjectLiteral
@@ -875,6 +963,34 @@ impl Checker {
         if symbol == self.get_merged_symbol(symbol_from_symbol_table) {
             like_symbols = true;
         }
+        // ts#64573 (Go N' symbolaccessibility.go:729): follow an alias chain
+        // (an `export =` of a class with a top-level `export type`).
+        if !like_symbols
+            && resolved_alias_symbol.is_some()
+            && self
+                .sym(resolved_alias_symbol)
+                .flags
+                .intersects(SymbolFlags::ALIAS)
+        {
+            let mut resolved_alias_symbol = resolved_alias_symbol;
+            let mut seen_aliases: FxHashSet<SymbolId> = FxHashSet::default();
+            // PORT: Go `resolveAlias` never returns nil; the `is_some` test
+            // only guards the read.
+            while resolved_alias_symbol.is_some()
+                && self
+                    .sym(resolved_alias_symbol)
+                    .flags
+                    .intersects(SymbolFlags::ALIAS)
+                && seen_aliases.insert(resolved_alias_symbol)
+            {
+                let target = self.resolve_alias(resolved_alias_symbol);
+                resolved_alias_symbol = self.get_merged_symbol(target);
+                if symbol == resolved_alias_symbol {
+                    like_symbols = true;
+                    break;
+                }
+            }
+        }
         if !like_symbols {
             return false;
         }
@@ -1327,4 +1443,30 @@ pub fn is_property_or_method_declaration_symbol(symbols: &SymbolArena, symbol: S
         return true;
     }
     false
+}
+
+// Go: checker/symbolaccessibility.go:216 externalModuleContainerIndex (ts#64469)
+// The external modules that export each resolved symbol, in program order.
+pub struct ExternalModuleContainerIndex {
+    pub complete: bool,
+    pub containers_by_target: FxHashMap<SymbolId, Vec<SymbolId>>,
+    pub module_order: FxHashMap<SymbolId, usize>,
+}
+
+impl ExternalModuleContainerIndex {
+    // Go: checker/symbolaccessibility.go:222 externalModuleContainerIndex.add (ts#64469)
+    fn add(&mut self, target: SymbolId, container: SymbolId) {
+        // Modules are indexed one at a time, so a repeat of this container is always the last entry.
+        let existing = self.containers_by_target.entry(target).or_default();
+        if existing.last() != Some(&container) {
+            existing.push(container);
+        }
+    }
+
+    // PORT: Go `index.moduleOrder[container] = len(index.moduleOrder)` in
+    // buildExternalModuleContainerIndex.
+    fn add_module(&mut self, container: SymbolId) {
+        let order = self.module_order.len();
+        self.module_order.insert(container, order);
+    }
 }

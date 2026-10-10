@@ -1442,7 +1442,8 @@ impl Checker {
                 if name_text != "meta" {
                     let is_callee =
                         is_call_expression(node.parent()) && node.parent().expression() == node;
-                    if name_text == "defer" {
+                    // ts#63915, Go N' grammarchecks.go:1825: `defer` and `source`
+                    if is_import_phase_meta_property(node) {
                         if !is_callee {
                             return self.grammar_error_at_pos(
                                 node,
@@ -1456,7 +1457,7 @@ impl Checker {
                         if is_callee {
                             return self.grammar_error_on_node(
                                 node_name,
-                                diag::X_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer,
+                                diag::X_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_defer_or_source,
                                 args![name_text],
                             );
                         }

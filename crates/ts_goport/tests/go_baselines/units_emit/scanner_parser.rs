@@ -1,5 +1,8 @@
 //! Ports of internal/scanner/scanner_test.go and
 //! internal/parser/parser_test.go (TestHeritageClauseElementKinds,
+//! TestParseStaticSourcePhaseImport, TestParseSourceAsImportEqualsBinding,
+//! TestParseInvalidStaticSourcePhaseImports,
+//! TestParseDynamicSourcePhaseImport, TestParseEscapedDynamicImportPhase,
 //! TestJSDocImportTypeParentChain,
 //! TestJSDocTypeSourceSurvivesReparse,
 //! TestJSDocTypeSourcePropagatesToConstructedReparse and
@@ -11,9 +14,11 @@
 
 use super::Subtests;
 use super::childprog::in_child;
-use super::leak;
+use super::parsetestutil::{check_diagnostics, parse_type_script, parse_type_script_file};
+use super::{leak, must};
 use ts_goport::ast::{
-    get_reparsed_node_for_node, get_source_file_of_node, source_file_get_position_map,
+    get_reparsed_node_for_node, get_source_file_of_node, source_file_diagnostics,
+    source_file_get_position_map,
 };
 use ts_goport::frontend::parser::{ParsedSourceFile, SourceFileParseOptions, parse_source_file};
 use ts_goport::frontend::scanner::new_scanner;
@@ -36,6 +41,19 @@ fn test_scan_string_preserves_lone_surrogates() {
         + &encode_js_string_rune(0xD801)
         + "🦀";
     assert_eq!(s.token_value(), expected);
+}
+
+// Go: scanner/scanner_test.go:95 TestScanSourceKeyword
+#[test]
+fn test_scan_source_keyword() {
+    let mut s = new_scanner();
+    s.set_text("source sourceValue");
+
+    assert_eq!(s.scan(), SyntaxKind::SourceKeyword);
+    assert_eq!(token_to_string(SyntaxKind::SourceKeyword), "source");
+    assert_eq!(string_to_token("source"), SyntaxKind::SourceKeyword);
+    assert_eq!(s.scan(), SyntaxKind::Identifier);
+    assert_eq!(s.token_value(), "sourceValue");
 }
 
 // Go: parser/parser_test.go:158 TestHeritageClauseElementKinds
@@ -102,6 +120,216 @@ class MissingImplements implements B. {}
         first_element_kind(missing_implements_decl, 0),
         SyntaxKind::ExpressionWithTypeArguments
     );
+}
+
+// Go: parser/parser_test.go:191 TestParseStaticSourcePhaseImport (ts#63915)
+#[test]
+fn test_parse_static_source_phase_import() {
+    // (name, source, phaseModifier, bindingName, hasAttributes)
+    let tests: &[(&str, &str, SyntaxKind, &str, bool)] = &[
+        (
+            "source phase",
+            r#"import source a from "./a.wasm";"#,
+            SyntaxKind::SourceKeyword,
+            "a",
+            false,
+        ),
+        (
+            "source phase with import attributes",
+            r#"import source a from "./a.wasm" with { type: "webassembly" };"#,
+            SyntaxKind::SourceKeyword,
+            "a",
+            true,
+        ),
+        (
+            "from as source phase binding",
+            r#"import source from from "./module.js";"#,
+            SyntaxKind::SourceKeyword,
+            "from",
+            false,
+        ),
+        (
+            "source as ordinary default binding",
+            r#"import source from "./module.js";"#,
+            SyntaxKind::Unknown,
+            "source",
+            false,
+        ),
+        (
+            "source as ordinary default binding with named imports",
+            r#"import source, { value } from "./module.js";"#,
+            SyntaxKind::Unknown,
+            "source",
+            false,
+        ),
+        (
+            "escaped source as ordinary default binding",
+            r#"import s\u006furce from "./module.js";"#,
+            SyntaxKind::Unknown,
+            "source",
+            false,
+        ),
+        (
+            "escaped defer as ordinary default binding",
+            r#"import d\u0065fer from "./module.js";"#,
+            SyntaxKind::Unknown,
+            "defer",
+            false,
+        ),
+    ];
+
+    let mut t = Subtests::new("TestParseStaticSourcePhaseImport");
+    for &(name, source, phase_modifier, binding_name, has_attributes) in tests {
+        t.run(name, || {
+            let file = parse_type_script(source, false);
+            check_diagnostics(file)?;
+            let statements = file.statements();
+            assert_eq!(statements.len(), 1);
+
+            let statement = statements.get(0);
+            assert!(is_import_declaration(statement));
+
+            let clause = statement.import_clause();
+            assert!(clause.is_some());
+
+            assert_eq!(clause.phase_modifier(), phase_modifier);
+            assert!(clause.name().is_some());
+            assert_eq!(clause.name().text(), binding_name);
+            assert_eq!(statement.attributes().is_some(), has_attributes);
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: parser/parser_test.go:267 TestParseSourceAsImportEqualsBinding (ts#63915)
+#[test]
+fn test_parse_source_as_import_equals_binding() {
+    let file = parse_type_script(r#"import source = require("./module.js");"#, false);
+    must(check_diagnostics(file));
+    let statements = file.statements();
+    assert_eq!(statements.len(), 1);
+
+    let statement = statements.get(0);
+    assert!(is_import_equals_declaration(statement));
+
+    assert_eq!(statement.name().text(), "source");
+}
+
+// Go: parser/parser_test.go:279 TestParseInvalidStaticSourcePhaseImports (ts#63915)
+#[test]
+fn test_parse_invalid_static_source_phase_imports() {
+    // (source, hasName, hasNamedBindings)
+    let tests: &[(&str, bool, bool)] = &[
+        (r#"import source "./a.js";"#, false, false),
+        (r#"import source * as a from "./a.js";"#, false, true),
+        (r#"import source { a } from "./a.js";"#, false, true),
+        (r#"import source a, { b } from "./a.js";"#, true, true),
+    ];
+
+    for &(source, has_name, has_named_bindings) in tests {
+        let file = parse_type_script(source, false);
+        must(check_diagnostics(file));
+        let statements = file.statements();
+        assert_eq!(statements.len(), 1);
+
+        let statement = statements.get(0);
+        assert!(is_import_declaration(statement));
+
+        let clause = statement.import_clause();
+        assert!(clause.is_some());
+
+        assert_eq!(clause.phase_modifier(), SyntaxKind::SourceKeyword);
+        assert_eq!(clause.name().is_some(), has_name);
+        assert_eq!(clause.named_bindings().is_some(), has_named_bindings);
+    }
+}
+
+// Go: parser/parser_test.go:310 TestParseDynamicSourcePhaseImport (ts#63915)
+#[test]
+fn test_parse_dynamic_source_phase_import() {
+    let parsed = parse_type_script_file(
+        r#"import.source("./a.wasm", { with: { type: "webassembly" } });"#,
+        false,
+    );
+    let file = parsed.root;
+    must(check_diagnostics(file));
+    let statements = file.statements();
+    assert_eq!(statements.len(), 1);
+
+    let statement = statements.get(0);
+    assert!(is_expression_statement(statement));
+
+    let call = statement.expression();
+    assert!(is_call_expression(call));
+    assert!(is_import_call(call));
+    assert!(
+        call.subtree_facts()
+            .intersects(SubtreeFacts::SUBTREE_CONTAINS_DYNAMIC_IMPORT)
+    );
+
+    let meta_property = call.expression();
+    assert!(is_meta_property(meta_property));
+    assert_eq!(meta_property.keyword_token(), SyntaxKind::ImportKeyword);
+    assert_eq!(meta_property.text(), "source");
+    assert_eq!(call.arguments().len(), 2);
+    assert!(
+        file.flags()
+            .intersects(NodeFlags::POSSIBLY_CONTAINS_DYNAMIC_IMPORT)
+    );
+    assert!(
+        !file
+            .flags()
+            .intersects(NodeFlags::POSSIBLY_CONTAINS_IMPORT_META)
+    );
+    assert!(parsed.external_module_indicator.is_nil());
+}
+
+// Go: parser/parser_test.go:334 TestParseEscapedDynamicImportPhase (ts#63915)
+#[test]
+fn test_parse_escaped_dynamic_import_phase() {
+    // (source, phaseName)
+    let tests: &[(&str, &str)] = &[
+        (r#"import.d\u0065fer("./a.js");"#, "defer"),
+        (r#"import.s\u006furce("./a.wasm");"#, "source"),
+    ];
+
+    let mut t = Subtests::new("TestParseEscapedDynamicImportPhase");
+    for &(source, phase_name) in tests {
+        t.run(phase_name, || {
+            let file = parse_type_script(source, false);
+            let diagnostics = source_file_diagnostics(file);
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(
+                diagnostics[0].code(),
+                diag::Keywords_cannot_contain_escape_characters.code() as i32
+            );
+            let statements = file.statements();
+            assert_eq!(statements.len(), 1);
+
+            let statement = statements.get(0);
+            assert!(is_expression_statement(statement));
+
+            let call = statement.expression();
+            assert!(is_call_expression(call));
+            assert!(is_import_call(call));
+
+            let meta_property = call.expression();
+            assert!(is_meta_property(meta_property));
+            assert_eq!(meta_property.text(), phase_name);
+            assert!(
+                file.flags()
+                    .intersects(NodeFlags::POSSIBLY_CONTAINS_DYNAMIC_IMPORT)
+            );
+            assert!(
+                !file
+                    .flags()
+                    .intersects(NodeFlags::POSSIBLY_CONTAINS_IMPORT_META)
+            );
+            Ok(())
+        });
+    }
+    t.finish();
 }
 
 // Go: parser/parser_test.go:189 TestJSDocImportTypeParentChain

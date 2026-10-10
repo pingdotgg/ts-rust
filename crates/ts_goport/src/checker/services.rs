@@ -1217,16 +1217,12 @@ impl Checker {
         check_mode: CheckMode,
         argument_count: i32,
     ) -> (SignatureId, Vec<SignatureId>) {
-        let parsed_node = new_emit_context().parse_node(node);
         self.apparent_argument_count = Some(argument_count);
         let mut candidates_out_array: Vec<SignatureId> = Vec::new();
         let mut res = SignatureId::NIL;
-        if parsed_node.is_some() {
-            res = self.get_resolved_signature(
-                parsed_node,
-                Some(&mut candidates_out_array),
-                check_mode,
-            );
+        // ts#64649, Go N' services.go:902: a parse tree test, no emit context.
+        if node.is_some() && is_parse_tree_node(node) {
+            res = self.get_resolved_signature(node, Some(&mut candidates_out_array), check_mode);
         }
         self.apparent_argument_count = None;
         (res, candidates_out_array)

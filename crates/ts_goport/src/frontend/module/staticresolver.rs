@@ -4,7 +4,7 @@ use crate::frontend::prelude::*;
 use crate::gostd::{GoError, errors, strconv};
 use std::sync::Arc;
 
-// Go: module/staticresolver.go:12 StaticResolutionEntry
+// Go: module/staticresolver.go:11 StaticResolutionEntry
 // PORT: Go `*core.ResolutionMode` and `*ResolvedModule` are `Option`.
 #[derive(Clone, Default)]
 pub struct StaticResolutionEntry {
@@ -14,7 +14,7 @@ pub struct StaticResolutionEntry {
     pub result: Option<Arc<ResolvedModule>>,
 }
 
-// Go: module/staticresolver.go:19 staticResolutionKey
+// Go: module/staticresolver.go:18 staticResolutionKey
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 struct StaticResolutionKey {
     module_name: String,
@@ -24,7 +24,7 @@ struct StaticResolutionKey {
     has_mode: bool,
 }
 
-// Go: module/staticresolver.go:27 StaticResolutions
+// Go: module/staticresolver.go:26 StaticResolutions
 pub struct StaticResolutions {
     fallback_to_resolver: bool,
     entries: FxHashMap<StaticResolutionKey, Option<Arc<ResolvedModule>>>,
@@ -32,7 +32,7 @@ pub struct StaticResolutions {
     use_case_sensitive_file_names: bool,
 }
 
-// Go: module/staticresolver.go:34 NewStaticResolutions
+// Go: module/staticresolver.go:33 NewStaticResolutions
 pub fn new_static_resolutions(
     entries: &[StaticResolutionEntry],
     fallback_to_resolver: bool,
@@ -127,13 +127,13 @@ impl StaticResolutions {
     }
 }
 
-// Go: module/staticresolver.go:83 StaticResolver
+// Go: module/staticresolver.go:82 StaticResolver
 pub struct StaticResolver {
     fallback: Rc<dyn Resolver>,
     resolutions: Rc<StaticResolutions>,
 }
 
-// Go: module/staticresolver.go:88 NewStaticResolver
+// Go: module/staticresolver.go:87 NewStaticResolver
 #[must_use]
 pub fn new_static_resolver(
     fallback: Rc<dyn Resolver>,
@@ -146,7 +146,7 @@ pub fn new_static_resolver(
 }
 
 impl StaticResolver {
-    // Go: module/staticresolver.go:115 resolveModuleName
+    // Go: module/staticresolver.go:118 resolveModuleName
     // PORT: named `resolve_module_name_worker`; the Go names
     // `ResolveModuleName` and `resolveModuleName` share a snake name.
     fn resolve_module_name_worker(
@@ -180,7 +180,7 @@ impl StaticResolver {
 }
 
 impl Resolver for StaticResolver {
-    // Go: module/staticresolver.go:92 ResolveModuleName
+    // Go: module/staticresolver.go:95 ResolveModuleName
     fn resolve_module_name(
         &self,
         module_name: &str,
@@ -201,7 +201,7 @@ impl Resolver for StaticResolver {
         )
     }
 
-    // Go: module/staticresolver.go:101 ResolveModuleNameFromDirectory
+    // Go: module/staticresolver.go:104 ResolveModuleNameFromDirectory
     fn resolve_module_name_from_directory(
         &self,
         module_name: &str,
@@ -228,7 +228,7 @@ impl Resolver for StaticResolver {
         )
     }
 
-    // Go: module/staticresolver.go:131 ResolveTypeReferenceDirective
+    // Go: module/staticresolver.go:134 ResolveTypeReferenceDirective
     fn resolve_type_reference_directive(
         &self,
         type_reference_directive_name: &str,
@@ -244,12 +244,12 @@ impl Resolver for StaticResolver {
         )
     }
 
-    // Go: module/staticresolver.go:140 GetPackageScopeForPath
+    // Go: module/staticresolver.go:140 GetPackageScopeForPath (at 673a5f17d713; removed by ts#64519, not ported yet)
     fn get_package_scope_for_path(&self, directory: &str) -> Option<Rc<InfoCacheEntry>> {
         self.fallback.get_package_scope_for_path(directory)
     }
 
-    // Go: module/staticresolver.go:144 PackageJsonCacheEntries
+    // Go: module/staticresolver.go:144 PackageJsonCacheEntries (at 673a5f17d713; removed by ts#64519, not ported yet)
     fn package_json_cache_entries(
         &self,
         f: &mut dyn FnMut(&Path, PackageJsonCacheEntry<'_>) -> bool,
@@ -257,7 +257,7 @@ impl Resolver for StaticResolver {
         self.fallback.package_json_cache_entries(f);
     }
 
-    // Go: module/staticresolver.go:148 ResolvePackageDirectory
+    // Go: module/staticresolver.go:148 ResolvePackageDirectory (at 673a5f17d713; removed by ts#64519, not ported yet)
     fn resolve_package_directory(
         &self,
         module_name: &str,

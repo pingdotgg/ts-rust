@@ -855,11 +855,15 @@ impl Checker {
                 let non_fixing_mapper = self.inference_context(n).non_fixing_mapper;
                 let instantiated_constraint = self.instantiate_type(constraint, non_fixing_mapper);
                 let compare_types = self.inference_context(n).compare_types.clone();
+                // A pure return type inference is still filtered in a recursive call resolution, whose result can become the type of the enclosing declaration.
+                // (ts#64530, Go N' inference.go:1393)
                 if inferred_type.is_some()
-                    && !self
+                    && (!self
                         .inference_context(n)
                         .flags
                         .intersects(InferenceFlags::NO_CONSTRAINT_CHECKS)
+                        || self.inference_context(n).inferences[index].priority
+                            == InferencePriority::RETURN_TYPE)
                 {
                     let constraint_with_this = self.get_type_with_this_argument(
                         instantiated_constraint,

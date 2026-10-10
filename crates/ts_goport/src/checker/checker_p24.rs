@@ -949,9 +949,13 @@ impl Checker {
     }
 
     // Go: checker/checker.go:22216 somePropertyReducesToNever
-    // PORT: Go ranges over a map, so its order is random. Every order gives
-    // the same answer; the order only decides how many synthetic properties
-    // are made before the first match. The port's order is deterministic:
+    // PORT: Go N ranged over a map, so its order was random. Since ts#64521
+    // (Go N' checker.go:22283) Go counts in a `collections.OrderedMap` and
+    // tests the names in first-seen order, so it makes the combined
+    // properties in the same order every time. Every order gives the same
+    // answer; the order only decides how many synthetic properties are made
+    // before the first match. The port keeps its own deterministic order
+    // (a PERF deviation from Go N' first-seen order):
     // first the names that are not a public method in some constituent, then
     // the names that are a public method in every constituent, each group in
     // the order in which the names are first seen (constituent order, then

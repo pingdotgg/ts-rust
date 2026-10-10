@@ -22,6 +22,7 @@
 
 mod ast_tests;
 mod buildinfo_contentmapper_tests;
+mod checker_tests;
 mod checkerpool_tests;
 mod childprog;
 mod clean_tests;

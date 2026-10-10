@@ -11,12 +11,14 @@
 //! code, stdout and output files with `go/<option>`. A passing case deletes
 //! its directory.
 //!
-//! The Go output is from the pin N oracle (673a5f17d713, sha256
-//! 2991c6e91578), with the same layout and args, from the repository root:
+//! The Go output is from the pin N' oracle (fed0bf24149f, sha256
+//! 6768987d6299), with the same layout and args, from the repository root.
+//! It differs from pin N (673a5f17d713) only in the source maps, which no
+//! longer have `"sourceRoot":""` (ts#64544):
 //!
 //! ```sh
 //! cp -r crates/ts_goport/tests/fixtures/source_map_cut/case <dir>/case && cd <dir>/case
-//! GOPORT_PIN=673a5f17d713 scripts/upstream/pin.py exec -- ~/.local/bin/tsgo-oracle \
+//! GOPORT_PIN=fed0bf24149f scripts/upstream/pin.py exec -- ~/.local/bin/tsgo-oracle \
 //!   -p tsconfig.json --outDir ../out --pretty false --noEmit false --<option> true > ../stdout
 //! ```
 //!

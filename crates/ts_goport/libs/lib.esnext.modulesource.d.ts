@@ -14,12 +14,8 @@ and limitations under the License.
 ***************************************************************************** */
 
 
-/// <reference lib="es2026" />
-/// <reference lib="esnext.intl" />
-/// <reference lib="esnext.decorators" />
-/// <reference lib="esnext.disposable" />
-/// <reference lib="esnext.sharedmemory" />
-/// <reference lib="esnext.temporal" />
-/// <reference lib="esnext.date" />
-/// <reference lib="esnext.modulesource" />
-/// <reference lib="esnext.promise" />
+/// <reference lib="es2015.symbol.wellknown" />
+
+interface AbstractModuleSource {
+    readonly [Symbol.toStringTag]: string;
+}

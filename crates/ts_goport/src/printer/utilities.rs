@@ -1316,8 +1316,9 @@ mod tests {
     // Go prints `%#v` of the parent's Kind in this panic
     // (printer/utilities.go:457 `panic(fmt.Sprintf("Unexpected TypeParameter
     // parent: %#v", parent.Kind))`). Kind is an int16 with no `GoString`
-    // method, so Go prints the number: 201 is `KindMappedType` at pin N
-    // (ast/kind_generated.go).
+    // method, so Go prints the number: 202 is `KindMappedType` at pin
+    // fed0bf24149f (ast/kind_generated.go; 201 before ts#63915 added
+    // KindSourceKeyword).
     #[test]
     fn unexpected_type_parameter_parent_panic_prints_the_kind_number() {
         use crate::frontend::parser::{SourceFileParseOptions, parse_source_file};
@@ -1335,7 +1336,7 @@ mod tests {
         .expect_err("no panic");
         assert_eq!(
             payload.downcast_ref::<String>().map(String::as_str),
-            Some("Unexpected TypeParameter parent: 201")
+            Some("Unexpected TypeParameter parent: 202")
         );
     }
 

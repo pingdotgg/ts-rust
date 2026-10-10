@@ -9,29 +9,53 @@ use smallvec::SmallVec;
 // nested inference takes another state from the pool, never this one.
 
 // Go: checker/inference.go:11 InferenceKey
+// ts#64553 (Go N' inference.go:11): the key also holds the priority and the
+// variance of the inference state, so a cached inference from type arguments
+// is reused only in the same state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InferenceKey {
-    pub s: TypeId,
-    pub t: TypeId,
+    pub source: TypeId,
+    pub target: TypeId,
+    pub priority: InferencePriority,
+    pub contravariant: bool,
+    pub bivariant: bool,
 }
 
-// PORT: both ids are hashed as one word. No code iterates maps with these
-// keys.
-impl std::hash::Hash for InferenceKey {
+impl InferenceKey {
+    /// PORT: perf. The two ids as one word.
     #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_u64(((self.s.0 as u64) << 32) | self.t.0 as u64);
+    fn ids_word(&self) -> u64 {
+        ((self.source.0 as u64) << 32) | self.target.0 as u64
+    }
+
+    /// PORT: perf. The priority bits and the two variance flags as one word.
+    #[inline]
+    fn state_word(&self) -> u64 {
+        ((self.priority.bits() as u32 as u64) << 2)
+            | ((self.contravariant as u64) << 1)
+            | self.bivariant as u64
     }
 }
 
-// PORT: perf. The same word through an Fx mix, which is the hash that
+// PORT: the ids are hashed as one word and the state as a second word. No
+// code iterates maps with these keys.
+impl std::hash::Hash for InferenceKey {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.ids_word());
+        state.write_u64(self.state_word());
+    }
+}
+
+// PORT: perf. The same words through an Fx mix, which is the hash that
 // `FxHashMap` computes for this key.
 impl FlatKey for InferenceKey {
     #[inline]
     fn flat_hash(&self) -> u64 {
         use std::hash::Hasher;
         let mut h = rustc_hash::FxHasher::default();
-        h.write_u64(((self.s.0 as u64) << 32) | self.t.0 as u64);
+        h.write_u64(self.ids_word());
+        h.write_u64(self.state_word());
         h.finish()
     }
 }
@@ -351,47 +375,23 @@ impl Checker {
             (Some(sa), Some(ta)) if sa.symbol == ta.symbol
         );
         if same_alias {
-            let sa = self.ty(source).alias.clone().unwrap();
-            let ta = self.ty(target).alias.clone().unwrap();
-            if !sa.type_arguments.is_empty() || !ta.type_arguments.is_empty() {
-                // Source and target are types originating in the same generic type alias declaration.
-                // Simply infer from source type arguments to target type arguments, with defaults applied.
-                let params_len = self.type_alias_links.get(sa.symbol).type_parameters.len();
-                let node_is_in_js_file = is_in_js_file(self.sym(sa.symbol).value_declaration);
-                // PERF: when no argument is missing and the alias is not in a
-                // JS file, Go fillMissingTypeArguments returns its input and
-                // getMinTypeArgumentCount only reads declarations, so the
-                // argument lists are read in place, without the copies.
-                if params_len != 0
-                    && !node_is_in_js_file
-                    && sa.type_arguments.len() >= params_len
-                    && ta.type_arguments.len() >= params_len
-                {
-                    let variances = self.get_alias_variances(sa.symbol);
-                    self.infer_from_type_arguments(
-                        n,
-                        &sa.type_arguments,
-                        &ta.type_arguments,
-                        &variances,
-                    );
-                    return;
-                }
-                let params = self.type_alias_links.get(sa.symbol).type_parameters.clone();
-                let min_params = self.get_min_type_argument_count(&params);
-                let source_types = self.fill_missing_type_arguments(
-                    &sa.type_arguments,
-                    &params,
-                    min_params,
-                    node_is_in_js_file,
-                );
-                let target_types = self.fill_missing_type_arguments(
-                    &ta.type_arguments,
-                    &params,
-                    min_params,
-                    node_is_in_js_file,
-                );
-                let variances = self.get_alias_variances(sa.symbol);
-                self.infer_from_type_arguments(n, &source_types, &target_types, &variances);
+            let (sa_empty, ta_empty) = (
+                self.ty(source)
+                    .alias
+                    .as_ref()
+                    .unwrap()
+                    .type_arguments
+                    .is_empty(),
+                self.ty(target)
+                    .alias
+                    .as_ref()
+                    .unwrap()
+                    .type_arguments
+                    .is_empty(),
+            );
+            if !sa_empty || !ta_empty {
+                // ts#64553 (Go N' inference.go:84)
+                self.invoke_once(n, source, target, Checker::infer_from_alias_type_arguments);
             }
             // And if there weren't any type arguments, there's no reason to run inference as the types must be the same.
             return;
@@ -642,15 +642,12 @@ impl Checker {
                 && self.ty(target).as_type_reference().node.is_some())
         {
             // If source and target are references to the same generic type, infer from type arguments
-            let source_type_arguments = self.get_type_arguments(source);
-            let target_type_arguments = self.get_type_arguments(target);
-            let source_target = self.ty(source).as_type_reference().object.target;
-            let variances = self.get_variances(source_target);
-            self.infer_from_type_arguments(
+            // ts#64553 (Go N' inference.go:230)
+            self.invoke_once(
                 n,
-                &source_type_arguments,
-                &target_type_arguments,
-                &variances,
+                source,
+                target,
+                Checker::infer_from_reference_type_arguments,
             );
         } else if source_flags.intersects(TypeFlags::INDEX)
             && target_flags.intersects(TypeFlags::INDEX)
@@ -750,6 +747,69 @@ impl Checker {
                 self.invoke_once(n, source, target, Checker::infer_from_object_types);
             }
         }
+    }
+
+    // Go: checker/inference.go:280 inferFromAliasTypeArguments (Go N', ts#64553)
+    pub fn infer_from_alias_type_arguments(
+        &mut self,
+        n: &mut InferenceState,
+        source: TypeId,
+        target: TypeId,
+    ) {
+        let sa = self.ty(source).alias.clone().unwrap();
+        let ta = self.ty(target).alias.clone().unwrap();
+        // Source and target are types originating in the same generic type alias declaration.
+        // Simply infer from source type arguments to target type arguments, with defaults applied.
+        let params_len = self.type_alias_links.get(sa.symbol).type_parameters.len();
+        let node_is_in_js_file = is_in_js_file(self.sym(sa.symbol).value_declaration);
+        // PERF: when no argument is missing and the alias is not in a
+        // JS file, Go fillMissingTypeArguments returns its input and
+        // getMinTypeArgumentCount only reads declarations, so the
+        // argument lists are read in place, without the copies.
+        if params_len != 0
+            && !node_is_in_js_file
+            && sa.type_arguments.len() >= params_len
+            && ta.type_arguments.len() >= params_len
+        {
+            let variances = self.get_alias_variances(sa.symbol);
+            self.infer_from_type_arguments(n, &sa.type_arguments, &ta.type_arguments, &variances);
+            return;
+        }
+        let params = self.type_alias_links.get(sa.symbol).type_parameters.clone();
+        let min_params = self.get_min_type_argument_count(&params);
+        let source_types = self.fill_missing_type_arguments(
+            &sa.type_arguments,
+            &params,
+            min_params,
+            node_is_in_js_file,
+        );
+        let target_types = self.fill_missing_type_arguments(
+            &ta.type_arguments,
+            &params,
+            min_params,
+            node_is_in_js_file,
+        );
+        let variances = self.get_alias_variances(sa.symbol);
+        self.infer_from_type_arguments(n, &source_types, &target_types, &variances);
+    }
+
+    // Go: checker/inference.go:291 inferFromReferenceTypeArguments (Go N', ts#64553)
+    pub fn infer_from_reference_type_arguments(
+        &mut self,
+        n: &mut InferenceState,
+        source: TypeId,
+        target: TypeId,
+    ) {
+        let source_type_arguments = self.get_type_arguments(source);
+        let target_type_arguments = self.get_type_arguments(target);
+        let source_target = self.ty(source).as_type_reference().object.target;
+        let variances = self.get_variances(source_target);
+        self.infer_from_type_arguments(
+            n,
+            &source_type_arguments,
+            &target_type_arguments,
+            &variances,
+        );
     }
 
     // Go: checker/inference.go:284 inferFromTypeArguments
@@ -855,8 +915,11 @@ impl Checker {
     ) {
         // PORT: a type handle equals its Go `id`, so the key needs no type read.
         let key = InferenceKey {
-            s: source,
-            t: target,
+            source,
+            target,
+            priority: n.priority,
+            contravariant: n.contravariant,
+            bivariant: n.bivariant,
         };
         // PORT: perf. The map is made first; a lookup on Go's nil map misses,
         // and the miss path makes the map anyway, so the map contents are the
@@ -1504,16 +1567,8 @@ impl Checker {
                 || self.is_array_type(source) && self.is_array_type(target))
         {
             // If source and target are references to the same generic type, infer from type arguments
-            let source_type_arguments = self.get_type_arguments(source);
-            let target_type_arguments = self.get_type_arguments(target);
-            let source_target = self.ty(source).target();
-            let variances = self.get_variances(source_target);
-            self.infer_from_type_arguments(
-                n,
-                &source_type_arguments,
-                &target_type_arguments,
-                &variances,
-            );
+            // ts#64553 (Go N' inference.go:713)
+            self.infer_from_reference_type_arguments(n, source, target);
             return;
         }
         if self.is_generic_mapped_type(source) && self.is_generic_mapped_type(target) {

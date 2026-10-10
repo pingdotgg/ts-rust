@@ -3,7 +3,7 @@
 use crate::contentmapper::Manifest;
 use crate::frontend::prelude::*;
 
-// Go: tsoptions/contentmappers.go:17 resolveContentMapperManifest
+// Go: tsoptions/contentmappers.go:31 resolveContentMapperManifest
 // resolveContentMapperManifest locates packageName in node_modules (walking up from the directory of
 // containingFile via node module resolution) and reads its package.json to produce the mapper's manifest
 // and package directory. It never executes the package. On failure it returns a diagnostic describing why

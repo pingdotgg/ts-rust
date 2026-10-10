@@ -14,7 +14,7 @@ use crate::diagnostics::Message;
 use crate::diagnostics_loc::message_localize;
 use crate::frontend::tsoptions::{
     CommandLineOption, CommandLineOptionKind, CompilerOptionsValue, OPTIONS_DECLARATIONS,
-    OPTIONS_FOR_BUILD, OPTIONS_FOR_WATCH, ParsedCommandLine, TSC_BUILD_OPTION,
+    OPTIONS_FOR_BUILD, ParsedCommandLine, TSC_BUILD_OPTION,
 };
 use crate::locale::Locale;
 
@@ -239,21 +239,7 @@ fn print_all_help(sys: &dyn System, locale: &Locale, options: &[&'static Command
         Some(&after_compiler_options),
     ));
 
-    // WATCH OPTIONS section
-    let before_watch_options = message_localize(
-        diag::Including_watch_w_will_start_watching_the_current_project_for_the_file_changes_Once_set_you_can_config_watch_mode_with_Colon,
-        locale,
-        &[],
-    );
-    output.extend(generate_section_options_output(
-        sys,
-        locale,
-        &message_localize(diag::WATCH_OPTIONS, locale, &[]),
-        &OPTIONS_FOR_WATCH,
-        false,
-        Some(&before_watch_options),
-        None,
-    ));
+    // ts#64457: the WATCH OPTIONS section is gone with the watch options.
 
     // BUILD OPTIONS section
     let before_build_options = message_localize(
@@ -587,9 +573,6 @@ pub(super) fn format_value_v(value: &CompilerOptionsValue) -> String {
         CompilerOptionsValue::ModuleDetectionKind(value) => value.0.to_string(),
         CompilerOptionsValue::JsxEmit(value) => value.string(),
         CompilerOptionsValue::NewLineKind(value) => value.0.to_string(),
-        CompilerOptionsValue::WatchFileKind(value) => value.0.to_string(),
-        CompilerOptionsValue::WatchDirectoryKind(value) => value.0.to_string(),
-        CompilerOptionsValue::PollingKind(value) => value.0.to_string(),
         // Go `[]any` and `[]string`: `[a b c]`.
         CompilerOptionsValue::List(list) => format!(
             "[{}]",

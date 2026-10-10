@@ -443,18 +443,23 @@ impl Checker {
         if self.strict_null_checks && prop.is_some() {
             let declaration = self.sym(prop).value_declaration;
             if declaration.is_some() {
+                // ts#64523 (Go N' checker.go:11614): a `this.x` access in strict
+                // property initialization mode never takes the JS assignment
+                // branch below, even when the property has an initializer or
+                // is static.
                 if self.strict_property_initialization
                     && is_access_expression(node)
                     && node.expression().kind() == SyntaxKind::ThisKeyword
-                    && self.is_property_without_initializer(declaration)
-                    && !is_static(declaration)
                 {
-                    let flow_container = self.get_control_flow_container(node);
-                    if is_constructor_declaration(flow_container)
-                        && flow_container.parent() == declaration.parent()
-                        && declaration.parser_flags(NodeFlags::AMBIENT).is_empty()
+                    if self.is_property_without_initializer(declaration) && !is_static(declaration)
                     {
-                        assume_uninitialized = true;
+                        let flow_container = self.get_control_flow_container(node);
+                        if is_constructor_declaration(flow_container)
+                            && flow_container.parent() == declaration.parent()
+                            && declaration.parser_flags(NodeFlags::AMBIENT).is_empty()
+                        {
+                            assume_uninitialized = true;
+                        }
                     }
                 } else if is_binary_expression(declaration)
                     && is_property_access_expression(declaration.left())

@@ -46,8 +46,26 @@ impl Checker {
         t: TypeId,
         transform: NodeBuilderTypeTransform,
     ) -> Node {
+        // ts#63969 (Go N' nodebuilderimpl.go:3213): past the truncation length,
+        // elide before the declared type cache can clone a cached node.
+        if self.check_truncation_length(b) {
+            return self.create_elided_information_placeholder(b);
+        }
+
         let ctx = nb_ctx(b);
-        let type_id = t;
+        let mut type_id = t;
+        // ts#64556 (Go N' nodebuilderimpl.go:3240)
+        let is_array_or_tuple = self.is_array_or_tuple_type(t);
+        if is_array_or_tuple {
+            // Deferred and regular references share a cycle identity.
+            let target = self.ty(t).target();
+            let type_arguments = self.get_type_arguments(t).to_vec();
+            type_id = self.create_type_reference(target, &type_arguments);
+        }
+        if ctx.borrow().visited_types.contains(&type_id) {
+            return self.create_cyclic_structure_placeholder(b);
+        }
+
         let (t_flags, t_object_flags, t_symbol) = {
             let ty = self.ty(t);
             (ty.flags, ty.object_flags, ty.symbol)
@@ -55,8 +73,10 @@ impl Checker {
         let is_constructor_object = t_object_flags.intersects(ObjectFlags::ANONYMOUS)
             && t_symbol.is_some()
             && self.sym(t_symbol).flags.intersects(SymbolFlags::CLASS);
-        let id: Option<CompositeSymbolIdentity> = if t_object_flags
-            .intersects(ObjectFlags::REFERENCE)
+        let id: Option<CompositeSymbolIdentity> = if is_array_or_tuple {
+            // Do not bound finite container nesting by the shared Array symbol or tuple origin.
+            None
+        } else if t_object_flags.intersects(ObjectFlags::REFERENCE)
             && self.ty(t).as_type_reference().node.is_some()
         {
             Some(CompositeSymbolIdentity {
@@ -90,6 +110,12 @@ impl Checker {
                     type_id,
                     flags: c.flags,
                     internal_flags: c.internal_flags,
+                    // ts#64556 (Go N' nodebuilderimpl.go:3273)
+                    infer_type_parameters: if c.infer_type_parameters.is_empty() {
+                        CacheHashKey::default()
+                    } else {
+                        get_type_list_key(&c.infer_type_parameters)
+                    },
                 },
                 // Don't rely on type cache if we're expanding a type, because we need to compute `canIncreaseExpansionDepth`.
                 c.max_expansion_depth < 0,
@@ -125,11 +151,43 @@ impl Checker {
             }
         }
 
+        // ts#64558 (Go N' nodebuilderimpl.go:3293)
+        // PORT: Go restores the origin depth in a `defer`; the port restores
+        // it on each return below (`restore_origin`).
+        let mut origin_depth: Option<(CompositeSymbolIdentity, i32)> = None;
+        if t_object_flags.intersects(ObjectFlags::REVERSE_MAPPED) {
+            // Growing type arguments can prevent a reverse mapped type from repeating.
+            // Bound expansion by its mapped declaration as well as its type identity.
+            let mapped_type = self.ty(t).as_reverse_mapped_type().mapped_type;
+            let declaration = self.ty(mapped_type).as_mapped_type().declaration;
+            let origin = CompositeSymbolIdentity {
+                is_constructor_node: false,
+                symbol_id: 0,
+                node_id: get_node_id(declaration),
+            };
+            let depth = ctx.borrow().symbol_depth.get(&origin).copied().unwrap_or(0);
+            if depth >= 100 {
+                ctx.borrow_mut().truncating = true;
+                return self.create_elided_information_placeholder(b);
+            }
+            ctx.borrow_mut().symbol_depth.insert(origin, depth + 1);
+            origin_depth = Some((origin, depth));
+        }
+        let restore_origin = |ctx: &Rc<RefCell<NodeBuilderContext>>| {
+            if let Some((origin, depth)) = origin_depth {
+                ctx.borrow_mut().symbol_depth.insert(origin, depth);
+            }
+        };
+
         let mut depth = 0;
         if let Some(id) = id {
             depth = ctx.borrow().symbol_depth.get(&id).copied().unwrap_or(0);
             if depth > 10 {
-                return self.create_elided_information_placeholder(b);
+                // ts#64461 (Go N' nodebuilderimpl.go:3310): the depth limit truncates.
+                ctx.borrow_mut().truncating = true;
+                let result = self.create_elided_information_placeholder(b);
+                restore_origin(&ctx);
+                return result;
             }
             ctx.borrow_mut().symbol_depth.insert(id, depth + 1);
         }
@@ -182,6 +240,7 @@ impl Checker {
             }
             c.tracked_symbols = prev_tracked_symbols;
         }
+        restore_origin(&ctx);
         result
 
         // !!! TODO: Attempt node reuse or parse nodes to minimize copying once text range setting is set up
@@ -527,7 +586,10 @@ impl Checker {
                 ctx.borrow_mut().depth -= 1;
                 return result;
             }
-            if self.ty(t).as_type_reference().node.is_some() {
+            // ts#64556 (Go N' nodebuilderimpl.go:3545)
+            if self.is_array_or_tuple_type(t) {
+                return self.visit_and_transform_type(b, t, Checker::array_or_tuple_type_to_node);
+            } else if self.ty(t).as_type_reference().node.is_some() {
                 return self.visit_and_transform_type(b, t, Checker::type_reference_to_type_node);
             } else {
                 return self.type_reference_to_type_node(b, t);

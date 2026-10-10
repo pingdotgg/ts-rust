@@ -389,6 +389,11 @@ impl Checker {
         import_attributes_type: TypeId,
     ) -> SymbolId {
         if is_string_literal_like(module_reference_expression) {
+            // ts#63915, Go N' checker.go:15418: a source phase import has no
+            // module symbol.
+            if is_source_phase_import(module_reference_expression.parent()) {
+                return SymbolId::NIL;
+            }
             return self.resolve_external_module(
                 location,
                 module_reference_expression.text(),
@@ -420,14 +425,18 @@ impl Checker {
             import_attributes_type =
                 self.get_type_from_import_attributes(get_import_attributes(declaration));
         }
+        // This is only used by emit and type printing, after checking has already reported any
+        // resolution errors for this specifier. Resolve with ignoreErrors so that these queries
+        // don't add new diagnostics (e.g. an implicit-any-module suggestion) as a side effect.
+        // (ts#64479, Go N' checker.go:15385)
         let module_symbol = self.resolve_external_module_name_worker(
             specifier,
             specifier,
-            None, /*moduleNotFoundError*/
-            false,
-            false,
+            None,  /*moduleNotFoundError*/
+            true,  /*ignoreErrors*/
+            false, /*isForAugmentation*/
             import_attributes_type,
-        ); // TODO: GH#18217
+        );
         if module_symbol.is_nil() {
             return Node::NIL;
         }

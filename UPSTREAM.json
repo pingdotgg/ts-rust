@@ -131,6 +131,28 @@
         "build": "scripts/upstream/record.py typesyms: go build -overlay with typesyms/tools/typesymdump-main-16c25522e123.go (sha256 ab0d134280b1), module path rewritten to github.com/microsoft/TypeScript/tsc"
       },
       "note": "Upstream head on 2026-09-29, the first microsoft/TypeScript pin: proof that the tools read the new layout. Not a bump target yet."
+    },
+    "fed0bf24149f": {
+      "repo": "microsoft/TypeScript",
+      "commit": "fed0bf24149fb1ed36039212648bafdafc1ea10e",
+      "date": "2026-10-08",
+      "layout": "typescript",
+      "subdir": "tsc",
+      "goCheckout": "/home/theo/.explore/repos/microsoft__TypeScript@fed0bf24149f/tsc",
+      "oracle": {
+        "path": "/home/theo/.local/bin/tsgo-oracle-fed0bf24149f",
+        "sha256": "6768987d62999bfaf4a9bab2ed34509c48fe93c073e218e840b0ac68ceaf6d45",
+        "go": "go1.27.1",
+        "version": "Version 7.1.0-dev",
+        "build": "CGO_ENABLED=0 GOAMD64=v1 go build ./cmd/tsc (in tsc/)"
+      },
+      "typesymDumper": {
+        "path": "/home/theo/Code/sandbox/ts-rust/target/continuation-r97-goport/pins/fed0bf24149f/target/continuation-r97-goport/typesyms/typesymdump-go",
+        "sha256": "7b3c060c98cc8f4ec914a2ad8d0cb7265c04dc4c9b8712ec85a1b269aa68505b",
+        "go": "go1.27.1",
+        "build": "scripts/upstream/record.py typesyms: go build -overlay with typesyms/tools/typesymdump-main-fed0bf24149f.go (sha256 b9163914f101): the 16c25522e123 main for typed paths (#64159): NewCompilerHost without cwd, GetParsedCommandLineOfConfigFile with a RootedFilePath and the vfs.FS, PathKey and FileName().AsString(); module path rewritten to github.com/microsoft/TypeScript/tsc"
+      },
+      "note": "Bump D target N': the gitHead of npm typescript@7.1.0-dev.20261008.1 (#64686). origin/main c0ca4744c917 adds only the API change #64681 (bump E). Not current yet."
     }
   }
 }

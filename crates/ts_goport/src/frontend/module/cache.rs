@@ -4,10 +4,10 @@ use crate::frontend::prelude::*;
 use std::cell::Cell;
 use std::sync::Arc;
 
-// Go: module/cache.go:9 ModeAwareCache
+// Go: module/cache.go:10 ModeAwareCache
 pub type ModeAwareCache<T> = FxHashMap<ModeAwareCacheKey, T>;
 
-// Go: module/cache.go:11 moduleResolutionCacheKey
+// Go: module/cache.go:12 moduleResolutionCacheKey
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModuleResolutionCacheKey {
     pub containing_directory: String,
@@ -87,7 +87,7 @@ impl ModuleResolutionCacheKey {
     }
 }
 
-// Go: module/cache.go:18 moduleResolutionCache
+// Go: module/cache.go:19 moduleResolutionCache
 // PORT: Go `collections.SyncMap` is a plain map behind a `RefCell`, so the
 // `DefaultResolver` methods can take `&self`. Cached Go pointers are `Arc`: parse
 // workers share them (`SharedResolutionCache`), and checker threads read
@@ -98,20 +98,20 @@ pub struct ModuleResolutionCache {
 }
 
 impl ModuleResolutionCache {
-    // Go: module/cache.go:22 moduleResolutionCache.Get
+    // Go: module/cache.go:23 moduleResolutionCache.Get
     #[must_use]
     pub fn get(&self, key: &dyn ModuleKey) -> Option<Arc<ResolvedModule>> {
         self.cache.borrow().get(key).cloned()
     }
 
-    // Go: module/cache.go:26 moduleResolutionCache.Set
+    // Go: module/cache.go:27 moduleResolutionCache.Set
     // PORT: Go `LoadOrStore`: the first stored value wins.
     pub fn set(&self, key: ModuleResolutionCacheKey, value: Arc<ResolvedModule>) {
         self.cache.borrow_mut().entry(key).or_insert(value);
     }
 }
 
-// Go: module/cache.go:30 typeRefDirectiveResolutionCacheKey
+// Go: module/cache.go:31 typeRefDirectiveResolutionCacheKey
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TypeRefDirectiveResolutionCacheKey {
     pub containing_directory: String,
@@ -121,7 +121,7 @@ pub struct TypeRefDirectiveResolutionCacheKey {
     pub from_inferred_types_containing_file: bool,
 }
 
-// Go: module/cache.go:38 typeRefDirectiveResolutionCache
+// Go: module/cache.go:39 typeRefDirectiveResolutionCache
 // PORT: see `ModuleResolutionCache`.
 #[derive(Default)]
 pub struct TypeRefDirectiveResolutionCache {
@@ -130,7 +130,7 @@ pub struct TypeRefDirectiveResolutionCache {
 }
 
 impl TypeRefDirectiveResolutionCache {
-    // Go: module/cache.go:42 typeRefDirectiveResolutionCache.Get
+    // Go: module/cache.go:43 typeRefDirectiveResolutionCache.Get
     #[must_use]
     pub fn get(
         &self,
@@ -139,7 +139,7 @@ impl TypeRefDirectiveResolutionCache {
         self.cache.borrow().get(key).cloned()
     }
 
-    // Go: module/cache.go:46 typeRefDirectiveResolutionCache.Set
+    // Go: module/cache.go:47 typeRefDirectiveResolutionCache.Set
     // PORT: Go `Store`: the last stored value wins.
     pub fn set(
         &self,
@@ -150,7 +150,7 @@ impl TypeRefDirectiveResolutionCache {
     }
 }
 
-// Go: module/cache.go:50 parsedPatternsCache
+// Go: module/cache.go:51 parsedPatternsCache
 // PORT: Go keys the `SyncMap` by the `*OrderedMap` of `paths`, and the key
 // keeps that map alive. The Rust `paths` map is a field of the
 // `CompilerOptions`, so the key is the address of that field (0 for a nil
@@ -161,7 +161,7 @@ pub struct ParsedPatternsCache {
 }
 
 impl ParsedPatternsCache {
-    // Go: module/cache.go:54 parsedPatternsCache.Get
+    // Go: module/cache.go:55 parsedPatternsCache.Get
     // PORT: Go takes `compilerOptions.Paths`; this takes the options that
     // own it (see the type).
     pub fn get(&self, compiler_options: &Rc<CompilerOptions>) -> Rc<ParsedPatterns> {
@@ -189,7 +189,7 @@ impl ParsedPatternsCache {
     }
 }
 
-// Go: module/cache.go:62 caches
+// Go: module/cache.go:62 caches (at 673a5f17d713; removed by ts#64519, not ported yet)
 // PORT: Go `*packagejson.InfoCache` is shared between resolvers
 // (`ResolverOptions.PackageJsonCache`), so it is `Rc<InfoCache>`. `InfoCache`
 // has interior mutability, like the Go `SyncMap`.
@@ -619,7 +619,7 @@ impl Caches {
     }
 }
 
-// Go: module/cache.go:18 moduleResolutionCache and :40
+// Go: module/cache.go:19 moduleResolutionCache and :40
 // typeRefDirectiveResolutionCache, the `SyncMap`s themselves.
 // PORT: Go shares one resolver, and so these maps, between all parse tasks
 // of a program. The Rust loader resolves on one thread with `Rc` values
@@ -1638,7 +1638,7 @@ impl Caches {
     }
 }
 
-// Go: module/cache.go:74 newCaches
+// Go: module/cache.go:74 newCaches (at 673a5f17d713; removed by ts#64519, not ported yet)
 #[must_use]
 pub fn new_caches(
     current_directory: &str,
@@ -1651,7 +1651,7 @@ pub fn new_caches(
     )))
 }
 
-// Go: module/cache.go:84 getRedirectConfigName
+// Go: module/cache.go:101 getRedirectConfigName
 #[must_use]
 pub fn get_redirect_config_name(redirect: Option<&dyn ModuleResolvedProjectReference>) -> String {
     match redirect {

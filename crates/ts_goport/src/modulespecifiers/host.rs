@@ -47,7 +47,7 @@ pub(crate) struct HostFsCache {
 }
 
 impl HostFsCache {
-    // Go: vfs/cachedvfs/cachedvfs.go:64 FileExists
+    // Go: vfs/cachedvfs/cachedvfs.go:65 FileExists
     /// The cached answer for `path`, or the answer of `probe`, which is then
     /// cached.
     pub(crate) fn file_exists(&self, path: &str, probe: impl FnOnce() -> bool) -> bool {
@@ -59,7 +59,7 @@ impl HostFsCache {
         ret
     }
 
-    // Go: packagejson/cache.go:182 Get
+    // Go: packagejson/cache.go:247 Get
     fn get_package_json_info(&self, key: &tspath::Path) -> Option<Arc<InfoCacheEntry>> {
         read(&self.package_json_info).get(key).cloned()
     }
@@ -81,7 +81,7 @@ impl HostFsCache {
             .clone()
     }
 
-    // Go: packagejson/cache.go:190 Set (the first stored value stays)
+    // Go: packagejson/cache.go:254 Set (the first stored value stays)
     fn set_package_json_info(
         &self,
         key: tspath::Path,
@@ -196,7 +196,7 @@ fn typings_location() -> Rc<str> {
     location
 }
 
-// Go: module/resolver.go:1755 getPackageJsonInfo
+// Go: module/resolver.go:1985 getPackageJsonInfo
 // PORT: off the loading thread only (see `ProgramHost`). Tracing is not
 // ported. The entries are in the program's `HostFsCache`, not in the
 // frontend resolver's cache; the build info reads both
@@ -279,7 +279,7 @@ fn frontend_package_json_entry(
     })
 }
 
-// Go: module/resolver.go:485 getPackageScopeForPath
+// Go: module/resolver.go:707 getPackageScopeForPath
 fn get_package_scope_for_path(directory: &str) -> Option<Arc<InfoCacheEntry>> {
     tspath::for_each_ancestor_directory_stopping_at_global_cache(
         &typings_location(),
@@ -313,7 +313,7 @@ impl OutputPathsHost for ProgramHost {
 }
 
 impl ModuleSpecifierGenerationHost for ProgramHost {
-    // Go: compiler/program.go:2300 GetSymlinkCache
+    // Go: compiler/program.go:2330 GetSymlinkCache
     fn get_symlink_cache(&self) -> Option<Rc<KnownSymlinks>> {
         if let Some(cached) = with_program_caches(|c| c.known_symlinks.clone()) {
             return Some(cached);
@@ -328,12 +328,12 @@ impl ModuleSpecifierGenerationHost for ProgramHost {
         crate::program::common_source_directory().to_string()
     }
 
-    // Go: compiler/program.go:528 ContentMapperExtensions (tsgo#4712)
+    // Go: compiler/program.go:549 ContentMapperExtensions (tsgo#4712)
     fn content_mapper_extensions(&self) -> Vec<String> {
         crate::program::content_mapper_extensions()
     }
 
-    // Go: compiler/program.go:143 GetGlobalTypingsCacheLocation
+    // Go: compiler/program.go:163 GetGlobalTypingsCacheLocation
     fn get_global_typings_cache_location(&self) -> String {
         typings_location().to_string()
     }
@@ -346,7 +346,7 @@ impl ModuleSpecifierGenerationHost for ProgramHost {
         crate::program::get_current_directory().to_string()
     }
 
-    // Go: compiler/program.go:189 GetProjectReferenceFromSource
+    // Go: compiler/program.go:214 GetProjectReferenceFromSource
     fn get_project_reference_from_source(
         &self,
         path: &tspath::Path,
@@ -354,12 +354,12 @@ impl ModuleSpecifierGenerationHost for ProgramHost {
         crate::program::get_project_reference_from_source(path)
     }
 
-    // Go: compiler/program.go:173 GetRedirectTargets
+    // Go: compiler/program.go:198 GetRedirectTargets
     fn get_redirect_targets(&self, path: &tspath::Path) -> Vec<String> {
         crate::program::get_redirect_targets(path)
     }
 
-    // Go: compiler/program.go:181 GetSourceOfProjectReferenceIfOutputIncluded
+    // Go: compiler/program.go:206 GetSourceOfProjectReferenceIfOutputIncluded
     fn get_source_of_project_reference_if_output_included(&self, file: Node) -> String {
         crate::program::get_source_of_project_reference_if_output_included(file)
     }
@@ -368,7 +368,7 @@ impl ModuleSpecifierGenerationHost for ProgramHost {
         crate::program::file_exists(path)
     }
 
-    // Go: compiler/program.go:148 GetNearestAncestorDirectoryWithPackageJson
+    // Go: compiler/program.go:168 GetNearestAncestorDirectoryWithPackageJson
     // PORT: on the loading thread, the frontend program asks its resolver,
     // as Go does: its cache holds the package.json files of the program
     // load, and it reads the program host's file system (in the language
@@ -385,7 +385,7 @@ impl ModuleSpecifierGenerationHost for ProgramHost {
         }
     }
 
-    // Go: compiler/program.go:157 GetPackageJsonInfo
+    // Go: compiler/program.go:177 GetPackageJsonInfo
     // PORT: see `get_nearest_ancestor_directory_with_package_json`.
     fn get_package_json_info(&self, pkg_json_path: &str) -> Option<Arc<InfoCacheEntry>> {
         if let Some(frontend) = crate::program::loading_thread_frontend() {

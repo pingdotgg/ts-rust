@@ -9,7 +9,7 @@ use crate::frontend::prelude::*;
 // `IndexMap<String, CompilerOptionsValue>`. `IndexMap::insert` keeps the
 // position of an existing key, like Go `OrderedMap.Set`.
 
-// Go: tsoptions/parsinghelpers.go:16 ParseTristate
+// Go: tsoptions/parsinghelpers.go:15 ParseTristate
 pub fn parse_tristate(value: &CompilerOptionsValue) -> Tristate {
     if value.is_nil() {
         return Tristate::Unknown;
@@ -24,7 +24,7 @@ pub fn parse_tristate(value: &CompilerOptionsValue) -> Tristate {
     }
 }
 
-// Go: tsoptions/parsinghelpers.go:30 ParseStringArray
+// Go: tsoptions/parsinghelpers.go:29 ParseStringArray
 // PORT: Go returns a nil slice (`None`) when the value is not `[]any` and
 // for a nil `[]any` (`NilList`). A `List` gives a non-nil slice.
 pub fn parse_string_array(value: &CompilerOptionsValue) -> Option<Vec<String>> {
@@ -40,7 +40,7 @@ pub fn parse_string_array(value: &CompilerOptionsValue) -> Option<Vec<String>> {
     None
 }
 
-// Go: tsoptions/parsinghelpers.go:46 parseStringMap
+// Go: tsoptions/parsinghelpers.go:45 parseStringMap
 // PORT: the Go map values are `[]string`; a nil slice (a non-array value)
 // is `None`, so `verifyCompilerOptions` can tell nil from empty.
 fn parse_string_map(value: &CompilerOptionsValue) -> Option<IndexMap<String, Option<Vec<String>>>> {
@@ -54,7 +54,7 @@ fn parse_string_map(value: &CompilerOptionsValue) -> Option<IndexMap<String, Opt
     None
 }
 
-// Go: tsoptions/parsinghelpers.go:57 ParseString
+// Go: tsoptions/parsinghelpers.go:56 ParseString
 pub fn parse_string(value: &CompilerOptionsValue) -> String {
     if let CompilerOptionsValue::String(str) = value {
         return str.clone();
@@ -62,7 +62,7 @@ pub fn parse_string(value: &CompilerOptionsValue) -> String {
     String::new()
 }
 
-// Go: tsoptions/parsinghelpers.go:64 parseNumber
+// Go: tsoptions/parsinghelpers.go:96 parseNumber
 // PORT: Go `*int` (64-bit) is `Option<i64>`. Go `int(float64)` truncates
 // toward zero, as `as i64` does in range. Out of range and NaN, Go leaves the
 // result to the platform: amd64 gives the min int64, and Rust `as` would
@@ -83,7 +83,7 @@ pub fn parse_number(value: &CompilerOptionsValue) -> Option<i64> {
     None
 }
 
-// Go: tsoptions/parsinghelpers.go:75 projectReferenceParseResult
+// Go: tsoptions/parsinghelpers.go:107 projectReferenceParseResult
 #[derive(Clone, Debug, Default)]
 pub struct ProjectReferenceParseResult {
     pub reference: ProjectReference,
@@ -93,7 +93,7 @@ pub struct ProjectReferenceParseResult {
     pub circular_valid: bool,
 }
 
-// Go: tsoptions/parsinghelpers.go:83 parseProjectReference
+// Go: tsoptions/parsinghelpers.go:116 parseProjectReference
 // PORT: Go returns a nilable pointer; that is `Option`.
 pub fn parse_project_reference(json: &CompilerOptionsValue) -> Option<ProjectReferenceParseResult> {
     if let CompilerOptionsValue::Map(v) = json {
@@ -117,7 +117,7 @@ pub fn parse_project_reference(json: &CompilerOptionsValue) -> Option<ProjectRef
     None
 }
 
-// Go: tsoptions/parsinghelpers.go:105 parseContentMapper (tsgo#4712)
+// Go: tsoptions/parsinghelpers.go:138 parseContentMapper (tsgo#4712)
 // PORT: Go returns a nilable `*contentmapper.Mapper`; that is an owned
 // `Option<Mapper>`, which the caller changes and then puts in an `Rc`.
 pub fn parse_content_mapper(value: &CompilerOptionsValue) -> (Option<Mapper>, Vec<Diagnostic>) {
@@ -179,7 +179,7 @@ pub fn parse_content_mapper(value: &CompilerOptionsValue) -> (Option<Mapper>, Ve
     (Some(mapper), errors)
 }
 
-// Go: tsoptions/parsinghelpers.go:145 parseStringArrayStrict (tsgo#4712)
+// Go: tsoptions/parsinghelpers.go:178 parseStringArrayStrict (tsgo#4712)
 // parseStringArrayStrict returns the string slice and true only if value is an array whose
 // elements are all strings. A missing element or wrong element type yields false.
 // PORT: Go `([]string, bool)` is `Option<Vec<String>>`.
@@ -197,7 +197,7 @@ pub fn parse_string_array_strict(value: &CompilerOptionsValue) -> Option<Vec<Str
     Some(result)
 }
 
-// Go: tsoptions/parsinghelpers.go:161 parseJsonToStringKey
+// Go: tsoptions/parsinghelpers.go:194 parseJsonToStringKey
 // PORT: Go returns a map pointer that is never nil. It is `Option` so it
 // can go straight to the nilable `json` argument of
 // `parseJsonConfigFileContentWorker`; it is always `Some`.
@@ -244,7 +244,7 @@ pub fn parse_json_to_string_key(
     Some(result)
 }
 
-// Go: tsoptions/parsinghelpers.go:198 optionParser
+// Go: tsoptions/parsinghelpers.go:231 optionParser
 // PORT: Go `*diagnostics.Message` results are never nil for the ported
 // parsers, so they are `&'static Message`.
 pub trait OptionParser {
@@ -253,61 +253,56 @@ pub trait OptionParser {
     fn unknown_did_you_mean_diagnostic(&self) -> &'static Message;
 }
 
-// Go: tsoptions/parsinghelpers.go:204 compilerOptionsParser
+// Go: tsoptions/parsinghelpers.go:237 compilerOptionsParser
 // PORT: the embedded Go `*core.CompilerOptions` is a mutable borrow.
 pub struct CompilerOptionsParser<'a> {
     pub compiler_options: &'a mut CompilerOptions,
 }
 
 impl OptionParser for CompilerOptionsParser<'_> {
-    // Go: tsoptions/parsinghelpers.go:132 (*compilerOptionsParser).ParseOption
+    // Go: tsoptions/parsinghelpers.go:242 (*compilerOptionsParser).ParseOption
     fn parse_option(&mut self, key: &str, value: CompilerOptionsValue) -> Vec<Diagnostic> {
         parse_compiler_options(key, value, self.compiler_options)
     }
 
-    // Go: tsoptions/parsinghelpers.go:136 (*compilerOptionsParser).UnknownOptionDiagnostic
+    // Go: tsoptions/parsinghelpers.go:275 (*compilerOptionsParser).UnknownOptionDiagnostic
     fn unknown_option_diagnostic(&self) -> &'static Message {
         extra_key_diagnostics("compilerOptions").expect("known key")
     }
 
-    // Go: tsoptions/parsinghelpers.go:140 (*compilerOptionsParser).UnknownDidYouMeanDiagnostic
+    // Go: tsoptions/parsinghelpers.go:279 (*compilerOptionsParser).UnknownDidYouMeanDiagnostic
     fn unknown_did_you_mean_diagnostic(&self) -> &'static Message {
         extra_key_did_you_mean_diagnostics("compilerOptions").expect("known key")
     }
 }
 
-// Go: tsoptions/parsinghelpers.go:220 watchOptionsParser
-// PORT: not ported. Watch mode is out of scope for this port, and the crate
-// has no `core.WatchOptions` type. The Go parser has no caller in the
-// tsconfig path (`watchOptions` parsing is commented out in Go).
-
-// Go: tsoptions/parsinghelpers.go:236 typeAcquisitionParser
+// Go: tsoptions/parsinghelpers.go:283 typeAcquisitionParser
 // PORT: the embedded Go `*core.TypeAcquisition` is a mutable borrow.
 pub struct TypeAcquisitionParser<'a> {
     pub type_acquisition: &'a mut TypeAcquisition,
 }
 
 impl OptionParser for TypeAcquisitionParser<'_> {
-    // Go: tsoptions/parsinghelpers.go:164 (*typeAcquisitionParser).ParseOption
+    // Go: tsoptions/parsinghelpers.go:287 (*typeAcquisitionParser).ParseOption
     fn parse_option(&mut self, key: &str, value: CompilerOptionsValue) -> Vec<Diagnostic> {
         parse_type_acquisition(key, value, self.type_acquisition)
     }
 
-    // Go: tsoptions/parsinghelpers.go:168 (*typeAcquisitionParser).UnknownOptionDiagnostic
+    // Go: tsoptions/parsinghelpers.go:291 (*typeAcquisitionParser).UnknownOptionDiagnostic
     fn unknown_option_diagnostic(&self) -> &'static Message {
         extra_key_diagnostics("typeAcquisition").expect("known key")
     }
 
-    // Go: tsoptions/parsinghelpers.go:172 (*typeAcquisitionParser).UnknownDidYouMeanDiagnostic
+    // Go: tsoptions/parsinghelpers.go:295 (*typeAcquisitionParser).UnknownDidYouMeanDiagnostic
     fn unknown_did_you_mean_diagnostic(&self) -> &'static Message {
         extra_key_did_you_mean_diagnostics("typeAcquisition").expect("known key")
     }
 }
 
-// Go: tsoptions/parsinghelpers.go:252 buildOptionsParser
+// Go: tsoptions/parsinghelpers.go:299 buildOptionsParser
 // PORT: ported next to `core.BuildOptions` in execute/build/command_line.rs.
 
-// Go: tsoptions/parsinghelpers.go:268 ParseCompilerOptions
+// Go: tsoptions/parsinghelpers.go:315 ParseCompilerOptions
 // PORT: Go `allOptions` can be nil; every Rust caller has options, so the
 // nil check is dropped.
 pub fn parse_compiler_options(
@@ -322,7 +317,7 @@ pub fn parse_compiler_options(
     Vec::new()
 }
 
-// Go: tsoptions/parsinghelpers.go:279 parseCompilerOptions
+// Go: tsoptions/options_generated.go:11 parseCompilerOptions (ts#64457 generates it)
 // PORT: renamed, because the snake_case form of the Go name is the same as
 // `ParseCompilerOptions`. Go `[]string` results go to `Option<Vec<String>>`
 // fields, so an explicit empty list stays different from nil.
@@ -609,7 +604,7 @@ fn as_new_line_kind(value: &CompilerOptionsValue) -> Option<NewLineKind> {
     }
 }
 
-// Go: tsoptions/parsinghelpers.go:570 floatOrInt32ToFlag
+// Go: tsoptions/parsinghelpers.go:325 floatOrInt32ToFlag
 // PORT: the Go type parameter `T ~int32` is the pair (`typed`, `from_i32`):
 // `typed` is Go `value.(T)` and `from_i32` is the Go conversion `T(...)`.
 // Go `value.(float64)` panics on another type; so does this port. A JSON
@@ -637,11 +632,7 @@ fn float_or_int32_to_flag<T>(
     ))
 }
 
-// Go: tsoptions/parsinghelpers.go:577 ParseWatchOptions
-// PORT: not ported. Watch mode is out of scope, and the crate has no
-// `core.WatchOptions` type.
-
-// Go: tsoptions/parsinghelpers.go:606 ParseTypeAcquisition
+// Go: tsoptions/options_generated.go:322 ParseTypeAcquisition (ts#64457 generates it)
 // PORT: Go `allOptions` can be nil; every Rust caller has one, so the nil
 // check is dropped. Go `[]string` fields are `Vec<String>`.
 pub fn parse_type_acquisition(
@@ -665,7 +656,7 @@ pub fn parse_type_acquisition(
     Vec::new()
 }
 
-// Go: tsoptions/parsinghelpers.go:626 ParseBuildOptions
+// Go: tsoptions/options_generated.go:342 ParseBuildOptions (ts#64457 generates it)
 // PORT: ported in execute/build/command_line.rs.
 
 /// Effect-TS/tsgo patch 013 `mergeCompilerOptions` with the source config
@@ -692,7 +683,7 @@ pub fn merge_compiler_options_with_paths<'a>(
     target_options
 }
 
-// Go: tsoptions/parsinghelpers.go:658 mergeCompilerOptions
+// Go: tsoptions/parsinghelpers.go:336 mergeCompilerOptions
 // mergeCompilerOptions merges the source compiler options into the target compiler options
 // with optional awareness of explicitly set null values in the raw JSON.
 // Fields in the source options will overwrite the corresponding fields in the target options,
@@ -886,7 +877,7 @@ pub fn merge_compiler_options<'a>(
     target_options
 }
 
-// Go: tsoptions/parsinghelpers.go:706 convertToOptionsWithAbsolutePaths
+// Go: tsoptions/parsinghelpers.go:386 convertToOptionsWithAbsolutePaths
 // PORT: Go changes the map through its pointer and returns it. The Rust
 // port takes the map by value and returns it.
 pub fn convert_to_options_with_absolute_paths(
@@ -906,7 +897,7 @@ pub fn convert_to_options_with_absolute_paths(
     Some(options_base)
 }
 
-// Go: tsoptions/parsinghelpers.go:721 ConvertOptionToAbsolutePath
+// Go: tsoptions/parsinghelpers.go:401 ConvertOptionToAbsolutePath
 pub fn convert_option_to_absolute_path(
     o: &str,
     v: &CompilerOptionsValue,

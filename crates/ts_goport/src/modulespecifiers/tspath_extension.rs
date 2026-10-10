@@ -231,7 +231,7 @@ pub fn get_declaration_file_extension(file_name: &str) -> String {
     String::new()
 }
 
-// Go: tspath/extension.go:137 GetDeclarationEmitExtensionForPath
+// Go: tspath/extension.go:141 GetDeclarationEmitExtensionForPath
 pub fn get_declaration_emit_extension_for_path(path: &str) -> String {
     if file_extension_is_one_of(path, &[EXTENSION_MJS, EXTENSION_MTS]) {
         EXTENSION_DMTS.to_string()
@@ -251,7 +251,7 @@ pub fn get_declaration_emit_extension_for_path(path: &str) -> String {
     }
 }
 
-// Go: tspath/extension.go:159 ChangeAnyExtension
+// Go: tspath/extension.go:163 ChangeAnyExtension
 // ChangeAnyExtension changes the extension of a path to the provided extension if it has one of the provided extensions.
 //
 // ChangeAnyExtension("/path/to/file.ext", ".js", ".ext") === "/path/to/file.js"
@@ -277,7 +277,7 @@ pub fn change_any_extension(
     path.to_string()
 }
 
-// Go: tspath/extension.go:174 ChangeExtension
+// Go: tspath/extension.go:178 ChangeExtension
 pub fn change_extension(path: &str, new_extension: &str) -> String {
     change_any_extension(
         path,
@@ -287,7 +287,7 @@ pub fn change_extension(path: &str, new_extension: &str) -> String {
     )
 }
 
-// Go: tspath/extension.go:183 ChangeFullExtension
+// Go: tspath/extension.go:187 ChangeFullExtension
 // Like `changeAnyExtension`, but declaration file extensions are recognized
 // and replaced starting from the `.d`.
 //
@@ -306,7 +306,7 @@ pub fn change_full_extension(path: &str, new_extension: &str) -> String {
     change_extension(path, new_extension)
 }
 
-// Go: tspath/extension.go:195 GetPossibleOriginalInputExtensionForExtension
+// Go: tspath/extension.go:202 GetPossibleOriginalInputExtensionForExtension
 pub fn get_possible_original_input_extension_for_extension(path: &str) -> Vec<String> {
     if file_extension_is_one_of(path, &[EXTENSION_DMTS, EXTENSION_MJS, EXTENSION_MTS]) {
         return vec![EXTENSION_MTS.to_string(), EXTENSION_MJS.to_string()];

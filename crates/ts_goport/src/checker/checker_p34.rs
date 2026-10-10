@@ -1419,9 +1419,8 @@ impl Checker {
             }
             SyntaxKind::ImportKeyword | SyntaxKind::NewKeyword => {
                 // PORT: Go `fallthrough` from ImportKeyword into NewKeyword.
-                if kind == SyntaxKind::ImportKeyword
-                    && is_meta_property(node.parent())
-                    && node.parent().text() == "defer"
+                // ts#63915, Go N' checker.go:32282
+                if kind == SyntaxKind::ImportKeyword && is_import_phase_meta_property(node.parent())
                 {
                     return SymbolId::NIL;
                 }

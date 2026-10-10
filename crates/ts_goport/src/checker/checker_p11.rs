@@ -1379,6 +1379,8 @@ impl Checker {
     // Go: checker/checker.go:10301 checkClassExpressionDeferred
     pub fn check_class_expression_deferred(&mut self, node: Node) {
         self.check_source_elements(node.members());
+        // ts#64646, Go N' checker.go:10336
+        self.check_constructor_declared_properties(node);
         self.register_for_unused_identifiers_check(node);
     }
 

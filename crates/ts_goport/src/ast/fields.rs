@@ -1091,13 +1091,13 @@ impl Node {
 // ──────────────────────────────────────────────────────────────────────
 
 // Go: ast/ast_generated.go:609 IsToken
-// PORT: Go lists every kind from KindUnknown to KindDeferKeyword in one
-// `case`. They are one range of the kind enum (astdata has the same order), so
-// this checks the range.
+// PORT: Go lists every kind from KindUnknown to KindSourceKeyword (ts#63915)
+// in one `case`. They are one range of the kind enum (astdata has the same
+// order), so this checks the range.
 #[inline]
 #[must_use]
 pub fn is_token(node: Node) -> bool {
-    (SyntaxKind::Unknown as u16..=SyntaxKind::DeferKeyword as u16).contains(&(node.kind() as u16))
+    (SyntaxKind::Unknown as u16..=SyntaxKind::SourceKeyword as u16).contains(&(node.kind() as u16))
 }
 
 // Go: ast/ast_generated.go:638 IsIdentifier
@@ -2646,7 +2646,8 @@ pub fn is_js_doc_node_kind(kind: SyntaxKind) -> bool {
 #[must_use]
 pub fn is_import_phase_modifier_kind(kind: SyntaxKind) -> bool {
     match kind {
-        SyntaxKind::TypeKeyword | SyntaxKind::DeferKeyword => true,
+        // ts#63915: SourceKeyword
+        SyntaxKind::TypeKeyword | SyntaxKind::DeferKeyword | SyntaxKind::SourceKeyword => true,
         _ => false,
     }
 }

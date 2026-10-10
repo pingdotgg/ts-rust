@@ -370,12 +370,16 @@ impl CommonJSModuleTransformer {
     /// Visits a top-level nested `with` statement as it may contain `var` declarations that are hoisted and may still be
     /// exported with `export {}`.
     pub(super) fn visit_top_level_nested_with_statement(&mut self, node: Node) -> Node {
-        let expression = self.visit_node_with(VisitorKind::Root, node.expression());
-        let statement =
+        let ec = self.emit_context.clone();
+        let f = ec.factory();
+        // Go visits the statement first, then the expression (an argument of the update call).
+        let mut statement =
             self.visit_embedded_statement_with(VisitorKind::TopLevelNested, node.statement());
-        self.emit_context
-            .factory()
-            .update_with_statement(node, expression, statement)
+        if statement.is_nil() {
+            statement = f.new_empty_statement();
+        }
+        let expression = self.visit_node_with(VisitorKind::Root, node.expression());
+        f.update_with_statement(node, expression, statement)
     }
 
     // Go: transformers/moduletransforms/commonjsmodule.go:1272 CommonJSModuleTransformer.visitTopLevelNestedIfStatement
@@ -448,12 +452,12 @@ impl CommonJSModuleTransformer {
         self.visit_each_child_with(VisitorKind::TopLevelNested, node)
     }
 
-    // Go: transformers/moduletransforms/commonjsmodule.go:1330 CommonJSModuleTransformer.visitForStatement
+    // Go: transformers/moduletransforms/commonjsmodule.go:1334 CommonJSModuleTransformer.visitForStatement
     pub(super) fn visit_for_statement(&mut self, node: Node) -> Node {
         let initializer = self.visit_node_with(VisitorKind::DiscardedValue, node.initializer());
         let condition = self.visit_node_with(VisitorKind::Root, node.condition());
         let incrementor = self.visit_node_with(VisitorKind::DiscardedValue, node.incrementor());
-        let body = self.visit_iteration_body_with(VisitorKind::TopLevelNested, node.statement());
+        let body = self.visit_iteration_body_with(VisitorKind::Root, node.statement());
         self.emit_context.factory().update_for_statement(
             node,
             initializer,
@@ -463,11 +467,11 @@ impl CommonJSModuleTransformer {
         )
     }
 
-    // Go: transformers/moduletransforms/commonjsmodule.go:1340 CommonJSModuleTransformer.visitForInOrOfStatement
+    // Go: transformers/moduletransforms/commonjsmodule.go:1344 CommonJSModuleTransformer.visitForInOrOfStatement
     pub(super) fn visit_for_in_or_of_statement(&mut self, node: Node) -> Node {
         let initializer = self.visit_node_with(VisitorKind::DiscardedValue, node.initializer());
         let expression = self.visit_node_with(VisitorKind::Root, node.expression());
-        let body = self.visit_iteration_body_with(VisitorKind::TopLevelNested, node.statement());
+        let body = self.visit_iteration_body_with(VisitorKind::Root, node.statement());
         self.emit_context.factory().update_for_in_or_of_statement(
             node,
             node.await_modifier(),
@@ -1098,7 +1102,7 @@ impl CommonJSModuleTransformer {
         self.visit_each_child_with(VisitorKind::Root, node)
     }
 
-    // Go: transformers/moduletransforms/commonjsmodule.go:1802 CommonJSModuleTransformer.visitCallExpression
+    // Go: transformers/moduletransforms/commonjsmodule.go:1806 CommonJSModuleTransformer.visitCallExpression
     /// Visits a call expression that might reference an imported symbol and thus require an indirect call, or that might
     /// be an `import()` or `require()` call that may need to be rewritten.
     pub(super) fn visit_call_expression(&mut self, node: Node) -> Node {
@@ -1113,7 +1117,9 @@ impl CommonJSModuleTransformer {
         {
             needs_rewrite = true;
         }
-        if is_import_call(node) && self.should_transform_import_call() {
+        if node.expression().kind() == SyntaxKind::ImportKeyword
+            && self.should_transform_import_call()
+        {
             return self.visit_import_call_expression(node, needs_rewrite);
         }
         if needs_rewrite {

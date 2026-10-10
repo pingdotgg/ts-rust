@@ -255,8 +255,9 @@ impl QuotePreference {
 }
 
 // Go: ls/lsutil/userpreferences.go:232 WorkspaceSymbolsScope
-// PORT: a Go string type. It has no entry in `typeParsers`, so Go sets any
-// string (`reflect.Value.SetString`); the value is a `Cow`.
+// PORT: a Go string type. Since ts#64554 it has a parser
+// (`parsePreferenceWorkspaceSymbolsScope`), so the value is one of the
+// constants or "" (an unknown value). It stays a `Cow`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WorkspaceSymbolsScope(pub Cow<'static, str>);
 
@@ -550,6 +551,26 @@ fn type_parsers(t: FieldType) -> Option<fn(&LspAny) -> FieldValue> {
             }
             FieldValue::QuotePreference(QuotePreference::UNKNOWN)
         }),
+        // Go: ls/lsutil/userpreferences_generated.go:371 parsePreferenceWorkspaceSymbolsScope
+        // (ts#64554): case-insensitive, and any other value is "".
+        FieldType::WorkspaceSymbolsScope => Some(|val: &LspAny| -> FieldValue {
+            if let LspAny::String(s) = val {
+                match strings_to_lower(s).as_str() {
+                    "allopenprojects" => {
+                        return FieldValue::WorkspaceSymbolsScope(
+                            WorkspaceSymbolsScope::ALL_OPEN_PROJECTS,
+                        );
+                    }
+                    "currentproject" => {
+                        return FieldValue::WorkspaceSymbolsScope(
+                            WorkspaceSymbolsScope::CURRENT_PROJECT,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            FieldValue::WorkspaceSymbolsScope(WorkspaceSymbolsScope(Cow::Borrowed("")))
+        }),
         FieldType::JsxAttributeCompletionStyle => Some(|val: &LspAny| -> FieldValue {
             if let LspAny::String(s) = val {
                 match strings_to_lower(s).as_str() {
@@ -618,9 +639,11 @@ fn type_parsers(t: FieldType) -> Option<fn(&LspAny) -> FieldValue> {
             }
             FieldValue::OrganizeImportsCollation(OrganizeImportsCollation::ORDINAL)
         }),
+        // Go: ls/lsutil/userpreferences_generated.go:227 parsePreferenceOrganizeImportsCaseFirst
+        // (ts#64554): case-insensitive.
         FieldType::OrganizeImportsCaseFirst => Some(|val: &LspAny| -> FieldValue {
             if let LspAny::String(s) = val {
-                match s.as_str() {
+                match strings_to_lower(s).as_str() {
                     "lower" => {
                         return FieldValue::OrganizeImportsCaseFirst(
                             OrganizeImportsCaseFirst::LOWER,
@@ -636,9 +659,11 @@ fn type_parsers(t: FieldType) -> Option<fn(&LspAny) -> FieldValue> {
             }
             FieldValue::OrganizeImportsCaseFirst(OrganizeImportsCaseFirst::FALSE)
         }),
+        // Go: ls/lsutil/userpreferences_generated.go:312 parsePreferenceOrganizeImportsTypeOrder
+        // (ts#64554): case-insensitive.
         FieldType::OrganizeImportsTypeOrder => Some(|val: &LspAny| -> FieldValue {
             if let LspAny::String(s) = val {
-                match s.as_str() {
+                match strings_to_lower(s).as_str() {
                     "last" => {
                         return FieldValue::OrganizeImportsTypeOrder(
                             OrganizeImportsTypeOrder::LAST,
@@ -1429,9 +1454,10 @@ static USER_PREFERENCES_FIELDS: &[StructField] = &[
         Tristate,
         exclude_library_symbols_in_nav_to
     ),
+    // ts#64554: the raw name `workspaceSymbolsScope` is new.
     pref_field!(
         "WorkspaceSymbolsScope",
-        "",
+        "workspaceSymbolsScope",
         "workspaceSymbols.scope",
         WorkspaceSymbolsScope,
         workspace_symbols_scope
@@ -1480,7 +1506,8 @@ static USER_PREFERENCES_FIELDS: &[StructField] = &[
         Tristate,
         report_style_checks_as_warnings
     ),
-    pref_field!("Locale", "", "locale", String, locale),
+    // ts#64554: the raw name `locale` is new.
+    pref_field!("Locale", "locale", "locale", String, locale),
     pref_field!(
         "DisableAutomaticTypeAcquisition",
         "disableAutomaticTypeAcquisition",
@@ -1778,15 +1805,9 @@ fn set_field_from_value(p: &mut UserPreferences, info: &FieldInfo, val: &LspAny)
         }
         FieldKind::String => {
             if let LspAny::String(s) = val {
-                // PORT: Go `field.SetString(s)` keeps the field's string type.
-                // Only the string types with no parser reach this point.
-                let v = match field_type {
-                    FieldType::WorkspaceSymbolsScope => FieldValue::WorkspaceSymbolsScope(
-                        WorkspaceSymbolsScope(Cow::Owned(s.clone())),
-                    ),
-                    _ => FieldValue::String(s.clone()),
-                };
-                (info.set)(p, v);
+                // PORT: only plain `string` fields reach this point; every
+                // string type has a parser.
+                (info.set)(p, FieldValue::String(s.clone()));
             }
         }
         FieldKind::Slice => {

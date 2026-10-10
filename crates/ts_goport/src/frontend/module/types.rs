@@ -11,7 +11,7 @@ pub trait ResolutionHost {
     fn get_current_directory(&self) -> &str;
 }
 
-// Go: module/types.go:20 Resolver (ts#64299)
+// Go: module/types.go:19 Resolver (ts#64299)
 // PORT: Go interface. A nil `*ResolvedModule` is `None`; a nil `error` is
 // `None`. `PackageJsonCacheEntries` takes a `dyn FnMut`, because a trait
 // object has no generic methods.
@@ -72,7 +72,7 @@ pub trait Resolver {
     }
 }
 
-// Go: module/resolver.go:148 DefaultResolver as a module.Resolver
+// Go: module/resolver.go:335 DefaultResolver as a module.Resolver
 // PORT: each method is the `DefaultResolver` method of the same Go name.
 impl Resolver for DefaultResolver {
     fn resolve_module_name(
@@ -167,7 +167,7 @@ impl Resolver for DefaultResolver {
     }
 }
 
-// Go: module/types.go:19 ModeAwareCacheKey
+// Go: module/types.go:41 ModeAwareCacheKey
 // PORT: the derived `Hash` must stay the one of `dyn ModeAwareKey` (name,
 // then mode).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -217,7 +217,7 @@ impl PartialEq for dyn ModeAwareKey + '_ {
 
 impl Eq for dyn ModeAwareKey + '_ {}
 
-// Go: module/types.go:24 ResolvedProjectReference
+// Go: module/types.go:46 ResolvedProjectReference
 // PORT: Go `module.ResolvedProjectReference` is an interface. The name
 // `ResolvedProjectReference` is already the program.rs struct, so the
 // interface is `ModuleResolvedProjectReference`. Go returns a nil
@@ -245,10 +245,10 @@ crate::flags_macros::go_flags!(NodeResolutionFeatures, i32 {
     BUNDLER_DEFAULT = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4); // NodeResolutionFeaturesBundlerDefault
 });
 
-// Go: module/types.go:47 PackageId
+// Go: module/types.go:69 PackageId
 // PORT: the struct is `program::PackageId`. Its Go methods are here.
 impl PackageId {
-    // Go: module/types.go:54 PackageId.String
+    // Go: module/types.go:76 PackageId.String
     #[must_use]
     pub fn string(&self) -> String {
         format!(
@@ -259,7 +259,7 @@ impl PackageId {
         )
     }
 
-    // Go: module/types.go:58 PackageId.PackageName
+    // Go: module/types.go:80 PackageId.PackageName
     #[must_use]
     pub fn package_name(&self) -> String {
         if !self.sub_module_name.is_empty() {
@@ -269,10 +269,10 @@ impl PackageId {
     }
 }
 
-// Go: module/types.go:65 ResolvedModule
+// Go: module/types.go:87 ResolvedModule
 // PORT: the struct and `IsResolved` are `program::ResolvedModule`.
 
-// Go: module/types.go:80 ResolvedTypeReferenceDirective
+// Go: module/types.go:105 ResolvedTypeReferenceDirective
 #[derive(Clone, Default)]
 pub struct ResolvedTypeReferenceDirective {
     pub resolution_diagnostics: Vec<Diagnostic>,
@@ -284,7 +284,7 @@ pub struct ResolvedTypeReferenceDirective {
 }
 
 impl ResolvedTypeReferenceDirective {
-    // Go: module/types.go:89 ResolvedTypeReferenceDirective.IsResolved
+    // Go: module/types.go:115 ResolvedTypeReferenceDirective.IsResolved
     #[must_use]
     pub fn is_resolved(&self) -> bool {
         !self.resolved_file_name.is_empty()
@@ -304,7 +304,7 @@ crate::flags_macros::go_flags!(Extensions, i32 {
 });
 
 impl Extensions {
-    // Go: module/types.go:104 extensions.String
+    // Go: module/types.go:130 extensions.String
     #[must_use]
     pub fn string(self) -> String {
         let mut result: Vec<&str> = Vec::with_capacity(self.0.count_ones() as usize);
@@ -323,7 +323,7 @@ impl Extensions {
         result.join(", ")
     }
 
-    // Go: module/types.go:121 extensions.Array
+    // Go: module/types.go:147 extensions.Array
     #[must_use]
     pub fn array(self) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();

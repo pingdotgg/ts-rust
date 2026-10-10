@@ -828,7 +828,8 @@ fn fill_non_zero_values() -> UserPreferences {
         },
         prefer_go_to_source_definition: true,
         exclude_library_symbols_in_nav_to: f,
-        workspace_symbols_scope: lsutil::WorkspaceSymbolsScope("test".into()),
+        // ts#64554: Go getValidStringValue gives lsutil.WorkspaceSymbolsScope a valid value.
+        workspace_symbols_scope: lsutil::WorkspaceSymbolsScope::ALL_OPEN_PROJECTS,
         enable_formatting: f,
         enable_validation: f,
         disable_suggestions: f,

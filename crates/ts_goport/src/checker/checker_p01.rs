@@ -787,8 +787,10 @@ impl FlatKey for TypeId {
 // - `regExpScanner` (Go scanner) and `mu` are out of scope (scanner object,
 //   concurrency) and are not fields. The nil-able Go `ctx` is
 //   `Option<Context>`. `tracer` is the last field (see `crate::tracing`).
-//   `emitResolver` plus `emitResolverOnce` is the `Option<Rc<EmitResolver>>`
-//   field `emit_resolver`.
+//   `emitResolverLinks` (ts#64649) is `emit_resolver_links`. The
+//   `emit_resolver` field is not in Go N' (ts#64649 removed `emitResolver`
+//   and `emitResolverOnce`): it keeps the resolver of `get_emit_resolver`
+//   until the program, emit and ls lanes port their ts#64649 parts.
 // - `sync.Once` fields become `bool` "done" flags.
 // - `*T` pools and shared structs (`*Relation`, `*Relater`, `*FlowState`,
 //   `*InferenceState`) are `Rc<RefCell<T>>`; nil-able ones are `Option`.
@@ -834,6 +836,8 @@ pub struct Checker {
     pub exact_optional_property_types: bool,
     pub can_collect_symbol_alias_accessibility_data: bool,
     pub emit_resolver: Option<Rc<crate::checker::emit_resolver_p1::EmitResolver>>,
+    // ts#64649, Go N' checker.go:893
+    pub emit_resolver_links: crate::checker::emit_resolver_p1::EmitResolverLinks,
     pub was_canceled: bool,
     pub array_variances: SharedList<VarianceFlags>,
     pub globals: SymbolTable,
@@ -895,6 +899,8 @@ pub struct Checker {
     pub diagnostics: DiagnosticsCollection,
     pub suggestion_diagnostics: DiagnosticsCollection,
     pub merged_symbols: FxHashMap<SymbolId, SymbolId>,
+    // Go N' checker.go:673 mergedExportsChecked (ts#64566)
+    pub merged_exports_checked: FxHashSet<SymbolId>,
     pub factory: NodeFactory,
     pub node_links: LinkStore<Node, NodeLinks>,
     pub signature_links: LinkStore<Node, Box<SignatureLinks>>,
@@ -923,6 +929,9 @@ pub struct Checker {
     pub reverse_mapped_symbol_links: LinkStore<SymbolId, ReverseMappedSymbolLinks>,
     pub marked_assignment_symbol_links: LinkStore<SymbolId, MarkedAssignmentSymbolLinks>,
     pub symbol_container_links: LinkStore<SymbolId, Box<ContainingSymbolLinks>>,
+    // ts#64469, Go N' checker.go:701. Go nil is `None`.
+    pub external_module_containers:
+        Option<Box<crate::checker::symbol_accessibility::ExternalModuleContainerIndex>>,
     pub source_file_links: LinkStore<Node, Box<SourceFileLinks>>,
     pub pattern_for_type: FxHashMap<TypeId, Node>,
     pub context_free_types: FxHashMap<Node, TypeId>,
@@ -1084,6 +1093,8 @@ pub struct Checker {
     pub get_global_promise_type: GlobalTypeFn,
     pub get_global_promise_type_checked: GlobalTypeFn,
     pub get_global_promise_like_type: GlobalTypeFn,
+    // ts#63915, Go N' checker.go:854
+    pub get_global_abstract_module_source_type: GlobalTypeFn,
     pub get_global_promise_constructor_symbol: GlobalSymbolFn,
     pub get_global_promise_constructor_symbol_or_nil: GlobalSymbolFn,
     pub get_global_omit_symbol: GlobalSymbolFn,
@@ -1360,6 +1371,7 @@ impl Checker {
                 .verbatim_module_syntax
                 .is_false_or_unknown(),
             emit_resolver: None,
+            emit_resolver_links: Default::default(),
             was_canceled: false,
             array_variances: vec![VarianceFlags::COVARIANT].into(),
             globals: SymbolTable::NIL,
@@ -1412,6 +1424,7 @@ impl Checker {
             diagnostics: DiagnosticsCollection::default(),
             suggestion_diagnostics: DiagnosticsCollection::default(),
             merged_symbols: FxHashMap::default(),
+            merged_exports_checked: FxHashSet::default(),
             // Go leaves `factory` as the zero `ast.NodeFactory`.
             factory: NodeFactory::new(),
             node_links: LinkStore::default(),
@@ -1440,6 +1453,7 @@ impl Checker {
             reverse_mapped_symbol_links: LinkStore::default(),
             marked_assignment_symbol_links: LinkStore::default(),
             symbol_container_links: LinkStore::default(),
+            external_module_containers: None,
             source_file_links: LinkStore::default(),
             pattern_for_type: FxHashMap::default(),
             context_free_types: FxHashMap::default(),
@@ -1595,6 +1609,7 @@ impl Checker {
             get_global_promise_type: nil_global_type_fn(),
             get_global_promise_type_checked: nil_global_type_fn(),
             get_global_promise_like_type: nil_global_type_fn(),
+            get_global_abstract_module_source_type: nil_global_type_fn(),
             get_global_promise_constructor_symbol: nil_global_symbol_fn(),
             get_global_promise_constructor_symbol_or_nil: nil_global_symbol_fn(),
             get_global_omit_symbol: nil_global_symbol_fn(),
@@ -2088,6 +2103,12 @@ impl Checker {
             c.get_global_type_resolver("Promise", 1 /*arity*/, true /*reportErrors*/);
         c.get_global_promise_like_type =
             c.get_global_type_resolver("PromiseLike", 1 /*arity*/, true /*reportErrors*/);
+        // ts#63915, Go N' checker.go:1095
+        c.get_global_abstract_module_source_type = c.get_global_type_resolver(
+            "AbstractModuleSource",
+            0,    /*arity*/
+            true, /*reportErrors*/
+        );
         c.get_global_promise_constructor_symbol =
             c.get_global_value_symbol_resolver("Promise", true /*reportErrors*/);
         c.get_global_promise_constructor_symbol_or_nil =

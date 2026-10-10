@@ -81,8 +81,6 @@ pub fn parse_build_options(
 // `*collections.OrderedMap`, which is `CompilerOptionsValue::Map`.
 // `sync.Once` plus the cached field is a `OnceCell` (for both
 // `resolvedProjectPaths` and `locale`).
-// PORT: Go also has `WatchOptions`. Watch mode is out of scope and the crate
-// has no `WatchOptions`, so it is left out. It does not change build output.
 pub struct ParsedBuildCommandLine {
     pub build_options: BuildOptions,
     pub compiler_options: Rc<CompilerOptions>,
@@ -127,8 +125,7 @@ impl ParsedBuildCommandLine {
 }
 
 // Go: tsoptions/commandlineparser.go:64 ParseBuildCommandLine
-// PORT: Go nil `commandLine` is an empty slice here already. The
-// `WatchOptions` conversion is left out (see `ParsedBuildCommandLine`).
+// PORT: Go nil `commandLine` is an empty slice here already.
 pub fn parse_build_command_line(
     command_line: &[String],
     host: &dyn ParseConfigHost,

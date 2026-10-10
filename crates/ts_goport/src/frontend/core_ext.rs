@@ -2,7 +2,7 @@
 
 use crate::frontend::prelude::*;
 
-// Go: core/typeacquisition.go:5 TypeAcquisition
+// Go: core/options_generated.go:853 TypeAcquisition (ts#64457 generates it)
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TypeAcquisition {
     pub enable: Tristate,

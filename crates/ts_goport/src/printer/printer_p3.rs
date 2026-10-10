@@ -788,13 +788,13 @@ impl Printer {
     // Go: printer/printer.go:3015 emitMetaProperty
     pub(crate) fn emit_meta_property(&mut self, node: Node) {
         let state = self.enter_node(node);
-        self.emit_token(
+        let pos = self.emit_token(
             node.keyword_token(),
             node.pos(),
             WriteKind::PUNCTUATION,
             node,
         );
-        self.write_punctuation(".");
+        self.emit_token(SyntaxKind::DotToken, pos, WriteKind::PUNCTUATION, node);
         self.emit_identifier_name(node.name());
         self.exit_node(node, state);
     }

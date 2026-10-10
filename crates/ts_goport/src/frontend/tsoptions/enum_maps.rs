@@ -1,43 +1,15 @@
 use crate::frontend::prelude::*;
 use std::sync::LazyLock;
 
-// PORT: Go `core.WatchFileKind`, `core.WatchDirectoryKind` and
-// `core.PollingKind` (core/watchoptions.go) are not in `crate::flags` and no
-// unit owns core/watchoptions.go. They are defined here with the Go values
-// because the enum maps below need them.
-// Go: core/watchoptions.go:15 WatchFileKind
-crate::flags_macros::go_enum!(WatchFileKind, i32 {
-    NONE = 0; // WatchFileKindNone
-    FIXED_POLLING_INTERVAL = 1; // WatchFileKindFixedPollingInterval
-    PRIORITY_POLLING_INTERVAL = 2; // WatchFileKindPriorityPollingInterval
-    DYNAMIC_PRIORITY_POLLING = 3; // WatchFileKindDynamicPriorityPolling
-    FIXED_CHUNK_SIZE_POLLING = 4; // WatchFileKindFixedChunkSizePolling
-    USE_FS_EVENTS = 5; // WatchFileKindUseFsEvents
-    USE_FS_EVENTS_ON_PARENT_DIRECTORY = 6; // WatchFileKindUseFsEventsOnParentDirectory
-});
-
-// Go: core/watchoptions.go:27 WatchDirectoryKind
-crate::flags_macros::go_enum!(WatchDirectoryKind, i32 {
-    NONE = 0; // WatchDirectoryKindNone
-    USE_FS_EVENTS = 1; // WatchDirectoryKindUseFsEvents
-    FIXED_POLLING_INTERVAL = 2; // WatchDirectoryKindFixedPollingInterval
-    DYNAMIC_PRIORITY_POLLING = 3; // WatchDirectoryKindDynamicPriorityPolling
-    FIXED_CHUNK_SIZE_POLLING = 4; // WatchDirectoryKindFixedChunkSizePolling
-});
-
-// Go: core/watchoptions.go:37 PollingKind
-crate::flags_macros::go_enum!(PollingKind, i32 {
-    NONE = 0; // PollingKindNone
-    FIXED_INTERVAL = 1; // PollingKindFixedInterval
-    PRIORITY_INTERVAL = 2; // PollingKindPriorityInterval
-    DYNAMIC_PRIORITY = 3; // PollingKindDynamicPriority
-    FIXED_CHUNK_SIZE = 4; // PollingKindFixedChunkSize
-});
+// Since ts#64457 Go generates the option maps into
+// tsoptions/declarations_generated.go (from tools/scripts/tsc/options.ts);
+// the rest of enummaps.go stays. The watch option maps and core/watchoptions.go
+// are gone.
 
 /// Go `*collections.OrderedMap[string, any]` used by the option enum maps.
 pub type CommandLineOptionEnumMap = IndexMap<String, CompilerOptionsValue>;
 
-// Go: tsoptions/enummaps.go:11 LibMap
+// Go: tsoptions/declarations_generated.go:1172 LibMap
 // PORT: Go package-level vars built at init are `LazyLock` statics. The Go
 // `any` values are `CompilerOptionsValue`. LibMap values are Go strings.
 pub static LIB_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
@@ -159,17 +131,20 @@ pub static LIB_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
         ("esnext.regexp", "lib.es2024.regexp.d.ts"),
         ("esnext.string", "lib.es2024.string.d.ts"),
         ("esnext.float16", "lib.es2025.float16.d.ts"),
-        ("esnext.promise", "lib.es2025.promise.d.ts"),
         ("esnext.array", "lib.es2026.array.d.ts"),
         ("esnext.collection", "lib.es2026.collection.d.ts"),
         ("esnext.error", "lib.es2026.error.d.ts"),
         ("esnext.iterator", "lib.es2026.iterator.d.ts"),
         ("esnext.typedarrays", "lib.es2026.typedarrays.d.ts"),
+        // ts#64093
+        ("esnext.promise", "lib.esnext.promise.d.ts"),
         // ESNext By-feature options
         ("esnext.date", "lib.esnext.date.d.ts"),
         ("esnext.decorators", "lib.esnext.decorators.d.ts"),
         ("esnext.disposable", "lib.esnext.disposable.d.ts"),
         ("esnext.intl", "lib.esnext.intl.d.ts"),
+        // ts#63915
+        ("esnext.modulesource", "lib.esnext.modulesource.d.ts"),
         ("esnext.sharedmemory", "lib.esnext.sharedmemory.d.ts"),
         ("esnext.temporal", "lib.esnext.temporal.d.ts"),
         // Decorators
@@ -182,10 +157,10 @@ pub static LIB_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
         .collect()
 });
 
-// Go: tsoptions/enummaps.go:136 Libs
+// Go: tsoptions/enummaps.go:12 Libs
 pub static LIBS: LazyLock<Vec<String>> = LazyLock::new(|| LIB_MAP.keys().cloned().collect());
 
-// Go: tsoptions/enummaps.go:137 LibFilesSet
+// Go: tsoptions/enummaps.go:13 LibFilesSet
 pub static LIB_FILES_SET: LazyLock<FxHashSet<String>> = LazyLock::new(|| {
     LIB_MAP
         .values()
@@ -196,7 +171,7 @@ pub static LIB_FILES_SET: LazyLock<FxHashSet<String>> = LazyLock::new(|| {
         .collect()
 });
 
-// Go: tsoptions/enummaps.go:140 GetLibFileName
+// Go: tsoptions/enummaps.go:16 GetLibFileName
 #[must_use]
 pub fn get_lib_file_name(lib_name: &str) -> (String, bool) {
     // checks if the libName is a valid lib name or file name and converts the lib name to the filename if needed
@@ -221,7 +196,7 @@ fn enum_map(entries: Vec<(&str, CompilerOptionsValue)>) -> CommandLineOptionEnum
         .collect()
 }
 
-// Go: tsoptions/enummaps.go:153 moduleResolutionOptionMap
+// Go: tsoptions/declarations_generated.go:1291 moduleResolutionOptionMap
 pub static MODULE_RESOLUTION_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
     use CompilerOptionsValue::ModuleResolutionKind as V;
     enum_map(vec![
@@ -234,7 +209,7 @@ pub static MODULE_RESOLUTION_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = La
     ])
 });
 
-// Go: tsoptions/enummaps.go:162 targetOptionMap
+// Go: tsoptions/declarations_generated.go:1317 targetOptionMap
 pub static TARGET_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
     use CompilerOptionsValue::ScriptTarget as V;
     enum_map(vec![
@@ -256,7 +231,7 @@ pub static TARGET_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new
     ])
 });
 
-// Go: tsoptions/enummaps.go:180 moduleOptionMap
+// Go: tsoptions/declarations_generated.go:1300 moduleOptionMap
 pub static MODULE_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
     use CompilerOptionsValue::ModuleKind as V;
     enum_map(vec![
@@ -277,7 +252,7 @@ pub static MODULE_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new
     ])
 });
 
-// Go: tsoptions/enummaps.go:197 moduleDetectionOptionMap
+// Go: tsoptions/declarations_generated.go:1335 moduleDetectionOptionMap
 pub static MODULE_DETECTION_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
     use CompilerOptionsValue::ModuleDetectionKind as V;
     enum_map(vec![
@@ -287,7 +262,7 @@ pub static MODULE_DETECTION_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = Laz
     ])
 });
 
-// Go: tsoptions/enummaps.go:203 jsxOptionMap
+// Go: tsoptions/declarations_generated.go:1341 jsxOptionMap
 pub static JSX_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
     use CompilerOptionsValue::JsxEmit as V;
     enum_map(vec![
@@ -299,7 +274,7 @@ pub static JSX_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(||
     ])
 });
 
-// Go: tsoptions/enummaps.go:211 newLineOptionMap
+// Go: tsoptions/declarations_generated.go:1349 newLineOptionMap
 pub static NEW_LINE_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
     use CompilerOptionsValue::NewLineKind as V;
     enum_map(vec![
@@ -308,7 +283,7 @@ pub static NEW_LINE_OPTION_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::n
     ])
 });
 
-// Go: tsoptions/enummaps.go:216 targetToLibMap
+// Go: tsoptions/declarations_generated.go:1370 targetToLibMap
 pub static TARGET_TO_LIB_MAP: LazyLock<FxHashMap<ScriptTarget, String>> = LazyLock::new(|| {
     let entries: [(ScriptTarget, &str); 13] = [
         (ScriptTarget::ES_NEXT, "lib.esnext.full.d.ts"),
@@ -331,13 +306,13 @@ pub static TARGET_TO_LIB_MAP: LazyLock<FxHashMap<ScriptTarget, String>> = LazyLo
         .collect()
 });
 
-// Go: tsoptions/enummaps.go:232 TargetToLibMap
+// Go: tsoptions/enummaps.go:29 TargetToLibMap
 #[must_use]
 pub fn target_to_lib_map() -> &'static FxHashMap<ScriptTarget, String> {
     &TARGET_TO_LIB_MAP
 }
 
-// Go: tsoptions/enummaps.go:236 GetDefaultLibFileName
+// Go: tsoptions/enummaps.go:33 GetDefaultLibFileName
 #[must_use]
 pub fn get_default_lib_file_name(options: &CompilerOptions) -> String {
     let Some(name) = TARGET_TO_LIB_MAP.get(&options.get_emit_script_target()) else {
@@ -345,62 +320,3 @@ pub fn get_default_lib_file_name(options: &CompilerOptions) -> String {
     };
     name.clone()
 }
-
-// Go: tsoptions/enummaps.go:244 watchFileEnumMap
-pub static WATCH_FILE_ENUM_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
-    use CompilerOptionsValue::WatchFileKind as V;
-    enum_map(vec![
-        (
-            "fixedpollinginterval",
-            V(WatchFileKind::FIXED_POLLING_INTERVAL),
-        ),
-        (
-            "prioritypollinginterval",
-            V(WatchFileKind::PRIORITY_POLLING_INTERVAL),
-        ),
-        (
-            "dynamicprioritypolling",
-            V(WatchFileKind::DYNAMIC_PRIORITY_POLLING),
-        ),
-        (
-            "fixedchunksizepolling",
-            V(WatchFileKind::FIXED_CHUNK_SIZE_POLLING),
-        ),
-        ("usefsevents", V(WatchFileKind::USE_FS_EVENTS)),
-        (
-            "usefseventsonparentdirectory",
-            V(WatchFileKind::USE_FS_EVENTS_ON_PARENT_DIRECTORY),
-        ),
-    ])
-});
-
-// Go: tsoptions/enummaps.go:253 watchDirectoryEnumMap
-pub static WATCH_DIRECTORY_ENUM_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
-    use CompilerOptionsValue::WatchDirectoryKind as V;
-    enum_map(vec![
-        ("usefsevents", V(WatchDirectoryKind::USE_FS_EVENTS)),
-        (
-            "fixedpollinginterval",
-            V(WatchDirectoryKind::FIXED_POLLING_INTERVAL),
-        ),
-        (
-            "dynamicprioritypolling",
-            V(WatchDirectoryKind::DYNAMIC_PRIORITY_POLLING),
-        ),
-        (
-            "fixedchunksizepolling",
-            V(WatchDirectoryKind::FIXED_CHUNK_SIZE_POLLING),
-        ),
-    ])
-});
-
-// Go: tsoptions/enummaps.go:260 fallbackEnumMap
-pub static FALLBACK_ENUM_MAP: LazyLock<CommandLineOptionEnumMap> = LazyLock::new(|| {
-    use CompilerOptionsValue::PollingKind as V;
-    enum_map(vec![
-        ("fixedinterval", V(PollingKind::FIXED_INTERVAL)),
-        ("priorityinterval", V(PollingKind::PRIORITY_INTERVAL)),
-        ("dynamicpriority", V(PollingKind::DYNAMIC_PRIORITY)),
-        ("fixedchunksize", V(PollingKind::FIXED_CHUNK_SIZE)),
-    ])
-});

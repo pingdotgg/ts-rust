@@ -142,6 +142,21 @@ impl Checker {
         self.get_merged_symbol(symbol)
     }
 
+    // Go: checker/exports.go:107 GetSymbolOfNode (ts#64598)
+    pub fn get_symbol_of_node_exported(&mut self, node: Node) -> SymbolId {
+        self.get_symbol_of_node(node)
+    }
+
+    // Go: checker/exports.go:111 GetSymbolOfDeclaration (ts#64598)
+    pub fn get_symbol_of_declaration_exported(&mut self, node: Node) -> SymbolId {
+        self.get_symbol_of_declaration(node)
+    }
+
+    // Go: checker/exports.go:115 GetParentOfSymbol (ts#64598)
+    pub fn get_parent_of_symbol_exported(&mut self, symbol: SymbolId) -> SymbolId {
+        self.get_parent_of_symbol(symbol)
+    }
+
     // Go: checker/exports.go:107 TryFindAmbientModule
     pub fn try_find_ambient_module_exported(&mut self, module_name: &str) -> SymbolId {
         self.try_find_ambient_module(module_name, true /*withAugmentations*/)
@@ -552,13 +567,6 @@ impl Checker {
     }
 
     // Go: checker/exports.go:374 RequiresAddingImplicitUndefined
-    // PORT: Go calls the locking `EmitResolver.RequiresAddingImplicitUndefined`,
-    // which takes the resolver's `checkerMu`. Here the checker is `self`,
-    // already borrowed by the caller, so the unlocked body runs:
-    // `requires_adding_implicit_undefined_unsafe_worker` is the same
-    // `IsParseTreeNode` test and `requiresAddingImplicitUndefined` call
-    // without the lock. The locking Rust method borrows the checker from
-    // the compile worker pool, which the language service thread does not use.
     pub fn requires_adding_implicit_undefined_exported(&mut self, node: Node) -> bool {
         let mut enclosing_declaration = find_ancestor(node, is_declaration);
         if enclosing_declaration.is_nil() {
@@ -568,13 +576,8 @@ impl Checker {
         if symbol.is_nil() {
             return false;
         }
-        let resolver = self.get_emit_resolver();
-        resolver.requires_adding_implicit_undefined_unsafe_worker(
-            self,
-            node,
-            symbol,
-            enclosing_declaration,
-        )
+        // ts#64649, Go N' exports.go:395: the checker method, not the emit resolver.
+        self.requires_adding_implicit_undefined(node, symbol, enclosing_declaration)
     }
 
     // Go: checker/exports.go:386 RemoveMissingOrUndefinedType

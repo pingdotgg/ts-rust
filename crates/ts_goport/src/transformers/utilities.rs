@@ -120,14 +120,14 @@ fn convert_binding_element_to_array_assignment_element(
         emit_context.assign_comment_and_source_map_ranges(elision, element);
         return elision;
     }
+    let expression =
+        convert_binding_name_to_assignment_element_target(emit_context, element.name());
     if element.dot_dot_dot_token().is_some() {
-        let spread = f.new_spread_element(element.name());
+        let spread = f.new_spread_element(expression);
         emit_context.set_original(spread, element);
         emit_context.assign_comment_and_source_map_ranges(spread, element);
         return spread;
     }
-    let expression =
-        convert_binding_name_to_assignment_element_target(emit_context, element.name());
     if element.initializer().is_some() {
         let assignment = f.new_assignment_expression(expression, element.initializer());
         emit_context.set_original(assignment, element);

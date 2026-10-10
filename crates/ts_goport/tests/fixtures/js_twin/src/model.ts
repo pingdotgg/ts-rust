@@ -31,7 +31,7 @@ export class Model {
     }
   }
 
-  merge(other: Partial<Model>) {
+  merge(other: Partial<Model>): Partial<Model> & { size: number } {
     return { ...this, ...other, size: other.shape?.size ?? 0 };
   }
 }

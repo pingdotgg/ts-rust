@@ -1405,7 +1405,7 @@ impl<'a> Parser<'a> {
         self.finish_node(node, pos)
     }
 
-    // Go: parser.go:5201 parseLeftHandSideExpressionOrHigher
+    // Go: parser.go:5222 parseLeftHandSideExpressionOrHigher
     pub fn parse_left_hand_side_expression_or_higher(&mut self) -> Node {
         // Original Ecma:
         // LeftHandSideExpression: See 11.2
@@ -1453,12 +1453,12 @@ impl<'a> Parser<'a> {
                 // This is an 'import.*' metaproperty (i.e. 'import.meta')
                 self.next_token(); // advance past the 'import'
                 self.next_token(); // advance past the dot
-                let name = self.parse_identifier_name();
+                let name = self.parse_import_meta_property_name();
                 let node = self
                     .factory
                     .new_meta_property(SyntaxKind::ImportKeyword, name);
                 expression = self.finish_node(node, pos);
-                if expression.text() == "defer" {
+                if is_import_phase_meta_property(expression) {
                     if self.token == SyntaxKind::OpenParenToken
                         || self.token == SyntaxKind::LessThanToken
                     {
@@ -1483,9 +1483,24 @@ impl<'a> Parser<'a> {
         self.parse_call_expression_rest(pos, expression)
     }
 
-    // Go: parser.go:5270 nextTokenIsDot
+    // Go: parser.go:5291 nextTokenIsDot
     pub fn next_token_is_dot(&mut self) -> bool {
         self.next_token() == SyntaxKind::DotToken
+    }
+
+    // Go: parser.go:5295 parseImportMetaPropertyName (ts#63915)
+    pub fn parse_import_meta_property_name(&mut self) -> Node {
+        if matches!(
+            self.token,
+            SyntaxKind::DeferKeyword | SyntaxKind::SourceKeyword
+        ) && self.current_import_phase_modifier() == SyntaxKind::Unknown
+        {
+            self.parse_error_at_current_token(
+                diag::Keywords_cannot_contain_escape_characters,
+                args![],
+            );
+        }
+        self.parse_identifier_name()
     }
 
     // Go: parser.go:5274 parseSuperExpression

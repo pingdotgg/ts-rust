@@ -166,6 +166,11 @@ impl Checker {
         f(self)
     }
 
+    pub fn get_global_abstract_module_source_type(&mut self) -> TypeId {
+        let f = self.get_global_abstract_module_source_type.clone();
+        f(self)
+    }
+
     pub fn get_global_promise_constructor_symbol(&mut self) -> SymbolId {
         let f = self.get_global_promise_constructor_symbol.clone();
         f(self)

@@ -32,7 +32,7 @@ go_enum!(Ending, i32 {
     CHANGEABLE = 2; // EndingChangeable
 });
 
-// Go: module/resolver.go:2141 ResolvedEntrypoint
+// Go: module/resolver.go:2389 ResolvedEntrypoint
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedEntrypoint {
     // OriginalFileName is the symlink path if the entrypoint was discovered at a symlink. Empty otherwise.
@@ -49,7 +49,7 @@ pub struct ResolvedEntrypoint {
 }
 
 impl ResolvedEntrypoint {
-    // Go: module/resolver.go:2155 SymlinkOrRealpath
+    // Go: module/resolver.go:2404 SymlinkOrRealpath
     #[must_use]
     pub fn symlink_or_realpath(&self) -> String {
         if !self.original_file_name.is_empty() {
@@ -60,7 +60,7 @@ impl ResolvedEntrypoint {
 }
 
 impl DefaultResolver {
-    // Go: module/resolver.go:2162 GetEntrypointsFromPackageJsonInfo
+    // Go: module/resolver.go:2411 GetEntrypointsFromPackageJsonInfo
     // PORT: Go returns a nil slice for no entrypoints; that is an empty `Vec`.
     // Go `&resolutionState{resolver: r, extensions: ..., features: ...,
     // compilerOptions: r.compilerOptions}` spells out the zero fields here
@@ -89,11 +89,24 @@ impl DefaultResolver {
             resolved_package_directory: false,
             diagnostics: Vec::new(),
         };
+        // ts#64544: a package in a dynamic directory names its entrypoints
+        // with module specifier escapes.
+        let dynamic_package = package_json
+            .as_ref()
+            .is_some_and(|p| is_encoded_dynamic_file_name(&p.package_directory));
+        let source_package_name = if dynamic_package {
+            dynamic_uri_path_to_module_specifier(package_name)
+        } else {
+            package_name.to_string()
+        };
         if let Some(info) = package_json.as_ref().filter(|p| p.exists()) {
             let exports = &info.contents.as_ref().unwrap().fields.path_fields.exports;
             if exports.is_present() {
-                let entrypoints =
-                    state.load_entrypoints_from_export_map(package_json, package_name, exports);
+                let entrypoints = state.load_entrypoints_from_export_map(
+                    package_json,
+                    &source_package_name,
+                    exports,
+                );
                 return entrypoints;
             }
         }
@@ -111,7 +124,7 @@ impl DefaultResolver {
         if is_resolved(&main_resolution) {
             result.push(self.create_resolved_entrypoint_handling_symlink(
                 &main_resolution.as_ref().unwrap().path,
-                package_name,
+                &source_package_name,
                 None,
                 None,
                 Ending::FIXED,
@@ -144,14 +157,20 @@ impl DefaultResolver {
                     continue;
                 }
 
-                let relative = get_relative_path_from_directory(
+                let mut relative = get_relative_path_from_directory(
                     &package_json_entry.package_directory,
                     file,
                     &compare_paths_options,
                 );
+                if dynamic_package {
+                    relative = dynamic_uri_path_to_module_specifier(&relative);
+                }
                 result.push(self.create_resolved_entrypoint_handling_symlink(
                     file,
-                    &crate::frontend::tspath::resolve_path(package_name, &[relative.as_str()]),
+                    &crate::frontend::tspath::resolve_path(
+                        &source_package_name,
+                        &[relative.as_str()],
+                    ),
                     None,
                     None,
                     Ending::CHANGEABLE,
@@ -165,7 +184,7 @@ impl DefaultResolver {
         Vec::new()
     }
 
-    // Go: module/resolver.go:2221 createResolvedEntrypointHandlingSymlink
+    // Go: module/resolver.go:2479 createResolvedEntrypointHandlingSymlink
     pub fn create_resolved_entrypoint_handling_symlink(
         &self,
         file_name: &str,
@@ -193,7 +212,7 @@ impl DefaultResolver {
 }
 
 impl ResolutionState<'_> {
-    // Go: module/resolver.go:2238 loadEntrypointsFromExportMap
+    // Go: module/resolver.go:2497 loadEntrypointsFromExportMap
     pub fn load_entrypoints_from_export_map(
         &mut self,
         package_json: &Option<Rc<InfoCacheEntry>>,
@@ -281,31 +300,48 @@ impl ResolutionState<'_> {
                 if exports_string.find('*') != exports_string.rfind('*') {
                     return;
                 }
-                let pattern_path = crate::frontend::tspath::resolve_path(
-                    &package_json.package_directory,
-                    &[exports_string],
-                );
+                // ts#64544: the pattern matches the path of each file relative
+                // to the package directory (decoded in a dynamic package).
+                let dynamic_package = is_encoded_dynamic_file_name(&package_json.package_directory);
+                let include_patterns = if dynamic_package {
+                    vec!["**/*".to_string()]
+                } else {
+                    vec![crate::frontend::tspath::change_full_extension(
+                        &exports_string.replacen('*', "**/*", 1),
+                        ".*",
+                    )]
+                };
+                let pattern_path = exports_string.strip_prefix("./").unwrap_or(exports_string);
                 // Go: strings.Cut(patternPath, "*")
                 let (leading_slice, trailing_slice) = match pattern_path.split_once('*') {
                     Some((before, after)) => (before.to_string(), after.to_string()),
-                    None => (pattern_path.clone(), String::new()),
+                    None => (pattern_path.to_string(), String::new()),
                 };
-                let case_sensitive = self.resolver.host.fs().use_case_sensitive_file_names();
+                let case_sensitive =
+                    dynamic_package || self.resolver.host.fs().use_case_sensitive_file_names();
                 let files = crate::frontend::vfs::vfsmatch::read_directory(
                     self.resolver.host.fs(),
                     self.resolver.host.get_current_directory(),
                     &package_json.package_directory,
                     &self.extensions.array(),
                     &[],
-                    &[crate::frontend::tspath::change_full_extension(
-                        &exports_string.replacen('*', "**/*", 1),
-                        ".*",
-                    )],
+                    &include_patterns,
                     crate::frontend::vfs::vfsmatch::UNLIMITED_DEPTH,
                 );
                 for file in &files {
-                    let (matched_star, ok) = self.get_matched_star_for_pattern_entrypoint(
+                    let mut logical_file = get_relative_path_from_directory(
+                        &package_json.package_directory,
                         file,
+                        &ComparePathsOptions {
+                            use_case_sensitive_file_names: case_sensitive,
+                            ..Default::default()
+                        },
+                    );
+                    if dynamic_package {
+                        logical_file = decode_dynamic_uri_path(&logical_file);
+                    }
+                    let (mut matched_star, ok) = self.get_matched_star_for_pattern_entrypoint(
+                        &logical_file,
                         &leading_slice,
                         &trailing_slice,
                         case_sensitive,
@@ -313,10 +349,16 @@ impl ResolutionState<'_> {
                     if !ok {
                         continue;
                     }
-                    let module_specifier = crate::frontend::tspath::resolve_path(
-                        package_name,
-                        &[subpath.replacen('*', &matched_star, 1).as_str()],
-                    );
+                    if dynamic_package {
+                        matched_star = encode_dynamic_logical_module_specifier(&matched_star);
+                    }
+                    let replaced = subpath.replacen('*', &matched_star, 1);
+                    let resolved_subpath = replaced.strip_prefix("./").unwrap_or(&replaced);
+                    if resolved_subpath.is_empty() {
+                        continue;
+                    }
+                    let module_specifier =
+                        crate::frontend::tspath::resolve_path(package_name, &[resolved_subpath]);
                     entrypoints.push(self.resolver.create_resolved_entrypoint_handling_symlink(
                         file,
                         &module_specifier,
@@ -427,7 +469,7 @@ impl ResolutionState<'_> {
         }
     }
 
-    // Go: module/resolver.go:2353 getMatchedStarForPatternEntrypoint
+    // Go: module/resolver.go:2632 getMatchedStarForPatternEntrypoint
     // PORT: Go slices bytes; a case-insensitive match can end inside a
     // character, so the bytes are copied (`from_utf8_lossy`) instead of
     // slicing the `&str`.

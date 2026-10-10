@@ -51,11 +51,6 @@ pub struct CommandLineParser {
 // Go: tsoptions/commandlineparser.go:43 ParseCommandLine
 // PORT: the plan names the entry point `parse_command_line(args, fs)`; Go
 // takes a `ParseConfigHost`, so this does too.
-// PORT: Go also converts the options with `watchOptionsParser` and stores the
-// result in `ParsedConfig.WatchOptions`. Watch mode is out of scope, the
-// crate has no `WatchOptions` type and U15 did not port `watchOptionsParser`,
-// so that step is left out. It does not change the compiler options, the
-// file names, the errors or the raw options.
 pub fn parse_command_line(
     command_line: &[String],
     host: &dyn ParseConfigHost,
@@ -98,7 +93,7 @@ pub fn parse_command_line(
 // PORT: ported with the other build mode types in
 // `execute/build/command_line.rs` (`parse_build_command_line`).
 
-// Go: tsoptions/commandlineparser.go:115 parseCommandLineWorker
+// Go: tsoptions/commandlineparser.go:112 parseCommandLineWorker
 // PORT: `fs` is passed down instead of stored (see `CommandLineParser`).
 // Go nil `vfs.FS` is `None`.
 pub fn parse_command_line_worker(
@@ -122,7 +117,7 @@ pub fn parse_command_line_worker(
 }
 
 impl CommandLineParser {
-    // Go: tsoptions/commandlineparser.go:133 (*commandLineParser).parseStrings
+    // Go: tsoptions/commandlineparser.go:131 (*commandLineParser).parseStrings
     pub fn parse_strings(&mut self, args: &[String], fs: Option<&dyn Fs>) {
         let mut i = 0usize;
         while i < args.len() {
@@ -147,27 +142,16 @@ impl CommandLineParser {
                             self.worker_diagnostics.option_type_mismatch_diagnostic,
                         );
                     } else {
-                        let watch_opt = WATCH_NAME_MAP.get_option_declaration_from_name(
+                        // ts#64457: the watch options are gone, so a name that
+                        // is not an option of this parser is unknown (TS5023,
+                        // or TS5072 for --build).
+                        let err = self.create_unknown_option_error(
                             input_option_name,
-                            true, /*allowShort*/
+                            s,
+                            Node::NIL,
+                            Node::NIL,
                         );
-                        if let Some(watch_opt) = watch_opt {
-                            i = self.parse_option_value(
-                                args,
-                                i,
-                                watch_opt,
-                                WATCH_OPTIONS_DID_YOU_MEAN_DIAGNOSTICS
-                                    .option_type_mismatch_diagnostic,
-                            );
-                        } else {
-                            let err = self.create_unknown_option_error(
-                                input_option_name,
-                                s,
-                                Node::NIL,
-                                Node::NIL,
-                            );
-                            self.errors.push(err);
-                        }
+                        self.errors.push(err);
                     }
                 }
                 _ => self.file_names.push(s.clone()),
@@ -176,7 +160,7 @@ impl CommandLineParser {
     }
 }
 
-// Go: tsoptions/commandlineparser.go:164 getInputOptionName
+// Go: tsoptions/commandlineparser.go:156 getInputOptionName
 pub fn get_input_option_name(input: &str) -> &str {
     // removes at most two leading '-' from the input string
     let input = input.strip_prefix('-').unwrap_or(input);
@@ -184,7 +168,7 @@ pub fn get_input_option_name(input: &str) -> &str {
 }
 
 impl CommandLineParser {
-    // Go: tsoptions/commandlineparser.go:169 (*commandLineParser).parseResponseFile
+    // Go: tsoptions/commandlineparser.go:161 (*commandLineParser).parseResponseFile
     // PORT: Go `defer p.responseFileStack.Delete(path)` is a `remove` before
     // each return. Go calls `p.fs.UseCaseSensitiveFileNames()` on a nil `fs`
     // and panics; so does this.
@@ -256,7 +240,7 @@ impl CommandLineParser {
     }
 }
 
-// Go: tsoptions/commandlineparser.go:224 tryReadFile
+// Go: tsoptions/commandlineparser.go:219 tryReadFile
 pub fn try_read_file(
     file_name: &str,
     read_file: &mut dyn FnMut(&str) -> (String, bool),
@@ -278,7 +262,7 @@ pub fn try_read_file(
 }
 
 impl CommandLineParser {
-    // Go: tsoptions/commandlineparser.go:229 (*commandLineParser).parseOptionValue
+    // Go: tsoptions/commandlineparser.go:232 (*commandLineParser).parseOptionValue
     // PORT: the Go parameter `diag` is `diag_message`, because `diag` is the
     // diagnostics module in Rust.
     pub fn parse_option_value(
@@ -444,7 +428,7 @@ impl CommandLineParser {
         i
     }
 
-    // Go: tsoptions/commandlineparser.go:335 (*commandLineParser).parseListTypeOption
+    // Go: tsoptions/commandlineparser.go:338 (*commandLineParser).parseListTypeOption
     pub fn parse_list_type_option(
         &self,
         opt: &'static CommandLineOption,
@@ -454,7 +438,7 @@ impl CommandLineParser {
     }
 }
 
-// Go: tsoptions/commandlineparser.go:347 ParseListTypeOption
+// Go: tsoptions/commandlineparser.go:342 ParseListTypeOption
 // PORT: Go returns `[]any`: a `List`, or a `NilList` when `core.MapFiltered`
 // keeps no element (for example `--types ,`), so the option stays unset.
 pub fn parse_list_type_option(
@@ -552,7 +536,7 @@ fn map_filtered_list(values: Vec<CompilerOptionsValue>) -> CompilerOptionsValue 
     }
 }
 
-// Go: tsoptions/commandlineparser.go:392 convertJsonOptionOfEnumType
+// Go: tsoptions/commandlineparser.go:387 convertJsonOptionOfEnumType
 pub fn convert_json_option_of_enum_type(
     opt: &CommandLineOption,
     value: &str,

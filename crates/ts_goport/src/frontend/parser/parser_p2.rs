@@ -1394,7 +1394,7 @@ impl<'a> Parser<'a> {
         result
     }
 
-    // Go: parser/parser.go:2283 parseImportDeclarationOrImportEqualsDeclaration
+    // Go: parser/parser.go:2282 parseImportDeclarationOrImportEqualsDeclaration
     pub fn parse_import_declaration_or_import_equals_declaration(
         &mut self,
         pos: i32,
@@ -1405,6 +1405,7 @@ impl<'a> Parser<'a> {
         let after_import_pos = self.node_pos();
         // We don't parse the identifier here in await context, instead we will report a grammar error in the checker.
         let save_has_await_identifier = self.statement_has_await_identifier;
+        let phase_modifier_candidate = self.current_import_phase_modifier();
         let mut identifier = Node::NIL;
         if self.is_identifier() {
             identifier = self.parse_identifier();
@@ -1423,23 +1424,20 @@ impl<'a> Parser<'a> {
             if self.is_identifier() {
                 identifier = self.parse_identifier();
             }
-        } else if identifier.is_some() && identifier.text() == "defer" {
-            let should_parse_as_defer_modifier = if self.token == SyntaxKind::FromKeyword {
-                !self.look_ahead(Parser::next_token_is_token_string_literal)
-            } else {
-                self.token != SyntaxKind::CommaToken && self.token != SyntaxKind::EqualsToken
-            };
-            if should_parse_as_defer_modifier {
-                phase_modifier = SyntaxKind::DeferKeyword;
-                identifier = Node::NIL;
-                if self.is_identifier() {
-                    identifier = self.parse_identifier();
-                }
+        } else if identifier.is_some()
+            && phase_modifier_candidate != SyntaxKind::Unknown
+            && self.should_parse_import_phase_modifier()
+        {
+            phase_modifier = phase_modifier_candidate;
+            identifier = Node::NIL;
+            if self.is_identifier() {
+                identifier = self.parse_identifier();
             }
         }
         if identifier.is_some()
-            && !self.token_after_imported_identifier_definitely_produces_import_declaration()
+            && self.token_after_imported_identifier_allows_import_equals_declaration()
             && phase_modifier != SyntaxKind::DeferKeyword
+            && phase_modifier != SyntaxKind::SourceKeyword
         {
             let node = self.parse_import_equals_declaration(
                 pos,
@@ -1474,22 +1472,45 @@ impl<'a> Parser<'a> {
         result
     }
 
-    // Go: parser/parser.go:2332 nextTokenIsFromKeywordOrEqualsToken
+    // Go: parser/parser.go:2324 nextTokenIsFromKeywordOrEqualsToken
     pub fn next_token_is_from_keyword_or_equals_token(&mut self) -> bool {
         self.next_token();
         self.token == SyntaxKind::FromKeyword || self.token == SyntaxKind::EqualsToken
     }
 
-    // Go: parser/parser.go:2337 tokenAfterImportDefinitelyProducesImportDeclaration
+    // Go: parser/parser.go:2329 shouldParseImportPhaseModifier (ts#63915)
+    pub fn should_parse_import_phase_modifier(&mut self) -> bool {
+        match self.token {
+            SyntaxKind::CommaToken | SyntaxKind::EqualsToken => return false,
+            SyntaxKind::FromKeyword => {
+                if self.look_ahead(Parser::next_token_is_token_string_literal) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    // Go: parser/parser.go:2341 currentImportPhaseModifier (ts#63915)
+    // The token text is the raw text, so an escaped `d\u0065fer` or
+    // `s\u006furce` is not a phase modifier.
+    pub fn current_import_phase_modifier(&self) -> SyntaxKind {
+        match self.scanner.token_text() {
+            "defer" => SyntaxKind::DeferKeyword,
+            "source" => SyntaxKind::SourceKeyword,
+            _ => SyntaxKind::Unknown,
+        }
+    }
+
+    // Go: parser/parser.go:2352 tokenAfterImportDefinitelyProducesImportDeclaration
     pub fn token_after_import_definitely_produces_import_declaration(&self) -> bool {
         self.token == SyntaxKind::AsteriskToken || self.token == SyntaxKind::OpenBraceToken
     }
 
-    // Go: parser/parser.go:2341 tokenAfterImportedIdentifierDefinitelyProducesImportDeclaration
-    pub fn token_after_imported_identifier_definitely_produces_import_declaration(&self) -> bool {
-        // In `import id ___`, the current token decides whether to produce
-        // an ImportDeclaration or ImportEqualsDeclaration.
-        self.token == SyntaxKind::CommaToken || self.token == SyntaxKind::FromKeyword
+    // Go: parser/parser.go:2356 tokenAfterImportedIdentifierAllowsImportEqualsDeclaration (ts#63915; was tokenAfterImportedIdentifierDefinitelyProducesImportDeclaration)
+    pub fn token_after_imported_identifier_allows_import_equals_declaration(&self) -> bool {
+        !matches!(self.token, SyntaxKind::CommaToken | SyntaxKind::FromKeyword)
     }
 
     // Go: parser/parser.go:2347 parseImportEqualsDeclaration
@@ -1554,7 +1575,7 @@ impl<'a> Parser<'a> {
         self.parse_expression()
     }
 
-    // Go: parser/parser.go:2385 tryParseImportClause
+    // Go: parser/parser.go:2403 tryParseImportClause
     pub fn try_parse_import_clause(
         &mut self,
         identifier: Node,
@@ -1577,6 +1598,15 @@ impl<'a> Parser<'a> {
             );
             self.parse_expected(SyntaxKind::FromKeyword);
             return import_clause;
+        }
+        if phase_modifier == SyntaxKind::DeferKeyword || phase_modifier == SyntaxKind::SourceKeyword
+        {
+            let node = self.factory.new_import_clause(
+                phase_modifier,
+                Node::NIL, /*name*/
+                Node::NIL, /*namedBindings*/
+            );
+            return self.finish_node(node, pos);
         }
         Node::NIL
     }

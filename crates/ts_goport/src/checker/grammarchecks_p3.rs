@@ -451,24 +451,65 @@ impl Checker {
                         args![],
                     );
                 }
-                if node.named_bindings().is_some()
-                    && node.named_bindings().kind() == SyntaxKind::NamedImports
-                {
+                // ts#64640, Go N' grammarchecks.go:2113
+                if node.named_bindings().is_nil() {
+                    return self.grammar_error_on_node(
+                        node,
+                        diag::A_deferred_import_must_specify_a_namespace_binding,
+                        args![],
+                    );
+                }
+                if node.named_bindings().kind() == SyntaxKind::NamedImports {
                     return self.grammar_error_on_node(
                         node,
                         diag::Named_imports_are_not_allowed_in_a_deferred_import,
                         args![],
                     );
                 }
-                if self.module_kind != ModuleKind::ES_NEXT
-                    && self.module_kind != ModuleKind::PRESERVE
-                {
+                // ts#63915, Go N' grammarchecks.go:2119
+                if module_kind_supports_deferred_imports(self.module_kind) {
+                    return false;
+                }
+                return self.grammar_error_on_node(
+                    node,
+                    diag::Deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or_preserve,
+                    args![],
+                );
+            }
+            // ts#63915, Go N' grammarchecks.go:2123
+            SyntaxKind::SourceKeyword => {
+                if node.named_bindings().is_some() {
                     return self.grammar_error_on_node(
                         node,
-                        diag::Deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or_preserve,
+                        diag::Named_and_namespace_imports_are_not_allowed_in_a_source_phase_import,
                         args![],
                     );
                 }
+                if node.name().is_nil() {
+                    return self.grammar_error_on_node(
+                        node,
+                        diag::A_source_phase_import_must_specify_a_local_binding,
+                        args![],
+                    );
+                }
+                if module_kind_supports_source_phase_imports(self.module_kind) {
+                    let module_specifier = get_module_specifier_from_node(node.parent());
+                    if self.get_emit_syntax_for_module_specifier_expression(module_specifier)
+                        == ModuleKind::COMMON_JS
+                    {
+                        return self.grammar_error_on_node(
+                            node,
+                            diag::Source_phase_imports_are_not_allowed_on_statements_that_compile_to_CommonJS_require_calls,
+                            args![],
+                        );
+                    }
+                    return false;
+                }
+                return self.grammar_error_on_node(
+                    node,
+                    diag::Source_phase_imports_are_only_supported_when_the_module_option_is_set_to_esnext_nodenext_or_preserve,
+                    args![],
+                );
             }
             _ => {}
         }
@@ -512,8 +553,17 @@ impl Checker {
             );
         }
 
-        if node.expression().kind() == SyntaxKind::MetaProperty {
-            if self.module_kind != ModuleKind::ES_NEXT && self.module_kind != ModuleKind::PRESERVE {
+        // ts#63915, Go N' grammarchecks.go:2181
+        if is_import_source_meta_property(node.expression()) {
+            if !module_kind_supports_source_phase_imports(self.module_kind) {
+                return self.grammar_error_on_node(
+                    node,
+                    diag::Source_phase_imports_are_only_supported_when_the_module_option_is_set_to_esnext_nodenext_or_preserve,
+                    args![],
+                );
+            }
+        } else if is_import_defer_meta_property(node.expression()) {
+            if !module_kind_supports_deferred_imports(self.module_kind) {
                 return self.grammar_error_on_node(
                     node,
                     diag::Deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or_preserve,
@@ -524,6 +574,15 @@ impl Checker {
             return self.grammar_error_on_node(
                 node,
                 diag::Dynamic_imports_are_only_supported_when_the_module_flag_is_set_to_es2020_es2022_esnext_commonjs_amd_system_umd_node16_node18_node20_or_nodenext,
+                args![],
+            );
+        }
+
+        // ts#63915, Go N' grammarchecks.go:2197
+        if is_source_phase_import_call(node) && node.question_dot_token().is_some() {
+            return self.grammar_error_on_node(
+                node.question_dot_token(),
+                diag::Optional_chaining_cannot_be_used_with_import_source,
                 args![],
             );
         }
@@ -583,4 +642,20 @@ impl Checker {
         }
         false
     }
+}
+
+// Go: core/compileroptions.go:217 ModuleKind.SupportsDeferredImports (ts#63915)
+// PORT: Go's method is in `core`; the port of `core/compileroptions.go`
+// (`src/options.rs`) belongs to the program lane. This local copy is used
+// until that lane adds the method.
+fn module_kind_supports_deferred_imports(module_kind: ModuleKind) -> bool {
+    module_kind == ModuleKind::ES_NEXT || module_kind == ModuleKind::PRESERVE
+}
+
+// Go: core/compileroptions.go:221 ModuleKind.SupportsSourcePhaseImports (ts#63915)
+// PORT: see `module_kind_supports_deferred_imports`.
+fn module_kind_supports_source_phase_imports(module_kind: ModuleKind) -> bool {
+    module_kind == ModuleKind::ES_NEXT
+        || module_kind == ModuleKind::NODE_NEXT
+        || module_kind == ModuleKind::PRESERVE
 }

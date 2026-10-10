@@ -35,7 +35,7 @@ impl std::fmt::Display for Usage {
 /// Pass as the depth argument to indicate there is no depth limit.
 pub const UNLIMITED_DEPTH: i32 = i32::MAX;
 
-// Go: vfs/vfsmatch/vfsmatch.go:30 ReadDirectory
+// Go: vfs/vfsmatch/vfsmatch.go:34 ReadDirectory
 pub fn read_directory(
     host: &dyn Fs,
     current_dir: &str,
@@ -57,7 +57,7 @@ pub fn read_directory(
     )
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:37 IsImplicitGlob
+// Go: vfs/vfsmatch/vfsmatch.go:41 IsImplicitGlob
 /// Checks if a path component is implicitly a glob.
 /// An "includes" path "foo" is implicitly a glob "foo/**/*" if its last component has no extension,
 /// and does not contain any glob characters itself.
@@ -65,10 +65,10 @@ pub fn is_implicit_glob(last_path_component: &str) -> bool {
     !last_path_component.contains(['.', '*', '?'])
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:41 wildcardCharCodes
+// Go: vfs/vfsmatch/vfsmatch.go:45 wildcardCharCodes
 const WILDCARD_CHAR_CODES: [char; 2] = ['*', '?'];
 
-// Go: vfs/vfsmatch/vfsmatch.go:43 getIncludeBasePath
+// Go: vfs/vfsmatch/vfsmatch.go:47 getIncludeBasePath
 fn get_include_base_path(absolute: &str) -> String {
     let Some(wildcard_offset) = absolute.find(WILDCARD_CHAR_CODES) else {
         // No "*" or "?" in the path
@@ -78,12 +78,17 @@ fn get_include_base_path(absolute: &str) -> String {
             return remove_trailing_directory_separator(&get_directory_path(absolute)).to_string();
         }
     };
-    // PORT: Go `max(LastIndex(...), 0)`; a missing separator gives 0.
-    let end = absolute[..wildcard_offset].rfind('/').unwrap_or(0);
+    // ts#64159: Go `max(LastIndex(...), GetRootLength(absolute))`, so a
+    // pattern in the root ("/*.ts", "c:/*.ts") has the root as its base path
+    // (N: `max(..., 0)` gave "" and "c:"). A missing separator gives -1.
+    let end = absolute[..wildcard_offset]
+        .rfind('/')
+        .map_or(-1, |i| i as isize)
+        .max(get_root_length(absolute) as isize) as usize;
     absolute[..end].to_string()
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:57 getBasePaths
+// Go: vfs/vfsmatch/vfsmatch.go:61 getBasePaths
 /// Computes the unique non-wildcard base paths amongst the provided include patterns.
 fn get_base_paths(
     path: &str,
@@ -105,13 +110,19 @@ fn get_base_paths(
         for include in includes {
             // We also need to check the relative paths by converting them to absolute and normalizing
             // in case they escape the base path (e.g "..\somedirectory")
+            // ts#64159: a rooted include is normalized too.
             let absolute = if is_rooted_disk_path(include) {
-                include.clone()
+                normalize_path(include)
             } else {
                 normalize_path(&combine_paths(path, &[include.as_str()]))
             };
             // Append the literal and canonical candidate base paths.
-            include_base_paths.push(get_include_base_path(&absolute));
+            // ts#64159: Go `tspath.ToRootedDirectoryPath(getIncludeBasePath(absolute), path)`:
+            // resolved against `path`, with no trailing separator except on a root.
+            include_base_paths.push(resolve_path_without_trailing_directory_separator(
+                path,
+                &[&get_include_base_path(&absolute)],
+            ));
         }
 
         // Sort the offsets array using either the literal or canonical path representations.
@@ -134,7 +145,7 @@ fn get_base_paths(
     base_paths
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:98 globPattern
+// Go: vfs/vfsmatch/vfsmatch.go:101 globPattern
 /// A compiled glob pattern for matching file paths without regex.
 #[derive(Clone, Debug, Default)]
 struct GlobPattern {
@@ -150,7 +161,7 @@ struct GlobPattern {
     double_asterisks: u64,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:107 component
+// Go: vfs/vfsmatch/vfsmatch.go:110 component
 /// A single path segment in a glob pattern.
 /// Examples: "src" (literal), "*" (wildcard), "*.ts" (wildcard), "**" (recursive)
 #[derive(Clone, Debug)]
@@ -167,7 +178,7 @@ struct Component {
     skip_package_folders: bool,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:115 componentKind
+// Go: vfs/vfsmatch/vfsmatch.go:118 componentKind
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComponentKind {
     /// exact match (e.g., "src")
@@ -178,7 +189,7 @@ enum ComponentKind {
     DoubleAsterisk,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:125 segment
+// Go: vfs/vfsmatch/vfsmatch.go:128 segment
 /// A piece of a wildcard component.
 /// Example: "*.ts" becomes [Star, Literal(".ts")]
 #[derive(Clone, Debug)]
@@ -190,7 +201,7 @@ struct Segment {
     literal_bytes: Vec<u8>,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:130 segmentKind
+// Go: vfs/vfsmatch/vfsmatch.go:133 segmentKind
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SegmentKind {
     /// exact text
@@ -201,7 +212,7 @@ enum SegmentKind {
     Question,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:140 compileGlobPattern
+// Go: vfs/vfsmatch/vfsmatch.go:143 compileGlobPattern
 /// Compiles a glob spec (e.g., "src/**/*.ts") into a pattern.
 /// Returns `None` if the pattern would match nothing.
 fn compile_glob_pattern(
@@ -211,6 +222,8 @@ fn compile_glob_pattern(
     case_sensitive: bool,
 ) -> Option<GlobPattern> {
     let mut parts = get_normalized_path_components(spec, base_path);
+    // ts#64544: dynamic file names compare with case.
+    let case_sensitive = case_sensitive || is_encoded_dynamic_file_name(&parts[0]);
 
     // "src/**" without a filename matches nothing (for include patterns)
     if usage != Usage::Exclude && parts.last().map(String::as_str).unwrap_or("") == "**" {
@@ -219,6 +232,13 @@ fn compile_glob_pattern(
 
     // Normalize root: "/home/" -> "/home"
     parts[0] = remove_trailing_directory_separator(&parts[0]).to_string();
+    // ts#64544: a dynamic root ("^/~ts-uri~/<scheme>/<authority>") is one
+    // component per segment.
+    if is_encoded_dynamic_file_name(&parts[0]) {
+        let mut root_parts: Vec<String> = parts[0].split('/').map(str::to_string).collect();
+        root_parts.extend(parts.drain(1..));
+        parts = root_parts;
+    }
 
     // Directories implicitly match all files: "src" -> "src/**/*"
     if is_implicit_glob(parts.last().map(String::as_str).unwrap_or("")) {
@@ -247,7 +267,7 @@ fn compile_glob_pattern(
     Some(p)
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:171 parseComponent
+// Go: vfs/vfsmatch/vfsmatch.go:181 parseComponent
 /// Converts a path segment string into a component.
 fn parse_component(s: &str, is_include: bool) -> Component {
     if s == "**" {
@@ -277,7 +297,7 @@ fn parse_component(s: &str, is_include: bool) -> Component {
     }
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:186 parseSegments
+// Go: vfs/vfsmatch/vfsmatch.go:196 parseSegments
 /// Breaks "*.ts" into [Star, Literal(".ts")]
 fn parse_segments(s: &str) -> Vec<Segment> {
     // Preallocate based on wildcard count: each wildcard contributes 1 segment,
@@ -322,26 +342,26 @@ fn parse_segments(s: &str) -> Vec<Segment> {
 }
 
 impl GlobPattern {
-    // Go: vfs/vfsmatch/vfsmatch.go:219 (*globPattern).matches
+    // Go: vfs/vfsmatch/vfsmatch.go:228 (*globPattern).matches
     /// Returns true if path matches this pattern.
     fn matches(&self, path: &str) -> bool {
         self.match_path_parts(path, "", 0, 0, false)
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:225 (*globPattern).matchesParts
+    // Go: vfs/vfsmatch/vfsmatch.go:234 (*globPattern).matchesParts
     /// Returns true if prefix+suffix matches this pattern.
     /// This avoids allocating a combined string for common call sites where prefix ends with '/'.
     fn matches_parts(&self, prefix: &str, suffix: &str) -> bool {
         self.match_path_parts(prefix, suffix, 0, 0, false)
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:230 (*globPattern).matchesPrefixParts
+    // Go: vfs/vfsmatch/vfsmatch.go:239 (*globPattern).matchesPrefixParts
     /// Returns true if files under prefix+suffix could match.
     fn matches_prefix_parts(&self, prefix: &str, suffix: &str) -> bool {
         self.match_path_parts(prefix, suffix, 0, 0, true)
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:236 (*globPattern).matchPathParts
+    // Go: vfs/vfsmatch/vfsmatch.go:245 (*globPattern).matchPathParts
     /// Like matchPath, but operates on a virtual path formed by prefix+suffix.
     /// Offsets are in the combined string.
     fn match_path_parts(
@@ -406,7 +426,7 @@ impl GlobPattern {
         }
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:283 (*globPattern).patternSatisfied
+    // Go: vfs/vfsmatch/vfsmatch.go:292 (*globPattern).patternSatisfied
     /// Checks if remaining pattern components can match empty input.
     fn pattern_satisfied(&self, comp_idx: usize) -> bool {
         // A pattern is satisfied when remaining components can match empty input.
@@ -563,7 +583,7 @@ struct PrefixStates {
     overrun: bool,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:294 nextPathPartSingle
+// Go: vfs/vfsmatch/vfsmatch.go:304 nextPathPartSingle
 /// Extracts the next path component from path starting at offset.
 /// PORT: Go returns `(part, nextOffset, ok)`; `None` is `ok == false`.
 fn next_path_part_single(s: &str, mut offset: usize) -> Option<(&str, usize)> {
@@ -587,7 +607,7 @@ fn next_path_part_single(s: &str, mut offset: usize) -> Option<(&str, usize)> {
     Some((rest, b.len()))
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:314 nextPathPartParts
+// Go: vfs/vfsmatch/vfsmatch.go:324 nextPathPartParts
 /// PORT: Go returns `(part, nextOffset, ok)`; `None` is `ok == false`.
 fn next_path_part_parts<'a>(
     prefix: &'a str,
@@ -641,7 +661,7 @@ fn next_path_part_parts<'a>(
 }
 
 impl GlobPattern {
-    // Go: vfs/vfsmatch/vfsmatch.go:361 (*globPattern).matchWildcard
+    // Go: vfs/vfsmatch/vfsmatch.go:370 (*globPattern).matchWildcard
     /// Matches a path component against wildcard segments.
     // PORT: `s` is the Go bytes of the component, and each literal segment
     // is compared by its Go bytes (see `scanner_util::GO_STRING_MARKER`).
@@ -670,7 +690,7 @@ impl GlobPattern {
         self.match_segments(segs, s) && self.should_include_min_js(s, segs)
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:382 (*globPattern).matchSegments
+    // Go: vfs/vfsmatch/vfsmatch.go:391 (*globPattern).matchSegments
     /// Matches segments against string s using an iterative algorithm.
     /// This avoids exponential backtracking by tracking only the last star position.
     /// The algorithm is O(n*m) where n is the string length and m is pattern length.
@@ -733,7 +753,7 @@ impl GlobPattern {
         seg_idx >= segs.len()
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:433 (*globPattern).shouldIncludeMinJs
+    // Go: vfs/vfsmatch/vfsmatch.go:442 (*globPattern).shouldIncludeMinJs
     fn should_include_min_js(&self, filename: &[u8], segs: &[Segment]) -> bool {
         if !self.exclude_min_js {
             return true;
@@ -752,7 +772,7 @@ impl GlobPattern {
         false
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:451 (*globPattern).hasMinJsSuffix
+    // Go: vfs/vfsmatch/vfsmatch.go:460 (*globPattern).hasMinJsSuffix
     fn has_min_js_suffix(&self, filename: &[u8]) -> bool {
         const MIN_JS: &[u8] = b".min.js";
         if self.case_sensitive {
@@ -765,7 +785,7 @@ impl GlobPattern {
         equal_fold(&filename[filename.len() - MIN_JS.len()..], MIN_JS)
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:463 (*globPattern).patternMentionsMinSuffix
+    // Go: vfs/vfsmatch/vfsmatch.go:472 (*globPattern).patternMentionsMinSuffix
     fn pattern_mentions_min_suffix(&self, segs: &[Segment]) -> bool {
         for seg in segs {
             if seg.kind != SegmentKind::Literal {
@@ -789,7 +809,7 @@ impl GlobPattern {
         false
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:480 (*globPattern).stringsEqual
+    // Go: vfs/vfsmatch/vfsmatch.go:489 (*globPattern).stringsEqual
     /// Compares strings with appropriate case sensitivity.
     fn strings_equal(&self, a: &[u8], b: &[u8]) -> bool {
         if self.case_sensitive {
@@ -801,7 +821,7 @@ impl GlobPattern {
     }
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:487 isHiddenPath
+// Go: vfs/vfsmatch/vfsmatch.go:497 isHiddenPath
 /// Checks if a path component is hidden (starts with dot).
 fn is_hidden_path(name: &str) -> bool {
     is_hidden_path_bytes(name.as_bytes())
@@ -812,7 +832,7 @@ fn is_hidden_path_bytes(name: &[u8]) -> bool {
     !name.is_empty() && name[0] == b'.'
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:492 isPackageFolder
+// Go: vfs/vfsmatch/vfsmatch.go:502 isPackageFolder
 /// Checks if name is a common package folder (node_modules, etc.)
 fn is_package_folder(name: &str) -> bool {
     let b = name.as_bytes();
@@ -826,7 +846,7 @@ fn is_package_folder(name: &str) -> bool {
     }
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:504 ensureTrailingSlash
+// Go: vfs/vfsmatch/vfsmatch.go:504 ensureTrailingSlash (at 673a5f17d713; removed by ts#64159)
 fn ensure_trailing_slash(s: &str) -> String {
     if !s.is_empty() && !s.ends_with('/') {
         return format!("{s}/");
@@ -911,7 +931,7 @@ pub fn equal_fold(a: &[u8], b: &[u8]) -> bool {
     i == a.len() && j == b.len()
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:512 globMatcher
+// Go: vfs/vfsmatch/vfsmatch.go:515 globMatcher
 /// Combines include and exclude patterns for file matching.
 struct GlobMatcher {
     includes: Vec<GlobPattern>,
@@ -920,7 +940,7 @@ struct GlobMatcher {
     had_includes: bool,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:518 newGlobMatcher
+// Go: vfs/vfsmatch/vfsmatch.go:521 newGlobMatcher
 fn new_glob_matcher(
     include_specs: &[String],
     exclude_specs: &[String],
@@ -948,7 +968,7 @@ fn new_glob_matcher(
 }
 
 impl GlobMatcher {
-    // Go: vfs/vfsmatch/vfsmatch.go:541 (*globMatcher).matchesFileParts
+    // Go: vfs/vfsmatch/vfsmatch.go:543 (*globMatcher).matchesFileParts
     /// Checks if prefix+suffix matches against the glob patterns.
     /// Returns the index of the matching include pattern, or `None` if not matched.
     /// PORT: Go returns `(0, false)` for no match; that is `None`.
@@ -1052,7 +1072,7 @@ impl GlobMatcher {
         false
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:562 (*globMatcher).matchesDirectoryParts
+    // Go: vfs/vfsmatch/vfsmatch.go:564 (*globMatcher).matchesDirectoryParts
     /// Checks if files under the directory prefix+suffix could match any pattern.
     fn matches_directory_parts(&self, prefix: &str, suffix: &str) -> bool {
         for exclude in &self.excludes {
@@ -1078,7 +1098,7 @@ struct MatcherPrefixStates {
     includes: Vec<Option<PrefixStates>>,
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:579 globVisitor
+// Go: vfs/vfsmatch/vfsmatch.go:582 globVisitor
 /// Traverses directories matching files against glob patterns.
 /// PORT: Go `vfs.FS` is a borrowed `&dyn Fs` for the length of the walk.
 struct GlobVisitor<'a> {
@@ -1092,7 +1112,7 @@ struct GlobVisitor<'a> {
 }
 
 impl GlobVisitor<'_> {
-    // Go: vfs/vfsmatch/vfsmatch.go:594 (*globVisitor).visit
+    // Go: vfs/vfsmatch/vfsmatch.go:596 (*globVisitor).visit
     /// Walks a directory tree, collecting files that match the glob patterns.
     /// resolved_real_path, when non-empty, is the already-resolved real path for this
     /// directory (computed incrementally from the parent). When empty, Realpath is
@@ -1189,7 +1209,8 @@ impl GlobVisitor<'_> {
     }
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:647 matchFiles
+// Go: vfs/vfsmatch/vfsmatch.go:647 matchFiles (at 673a5f17d713;
+// ts#64159 renames it matchFileNames, vfs/vfsmatch/vfsmatch.go:649)
 #[allow(clippy::too_many_arguments)]
 fn match_files(
     path: &str,
@@ -1251,13 +1272,13 @@ pub struct SpecMatcher {
 }
 
 impl SpecMatcher {
-    // Go: vfs/vfsmatch/vfsmatch.go:682 (*SpecMatcher).MatchString
+    // Go: vfs/vfsmatch/vfsmatch.go:681 (*SpecMatcher).MatchString
     /// Returns true if any pattern matches the path.
     pub fn match_string(&self, path: &str) -> bool {
         self.patterns.iter().any(|p| p.matches(path))
     }
 
-    // Go: vfs/vfsmatch/vfsmatch.go:692 (*SpecMatcher).MatchIndex
+    // Go: vfs/vfsmatch/vfsmatch.go:695 (*SpecMatcher).MatchIndex
     /// Returns the index of the first matching pattern, or -1.
     pub fn match_index(&self, path: &str) -> i32 {
         for (i, p) in self.patterns.iter().enumerate() {
@@ -1269,7 +1290,7 @@ impl SpecMatcher {
     }
 }
 
-// Go: vfs/vfsmatch/vfsmatch.go:702 NewSpecMatcher
+// Go: vfs/vfsmatch/vfsmatch.go:710 NewSpecMatcher
 /// Creates a matcher for one or more glob specs.
 /// It returns a matcher that can test if paths match any of the patterns.
 /// PORT: Go returns a nil pointer for no patterns; that is `None`.

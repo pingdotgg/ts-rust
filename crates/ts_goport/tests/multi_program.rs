@@ -800,7 +800,9 @@ fn watch_build_frees_file_versions() {
 /// `tsgo-oracle-673a5f17d713 -w -p tsconfig.json --pretty` for the same
 /// edits. The outputs equal Go's (`expected-out`): the last edit emits
 /// each file again, with its comments and LF line ends, and the source
-/// maps of the crlf build stay.
+/// maps of the crlf build stay. The `expected-out` source maps are from
+/// `tsgo-oracle-fed0bf24149f` (pin N'), which omits an empty `sourceRoot`
+/// (ts#64544); its watch output and other outputs are the same as pin N's.
 // PORT: no Go counterpart; the output is Go's.
 #[test]
 fn watch_config_edits_of_emit_options_print_like_go() {
@@ -836,7 +838,9 @@ fn build_watch_config_edits_of_emit_options_print_like_go() {
 /// keeps the old version of `a.d.ts` and no signature for `index.ts`.
 /// `expected.txt` (the output up to the end of the second build) and
 /// `expected-app.tsbuildinfo.json` are from `tsgo-oracle-673a5f17d713` for
-/// the same steps (10 of 10 runs).
+/// the same steps (10 of 10 runs). At the bump D pin the build info is from
+/// `tsgo-oracle-fed0bf24149f` (3 of 3 runs): only the versions of the changed
+/// libs `lib.dom.d.ts` and `lib.es2022.array.d.ts` differ.
 // PORT: no Go counterpart; the output is Go's.
 #[test]
 fn build_watch_keeps_the_first_dts_parse_of_a_cycle() {

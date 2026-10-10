@@ -1270,6 +1270,11 @@ impl Checker {
             }
             import_attributes_type = self.get_type_of_property_of_type(options_type, "with");
         }
+        // ts#63915, Go N' checker.go:8506
+        if is_source_phase_import_call(node) {
+            let abstract_module_source_type = self.get_global_abstract_module_source_type();
+            return self.create_promise_return_type(node, abstract_module_source_type);
+        }
         // resolveExternalModuleName will return undefined if the moduleReferenceExpression is not a string literal
         let module_symbol = self.resolve_external_module_name(
             node,

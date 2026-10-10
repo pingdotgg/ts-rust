@@ -322,17 +322,44 @@ impl Checker {
                             null_type,
                             undefined_type,
                         ]);
-                        let widened = self.widen_type_for_variable_like_declaration(
-                            initializer_type,
-                            node,
-                            false,
-                        );
-                        self.check_type_assignable_to(
-                            widened,
+                        let widened_initializer_type = self
+                            .widen_type_for_variable_like_declaration(
+                                initializer_type,
+                                node,
+                                false,
+                            );
+                        // ts#64584, Go N' checker.go:6101 to 6114: suggest
+                        // `await using` when the initializer is AsyncDisposable.
+                        let mut diags = Vec::new();
+                        if !self.check_type_assignable_to_ex(
+                            widened_initializer_type,
                             optional_disposable_type,
                             initializer,
                             Some(diag::The_initializer_of_a_using_declaration_must_be_either_an_object_with_a_Symbol_dispose_method_or_be_null_or_undefined),
-                        );
+                            Some(&mut diags),
+                        ) {
+                            let global_async_disposable_type =
+                                self.get_global_async_disposable_type();
+                            let optional_async_disposable_type = self.get_union_type(&[
+                                global_async_disposable_type,
+                                null_type,
+                                undefined_type,
+                            ]);
+                            let mut diagnostic = diags.swap_remove(0);
+                            if global_async_disposable_type != self.empty_object_type
+                                && self.is_type_assignable_to(
+                                    widened_initializer_type,
+                                    optional_async_disposable_type,
+                                )
+                            {
+                                diagnostic.add_message_chain(Some(new_diagnostic_chain(
+                                    None,
+                                    diag::This_initializer_has_a_Symbol_asyncDispose_method_Did_you_mean_to_use_await_using,
+                                    args![],
+                                )));
+                            }
+                            self.add_diagnostic(diagnostic);
+                        }
                     }
                 }
             }

@@ -10,6 +10,45 @@ use crate::prelude::*;
 // symbol.go
 // ---------------------------------------------------------------------------
 
+// Go: ast/symbol.go:28 GetSourceFileOfSymbol (ts#64518)
+// GetSourceFileOfSymbol returns the owning file of a published binder symbol, or
+// nil for a non-file-owned symbol, even if it borrows declarations from a file.
+// Ownership recovery walks only the first declaration's AST parents.
+// PORT: Go reads `symbol.Parent` directly; here the arena that owns the
+// symbol is passed in. The result is the SourceFile node (`Node::NIL` for
+// Go nil).
+#[must_use]
+pub fn get_source_file_of_symbol(symbols: &SymbolArena, symbol: SymbolId) -> Node {
+    go_assert!(symbol.is_some(), "Expected a symbol");
+    let mut s = symbols.sym(symbol);
+    if s.flags.intersects(SymbolFlags::TRANSIENT) {
+        return Node::NIL;
+    }
+    if s.declarations.is_empty() {
+        // A class's implicit prototype has no declaration of its own.
+        go_assert!(
+            s.flags.intersects(SymbolFlags::PROTOTYPE),
+            "File-bound symbol has no declarations"
+        );
+        go_assert!(
+            s.parent.is_some() && symbols.sym(s.parent).flags.intersects(SymbolFlags::CLASS),
+            "Prototype has no declaring class"
+        );
+        s = symbols.sym(s.parent);
+        go_assert!(
+            !s.flags.intersects(SymbolFlags::TRANSIENT),
+            "Prototype parent is not file-bound"
+        );
+        go_assert!(
+            !s.declarations.is_empty(),
+            "Prototype parent has no declarations"
+        );
+    }
+    let file = get_source_file_of_node(s.declarations[0]);
+    go_assert!(file.is_some(), "File-bound declaration has no source file");
+    file
+}
+
 impl Symbol {
     // Go: ast/symbol.go:23 IsExternalModule
     #[must_use]

@@ -637,3 +637,89 @@ child_test! {
         assert_eq!(got, answer(""), "goport computes augmentation groups last");
     }
 }
+
+/// The keyword labels (sorted) at a statement and in a function body. Go N'
+/// (tsgo-oracle-fed0bf24149f --lsp) gives these 47 at both positions of
+/// `completion_keywords_at_a_statement`.
+const STATEMENT_KEYWORDS: [&str; 47] = [
+    "as",
+    "async",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "package",
+    "return",
+    "satisfies",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "type",
+    "typeof",
+    "using",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+];
+
+child_test! {
+    // PORT: no Go counterpart. The keyword items come from each kind from
+    // FirstKeyword to LastKeyword through the scanner keyword table. A kind
+    // with no table text (KindSourceKeyword of ts#63915, before its "source"
+    // entry) gave an extra item with an empty label.
+    fn completion_keywords_at_a_statement() {
+        let text = "function f() {\n  \n}\n";
+        let client = init_completion_client(
+            "/home/projects",
+            &[
+                ("/home/projects/tsconfig.json", TSCONFIG),
+                ("/home/projects/a.ts", text),
+            ],
+        );
+        let uri = lsconv::file_name_to_document_uri("/home/projects/a.ts");
+        open(&client, &uri, text);
+        for (line, character) in [(1, 2), (3, 0)] {
+            let (msg, resp) = client.send_request(
+                &lsproto::TEXT_DOCUMENT_COMPLETION_INFO,
+                completion_params(&uri, line, character),
+            );
+            assert!(msg.error.is_none(), "{:?}", msg.error);
+            let mut labels: Vec<String> = completion_items(resp)
+                .into_iter()
+                .filter(|item| item.kind == Some(lsproto::CompletionItemKind::KEYWORD))
+                .map(|item| item.label)
+                .collect();
+            labels.sort();
+            assert_eq!(labels, STATEMENT_KEYWORDS, "position {line}:{character}");
+        }
+    }
+}

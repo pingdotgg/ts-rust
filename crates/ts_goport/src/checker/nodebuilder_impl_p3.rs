@@ -194,21 +194,14 @@ impl Checker {
             }
         }
 
-        // !!! TODO: JSDoc, getEmitResolver call is unfortunate layering for the helper - hoist it into checker
-        // PORT: Go `requiresAddingImplicitUndefined` reads `r.checker`; here the checker is passed in.
+        // ts#64649, Go N' nodebuilderimpl.go:2287: the checker method, not the emit resolver.
         let requires_adding_undefined = declaration.is_some()
             && (is_parameter_declaration(declaration)
                 || is_property_signature_declaration(declaration)
                 || is_property_declaration(declaration))
             && {
-                let resolver = self.get_emit_resolver();
                 let enclosing_declaration = nb_ctx(b, |c| c.enclosing_declaration);
-                resolver.requires_adding_implicit_undefined(
-                    self,
-                    declaration,
-                    symbol,
-                    enclosing_declaration,
-                )
+                self.requires_adding_implicit_undefined(declaration, symbol, enclosing_declaration)
             };
         let add_undefined_for_parameter = requires_adding_undefined && is_parameter_declaration(declaration) /*|| ast.IsJSDocParameterTag(declaration)*/;
         if add_undefined_for_parameter {
@@ -353,6 +346,14 @@ impl Checker {
         b: &Rc<RefCell<NodeBuilderImpl>>,
         property_symbol: SymbolId,
     ) -> bool {
+        // Reverse mapped type placeholders are for display, not declaration emit.
+        // (ts#64558, Go N' nodebuilderimpl.go:2374)
+        if !nb_ctx(b, |c| {
+            c.flags
+                .intersects(NodeBuilderFlags::ALLOW_ANONYMOUS_IDENTIFIER)
+        }) {
+            return false;
+        }
         // Use placeholders for reverse mapped types we've either
         // (1) already descended into, or
         // (2) are nested reverse mappings within a mapping over a non-anonymous type, or
@@ -1035,15 +1036,18 @@ impl Checker {
             ));
         }
         for info in index_infos {
-            // PORT: Go `core.IfElse` evaluates both arguments, so the
-            // placeholder is always created (it adds to approximateLength).
-            let placeholder = self.create_elided_information_placeholder(b);
+            // ts#64558 (Go N' nodebuilderimpl.go:2742): the placeholder is
+            // made (and adds to approximateLength) only for a reverse mapped
+            // type in display.
             let type_node = if self
                 .ty(resolved_type)
                 .object_flags
                 .intersects(ObjectFlags::REVERSE_MAPPED)
-            {
-                placeholder
+                && nb_ctx(b, |c| {
+                    c.flags
+                        .intersects(NodeBuilderFlags::ALLOW_ANONYMOUS_IDENTIFIER)
+                }) {
+                self.create_elided_information_placeholder(b)
             } else {
                 Node::NIL
             };
@@ -1426,7 +1430,7 @@ impl Checker {
                     // in turn try to reuse the same node again. Mark the type as visited around the reuse
                     // attempt so the inner recursion bottoms out via the visitedTypes guard below.
                     if nb_ctx(b, |c| c.visited_types.contains(&type_id)) {
-                        return self.create_elided_information_placeholder(b);
+                        return self.create_cyclic_structure_placeholder(b);
                     }
                     nb_ctx_mut(b, |c| c.visited_types.insert(type_id));
                     let type_node = self.try_reuse_existing_non_parameter_type_node(
@@ -1442,7 +1446,7 @@ impl Checker {
                     }
                 }
                 if nb_ctx(b, |c| c.visited_types.contains(&type_id)) {
-                    return self.create_elided_information_placeholder(b);
+                    return self.create_cyclic_structure_placeholder(b);
                 }
                 return self.visit_and_transform_type(
                     b,
@@ -1488,13 +1492,27 @@ impl Checker {
                     // The specified symbol flags need to be reinterpreted as type flags
                     self.symbol_to_type_node(b, type_alias, SymbolFlags::TYPE, NodeList::NIL)
                 } else {
-                    self.create_elided_information_placeholder(b)
+                    self.create_cyclic_structure_placeholder(b)
                 }
             } else {
                 self.visit_and_transform_type(b, t, Checker::create_type_node_from_object_type)
             }
+        } else if self
+            .ty(t)
+            .object_flags
+            .intersects(ObjectFlags::REVERSE_MAPPED)
+            && !nb_ctx(b, |c| {
+                c.flags
+                    .intersects(NodeBuilderFlags::ALLOW_ANONYMOUS_IDENTIFIER)
+            })
+        {
+            // ts#64558 (Go N' nodebuilderimpl.go:2979)
+            if nb_ctx(b, |c| c.visited_types.contains(&type_id)) {
+                return self.create_cyclic_structure_placeholder(b);
+            }
+            self.visit_and_transform_type(b, t, Checker::create_type_node_from_object_type)
         } else {
-            // Anonymous types without a symbol are never circular.
+            // Reverse mapped types use property and index signature placeholders for display.
             self.create_type_node_from_object_type(b, t)
         }
     }
@@ -1535,18 +1553,26 @@ impl Checker {
         if self.ty(t).flags.intersects(TypeFlags::UNION) {
             let id = self.ty(t).id;
             if nb_ctx(b, |c| c.visited_types.contains(&id)) {
-                if !nb_ctx(b, |c| {
-                    c.flags
-                        .intersects(NodeBuilderFlags::ALLOW_ANONYMOUS_IDENTIFIER)
-                }) {
-                    nb_ctx_mut(b, |c| c.encountered_error = true);
-                    tracker_report_cyclic_structure_error(self, b);
-                }
-                return self.create_elided_information_placeholder(b);
+                return self.create_cyclic_structure_placeholder(b);
             }
             return self.visit_and_transform_type(b, t, Checker::type_to_type_node);
         }
         self.type_to_type_node(b, t)
+    }
+
+    // Go: checker/nodebuilderimpl.go:3017 createCyclicStructurePlaceholder (Go N', ts#64461)
+    pub fn create_cyclic_structure_placeholder(
+        &mut self,
+        b: &Rc<RefCell<NodeBuilderImpl>>,
+    ) -> Node {
+        if !nb_ctx(b, |c| {
+            c.flags
+                .intersects(NodeBuilderFlags::ALLOW_ANONYMOUS_IDENTIFIER)
+        }) {
+            nb_ctx_mut(b, |c| c.encountered_error = true);
+            tracker_report_cyclic_structure_error(self, b);
+        }
+        self.create_elided_information_placeholder(b)
     }
 
     // Go: checker/nodebuilderimpl.go:3009 conditionalTypeToTypeNode
@@ -1683,8 +1709,9 @@ impl Checker {
         self.get_symbol_of_node(host)
     }
 
-    // Go: checker/nodebuilderimpl.go:3070 typeReferenceToTypeNode
-    pub fn type_reference_to_type_node(
+    // Go: checker/nodebuilderimpl.go:3086 arrayOrTupleTypeToNode (Go N', ts#64556)
+    // The array and tuple part of Go N typeReferenceToTypeNode.
+    pub fn array_or_tuple_type_to_node(
         &mut self,
         b: &Rc<RefCell<NodeBuilderImpl>>,
         t: TypeId,
@@ -1716,7 +1743,8 @@ impl Checker {
             } else {
                 f.new_type_operator_node(SyntaxKind::ReadonlyKeyword, array_type)
             }
-        } else if self.ty(target).object_flags.intersects(ObjectFlags::TUPLE) {
+        } else {
+            debug_assert!(self.ty(target).object_flags.intersects(ObjectFlags::TUPLE));
             let element_infos: Vec<TupleElementInfo> =
                 self.ty(target).as_tuple_type().element_infos.clone();
             let readonly = self.ty(target).as_tuple_type().readonly;
@@ -1805,7 +1833,22 @@ impl Checker {
             nb_ctx_mut(b, |c| c.encountered_error = true);
             Node::NIL
             // TODO: GH#18217
-        } else if nb_ctx(b, |c| {
+        }
+    }
+
+    // Go: checker/nodebuilderimpl.go:3070 typeReferenceToTypeNode
+    // Go N' nodebuilderimpl.go:3160: since ts#64556 the array and tuple part
+    // is `array_or_tuple_type_to_node`.
+    pub fn type_reference_to_type_node(
+        &mut self,
+        b: &Rc<RefCell<NodeBuilderImpl>>,
+        t: TypeId,
+    ) -> Node {
+        let mut type_arguments: Vec<TypeId> = self.get_type_arguments(t).to_vec();
+        let target = self.ty(t).target();
+        let e = nb_e(b);
+        let f = e.factory();
+        if nb_ctx(b, |c| {
             c.flags
                 .intersects(NodeBuilderFlags::WRITE_CLASS_EXPRESSION_AS_TYPE_LITERAL)
         }) && {

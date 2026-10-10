@@ -162,7 +162,7 @@ impl Walker<'_, '_> {
     }
 }
 
-// Go: vfs/walkdir.go:143 normalizeWalkDirError
+// Go: vfs/walkdir.go:147 normalizeWalkDirError
 fn normalize_walk_dir_error(err: Result<(), FsError>) -> Result<(), FsError> {
     match err {
         Err(err) if err.is_skip_dir() || err.is_skip_all() => Ok(()),
@@ -170,7 +170,7 @@ fn normalize_walk_dir_error(err: Result<(), FsError>) -> Result<(), FsError> {
     }
 }
 
-// Go: vfs/walkdir.go:150 walkDirEntry
+// Go: vfs/walkdir.go:154 walkDirEntry
 // PORT: a `DirEntry` value. `Info` (Go walkdir.go:165): a symbolic link has
 // the Go `walkDirFileInfo` (its name and mode, size 0, the zero time);
 // another entry has the `Stat` of its path, or `ErrNotExist`

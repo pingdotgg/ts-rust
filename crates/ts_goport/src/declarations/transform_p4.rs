@@ -959,7 +959,15 @@ impl DeclarationTransformer {
 
         let (_, cleanup) = self.setup_diagnostic_context(node);
 
+        let preexisting_expando_has_export = self
+            .expando_members
+            .get(&host_id)
+            .is_some_and(|members| members.iter().any(|&m| is_export_declaration(m)));
+
         if is_identifier(node.right()) {
+            if !preexisting_expando_has_export {
+                self.add_export_modifier_to_expando_members(host_id);
+            }
             // alias-like, emit an `export {name}` or `export {name as alias}`
             let result = self.transform_binary_expression_to_export_declaration(node, export_name);
             self.expando_members
@@ -970,10 +978,6 @@ impl DeclarationTransformer {
             return;
         }
 
-        let preexisting_expando_has_export = self
-            .expando_members
-            .get(&host_id)
-            .is_some_and(|members| members.iter().any(|&m| is_export_declaration(m)));
         let mut var_modifiers = ModifierList::NIL;
 
         if preexisting_expando_has_export {
@@ -1028,24 +1032,12 @@ impl DeclarationTransformer {
                 Node::NIL, /*moduleSpecifier*/
                 Node::NIL, /*attributes*/
             ));
-        }
-
-        if statements.len() > 1 && !preexisting_expando_has_export {
-            // Add an `export` modifier to all existing expando members so they remain exported after the `export {}` is added
-            let existing = self
-                .expando_members
-                .get(&host_id)
-                .cloned()
-                .unwrap_or_default();
-            for decl in existing {
-                let modifier_flags = ModifierFlags::EXPORT | get_combined_modifier_flags(decl);
-                let modifiers = f.new_modifier_list(&create_modifiers_from_modifier_flags(
-                    modifier_flags,
-                    &mut |k| f.new_modifier(k),
-                ));
-                set_node_modifiers(decl, modifiers);
+            if !preexisting_expando_has_export {
+                // Done before adding statements to expando members to keep the initial variable statement, before we rename anything, private
+                self.add_export_modifier_to_expando_members(host_id);
             }
         }
+
         self.expando_members
             .entry(host_id)
             .or_default()
@@ -1056,7 +1048,30 @@ impl DeclarationTransformer {
         cleanup.run(self);
     }
 
-    // Go: transformers/declarations/transform.go:2861 DeclarationTransformer.getExpandoHostId
+    // Go: transformers/declarations/transform.go:2862 DeclarationTransformer.addExportModifierToExpandoMembers
+    // PORT: Go keys the members by `ast.NodeId`; the Rust maps are keyed by
+    // the host node (`get_expando_host_id`).
+    pub(crate) fn add_export_modifier_to_expando_members(&mut self, host_id: Node) {
+        let ec = self.emit_context.clone();
+        let f = ec.factory();
+        // Add an `export` modifier to all existing expando members so they remain exported after the `export {}` is added
+        let existing = self
+            .expando_members
+            .get(&host_id)
+            .cloned()
+            .unwrap_or_default();
+        for decl in existing {
+            // only invoked when `tx.expandoMembers` does not *yet* contain an `export` declaration, so no need to skip one here to prevent `export export {}`
+            let modifier_flags = ModifierFlags::EXPORT | get_combined_modifier_flags(decl);
+            let modifiers = f.new_modifier_list(&create_modifiers_from_modifier_flags(
+                modifier_flags,
+                &mut |k| f.new_modifier(k),
+            ));
+            set_node_modifiers(decl, modifiers);
+        }
+    }
+
+    // Go: transformers/declarations/transform.go:2871 DeclarationTransformer.getExpandoHostId
     // PORT: Go returns `ast.GetNodeId(mostOriginal)`. The Rust maps are keyed
     // by `Node`, so this returns the node. `get_node_id` still runs for its
     // id assignment side effect.
@@ -1071,7 +1086,7 @@ impl DeclarationTransformer {
         original
     }
 
-    // Go: transformers/declarations/transform.go:2867 DeclarationTransformer.transformExpandoHost
+    // Go: transformers/declarations/transform.go:2877 DeclarationTransformer.transformExpandoHost
     pub(crate) fn transform_expando_host(&mut self, name: Node, declaration: Node) {
         let root = if is_variable_declaration(declaration) {
             declaration.parent().parent()

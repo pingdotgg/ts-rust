@@ -5,14 +5,14 @@ use crate::frontend::prelude::*;
 use crate::execute::incremental::build_info::marshal_any;
 use crate::execute::incremental::snapshot_to_build_info::is_zero_compiler_option_value;
 
-// Go: tsoptions/showconfig.go:15 computeFn
+// Go: tsoptions/showconfig.go:11 computeFn
 // computeFn wraps a typed getter method so it can be stored in an
 // impliedOption's compute field (which has type func(*core.CompilerOptions) any).
 // PORT: Go `any` is `CompilerOptionsValue`. The table below uses
 // non-capturing closures that wrap each getter result in its variant.
 type ShowConfigComputeFn = fn(&CompilerOptions) -> CompilerOptionsValue;
 
-// Go: tsoptions/showconfig.go:23 impliedOption
+// Go: tsoptions/showconfig.go:19 impliedOption
 // impliedOption describes a compiler option whose effective value can be derived from
 // other options. This mirrors TypeScript's computedOptions concept used in convertToTSConfig.
 struct ImpliedOption {
@@ -24,7 +24,7 @@ struct ImpliedOption {
     compute: ShowConfigComputeFn,
 }
 
-// Go: tsoptions/showconfig.go:35 impliedOptions
+// Go: tsoptions/showconfig.go:31 impliedOptions
 // impliedOptions lists the compiler options that may be implied by other options,
 // mirroring TypeScript's computedOptions used in convertToTSConfig.
 // Each compute function delegates directly to an existing core.CompilerOptions getter.
@@ -107,7 +107,7 @@ static IMPLIED_OPTIONS: [ImpliedOption; 14] = [
 ];
 
 /// TSConfig represents the output structure for --showConfig
-// Go: tsoptions/showconfig.go:53 TSConfig
+// Go: tsoptions/showconfig.go:49 TSConfig
 // PORT: Go `CompilerOptions *collections.OrderedMap[string, any]` is never
 // nil here, so it is a plain `IndexMap`. Go `References []any` holds
 // `*collections.OrderedMap[string, any]` values (`CompilerOptionsValue::Map`).
@@ -130,7 +130,7 @@ pub struct TsConfig {
     pub compile_on_save: Option<bool>,
 }
 
-// Go: tsoptions/showconfig.go:53 TSConfig (JSON v2 struct marshaler)
+// Go: tsoptions/showconfig.go:49 TSConfig (JSON v2 struct marshaler)
 // PORT: Go marshals the struct by reflection in field order with the tags
 // `json:"compilerOptions"`, `json:"references,omitzero"`,
 // `json:"files,omitzero"`, `json:"include,omitzero"`,
@@ -183,7 +183,7 @@ impl MarshalerTo for TsConfig {
     }
 }
 
-// Go: tsoptions/showconfig.go:64 ConvertToTSConfig
+// Go: tsoptions/showconfig.go:60 ConvertToTSConfig
 // ConvertToTSConfig generates a complete tsconfig representation for --showConfig output,
 // matching the behavior of TypeScript's convertToTSConfig function.
 #[must_use]
@@ -224,23 +224,6 @@ pub fn convert_to_ts_config(
         &normalized_config_path,
         &compare_paths_options,
     );
-
-    // Remove command-line-only options from the output
-    for name in [
-        "showConfig",
-        "configFile",
-        "configFilePath",
-        "help",
-        "init",
-        "listFilesOnly",
-        "listEmittedFiles",
-        "project",
-        "build",
-        "version",
-    ] {
-        // PORT: Go `OrderedMap.Delete` keeps the order of the other keys.
-        option_map.shift_remove(name);
-    }
 
     // Add implied compiler options (options that are derived from explicitly set options,
     // such as moduleResolution implied by module, or useDefineForClassFields implied by target).
@@ -301,7 +284,7 @@ pub fn convert_to_ts_config(
     config
 }
 
-// Go: tsoptions/showconfig.go:141 filterSameAsDefaultInclude
+// Go: tsoptions/showconfig.go:133 filterSameAsDefaultInclude
 // filterSameAsDefaultInclude returns nil if specs is the default include spec ["**/*"]
 // PORT: an empty `Vec` is the Go nil slice.
 fn filter_same_as_default_include(specs: &[String]) -> Vec<String> {
@@ -314,7 +297,7 @@ fn filter_same_as_default_include(specs: &[String]) -> Vec<String> {
     specs.to_vec()
 }
 
-// Go: tsoptions/showconfig.go:153 getNameOfCompilerOptionValue
+// Go: tsoptions/showconfig.go:145 getNameOfCompilerOptionValue
 // getNameOfCompilerOptionValue returns the string key for a given enum value by
 // searching the option's enum map.
 // PORT: Go `v == value` on two `any` values is `PartialEq` on
@@ -354,10 +337,16 @@ fn is_zero_show_config_field(
     }
 }
 
-// Go: tsoptions/showconfig.go:165 serializeCompilerOptions
+// Go: tsoptions/options_generated.go:1362 serializeCompilerOptions
 // serializeCompilerOptions converts CompilerOptions to an ordered map with
 // string names as keys and serialized values (enums as strings, paths as
 // relative paths, etc.) matching the output of tsc --showConfig.
+// PORT: since ts#64457 Go generates this function. Its option set is the
+// options of tools/scripts/tsc/options.ts that are not `showConfig: false`
+// (listFiles, listEmittedFiles) and not in the Command_line_Options or
+// Output_Formatting category, in CompilerOptions field order. That is the
+// old Go set minus listFiles; the old Go delete list after serialization is
+// gone. The port keeps its field walk and skips those two options.
 fn serialize_compiler_options(
     options: &CompilerOptions,
     config_file_path: &str,
@@ -383,6 +372,11 @@ fn serialize_compiler_options(
             std::ptr::eq(category, diag::Command_line_Options)
                 || std::ptr::eq(category, diag::Output_Formatting)
         }) {
+            continue;
+        }
+
+        // ts#64457: `showConfig: false` in Go options.ts.
+        if matches!(option_decl.name, "listFiles" | "listEmittedFiles") {
             continue;
         }
 
@@ -513,14 +507,12 @@ fn show_config_value_as_int(value: &CompilerOptionsValue) -> Option<i64> {
         V::ModuleDetectionKind(k) => Some(i64::from(k.0)),
         V::JsxEmit(k) => Some(i64::from(k.0)),
         V::NewLineKind(k) => Some(i64::from(k.0)),
-        V::WatchFileKind(k) => Some(i64::from(k.0)),
-        V::WatchDirectoryKind(k) => Some(i64::from(k.0)),
-        V::PollingKind(k) => Some(i64::from(k.0)),
         _ => None,
     }
 }
 
-// Go: tsoptions/showconfig.go:280 serializeEnumValue
+// Go: tsoptions/showconfig.go:280 serializeEnumValue (removed by ts#64457; Go N' uses
+// tsoptions/options_generated.go:1704 serializeCompilerOptionEnum)
 // serializeEnumValue converts an enum field value to its corresponding string key
 // using the option's enum map. It handles int32-based enum types.
 fn serialize_enum_value(
@@ -540,7 +532,7 @@ fn serialize_enum_value(
     get_name_of_compiler_option_value(value, enum_map)
 }
 
-// Go: tsoptions/showconfig.go:300 addImpliedOptions
+// Go: tsoptions/showconfig.go:176 addImpliedOptions
 // addImpliedOptions adds compiler options that are implied by other explicitly-set options,
 // mirroring TypeScript's convertToTSConfig behavior for computedOptions.
 // For example, when module: nodenext is set, moduleResolution: nodenext is implied.
@@ -595,7 +587,7 @@ fn add_implied_options(
     }
 }
 
-// Go: tsoptions/showconfig.go:352 anyDependencyProvided
+// Go: tsoptions/showconfig.go:226 anyDependencyProvided
 // anyDependencyProvided returns true if any of the given dependency names
 // (using Go field names like "Target") corresponds to an option in the provided set.
 // PORT: Go `map[string]bool` with only true values is a set.
@@ -610,7 +602,7 @@ fn any_dependency_provided(dependencies: &[&str], provided: &FxHashSet<String>) 
     false
 }
 
-// Go: tsoptions/showconfig.go:365 serializeImpliedOptionValue
+// Go: tsoptions/showconfig.go:239 serializeImpliedOptionValue
 // serializeImpliedOptionValue converts a computed implied option value to its serializable form.
 // For enum options, it converts numeric values to their string names.
 // For boolean options, it returns the bool directly.

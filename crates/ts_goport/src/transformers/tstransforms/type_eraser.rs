@@ -560,7 +560,17 @@ impl TypeEraserTransformer {
                     return Node::NIL;
                 }
                 let name = node.name();
-                let named_bindings = self.visit_node(node.named_bindings());
+                let mut named_bindings = self.visit_node(node.named_bindings());
+                // Empty {} due to type-only import erasure can be skipped if there is also a default import
+                if name.is_some()
+                    && named_bindings.is_some()
+                    && is_named_imports(named_bindings)
+                    && named_bindings.element_list().nodes().is_empty()
+                    && !node.named_bindings().element_list().nodes().is_empty()
+                {
+                    // the default binding keeps the import; a source-written {} is left as is
+                    named_bindings = Node::NIL;
+                }
                 if name.is_nil() && named_bindings.is_nil() {
                     // all import bindings were elided
                     return Node::NIL;

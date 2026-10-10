@@ -58,7 +58,7 @@ impl ParseTask {
         self.normalized_file_path.clone()
     }
 
-    // Go: filesparser.go:55 (*parseTask).Path
+    // Go: filesparser.go:55 (*parseTask).Path (at 673a5f17d713; ts#64159 renames it PathKey, compiler/filesparser.go:55)
     pub fn path(&self) -> Path {
         self.path.clone()
     }
@@ -98,7 +98,7 @@ impl ParseTask {
             if !allow_non_ts_extensions {
                 let canonical_file_name = get_canonical_file_name(
                     &self.normalized_file_path,
-                    loader.opts.host.fs().use_case_sensitive_file_names(),
+                    loader.host.fs().use_case_sensitive_file_names(),
                 );
                 if !loader.is_supported_extension(&canonical_file_name) {
                     if has_js_file_extension(&canonical_file_name) {
@@ -230,7 +230,7 @@ impl ParseTask {
         }
     }
 
-    // Go: filesparser.go:185 (*parseTask).redirect
+    // Go: filesparser.go:187 (*parseTask).redirect
     pub fn redirect(&mut self, _loader: &FileLoader, file_name: &str) {
         let redirected = Rc::new(RefCell::new(ParseTask {
             normalized_file_path: normalize_path(file_name),
@@ -243,7 +243,7 @@ impl ParseTask {
         self.sub_tasks = vec![redirected];
     }
 
-    // Go: filesparser.go:195 (*parseTask).loadAutomaticTypeDirectives
+    // Go: filesparser.go:198 (*parseTask).loadAutomaticTypeDirectives
     pub fn load_automatic_type_directives(&mut self, loader: &FileLoader) {
         let _trace = crate::tracing::get().map(|tr| {
             tr.push(
@@ -263,7 +263,7 @@ impl ParseTask {
         }
     }
 
-    // Go: filesparser.go:216 (*parseTask).addSubTask
+    // Go: filesparser.go:220 (*parseTask).addSubTask
     pub fn add_sub_task(&mut self, ref_: ResolvedRef, lib_file: Option<Rc<LibFile>>) {
         // PERF: a resolved name is normal already (Go normalizes it again);
         // then the name moves, with no copy.
@@ -285,7 +285,7 @@ impl ParseTask {
     }
 }
 
-// Go: filesparser.go:208 resolvedRef
+// Go: filesparser.go:211 resolvedRef
 #[derive(Clone, Default)]
 pub struct ResolvedRef {
     pub file_name: String,
@@ -304,7 +304,7 @@ pub(crate) struct QueuedParseTask {
     depth: i32,
 }
 
-// Go: filesparser.go:229 filesParser
+// Go: filesparser.go:233 filesParser
 // PORT: Go `core.WorkGroup` is single threaded here (contract 10). Go
 // `singleThreadedWorkGroup` keeps queued functions in a slice and
 // `RunAndWait` pops the last one first, so `queue` is a stack with the same
@@ -358,7 +358,7 @@ impl Drop for ParseTaskLinks {
     }
 }
 
-// Go: filesparser.go:243 getParseTaskData
+// Go: filesparser.go:247 getParseTaskData
 // PORT: Go takes the value from `parseTaskDataPool`; `putParseTaskData`
 // (filesparser.go:226) returns an unused one. No pool is needed here.
 fn get_parse_task_data(task: &ParseTaskRef) -> Rc<RefCell<ParseTaskData>> {
@@ -373,7 +373,7 @@ fn get_parse_task_data(task: &ParseTaskRef) -> Rc<RefCell<ParseTaskData>> {
     }))
 }
 
-// Go: filesparser.go:255 parseTaskData
+// Go: filesparser.go:259 parseTaskData
 // PORT: Go iterates `tasks` (a Go map) in random order. `IndexMap` keeps
 // insertion order. The map holds more than one task only when one path is
 // reached through file names that differ in casing.
@@ -416,7 +416,7 @@ fn all_roots_cached(
 }
 
 impl FilesParser {
-    // Go: filesparser.go:264 (*filesParser).parse
+    // Go: filesparser.go:268 (*filesParser).parse
     pub fn parse(&mut self, loader: &FileLoader, tasks: &[ParseTaskRef]) {
         if PREFETCH.with(|p| p.borrow().is_some()) {
             self.run(loader, tasks);
@@ -429,7 +429,7 @@ impl FilesParser {
         // The worker parses of these paths are freeable file versions
         // (`PrefetchQueue::freeable`). An early pool queued its jobs before
         // this set existed, so its parses would be static: it goes.
-        let freeable = if loader.opts.host.freeable_worker_parses() {
+        let freeable = if loader.host.freeable_worker_parses() {
             crate::ast::published_paths()
         } else {
             Arc::default()
@@ -442,7 +442,7 @@ impl FilesParser {
         // A host with its own file cache (`CompilerHost::prefetch_parses`)
         // gets no workers. This does not set `single_threaded`, so the
         // queue order stays that of a parallel load.
-        let mut workers = if self.single_threaded || !loader.opts.host.prefetch_parses() {
+        let mut workers = if self.single_threaded || !loader.host.prefetch_parses() {
             0
         } else {
             prefetch_worker_count()
@@ -457,7 +457,7 @@ impl FilesParser {
         let cached = if workers == 0 {
             FxHashMap::default()
         } else {
-            loader.opts.host.cached_source_file_refs()
+            loader.host.cached_source_file_refs()
         };
         // When the host gives every root file from its cache, no worker
         // parse can be used, so no worker starts. The loader parses the
@@ -490,10 +490,9 @@ impl FilesParser {
         // before the resolve config, so a worker's resolver sees it
         // (`WorkerResolver::new`).
         let build_host_cache = loader
-            .opts
             .host
             .stat_cache()
-            .filter(|_| loader.opts.host.is_plain_os_fs());
+            .filter(|_| loader.host.is_plain_os_fs());
         if let Some(cache) = build_host_cache {
             cache.start_load();
             let _ = pool.shared.stats.host.set(cache);
@@ -591,7 +590,7 @@ impl FilesParser {
         }
     }
 
-    // Go: filesparser.go:269 (*filesParser).start
+    // Go: filesparser.go:273 (*filesParser).start
     pub fn start(&mut self, loader: &FileLoader, tasks: &[ParseTaskRef], depth: i32) {
         let prefetch = PREFETCH.with(|p| p.borrow().clone());
         let mut requests = Vec::new();
@@ -745,7 +744,7 @@ impl FilesParser {
     }
 
     /// The body of the closure that Go `start` queues.
-    // Go: filesparser.go:269 (*filesParser).start (queued func)
+    // Go: filesparser.go:273 (*filesParser).start (queued func)
     fn run_queued(&mut self, loader: &FileLoader, queued: QueuedParseTask) {
         let QueuedParseTask {
             task,
@@ -789,11 +788,11 @@ impl FilesParser {
         } else {
             depth
         };
-        let mut relower = false;
+        let lowered;
         {
             let mut d = data.borrow_mut();
-            if current_depth < d.lowest_depth {
-                relower = d.lowest_depth != i32::MAX;
+            lowered = current_depth < d.lowest_depth;
+            if lowered {
                 // If we're seeing this task at a lower depth than before,
                 // reprocess its subtasks to ensure they are loaded.
                 d.lowest_depth = current_depth;
@@ -819,26 +818,11 @@ impl FilesParser {
                     data.borrow_mut().started_sub_tasks = true;
                 }
             }
-            if !task_by_file_name.borrow().started_sub_tasks && load_sub_tasks {
+            // ts#64632: a later arrival that lowers the depth starts the
+            // subtasks again at the new depth, so each file ends at its
+            // lowest depth over all paths, in every run order.
+            if load_sub_tasks && (lowered || !task_by_file_name.borrow().started_sub_tasks) {
                 task_by_file_name.borrow_mut().started_sub_tasks = true;
-                let sub_tasks = task_by_file_name.borrow().sub_tasks.clone();
-                let lowest_depth = data.borrow().lowest_depth;
-                self.start(loader, &sub_tasks, lowest_depth);
-            } else if relower
-                && !self.single_threaded
-                && task_by_file_name.borrow().started_sub_tasks
-            {
-                // PORT: parallel tsgo runs each queued task in its own
-                // goroutine, so the shallowest path to a file usually arrives
-                // first and its subtasks start at that depth. This queue pops
-                // LIFO (Go singleThreadedWorkGroup order) and can reach a file
-                // first through a deeper path. Go then lowers `lowestDepth`
-                // but does not restart subtasks that already started, so the
-                // children keep a depth > 0 (node_modules files: no TS6059, no
-                // emit). Start them again at the new depth to give the result
-                // of parallel tsgo. This is also the Strada rule. Tested in
-                // pinned Go: all project configs match parallel tsgo.
-                // `--singleThreaded` keeps the exact Go order.
                 let sub_tasks = task_by_file_name.borrow().sub_tasks.clone();
                 let lowest_depth = data.borrow().lowest_depth;
                 self.start(loader, &sub_tasks, lowest_depth);
@@ -846,7 +830,7 @@ impl FilesParser {
         }
     }
 
-    // Go: filesparser.go:330 (*filesParser).getProcessedFiles
+    // Go: filesparser.go:337 (*filesParser).getProcessedFiles
     pub fn get_processed_files(&self, loader: &FileLoader) -> ProcessedFiles {
         let total_file_count = loader.total_file_count.get() as usize;
         let lib_file_count = loader.lib_file_count.get() as usize;
@@ -1085,10 +1069,10 @@ impl FilesParser {
                     {
                         let t = task.borrow();
                         for trace in &t.type_resolutions_trace {
-                            loader.opts.host.trace(trace.message, trace.args.clone());
+                            loader.host.trace(trace.message, trace.args.clone());
                         }
                         for trace in &t.resolutions_trace {
-                            loader.opts.host.trace(trace.message, trace.args.clone());
+                            loader.host.trace(trace.message, trace.args.clone());
                         }
                     }
 
@@ -1307,7 +1291,7 @@ impl FilesParser {
             );
             resolved_modules.insert(key, cache);
             for trace in &value.trace {
-                loader.opts.host.trace(trace.message, trace.args.clone());
+                loader.host.trace(trace.message, trace.args.clone());
             }
         }
 
@@ -1335,11 +1319,10 @@ impl FilesParser {
             redirect_files_by_path: redirect_files_by_path.map(Rc::new),
             // tsgo#4712
             content_mapper_diagnostics: loader.content_mapper_diagnostics.borrow().clone(),
-            module_resolution_error: loader.module_resolution_error.borrow().clone(),
         }
     }
 
-    // Go: filesparser.go:589 (*filesParser).addIncludeReason
+    // Go: filesparser.go:594 (*filesParser).addIncludeReason
     // PORT: Go can append a nil reason. Only the automatic type directive
     // root task has no reason, and `collectFiles` never passes it here, so a
     // nil reason is skipped.
@@ -1943,8 +1926,8 @@ impl PrefetchConfig {
             .lib_replacement
             .is_true();
         PrefetchConfig {
-            current_directory: loader.opts.host.get_current_directory(),
-            use_case_sensitive_file_names: loader.opts.host.fs().use_case_sensitive_file_names(),
+            current_directory: loader.host.get_current_directory(),
+            use_case_sensitive_file_names: loader.host.fs().use_case_sensitive_file_names(),
             default_library_path: if lib_replacement {
                 String::new()
             } else {
@@ -1994,7 +1977,7 @@ impl WorkerResolveConfig {
         // `process_all_program_files`.
         if !super::file_loader::workers_resolve_imports(options)
             || loader.opts.skip_module_resolution
-            || loader.opts.create_module_resolver.is_some()
+            || loader.custom_module_resolver
         {
             return None;
         }

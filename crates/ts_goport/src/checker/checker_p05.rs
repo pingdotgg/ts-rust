@@ -701,7 +701,29 @@ impl Checker {
         }
         self.check_class_like_declaration(node);
         self.check_source_elements(node.members());
+        // ts#64646, Go N' checker.go:4321
+        self.check_constructor_declared_properties(node);
         self.register_for_unused_identifiers_check(node);
+    }
+
+    // Go: checker/checker.go:4325 checkConstructorDeclaredProperties (ts#64646, Go N')
+    // Gets the type of each JS property that the class constructor declares,
+    // so the diagnostics of its type do not depend on what is checked first.
+    pub fn check_constructor_declared_properties(&mut self, node: Node) {
+        if !is_in_js_file(node) {
+            return;
+        }
+        let symbol = self.get_symbol_of_declaration(node);
+        let class_type = self.get_declared_type_of_symbol(symbol);
+        let properties = self.get_properties_of_type(class_type);
+        for property in properties.iter().copied() {
+            let (kind, constructor) = self.is_constructor_declared_this_property(property);
+            if kind == ThisAssignmentDeclarationKind::THIS_ASSIGNMENT_DECLARATION_CONSTRUCTOR
+                && constructor.parent() == node
+            {
+                self.get_type_of_symbol(property);
+            }
+        }
     }
 
     // Go: checker/checker.go:4321 checkClassLikeDeclaration

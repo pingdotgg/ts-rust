@@ -11,7 +11,7 @@ use super::tspath;
 use super::types::*;
 use super::util::get_js_extension_for_declaration_file_extension;
 
-// Go: modulespecifiers/util.go:388 ProcessEntrypointEnding
+// Go: modulespecifiers/util.go:410 ProcessEntrypointEnding
 // ProcessEntrypointEnding processes a pre-computed module specifier from a package.json exports
 // entrypoint according to the entrypoint's Ending type and the user's preferred endings.
 // PORT: Go `module.TryGetJSExtensionForFile` is the package copy

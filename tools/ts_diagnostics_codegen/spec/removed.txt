@@ -1,6 +1,12 @@
 # Messages that Go removed at the pin while unported Rust code still uses them.
 # ts_diagnostics_codegen --removed writes them to diag.rs as local statics,
-# outside CATALOG, so key_to_message does not find them (as in Go). Each
-# message line is copied from diagnostics_generated.go at the previous pin
-# (typescript-go 16c25522e). Remove a line with its last Rust user, then
-# generate again. An empty file (only comments) gives the plain Go catalog.
+# outside CATALOG. key_to_message finds them first, so a serialized diagnostic
+# still reads back. Each message line is copied from diagnostics_generated.go
+# at the previous pin (microsoft/TypeScript 673a5f17d713). Remove a line with
+# its last Rust user, then generate again. An empty file (only comments) gives
+# the plain Go catalog.
+
+# checker/grammarchecks_p2.rs checkGrammarMetaProperty (the import meta-property).
+# ts#63915 changes the text to "Did you mean 'meta', 'defer', or 'source'?";
+# the checker lane ports it with source phase imports.
+var X_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer = &Message{code: 18061, category: CategoryError, key: "_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer_18061", text: "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?"}

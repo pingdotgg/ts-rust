@@ -72,6 +72,7 @@ impl TransformerVisit for MetadataTransformer {
         match node.kind() {
             SyntaxKind::ClassDeclaration => self.visit_class_declaration(node),
             SyntaxKind::ClassExpression => self.visit_class_expression(node),
+            SyntaxKind::ObjectLiteralExpression => self.visit_object_literal_expression(node),
             SyntaxKind::PropertyDeclaration => self.visit_property_declaration(node),
             SyntaxKind::MethodDeclaration => self.visit_method_declaration(node),
             SyntaxKind::SetAccessor => self.visit_set_accessor(node),
@@ -116,7 +117,17 @@ impl MetadataTransformer {
         self.current_lexical_scope = node;
     }
 
-    // Go: transformers/tstransforms/metadata.go:79 MetadataTransformer.visitClassExpression
+    // Go: transformers/tstransforms/metadata.go:81 MetadataTransformer.visitObjectLiteralExpression
+    fn visit_object_literal_expression(&mut self, node: Node) -> Node {
+        let old_parent = self.parent;
+        self.parent = node;
+        let result = self.visit_each_child(node);
+        // PORT: Go restores this with `defer`.
+        self.set_parent(old_parent);
+        result
+    }
+
+    // Go: transformers/tstransforms/metadata.go:89 MetadataTransformer.visitClassExpression
     fn visit_class_expression(&mut self, node: Node) -> Node {
         let old_parent = self.parent;
         self.parent = node;

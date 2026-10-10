@@ -30,7 +30,7 @@ fn executable_dir() -> String {
 
 /// Go `libPath()`: the directory of the executable, once. Panics when it
 /// has no lib.d.ts.
-// Go: noembed.go:32 libPath
+// Go: noembed.go:31 libPath
 // PORT: Go returns TestingLibPath() in a test binary. That branch is not
 // ported: the protected tests run on the default (embed) build, and a
 // noembed test binary needs the lib files next to it (scripts/copy-libs.sh).
@@ -46,7 +46,7 @@ fn lib_dir() -> &'static str {
     })
 }
 
-// Go: noembed.go:32 libPath
+// Go: noembed.go:31 libPath
 pub fn lib_path() -> String {
     lib_dir().to_string()
 }
@@ -66,7 +66,7 @@ pub fn embedded_text_hash(_text: &str) -> Option<u64> {
     None
 }
 
-// Go: noembed.go:46 IsBundled
+// Go: noembed.go:45 IsBundled
 pub fn is_bundled(_path: &str) -> bool {
     false
 }

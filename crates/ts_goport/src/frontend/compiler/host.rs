@@ -188,7 +188,7 @@ pub struct CompilerHostImpl {
     plain_os_fs: bool,
 }
 
-// Go: host.go:44 NewCachedFSCompilerHost
+// Go: host.go:42 NewCachedFSCompilerHost
 pub fn new_cached_fs_compiler_host(
     current_directory: &str,
     fs: Rc<dyn Fs>,
@@ -231,7 +231,7 @@ pub fn new_compiler_host_over(
     )
 }
 
-// Go: host.go:55 NewCompilerHost
+// Go: host.go:52 NewCompilerHost
 pub fn new_compiler_host(
     current_directory: &str,
     fs: Rc<dyn Fs>,
@@ -277,27 +277,27 @@ fn new_compiler_host_with(
 }
 
 impl CompilerHost for CompilerHostImpl {
-    // Go: host.go:62 (*compilerHost).FS
+    // Go: host.go:71 (*compilerHost).FS
     fn fs(&self) -> Rc<dyn Fs> {
         self.fs.clone()
     }
 
-    // Go: host.go:66 (*compilerHost).DefaultLibraryPath
+    // Go: host.go:75 (*compilerHost).DefaultLibraryPath
     fn default_library_path(&self) -> String {
         self.default_library_path.clone()
     }
 
-    // Go: host.go:70 (*compilerHost).GetCurrentDirectory
+    // Go: host.go:84 (*compilerHost).GetCurrentDirectory (at 673a5f17d713; removed by ts#64159; use the program base directory, compiler/program.go:150)
     fn get_current_directory(&self) -> String {
         self.current_directory.clone()
     }
 
-    // Go: host.go:74 (*compilerHost).Trace
+    // Go: host.go:79 (*compilerHost).Trace
     fn trace(&self, msg: &'static Message, args: Vec<String>) {
         (self.trace)(msg, args);
     }
 
-    // Go: host.go:78 (*compilerHost).GetSourceFile
+    // Go: host.go:83 (*compilerHost).GetSourceFile
     // PORT: a parse worker may have parsed the file already (`FilesParser`
     // prefetch, `take_prefetched`). A file text is leaked for the program
     // lifetime, except the text of a freeable file version (`FileText::new`),
@@ -347,7 +347,7 @@ impl CompilerHost for CompilerHostImpl {
         Some(Rc::new(parse_source_file(opts, text, script_kind)))
     }
 
-    // Go: host.go:100 (*compilerHost).GetContentMappedSourceFiles (tsgo#4712)
+    // Go: host.go:91 (*compilerHost).GetContentMappedSourceFiles (tsgo#4712)
     fn get_content_mapped_source_files(
         &self,
         parse_options: &SourceFileParseOptions,
@@ -364,12 +364,12 @@ impl CompilerHost for CompilerHostImpl {
         true
     }
 
-    // Go: host.go:115 (*compilerHost).ContentMapperProject (tsgo#4712)
+    // Go: host.go:106 (*compilerHost).ContentMapperProject (tsgo#4712)
     fn content_mapper_project(&self) -> Option<Rc<dyn Project>> {
         self.content_mapper_project.clone()
     }
 
-    // Go: host.go:86 (*compilerHost).GetResolvedProjectReference
+    // Go: host.go:110 (*compilerHost).GetResolvedProjectReference
     fn get_resolved_project_reference(
         &self,
         file_name: &str,

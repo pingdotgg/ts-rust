@@ -333,9 +333,6 @@ pub fn marshal_any(enc: &mut String, v: &CompilerOptionsValue) -> Result<(), Jso
         CompilerOptionsValue::ModuleDetectionKind(k) => marshal_int(enc, i64::from(k.0)),
         CompilerOptionsValue::JsxEmit(k) => marshal_int(enc, i64::from(k.0)),
         CompilerOptionsValue::NewLineKind(k) => marshal_int(enc, i64::from(k.0)),
-        CompilerOptionsValue::WatchFileKind(k) => marshal_int(enc, i64::from(k.0)),
-        CompilerOptionsValue::WatchDirectoryKind(k) => marshal_int(enc, i64::from(k.0)),
-        CompilerOptionsValue::PollingKind(k) => marshal_int(enc, i64::from(k.0)),
         CompilerOptionsValue::List(list) => {
             enc.push('[');
             for (i, item) in list.iter().enumerate() {

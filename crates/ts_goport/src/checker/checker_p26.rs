@@ -969,7 +969,7 @@ impl Checker {
     pub fn get_infer_type_parameters(&mut self, node: Node) -> Vec<TypeId> {
         let mut result = Vec::new();
         // PORT: Go ranges over the locals map (random order). We use the
-        // symbol table insertion order, which is declaration order.
+        // symbol table insertion order; the sort below gives Go's order.
         for symbol in self.symbols.values(node.locals()) {
             if self
                 .sym(symbol)
@@ -980,6 +980,8 @@ impl Checker {
                 result.push(t);
             }
         }
+        // ts#64621, Go N' checker.go:24334: a stable order for the type mapper.
+        result.sort_by(|a, b| self.compare_types(*a, *b).cmp(&0));
         result
     }
 

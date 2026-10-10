@@ -1,8 +1,15 @@
 use crate::frontend::prelude::*;
 use std::sync::LazyLock;
 
-// This file ports tsoptions/declscompiler.go, namemap.go, declsbuild.go,
-// declswatch.go and declstypeacquisition.go.
+// This file ports the option declarations and tsoptions/namemap.go. Since
+// ts#64457 Go generates the declarations (tsoptions/declarations_generated.go)
+// and the option compare functions (tsoptions/options_generated.go) from
+// tools/scripts/tsc/options.ts; declscompiler.go, declsbuild.go, declswatch.go
+// and declstypeacquisition.go are gone. The port keeps the hand-written lists:
+// at fed0bf24149f every generated declaration list, element, enum map and
+// deprecated key set equals the old Go lists field by field, except the 7
+// removed watch options (OptionsForWatch) and their 2 elements. The section
+// headers below name the old Go files.
 // PORT: Go package-level vars are `LazyLock` statics. Declaration lists
 // are `Vec<&'static CommandLineOption>` with leaked entries, so the same
 // option has the same address in every list, as in Go.
@@ -24,11 +31,11 @@ fn concat_options(
 // tsoptions/declscompiler.go
 // ---------------------------------------------------------------------------
 
-// Go: tsoptions/declscompiler.go:11 OptionsDeclarations
+// Go: tsoptions/declarations_generated.go:13 OptionsDeclarations
 pub static OPTIONS_DECLARATIONS: LazyLock<Vec<&'static CommandLineOption>> =
     LazyLock::new(|| concat_options(&COMMON_OPTIONS_WITH_BUILD, &OPTIONS_FOR_COMPILER));
 
-// Go: tsoptions/declscompiler.go:13 commonOptionsWithBuild
+// Go: tsoptions/declarations_generated.go:17 commonOptionsWithBuild
 pub static COMMON_OPTIONS_WITH_BUILD: LazyLock<Vec<&'static CommandLineOption>> = LazyLock::new(
     || {
         vec![
@@ -313,7 +320,7 @@ pub static COMMON_OPTIONS_WITH_BUILD: LazyLock<Vec<&'static CommandLineOption>> 
     },
 );
 
-// Go: tsoptions/declscompiler.go:263 optionsForCompiler
+// Go: tsoptions/declarations_generated.go:247 optionsForCompiler
 pub static OPTIONS_FOR_COMPILER: LazyLock<Vec<&'static CommandLineOption>> = LazyLock::new(|| {
     vec![
     //******* compilerOptions not common with --build *******
@@ -1362,6 +1369,8 @@ pub static OPTIONS_FOR_COMPILER: LazyLock<Vec<&'static CommandLineOption>> = Laz
 });
 
 // Go: tsoptions/declscompiler.go:1211 optionsType
+// PORT: ts#64457 removes this Go function (fed0bf24149f compares each field
+// in options_generated.go). The port keeps it; the results are the same.
 // PORT: Go reads `core.CompilerOptions` fields by reflection. This returns
 // the exported fields in Go declaration order, as (Go field name, value).
 // The Go field index `i` is the index in this list (the unexported
@@ -1639,6 +1648,8 @@ pub fn compiler_options_field_values(
 }
 
 // Go: tsoptions/declscompiler.go:1213 optionsHaveChanges
+// PORT: ts#64457 removes this Go function (fed0bf24149f compares each field
+// in options_generated.go). The port keeps it; the results are the same.
 #[must_use]
 pub fn options_have_changes(
     old_options: Option<&CompilerOptions>,
@@ -1676,6 +1687,8 @@ pub fn options_have_changes(
 }
 
 // Go: tsoptions/declscompiler.go:1234 ForEachCompilerOptionValue
+// PORT: ts#64457 removes this Go function (fed0bf24149f compares each field
+// in options_generated.go). The port keeps it; the results are the same.
 pub fn for_each_compiler_option_value(
     options: &CompilerOptions,
     decl_filter: &dyn Fn(&CommandLineOption) -> bool,
@@ -1694,7 +1707,7 @@ pub fn for_each_compiler_option_value(
     false
 }
 
-// Go: tsoptions/declscompiler.go:1250 CompilerOptionsAffectSemanticDiagnostics
+// Go: tsoptions/options_generated.go:368 CompilerOptionsAffectSemanticDiagnostics
 #[must_use]
 pub fn compiler_options_affect_semantic_diagnostics(
     old_options: Option<&CompilerOptions>,
@@ -1712,7 +1725,7 @@ pub fn compiler_options_affect_semantic_diagnostics(
     })
 }
 
-// Go: tsoptions/declscompiler.go:1259 CompilerOptionsAffectDeclarationPath
+// Go: tsoptions/options_generated.go:413 CompilerOptionsAffectDeclarationPath
 #[must_use]
 pub fn compiler_options_affect_declaration_path(
     old_options: Option<&CompilerOptions>,
@@ -1723,7 +1736,7 @@ pub fn compiler_options_affect_declaration_path(
     })
 }
 
-// Go: tsoptions/declscompiler.go:1268 CompilerOptionsAffectEmit
+// Go: tsoptions/options_generated.go:426 CompilerOptionsAffectEmit
 #[must_use]
 pub fn compiler_options_affect_emit(
     old_options: Option<&CompilerOptions>,
@@ -1736,17 +1749,14 @@ pub fn compiler_options_affect_emit(
 // tsoptions/namemap.go
 // ---------------------------------------------------------------------------
 
-// Go: tsoptions/namemap.go:9 CompilerNameMap
+// Go: tsoptions/namemap.go:10 CompilerNameMap
 pub static COMPILER_NAME_MAP: LazyLock<NameMap> =
     LazyLock::new(|| get_name_map_from_list(&OPTIONS_DECLARATIONS));
-// Go: tsoptions/namemap.go:10 BuildNameMap
+// Go: tsoptions/namemap.go:11 BuildNameMap
 pub static BUILD_NAME_MAP: LazyLock<NameMap> =
     LazyLock::new(|| get_name_map_from_list(&BUILD_OPTS));
-// Go: tsoptions/namemap.go:11 WatchNameMap
-pub static WATCH_NAME_MAP: LazyLock<NameMap> =
-    LazyLock::new(|| get_name_map_from_list(&OPTIONS_FOR_WATCH));
 
-// Go: tsoptions/namemap.go:15 GetNameMapFromList
+// Go: tsoptions/namemap.go:14 GetNameMapFromList
 #[must_use]
 pub fn get_name_map_from_list(opt_decls: &[&'static CommandLineOption]) -> NameMap {
     let mut options_names: IndexMap<String, &'static CommandLineOption> =
@@ -1764,7 +1774,7 @@ pub fn get_name_map_from_list(opt_decls: &[&'static CommandLineOption]) -> NameM
     }
 }
 
-// Go: tsoptions/namemap.go:30 NameMap
+// Go: tsoptions/namemap.go:29 NameMap
 // PORT: Go `OrderedMap.Set` on an existing key keeps the first position and
 // replaces the value. `IndexMap::insert` does the same.
 #[derive(Clone, Debug, Default)]
@@ -1774,13 +1784,13 @@ pub struct NameMap {
 }
 
 impl NameMap {
-    // Go: tsoptions/namemap.go:35 Get
+    // Go: tsoptions/namemap.go:34 Get
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&'static CommandLineOption> {
         self.options_names.get(&name.to_lowercase()).copied()
     }
 
-    // Go: tsoptions/namemap.go:39 GetFromShort
+    // Go: tsoptions/namemap.go:38 GetFromShort
     #[must_use]
     pub fn get_from_short(&self, short_name: &str) -> Option<&'static CommandLineOption> {
         // returns option only if shortName is a valid short option
@@ -1790,7 +1800,7 @@ impl NameMap {
         self.get(name)
     }
 
-    // Go: tsoptions/namemap.go:48 GetOptionDeclarationFromName
+    // Go: tsoptions/namemap.go:47 GetOptionDeclarationFromName
     #[must_use]
     pub fn get_option_declaration_from_name(
         &self,
@@ -1814,7 +1824,7 @@ impl NameMap {
 // tsoptions/declsbuild.go
 // ---------------------------------------------------------------------------
 
-// Go: tsoptions/declsbuild.go:9 TscBuildOption
+// Go: tsoptions/declarations_generated.go:1052 TscBuildOption
 pub static TSC_BUILD_OPTION: LazyLock<CommandLineOption> = LazyLock::new(|| CommandLineOption {
     name: "build",
     kind: CommandLineOptionKind::BOOLEAN,
@@ -1826,7 +1836,7 @@ pub static TSC_BUILD_OPTION: LazyLock<CommandLineOption> = LazyLock::new(|| Comm
     ..Default::default()
 });
 
-// Go: tsoptions/declsbuild.go:19 OptionsForBuild
+// Go: tsoptions/declarations_generated.go:1062 OptionsForBuild
 pub static OPTIONS_FOR_BUILD: LazyLock<Vec<&'static CommandLineOption>> = LazyLock::new(|| {
     vec![
         &*TSC_BUILD_OPTION,
@@ -1889,111 +1899,15 @@ pub static OPTIONS_FOR_BUILD: LazyLock<Vec<&'static CommandLineOption>> = LazyLo
     ]
 });
 
-// Go: tsoptions/declsbuild.go:69 BuildOpts
+// Go: tsoptions/declarations_generated.go:15 BuildOpts
 pub static BUILD_OPTS: LazyLock<Vec<&'static CommandLineOption>> =
     LazyLock::new(|| concat_options(&COMMON_OPTIONS_WITH_BUILD, &OPTIONS_FOR_BUILD));
-
-// ---------------------------------------------------------------------------
-// tsoptions/declswatch.go
-// ---------------------------------------------------------------------------
-
-// Go: tsoptions/declswatch.go:8 OptionsForWatch
-pub static OPTIONS_FOR_WATCH: LazyLock<Vec<&'static CommandLineOption>> = LazyLock::new(|| {
-    vec![
-    opt(CommandLineOption {
-        name: "watchInterval",
-        kind: CommandLineOptionKind::NUMBER,
-        category: Some(diag::Watch_and_Build_Modes),
-        ..Default::default()
-    }),
-    opt(CommandLineOption {
-        name: "watchFile",
-        kind: CommandLineOptionKind::ENUM,
-        // new Map(Object.entries({
-        //     fixedpollinginterval: WatchFileKind.FixedPollingInterval,
-        //     prioritypollinginterval: WatchFileKind.PriorityPollingInterval,
-        //     dynamicprioritypolling: WatchFileKind.DynamicPriorityPolling,
-        //     fixedchunksizepolling: WatchFileKind.FixedChunkSizePolling,
-        //     usefsevents: WatchFileKind.UseFsEvents,
-        //     usefseventsonparentdirectory: WatchFileKind.UseFsEventsOnParentDirectory,
-        // })),
-        category: Some(diag::Watch_and_Build_Modes),
-        description: Some(diag::Specify_how_the_TypeScript_watch_mode_works),
-        default_value_description: CompilerOptionsValue::WatchFileKind(WatchFileKind::USE_FS_EVENTS),
-        ..Default::default()
-    }),
-    opt(CommandLineOption {
-        name: "watchDirectory",
-        kind: CommandLineOptionKind::ENUM,
-        // new Map(Object.entries({
-        //     usefsevents: WatchDirectoryKind.UseFsEvents,
-        //     fixedpollinginterval: WatchDirectoryKind.FixedPollingInterval,
-        //     dynamicprioritypolling: WatchDirectoryKind.DynamicPriorityPolling,
-        //     fixedchunksizepolling: WatchDirectoryKind.FixedChunkSizePolling,
-        // })),
-        category: Some(diag::Watch_and_Build_Modes),
-        description: Some(diag::Specify_how_directories_are_watched_on_systems_that_lack_recursive_file_watching_functionality),
-        default_value_description: CompilerOptionsValue::WatchDirectoryKind(WatchDirectoryKind::USE_FS_EVENTS),
-        ..Default::default()
-    }),
-    opt(CommandLineOption {
-        name: "fallbackPolling",
-        kind: CommandLineOptionKind::ENUM,
-        // new Map(Object.entries({
-        //     fixedinterval: PollingWatchKind.FixedInterval,
-        //     priorityinterval: PollingWatchKind.PriorityInterval,
-        //     dynamicpriority: PollingWatchKind.DynamicPriority,
-        //     fixedchunksize: PollingWatchKind.FixedChunkSize,
-        // })),
-        category: Some(diag::Watch_and_Build_Modes),
-        description: Some(diag::Specify_what_approach_the_watcher_should_use_if_the_system_runs_out_of_native_file_watchers),
-        default_value_description: CompilerOptionsValue::PollingKind(PollingKind::PRIORITY_INTERVAL),
-        ..Default::default()
-    }),
-    opt(CommandLineOption {
-        name: "synchronousWatchDirectory",
-        kind: CommandLineOptionKind::BOOLEAN,
-        category: Some(diag::Watch_and_Build_Modes),
-        description: Some(diag::Synchronously_call_callbacks_and_update_the_state_of_directory_watchers_on_platforms_that_don_t_support_recursive_watching_natively),
-        default_value_description: CompilerOptionsValue::Bool(false),
-        ..Default::default()
-    }),
-    opt(CommandLineOption {
-        name: "excludeDirectories",
-        kind: CommandLineOptionKind::LIST,
-        // element: {
-        //     Name: "excludeDirectory",
-        //     Kind: "string",
-        //     isFilePath: true,
-        //     extraValidation: specToDiagnostic,
-        // },
-        allow_config_dir_template_substitution: true,
-        category: Some(diag::Watch_and_Build_Modes),
-        description: Some(diag::Remove_a_list_of_directories_from_the_watch_process),
-        ..Default::default()
-    }),
-    opt(CommandLineOption {
-        name: "excludeFiles",
-        kind: CommandLineOptionKind::LIST,
-        // element: {
-        //     Name: "excludeFile",
-        //     Kind: "string",
-        //     isFilePath: true,
-        //     extraValidation: specToDiagnostic,
-        // },
-        allow_config_dir_template_substitution: true,
-        category: Some(diag::Watch_and_Build_Modes),
-        description: Some(diag::Remove_a_list_of_files_from_the_watch_mode_s_processing),
-        ..Default::default()
-    }),
-    ]
-});
 
 // ---------------------------------------------------------------------------
 // tsoptions/declstypeacquisition.go
 // ---------------------------------------------------------------------------
 
-// Go: tsoptions/declstypeacquisition.go:3 typeAcquisitionDeclaration
+// Go: tsoptions/declarations_generated.go:1118 typeAcquisitionDeclaration
 pub static TYPE_ACQUISITION_DECLARATION: LazyLock<&'static CommandLineOption> =
     LazyLock::new(|| {
         opt(CommandLineOption {
@@ -2005,7 +1919,7 @@ pub static TYPE_ACQUISITION_DECLARATION: LazyLock<&'static CommandLineOption> =
     });
 
 // Do not delete this without updating the website's tsconfig generation.
-// Go: tsoptions/declstypeacquisition.go:10 typeAcquisitionDecls
+// Go: tsoptions/declarations_generated.go:963 typeAcquisitionDecls
 pub static TYPE_ACQUISITION_DECLS: LazyLock<Vec<&'static CommandLineOption>> =
     LazyLock::new(|| {
         vec![

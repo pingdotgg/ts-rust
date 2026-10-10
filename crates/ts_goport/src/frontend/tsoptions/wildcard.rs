@@ -1,6 +1,9 @@
 use crate::frontend::prelude::*;
 
 // Go: tsoptions/wildcarddirectories.go:10 getWildcardDirectories
+// ts#64159: each directory is a rooted directory path ("c:/", and the root
+// itself for a pattern in the root), and its key is the path key
+// (`to_path`).
 // PORT: Go returns a nil map for an empty include list. Every reader treats
 // nil and empty the same, so this returns an empty map. Go deletes subpaths
 // while it ranges over the map. The delete test depends only on the path and
@@ -50,13 +53,13 @@ pub fn get_wildcard_directories(
             continue;
         }
 
-        let match_ = get_wildcard_directory_from_spec(
-            &spec,
-            compare_paths_options.use_case_sensitive_file_names,
-        );
+        let match_ = get_wildcard_directory_from_spec(&spec);
         if let Some(match_) = match_ {
-            let key = match_.key;
-            let path = match_.path;
+            let mut path = match_.path;
+            if path.is_empty() {
+                path = spec[..get_root_length(&spec)].to_string();
+            }
+            let key = to_canonical_key(&path, compare_paths_options.use_case_sensitive_file_names);
             let recursive = match_.recursive;
 
             let existing_path = wild_card_key_to_path.get(&key).cloned();
@@ -105,38 +108,48 @@ pub fn get_wildcard_directories(
     wildcard_directories
 }
 
-// Go: tsoptions/wildcarddirectories.go:85 toCanonicalKey
-// PORT: Go `strings.ToLower` maps each rune with the one-rune
-// `unicode.ToLower` (the first char of the Rust mapping) and each byte that
-// is not valid UTF-8 to U+FFFD (`go_map_runes`).
+// Go: tsoptions/wildcarddirectories.go:85 toCanonicalKey (at 673a5f17d713; removed by ts#64159,
+// which keys by tspath.CaseSensitivity.PathKey)
+// PORT: Go `PathKey` of a rooted path: the canonical file name
+// (`to_path` of a rooted, normal path).
 fn to_canonical_key(path: &str, use_case_sensitive_file_names: bool) -> String {
-    if use_case_sensitive_file_names {
-        return path.to_string();
-    }
-    go_map_runes(path, |c| c.to_lowercase().next().unwrap_or(c))
+    to_path(path, "", use_case_sensitive_file_names).0
 }
 
 /// Go `wildcardDirectoryMatch`: the result of a wildcard directory match.
-// Go: tsoptions/wildcarddirectories.go:93 wildcardDirectoryMatch
+// Go: tsoptions/wildcarddirectories.go:89 wildcardDirectoryMatch
+// ts#64159: no key; the caller makes it from the rooted path.
 #[derive(Clone, Debug)]
 struct WildcardDirectoryMatch {
-    key: String,
+    /// Empty when the pattern is in the root (Go: a zero RootedDirectoryPath).
     path: String,
     recursive: bool,
 }
 
-// Go: tsoptions/wildcarddirectories.go:99 getWildcardDirectoryFromSpec
+/// Go `tspath.RootedDirectoryPathFromAbsolute` of a normal absolute path:
+/// a root keeps a trailing separator ("c:" is "c:/").
+fn rooted_directory_path(path: &str) -> String {
+    let normalized = get_normalized_absolute_path(path, "");
+    if get_root_length(&normalized) == normalized.len() {
+        return ensure_trailing_directory_separator(&normalized);
+    }
+    normalized
+}
+
+// Go: tsoptions/wildcarddirectories.go:94 getWildcardDirectoryFromSpec
 // PORT: Go `strings.ToLower` and Rust `to_lowercase` agree on the ASCII and
 // common Unicode cases that appear in paths.
-fn get_wildcard_directory_from_spec(
-    spec: &str,
-    use_case_sensitive_file_names: bool,
-) -> Option<WildcardDirectoryMatch> {
+fn get_wildcard_directory_from_spec(spec: &str) -> Option<WildcardDirectoryMatch> {
     // Find the first occurrence of a wildcard character
     if let Some(first_wildcard) = spec.find(['*', '?']) {
         // Find the last directory separator before the wildcard
         if let Some(last_sep_before_wildcard) = spec[..first_wildcard].rfind('/') {
-            let path = &spec[..last_sep_before_wildcard];
+            let path_text = &spec[..last_sep_before_wildcard];
+            let path = if path_text.is_empty() {
+                String::new()
+            } else {
+                rooted_directory_path(path_text)
+            };
             let last_directory_separator_index = spec.rfind('/');
 
             // Determine if this should be watched recursively:
@@ -145,20 +158,15 @@ fn get_wildcard_directory_from_spec(
             // always one here (found above), so `is_some_and` is always true on Some.
             let recursive = last_directory_separator_index.is_some_and(|i| first_wildcard < i);
 
-            return Some(WildcardDirectoryMatch {
-                key: to_canonical_key(path, use_case_sensitive_file_names),
-                path: path.to_string(),
-                recursive,
-            });
+            return Some(WildcardDirectoryMatch { path, recursive });
         }
     }
 
     if let Some(last_sep_index) = spec.rfind('/') {
         let last_segment = &spec[last_sep_index + 1..];
         if is_implicit_glob(last_segment) {
-            let path = remove_trailing_directory_separator(spec).to_string();
+            let path = rooted_directory_path(remove_trailing_directory_separator(spec));
             return Some(WildcardDirectoryMatch {
-                key: to_canonical_key(&path, use_case_sensitive_file_names),
                 path,
                 recursive: true,
             });

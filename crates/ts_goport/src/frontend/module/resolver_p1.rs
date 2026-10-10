@@ -18,6 +18,7 @@
 
 use crate::frontend::prelude::*;
 use crate::gostd::GoError;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Go `if r.tracer != nil { r.tracer.write(diag, args...) }`.
@@ -39,7 +40,7 @@ fn entry_exists(info: &Option<Rc<InfoCacheEntry>>) -> bool {
     info.as_ref().is_some_and(|p| p.exists())
 }
 
-// Go: module/resolver.go:19 resolved
+// Go: module/resolver.go:20 resolved
 #[derive(Clone, Debug, Default)]
 pub struct Resolved {
     pub path: String,
@@ -51,37 +52,136 @@ pub struct Resolved {
     pub resolved_using_extra_extensions: bool,
 }
 
-// Go: module/resolver.go:28 resolved.shouldContinueSearching
+// Go: module/resolver.go:29 resolved.shouldContinueSearching
 // PORT: `Option::is_none` on `Option<Resolved>`.
 
-// Go: module/resolver.go:32 resolved.isResolved
+// Go: module/resolver.go:33 resolved.isResolved
 // PORT: the private `resolved_is_resolved` helper.
 
-// Go: module/resolver.go:36 continueSearching
+// Go: module/resolver.go:37 continueSearching
 #[must_use]
 pub fn continue_searching() -> Option<Resolved> {
     None
 }
 
-// Go: module/resolver.go:40 unresolved
+// Go: module/resolver.go:41 unresolved
 #[must_use]
 pub fn unresolved() -> Option<Resolved> {
     Some(Resolved::default())
 }
 
-// Go: module/resolver.go:44 resolutionKindSpecificLoader
+// Go: module/resolver.go:130 pathForDynamicResolution (ts#64544)
+// A relative module name under an encoded dynamic directory, with its
+// segments encoded as the dynamic file names are.
+pub(crate) fn path_for_dynamic_resolution<'a>(
+    directory: &str,
+    path: &'a str,
+    directory_only: bool,
+) -> Cow<'a, str> {
+    if is_encoded_dynamic_file_name(directory) && !path_is_absolute(path) {
+        if directory_only {
+            return Cow::Owned(encode_dynamic_directory_specifier(path));
+        }
+        return Cow::Owned(encode_dynamic_module_specifier(path));
+    }
+    Cow::Borrowed(path)
+}
+
+// Go: module/resolver.go:54 resolvePathForModule (ts#64544 at 59f5b0233; ts#64159
+// replaces it with resolutionCandidate)
+// `path` resolved against `directory`; a directory path ends with "/".
+pub(crate) fn resolve_path_for_module(directory: &str, path: &str, directory_only: bool) -> String {
+    let resolved = normalize_path(&combine_paths(
+        directory,
+        &[&path_for_dynamic_resolution(
+            directory,
+            path,
+            directory_only,
+        )],
+    ));
+    if directory_only {
+        return ensure_trailing_directory_separator(&resolved);
+    }
+    resolved
+}
+
+// Go: module/resolver.go:62 resolveDynamicLogicalPath (ts#64544 at 59f5b0233; removed by
+// ts#64159)
+pub(crate) fn resolve_dynamic_logical_path(
+    directory: &str,
+    path: &str,
+    directory_only: bool,
+) -> String {
+    let path = if !path.is_empty() && directory_only {
+        remove_trailing_directory_separator(path)
+    } else {
+        path
+    };
+    let encoded = if directory_only {
+        encode_dynamic_relative_uri_directory_path(path)
+    } else {
+        encode_dynamic_relative_uri_path(path)
+    };
+    let resolved = normalize_path(&combine_paths(directory, &[&encoded]));
+    if directory_only {
+        return ensure_trailing_directory_separator(&resolved);
+    }
+    resolved
+}
+
+// Go: module/resolver.go:77 dynamicDirectoryCandidate (ts#64544 at 59f5b0233; ts#64159
+// replaces it with resolutionCandidate.directoryPath)
+// A dynamic candidate whose last segment is encoded as a directory segment
+// (a file segment keeps its extension outside the escape).
+pub(crate) fn dynamic_directory_candidate(candidate: &str) -> Cow<'_, str> {
+    if !is_encoded_dynamic_file_name(candidate) {
+        return Cow::Borrowed(candidate);
+    }
+    let directory = get_directory_path(candidate);
+    let base = get_base_file_name(candidate);
+    let logical_base = decode_dynamic_uri_path_segment(&base);
+    let encoded_base = encode_dynamic_uri_directory_path(&logical_base);
+    if encoded_base == base {
+        return Cow::Borrowed(candidate);
+    }
+    Cow::Owned(combine_paths(&directory, &[&encoded_base]))
+}
+
+// Go: module/resolver.go:48 resolutionCandidate (ts#64159)
+// PORT: the port keeps a candidate as one string, and a trailing separator
+// is Go's `directoryOnly`. `candidate_path` is Go's `path` field: the name
+// without that separator (a root keeps it, resolutionCandidateFromNormalized
+// :54).
+pub(crate) fn candidate_path(candidate: &str) -> &str {
+    if candidate.len() > get_root_length(candidate) {
+        return remove_trailing_directory_separator(candidate);
+    }
+    candidate
+}
+
+// Go: module/resolver.go:165 resolutionCandidate.AsDirectoryPath (ts#64159)
+// A directory-only candidate is already encoded as a directory; another
+// candidate uses its dynamic directory spelling (`dynamic_directory_candidate`).
+pub(crate) fn candidate_directory_path(candidate: &str) -> Cow<'_, str> {
+    if has_trailing_directory_separator(candidate) {
+        return Cow::Borrowed(candidate_path(candidate));
+    }
+    dynamic_directory_candidate(candidate)
+}
+
+// Go: module/resolver.go:223 resolutionKindSpecificLoader
 // PORT: Go closures capture `r`. Here the loader gets the state as its first
 // argument, so the caller can keep `&mut self`.
 pub type ResolutionKindSpecificLoader<'s> =
     dyn FnMut(&mut ResolutionState<'s>, Extensions, &str) -> Option<Resolved>;
 
-// Go: module/resolver.go:46 tracer
+// Go: module/resolver.go:225 tracer
 #[derive(Clone, Debug, Default)]
 pub struct Tracer {
     pub traces: Vec<DiagAndArgs>,
 }
 
-// Go: module/resolver.go:50 DiagAndArgs
+// Go: module/resolver.go:229 DiagAndArgs
 // PORT: Go `Args []any` is `Vec<String>`. Values are formatted with
 // `ToString` when written (`args!`), like the Go `%v` formatting later.
 #[derive(Clone, Debug)]
@@ -91,7 +191,7 @@ pub struct DiagAndArgs {
 }
 
 impl Tracer {
-    // Go: module/resolver.go:55 tracer.write
+    // Go: module/resolver.go:234 tracer.write
     // PORT: the Go nil check is on the caller side (`trace_write!`).
     pub fn write(&mut self, diag: &'static crate::diagnostics::Message, args: Vec<String>) {
         self.traces.push(DiagAndArgs {
@@ -100,7 +200,7 @@ impl Tracer {
         });
     }
 
-    // Go: module/resolver.go:61 tracer.getTraces
+    // Go: module/resolver.go:240 tracer.getTraces
     // PORT: a nil tracer gives an empty `Vec` (see `traces_of`).
     #[must_use]
     pub fn get_traces(&self) -> Vec<DiagAndArgs> {
@@ -116,7 +216,7 @@ fn traces_of(tracer: &Option<Rc<RefCell<Tracer>>>) -> Vec<DiagAndArgs> {
     }
 }
 
-// Go: module/resolver.go:68 resolutionState
+// Go: module/resolver.go:247 resolutionState
 pub struct ResolutionState<'a> {
     pub resolver: &'a DefaultResolver,
     pub tracer: Option<Rc<RefCell<Tracer>>>,
@@ -168,7 +268,7 @@ impl<'a> ResolutionState<'a> {
     }
 }
 
-// Go: module/resolver.go:93 newResolutionState
+// Go: module/resolver.go:273 newResolutionState
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn new_resolution_state<'a>(
@@ -218,7 +318,7 @@ pub fn new_resolution_state<'a>(
     state
 }
 
-// Go: module/resolver.go:138 GetCompilerOptionsWithRedirect
+// Go: module/resolver.go:325 GetCompilerOptionsWithRedirect
 #[must_use]
 pub fn get_compiler_options_with_redirect(
     compiler_options: &Rc<CompilerOptions>,
@@ -233,7 +333,7 @@ pub fn get_compiler_options_with_redirect(
     compiler_options.clone()
 }
 
-// Go: module/resolver.go:148 DefaultResolver
+// Go: module/resolver.go:335 DefaultResolver
 // PORT: Go embeds `caches`; here it is the `caches` field.
 pub struct DefaultResolver {
     pub caches: Caches,
@@ -246,7 +346,7 @@ pub struct DefaultResolver {
     // reportDiagnostic: DiagnosticReporter
 }
 
-// Go: module/resolver.go:158 ResolverOptions
+// Go: module/resolver.go:350 ResolverOptions
 // PORT: the Go nil `Host` and `CompilerOptions` are `None`. Go copies the
 // struct by value; this is `Clone`.
 #[derive(Clone, Default)]
@@ -259,7 +359,7 @@ pub struct ResolverOptions {
     pub package_json_cache: Option<Rc<InfoCache>>,
 }
 
-// Go: module/resolver.go:167 NewResolver
+// Go: module/resolver.go:363 NewResolver
 // PORT: Go keeps a nil `Host` or `CompilerOptions` and panics at the first
 // use; `DefaultResolver` has no nil for them, so this panics now.
 #[must_use]
@@ -288,7 +388,7 @@ pub fn new_resolver(opts: ResolverOptions) -> DefaultResolver {
 }
 
 impl DefaultResolver {
-    // Go: module/resolver.go:183 newTraceBuilder
+    // Go: module/resolver.go:401 newTraceBuilder
     #[must_use]
     pub fn new_trace_builder(&self) -> Option<Rc<RefCell<Tracer>>> {
         if self.compiler_options.trace_resolution == Tristate::True {
@@ -297,7 +397,7 @@ impl DefaultResolver {
         None
     }
 
-    // Go: module/resolver.go:190 GetPackageScopeForPath
+    // Go: module/resolver.go:408 GetPackageScopeForPath
     pub fn get_package_scope_for_path(&self, directory: &str) -> Option<Rc<InfoCacheEntry>> {
         ResolutionState::zero(self, self.compiler_options.clone())
             .get_package_scope_for_path(directory)
@@ -331,7 +431,7 @@ impl DefaultResolver {
         }
     }
 
-    // Go: module/resolver.go:194 PackageJsonCacheEntries (tsgo#4301)
+    // Go: module/resolver.go:412 PackageJsonCacheEntries (tsgo#4301)
     // PORT: the entries include the package.json lookups of the parse
     // worker answers that this resolver took (`Caches::worker_package_jsons`),
     // so that they are what the one Go cache of all parse tasks holds: after
@@ -391,7 +491,7 @@ impl DefaultResolver {
 }
 
 impl Tracer {
-    // Go: module/resolver.go:198 tracer.traceResolutionUsingProjectReference
+    // Go: module/resolver.go:416 tracer.traceResolutionUsingProjectReference
     pub fn trace_resolution_using_project_reference(
         &mut self,
         redirected_reference: Option<&dyn ModuleResolvedProjectReference>,
@@ -408,7 +508,7 @@ impl Tracer {
 }
 
 impl DefaultResolver {
-    // Go: module/resolver.go:204 ResolveTypeReferenceDirective
+    // Go: module/resolver.go:422 ResolveTypeReferenceDirective
     pub fn resolve_type_reference_directive(
         &self,
         type_reference_directive_name: &str,
@@ -514,7 +614,7 @@ impl DefaultResolver {
         (result, traces_of(&trace_builder))
     }
 
-    // Go: module/resolver.go:249 ResolveModuleName
+    // Go: module/resolver.go:467 ResolveModuleName
     // PORT: the `module.Resolver` form is `Resolver::resolve_module_name`,
     // whose result can be nil. This one is never nil and never fails (Go
     // returns a nil error).
@@ -535,7 +635,7 @@ impl DefaultResolver {
         (result, trace, None)
     }
 
-    // Go: module/resolver.go:254 ResolveModuleNameFromDirectory (ts#64299)
+    // Go: module/resolver.go:472 ResolveModuleNameFromDirectory (ts#64299)
     // PORT: see `resolve_module_name`.
     pub fn resolve_module_name_from_directory(
         &self,
@@ -553,7 +653,7 @@ impl DefaultResolver {
         (result, trace, None)
     }
 
-    // Go: module/resolver.go:259 resolveModuleName
+    // Go: module/resolver.go:477 resolveModuleName
     // PORT: named `resolve_module_name_worker`; the Go names
     // `ResolveModuleName` and `resolveModuleName` share a snake name.
     fn resolve_module_name_worker(
@@ -713,7 +813,7 @@ impl DefaultResolver {
         (final_result, traces_of(&trace_builder))
     }
 
-    // Go: module/resolver.go:319 ResolvePackageDirectory
+    // Go: module/resolver.go:537 ResolvePackageDirectory
     // PORT: a Go nil `*ResolvedModule` is `None`.
     pub fn resolve_package_directory(
         &self,
@@ -744,7 +844,7 @@ impl DefaultResolver {
         None
     }
 
-    // Go: module/resolver.go:330 tryResolveFromTypingsLocation
+    // Go: module/resolver.go:548 tryResolveFromTypingsLocation
     // PORT: takes the original result by value and returns it or a new one.
     pub fn try_resolve_from_typings_location(
         &self,
@@ -795,7 +895,7 @@ impl DefaultResolver {
         result
     }
 
-    // Go: module/resolver.go:359 resolveConfig
+    // Go: module/resolver.go:577 resolveConfig
     pub fn resolve_config(&self, module_name: &str, containing_file: &str) -> ResolvedModule {
         let containing_directory = get_directory_path(containing_file);
         let mut state = new_resolution_state(
@@ -815,7 +915,7 @@ impl DefaultResolver {
 }
 
 impl Tracer {
-    // Go: module/resolver.go:367 tracer.traceTypeReferenceDirectiveResult
+    // Go: module/resolver.go:585 tracer.traceTypeReferenceDirectiveResult
     pub fn trace_type_reference_directive_result(
         &mut self,
         type_reference_directive_name: &str,
@@ -850,7 +950,7 @@ impl Tracer {
 }
 
 impl ResolutionState<'_> {
-    // Go: module/resolver.go:388 resolveTypeReferenceDirective
+    // Go: module/resolver.go:606 resolveTypeReferenceDirective
     pub fn resolve_type_reference_directive(
         &mut self,
         type_roots: &[String],
@@ -875,13 +975,15 @@ impl ResolutionState<'_> {
                     );
                     continue;
                 }
-                if from_config {
+                // ts#64159: a name with a trailing separator is only a
+                // directory.
+                if from_config && !has_trailing_directory_separator(&candidate) {
                     // Custom typeRoots resolve as file or directory just like we do modules
                     let resolved_from_file =
                         self.load_module_from_file(Extensions::DECLARATION, &candidate);
                     if let Some(mut resolved_from_file) = resolved_from_file {
                         let package_directory =
-                            parse_node_module_from_path(&resolved_from_file.path, false);
+                            node_module_package_root_for_file(&resolved_from_file.path);
                         if !package_directory.is_empty() {
                             let package_info = self.get_package_json_info(&package_directory);
                             resolved_from_file.package_id =
@@ -941,7 +1043,7 @@ impl ResolutionState<'_> {
         self.create_resolved_type_reference_directive(resolved, false /*primary*/)
     }
 
-    // Go: module/resolver.go:439 getCandidateFromTypeRoot
+    // Go: module/resolver.go:659 getCandidateFromTypeRoot
     pub fn get_candidate_from_type_root(&mut self, type_root: &str) -> String {
         let mut name_for_lookup = self.name.clone();
         if type_root.ends_with("/node_modules/@types")
@@ -950,10 +1052,16 @@ impl ResolutionState<'_> {
             let name = self.name.clone();
             name_for_lookup = self.mangle_scoped_package_name(&name);
         }
-        combine_paths(type_root, &[&name_for_lookup])
+        // ts#64159: the candidate is normalized and keeps the directory
+        // intent of a trailing separator (Go resolutionCandidateFromDirectoryPath).
+        resolve_path_for_module(
+            type_root,
+            &name_for_lookup,
+            has_trailing_directory_separator(&name_for_lookup),
+        )
     }
 
-    // Go: module/resolver.go:447 resolutionState.mangleScopedPackageName
+    // Go: module/resolver.go:667 resolutionState.mangleScopedPackageName
     pub fn mangle_scoped_package_name(&mut self, name: &str) -> String {
         let mangled = mangle_scoped_package_name(name);
         if self.tracer.is_some() && mangled != name {
@@ -962,7 +1070,7 @@ impl ResolutionState<'_> {
         mangled
     }
 
-    // Go: module/resolver.go:458 resolveFromTypeRoot
+    // Go: module/resolver.go:678 resolveFromTypeRoot
     // resolveFromTypeRoot tries to resolve a module name from the configured typeRoots.
     // This is used as a fallback after node_modules resolution fails, for declaration file lookups.
     // Returns nil if typeRoots is not configured or if no matching module is found in any typeRoot directory.
@@ -981,17 +1089,20 @@ impl ResolutionState<'_> {
                 );
                 continue;
             }
-            let resolved_from_file =
-                self.load_module_from_file(Extensions::DECLARATION, &candidate);
-            if let Some(mut resolved_from_file) = resolved_from_file {
-                let package_directory =
-                    parse_node_module_from_path(&resolved_from_file.path, false);
-                if !package_directory.is_empty() {
-                    let package_info = self.get_package_json_info(&package_directory);
-                    resolved_from_file.package_id =
-                        self.get_package_id(&resolved_from_file.path, &package_info);
+            // ts#64159: a name with a trailing separator is only a directory.
+            if !has_trailing_directory_separator(&candidate) {
+                let resolved_from_file =
+                    self.load_module_from_file(Extensions::DECLARATION, &candidate);
+                if let Some(mut resolved_from_file) = resolved_from_file {
+                    let package_directory =
+                        node_module_package_root_for_file(&resolved_from_file.path);
+                    if !package_directory.is_empty() {
+                        let package_info = self.get_package_json_info(&package_directory);
+                        resolved_from_file.package_id =
+                            self.get_package_id(&resolved_from_file.path, &package_info);
+                    }
+                    return Some(resolved_from_file);
                 }
-                return Some(resolved_from_file);
             }
             let resolved = self.load_node_module_from_directory(
                 Extensions::DECLARATION,
@@ -1005,7 +1116,7 @@ impl ResolutionState<'_> {
         None
     }
 
-    // Go: module/resolver.go:485 getPackageScopeForPath
+    // Go: module/resolver.go:707 getPackageScopeForPath
     pub fn get_package_scope_for_path(&mut self, directory: &str) -> Option<Rc<InfoCacheEntry>> {
         let resolver = self.resolver;
         for_each_ancestor_directory_stopping_at_global_cache(
@@ -1021,7 +1132,7 @@ impl ResolutionState<'_> {
         )
     }
 
-    // Go: module/resolver.go:499 resolveNodeLike
+    // Go: module/resolver.go:719 resolveNodeLike
     pub fn resolve_node_like(&mut self) -> ResolvedModule {
         if self.tracer.is_some() {
             let conditions = self
@@ -1078,7 +1189,7 @@ impl ResolutionState<'_> {
         result
     }
 
-    // Go: module/resolver.go:532 resolveNodeLikeWorker
+    // Go: module/resolver.go:752 resolveNodeLikeWorker
     pub fn resolve_node_like_worker(&mut self) -> ResolvedModule {
         let resolved = self.try_load_module_using_optional_resolution_settings();
         if resolved.is_some() {
@@ -1139,7 +1250,7 @@ impl ResolutionState<'_> {
         self.create_resolved_module(None, false)
     }
 
-    // Go: module/resolver.go:576 loadModuleFromSelfNameReference
+    // Go: module/resolver.go:796 loadModuleFromSelfNameReference
     pub fn load_module_from_self_name_reference(&mut self) -> Option<Resolved> {
         let directory_path = get_normalized_absolute_path(
             &self.containing_directory,
@@ -1212,7 +1323,7 @@ impl ResolutionState<'_> {
         self.load_module_from_exports(&scope, secondary_extensions, &subpath)
     }
 
-    // Go: module/resolver.go:623 loadModuleFromImports
+    // Go: module/resolver.go:842 loadModuleFromImports
     pub fn load_module_from_imports(&mut self) -> Option<Resolved> {
         if self.name == "#"
             || (self.name.starts_with("#/")
@@ -1276,7 +1387,7 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:657 loadModuleFromExports
+    // Go: module/resolver.go:876 loadModuleFromExports
     pub fn load_module_from_exports(
         &mut self,
         package_info: &Option<Rc<InfoCacheEntry>>,
@@ -1352,7 +1463,7 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:690 loadModuleFromExportsOrImports
+    // Go: module/resolver.go:909 loadModuleFromExportsOrImports
     pub fn load_module_from_exports_or_imports(
         &mut self,
         extensions: Extensions,
@@ -1446,7 +1557,7 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:731 loadModuleFromTargetExportOrImport
+    // Go: module/resolver.go:950 loadModuleFromTargetExportOrImport
     #[allow(clippy::too_many_arguments)]
     pub fn load_module_from_target_export_or_import(
         &mut self,
@@ -1544,7 +1655,6 @@ impl ResolutionState<'_> {
                     );
                     return continue_searching();
                 }
-                let resolved_target = combine_paths(&scope.package_directory, &[&target_string]);
                 // TODO: Assert that `resolvedTarget` is actually within the package directory? That's what the spec says.... but I'm not sure we need
                 // to be in the business of validating everyone's import and export map correctness.
                 let subpath_parts = get_path_components(subpath, "");
@@ -1575,17 +1685,19 @@ impl ResolutionState<'_> {
                         message_target
                     );
                 }
-                let final_path = if is_pattern {
-                    get_normalized_absolute_path(
-                        &resolved_target.replace('*', subpath),
-                        self.resolver.host.get_current_directory(),
-                    )
+                // ts#64544: the target is resolved against the package
+                // directory, and a target that ends with "/" stays a
+                // directory path.
+                let target_path = if is_pattern {
+                    target_string.replace('*', subpath)
                 } else {
-                    get_normalized_absolute_path(
-                        &format!("{resolved_target}{subpath}"),
-                        self.resolver.host.get_current_directory(),
-                    )
+                    format!("{target_string}{subpath}")
                 };
+                let final_path = resolve_path_for_module(
+                    &scope.package_directory,
+                    &target_path,
+                    has_trailing_directory_separator(&target_path),
+                );
                 let scope_info = Some(scope.clone());
                 let input_link = self.try_load_input_file_for_path(
                     &final_path,
@@ -1695,7 +1807,7 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:879 tryLoadInputFileForPath
+    // Go: module/resolver.go:1094 tryLoadInputFileForPath
     pub fn try_load_input_file_for_path(
         &mut self,
         final_path: &str,
@@ -1703,6 +1815,10 @@ impl ResolutionState<'_> {
         package_path: &str,
         is_imports: bool,
     ) -> Option<Resolved> {
+        // ts#64159: a directory-only target is never a file.
+        if has_trailing_directory_separator(final_path) {
+            return continue_searching();
+        }
         let options = self.compiler_options.clone();
         let compare_paths_options = ComparePathsOptions {
             use_case_sensitive_file_names: self.resolver.host.fs().use_case_sensitive_file_names(),
@@ -1799,7 +1915,8 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:955 getOutputDirectoriesForBaseDirectory
+    // Go: module/resolver.go:955 getOutputDirectoriesForBaseDirectory (at 673a5f17d713;
+    // ts#64159 makes it getOutputDirectories, module/resolver.go:1165)
     #[must_use]
     pub fn get_output_directories_for_base_directory(
         &self,
@@ -1831,7 +1948,7 @@ impl ResolutionState<'_> {
         candidate_directories
     }
 
-    // Go: module/resolver.go:969 loadModuleFromNearestNodeModulesDirectory
+    // Go: module/resolver.go:1176 loadModuleFromNearestNodeModulesDirectory
     pub fn load_module_from_nearest_node_modules_directory(
         &mut self,
         types_scope_only: bool,
@@ -1883,7 +2000,7 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:1001 loadModuleFromNearestNodeModulesDirectoryWorker
+    // Go: module/resolver.go:1208 loadModuleFromNearestNodeModulesDirectoryWorker
     // PORT: Go does not read `mode`.
     pub fn load_module_from_nearest_node_modules_directory_worker(
         &mut self,
@@ -1911,7 +2028,7 @@ impl ResolutionState<'_> {
         result
     }
 
-    // Go: module/resolver.go:1016 loadModuleFromImmediateNodeModulesDirectory
+    // Go: module/resolver.go:1222 loadModuleFromImmediateNodeModulesDirectory
     pub fn load_module_from_immediate_node_modules_directory(
         &mut self,
         extensions: Extensions,
@@ -1972,7 +2089,7 @@ impl ResolutionState<'_> {
         continue_searching()
     }
 
-    // Go: module/resolver.go:1045 loadModuleFromSpecificNodeModulesDirectory
+    // Go: module/resolver.go:1251 loadModuleFromSpecificNodeModulesDirectory
     pub fn load_module_from_specific_node_modules_directory(
         &mut self,
         ext: Extensions,
@@ -1987,15 +2104,27 @@ impl ResolutionState<'_> {
         // causing `loadNodeModuleFromDirectoryWorker`'s `ComparePaths(candidate, ...)`
         // check to fail and skip loading the package's `main`/`types` entry.
         // https://github.com/microsoft/typescript-go/issues/3526
-        let candidate = remove_trailing_directory_separator(&normalize_path(&combine_paths(
+        // ts#64544: the candidate and the package directory resolve as
+        // module paths, so the segments of a dynamic directory stay encoded.
+        // ts#64159: Go `resolutionCandidateFromDirectoryPath(nodeModulesDirectory,
+        // moduleName)` (resolver.go:1259) keeps the directory intent of "pkg/"
+        // in the candidate (N: the separator was removed); the candidate
+        // directory has none.
+        let candidate = resolve_path_for_module(
             node_modules_directory,
-            &[module_name],
-        )))
-        .to_string();
+            module_name,
+            has_trailing_directory_separator(module_name),
+        );
+        let candidate_directory = candidate_directory_path(&candidate).into_owned();
         let (package_name, rest) = parse_package_name(module_name);
-        let mut package_directory = combine_paths(node_modules_directory, &[&package_name]);
+        let mut package_directory = remove_trailing_directory_separator(&resolve_path_for_module(
+            node_modules_directory,
+            &package_name,
+            true,
+        ))
+        .to_string();
         if package_name.is_empty() {
-            package_directory = candidate.clone();
+            package_directory = candidate_directory.clone();
         }
 
         if self.resolve_package_directory_only {
@@ -2010,7 +2139,7 @@ impl ResolutionState<'_> {
 
         let mut root_package_info: Option<Rc<InfoCacheEntry>> = None;
         // First look for a nested package.json, as in `node_modules/foo/bar/package.json`
-        let mut package_info = self.get_package_json_info(&candidate);
+        let mut package_info = self.get_package_json_info(&candidate_directory);
         // But only if we're not respecting export maps (if we are, we might redirect around this location)
         if !rest.is_empty() && entry_exists(&package_info) {
             if self.features.intersects(NodeResolutionFeatures::EXPORTS) {
@@ -2035,8 +2164,11 @@ impl ResolutionState<'_> {
                     return from_file;
                 }
 
-                let from_directory =
-                    self.load_node_module_from_directory_worker(ext, &candidate, &package_info);
+                let from_directory = self.load_node_module_from_directory_worker(
+                    ext,
+                    &candidate_directory,
+                    &package_info,
+                );
                 if let Some(mut from_directory) = from_directory {
                     from_directory.package_id =
                         self.get_package_id(&from_directory.path, &package_info);
@@ -2056,55 +2188,59 @@ impl ResolutionState<'_> {
             }
         }
 
-        let mut loader = |state: &mut Self,
-                          extensions: Extensions,
-                          candidate: &str|
-         -> Option<Resolved> {
-            if !rest.is_empty() || !state.esm_mode {
-                let from_file = state.load_module_from_file(extensions, candidate);
-                if let Some(mut from_file) = from_file {
-                    from_file.package_id = state.get_package_id(&from_file.path, &package_info);
-                    return Some(from_file);
+        let mut loader =
+            |state: &mut Self, extensions: Extensions, candidate: &str| -> Option<Resolved> {
+                let loader_candidate_directory = candidate_directory_path(candidate);
+                if !rest.is_empty() || !state.esm_mode {
+                    let from_file = state.load_module_from_file(extensions, candidate);
+                    if let Some(mut from_file) = from_file {
+                        from_file.package_id = state.get_package_id(&from_file.path, &package_info);
+                        return Some(from_file);
+                    }
                 }
-            }
-            let from_directory =
-                state.load_node_module_from_directory_worker(extensions, candidate, &package_info);
-            if let Some(mut from_directory) = from_directory {
-                from_directory.package_id =
-                    state.get_package_id(&from_directory.path, &package_info);
-                return Some(from_directory);
-            }
-            if rest.is_empty()
-                && entry_exists(&package_info)
-                && {
-                    let exports_type = package_info
-                        .as_ref()
-                        .unwrap()
-                        .contents
-                        .as_ref()
-                        .unwrap()
-                        .fields
-                        .path_fields
-                        .exports
-                        .json_value
-                        .type_;
-                    exports_type == JSONValueType::NOT_PRESENT
-                        || exports_type == JSONValueType::NULL
+                let from_directory = state.load_node_module_from_directory_worker(
+                    extensions,
+                    &loader_candidate_directory,
+                    &package_info,
+                );
+                if let Some(mut from_directory) = from_directory {
+                    from_directory.package_id =
+                        state.get_package_id(&from_directory.path, &package_info);
+                    return Some(from_directory);
                 }
-                && state.esm_mode
-            {
-                // EsmMode disables index lookup in `loadNodeModuleFromDirectoryWorker` generally, however non-relative package resolutions still assume
-                // a default `index.js` entrypoint if no `main` or `exports` are present
-                let index_result = state
-                    .load_module_from_file(extensions, &combine_paths(candidate, &["index.js"]));
-                if let Some(mut index_result) = index_result {
-                    index_result.package_id =
-                        state.get_package_id(&index_result.path, &package_info);
-                    return Some(index_result);
+                if rest.is_empty()
+                    && entry_exists(&package_info)
+                    && {
+                        let exports_type = package_info
+                            .as_ref()
+                            .unwrap()
+                            .contents
+                            .as_ref()
+                            .unwrap()
+                            .fields
+                            .path_fields
+                            .exports
+                            .json_value
+                            .type_;
+                        exports_type == JSONValueType::NOT_PRESENT
+                            || exports_type == JSONValueType::NULL
+                    }
+                    && state.esm_mode
+                {
+                    // EsmMode disables index lookup in `loadNodeModuleFromDirectoryWorker` generally, however non-relative package resolutions still assume
+                    // a default `index.js` entrypoint if no `main` or `exports` are present
+                    let index_result = state.load_module_from_file(
+                        extensions,
+                        &combine_paths(&loader_candidate_directory, &["index.js"]),
+                    );
+                    if let Some(mut index_result) = index_result {
+                        index_result.package_id =
+                            state.get_package_id(&index_result.path, &package_info);
+                        return Some(index_result);
+                    }
                 }
-            }
-            continue_searching()
-        };
+                continue_searching()
+            };
 
         if package_info.is_some() {
             self.resolved_package_directory = true;

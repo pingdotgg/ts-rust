@@ -24,7 +24,7 @@ pub fn is_applicable_versioned_types_key(key: &str) -> bool {
     range.test(&semver::must_parse_version(TYPE_SCRIPT_VERSION))
 }
 
-// Go: module/util.go:69 UnmangleScopedPackageName
+// Go: module/util.go:76 UnmangleScopedPackageName
 pub fn unmangle_scoped_package_name(package_name: &str) -> String {
     if let Some((before, after)) = package_name.split_once("__") {
         return format!("@{before}/{after}");
@@ -32,7 +32,7 @@ pub fn unmangle_scoped_package_name(package_name: &str) -> String {
     package_name.to_string()
 }
 
-// Go: module/util.go:81 GetPackageNameFromTypesPackageName
+// Go: module/util.go:88 GetPackageNameFromTypesPackageName
 pub fn get_package_name_from_types_package_name(mangled_name: &str) -> String {
     if let Some(without_at_type_prefix) = mangled_name.strip_prefix("@types/") {
         return unmangle_scoped_package_name(without_at_type_prefix);
@@ -40,7 +40,7 @@ pub fn get_package_name_from_types_package_name(mangled_name: &str) -> String {
     mangled_name.to_string()
 }
 
-// Go: module/util.go:58 MangleScopedPackageName
+// Go: module/util.go:65 MangleScopedPackageName
 pub fn mangle_scoped_package_name(package_name: &str) -> String {
     if package_name.starts_with('@') {
         let Some(idx) = package_name.find('/') else {
@@ -51,7 +51,7 @@ pub fn mangle_scoped_package_name(package_name: &str) -> String {
     package_name.to_string()
 }
 
-// Go: module/util.go:182 TryGetJSExtensionForFile
+// Go: module/util.go:189 TryGetJSExtensionForFile
 // TryGetJSExtensionForFile maps TS/JS/DTS extensions to the output JS-side extension.
 // Returns an empty string if the extension is unsupported.
 pub fn try_get_js_extension_for_file(file_name: &str, options: &CompilerOptions) -> &'static str {
@@ -75,7 +75,7 @@ pub fn try_get_js_extension_for_file(file_name: &str, options: &CompilerOptions)
     }
 }
 
-// Go: module/resolver.go:1916 GetConditions
+// Go: module/resolver.go:2148 GetConditions
 pub fn get_conditions(
     options: &CompilerOptions,
     mut resolution_mode: ResolutionMode,
@@ -170,14 +170,14 @@ pub fn find_best_pattern_match(values: &[Pattern], candidate: &str) -> Pattern {
     best_pattern
 }
 
-// Go: module/resolver.go:1977 ParsedPatterns
+// Go: module/resolver.go:2209 ParsedPatterns
 #[derive(Clone, Debug, Default)]
 pub struct ParsedPatterns {
     matchable_string_set: FxHashSet<String>,
     patterns: Vec<Pattern>,
 }
 
-// Go: module/resolver.go:1986 TryParsePatterns
+// Go: module/resolver.go:2218 TryParsePatterns
 pub fn try_parse_patterns(
     path_mappings: Option<&IndexMap<String, Option<Vec<String>>>>,
 ) -> ParsedPatterns {
@@ -198,7 +198,7 @@ pub fn try_parse_patterns(
     result
 }
 
-// Go: module/resolver.go:2025 MatchPatternOrExact
+// Go: module/resolver.go:2257 MatchPatternOrExact
 pub fn match_pattern_or_exact(patterns: &ParsedPatterns, candidate: &str) -> Pattern {
     if patterns.matchable_string_set.contains(candidate) {
         return Pattern {
@@ -212,7 +212,7 @@ pub fn match_pattern_or_exact(patterns: &ParsedPatterns, candidate: &str) -> Pat
     find_best_pattern_match(&patterns.patterns, candidate)
 }
 
-// Go: core/core.go:715 IndexAfter
+// Go: core/core.go:714 IndexAfter
 pub fn index_after(s: &str, pattern: &str, start_index: usize) -> isize {
     match s.get(start_index..).and_then(|rest| rest.find(pattern)) {
         None => -1,
@@ -220,7 +220,7 @@ pub fn index_after(s: &str, pattern: &str, start_index: usize) -> isize {
     }
 }
 
-// Go: core/core.go:867 CompareBooleans
+// Go: core/core.go:866 CompareBooleans
 // CompareBooleans treats true as greater than false.
 pub fn compare_booleans(a: bool, b: bool) -> i32 {
     if a && !b {
@@ -283,7 +283,7 @@ pub trait OutputPathsHost {
     fn use_case_sensitive_file_names(&self) -> bool;
 }
 
-// Go: outputpaths/outputpaths.go:101 GetOutputJSFileNameWorker
+// Go: outputpaths/outputpaths.go:95 GetOutputJSFileNameWorker
 pub fn get_output_js_file_name_worker(
     input_file_name: &str,
     options: &CompilerOptions,
@@ -295,7 +295,7 @@ pub fn get_output_js_file_name_worker(
     )
 }
 
-// Go: outputpaths/outputpaths.go:108 GetOutputDeclarationFileNameWorker
+// Go: outputpaths/outputpaths.go:100 GetOutputDeclarationFileNameWorker
 pub fn get_output_declaration_file_name_worker(
     input_file_name: &str,
     options: &CompilerOptions,
@@ -312,7 +312,7 @@ pub fn get_output_declaration_file_name_worker(
     )
 }
 
-// Go: outputpaths/outputpaths.go:148 ChangeToDeclarationExtension (#4712)
+// Go: outputpaths/outputpaths.go:150 ChangeToDeclarationExtension (#4712)
 /// A content mapper extension `.ext` becomes `.d.ext.ts`. Other paths get
 /// their declaration extension (Go `GetDeclarationEmitExtensionForPath`).
 pub fn change_to_declaration_extension(path: &str, host: &dyn OutputPathsHost) -> String {
@@ -339,7 +339,7 @@ pub fn change_to_declaration_extension(path: &str, host: &dyn OutputPathsHost) -
     )
 }
 
-// Go: outputpaths/outputpaths.go:116 GetOutputExtension
+// Go: outputpaths/outputpaths.go:109 GetOutputExtension
 pub fn get_output_extension(file_name: &str, jsx: JsxEmit) -> &'static str {
     if tspath::file_extension_is(file_name, tspath::EXTENSION_JSON) {
         tspath::EXTENSION_JSON
@@ -365,7 +365,8 @@ pub fn get_output_extension(file_name: &str, jsx: JsxEmit) -> &'static str {
     }
 }
 
-// Go: outputpaths/outputpaths.go:165 getOutputPathWithoutChangingExtension
+// Go: outputpaths/outputpaths.go:165 getOutputPathWithoutChangingExtension (at 673a5f17d713;
+// ts#64159 renames it getOutputFileNameWithoutChangingExtension, outputpaths/outputpaths.go:163)
 fn get_output_path_without_changing_extension(
     input_file_name: &str,
     output_directory: &str,

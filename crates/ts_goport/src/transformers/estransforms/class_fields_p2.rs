@@ -2318,7 +2318,7 @@ impl ClassFieldsTransformer {
 
     // Go: transformers/estransforms/classfields.go:3320 classFieldsTransformer.visitObjectAssignmentElement
     pub(super) fn visit_object_assignment_element(&mut self, node: Node) -> Node {
-        go_assert!(node.is_some() && is_object_binding_or_assignment_element(node));
+        go_assert!(node.is_some() && is_object_literal_element(node));
         if is_spread_assignment(node) {
             return self.visit_assignment_rest_property(node);
         }

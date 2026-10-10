@@ -669,15 +669,17 @@ impl Checker {
         self.merged_symbols.insert(source, target);
     }
 
+    // Go: checker/checker.go:14641 getResolvedTarget (ts#64469)
+    pub fn get_resolved_target(&mut self, symbol: SymbolId) -> SymbolId {
+        let merged = self.get_merged_symbol(symbol);
+        let resolved = self.resolve_symbol(merged);
+        self.get_merged_symbol(resolved)
+    }
+
     // Go: checker/checker.go:14604 getSymbolIfSameReference
     pub fn get_symbol_if_same_reference(&mut self, s1: SymbolId, s2: SymbolId) -> SymbolId {
-        let m1 = self.get_merged_symbol(s1);
-        let r1 = self.resolve_symbol(m1);
-        let left = self.get_merged_symbol(r1);
-        let m2 = self.get_merged_symbol(s2);
-        let r2 = self.resolve_symbol(m2);
-        let right = self.get_merged_symbol(r2);
-        if left == right {
+        // ts#64469, Go N' checker.go:14646
+        if self.get_resolved_target(s1) == self.get_resolved_target(s2) {
             return s1;
         }
         SymbolId::NIL
@@ -947,6 +949,22 @@ impl Checker {
 
     // Go: checker/checker.go:14756 getTargetOfImportClause
     pub fn get_target_of_import_clause(&mut self, node: Node) -> SymbolId {
+        // ts#63915, Go N' checker.go:14798: `import source x from "m"` binds
+        // x to a variable of type AbstractModuleSource.
+        if node.phase_modifier() == SyntaxKind::SourceKeyword {
+            let alias = self.get_symbol_of_declaration(node);
+            let immediate_target = self.alias_symbol_links.get(alias).immediate_target;
+            if immediate_target.is_nil() {
+                let symbol =
+                    self.new_symbol(SymbolFlags::FUNCTION_SCOPED_VARIABLE, node.name().text());
+                let declarations = self.sym(alias).declarations.clone();
+                self.sym_mut(symbol).declarations = declarations;
+                let resolved_type = self.get_global_abstract_module_source_type();
+                self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+                self.alias_symbol_links.get(alias).immediate_target = symbol;
+            }
+            return self.alias_symbol_links.get(alias).immediate_target;
+        }
         let module_specifier = get_module_specifier_from_node(node.parent());
         let import_attributes_type =
             self.get_type_from_import_attributes(get_import_attributes(node.parent()));

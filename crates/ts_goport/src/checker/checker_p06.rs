@@ -527,13 +527,18 @@ impl Checker {
         self.check_exports_on_merged_declarations(node);
         let symbol = self.get_symbol_of_declaration(node);
         self.check_type_parameter_lists_identical(symbol);
-        // Only check this symbol once
+        // Check once per checker, but report on the first interface declaration,
+        // independently of which declaration is checked first.
+        // (ts#64566, Go N' checker.go:5110)
         if !self.declared_type_links.get(symbol).interface_checked {
             self.declared_type_links.get(symbol).interface_checked = true;
+            let first_interface_declaration =
+                get_declaration_of_kind(&self.symbols, symbol, SyntaxKind::InterfaceDeclaration);
             let t = self.get_declared_type_of_symbol(symbol);
             let type_with_this = self.get_type_with_this_argument(t, TypeId::NIL, false);
             // run subsequent checks only if first set succeeded
-            if self.check_inherited_properties_are_identical(t, node.name()) {
+            if self.check_inherited_properties_are_identical(t, first_interface_declaration.name())
+            {
                 for base_type in self.get_base_types(t) {
                     let this_type = self.ty(t).as_interface_type().this_type;
                     let base_with_this =
@@ -541,7 +546,7 @@ impl Checker {
                     self.check_type_assignable_to(
                         type_with_this,
                         base_with_this,
-                        node.name(),
+                        first_interface_declaration.name(),
                         Some(diag::Interface_0_incorrectly_extends_interface_1),
                     );
                 }
@@ -670,7 +675,13 @@ impl Checker {
             self.declared_type_links.get(enum_symbol).enum_checked = true;
             let declarations = self.sym(enum_symbol).declarations.clone();
             if declarations.len() > 1 {
-                let enum_is_const = is_enum_const(node);
+                // ts#64566 (Go N' checker.go:5202): the const test of the first enum declaration.
+                let first_enum_declaration = get_declaration_of_kind(
+                    &self.symbols,
+                    enum_symbol,
+                    SyntaxKind::EnumDeclaration,
+                );
+                let enum_is_const = is_enum_const(first_enum_declaration);
                 // check that const is placed\omitted on all enum declarations
                 for &decl in &declarations {
                     if is_enum_declaration(decl) && is_enum_const(decl) != enum_is_const {
@@ -716,6 +727,11 @@ impl Checker {
                 diag::An_enum_member_cannot_be_named_with_a_private_identifier,
                 args![],
             );
+        }
+        // ts#64674, Go N' checker.go:5237: a computed name is checked even
+        // though it is a grammar error.
+        if is_computed_property_name(node.name()) {
+            self.check_expression(node.name().expression());
         }
         if node.initializer().is_some() {
             self.check_expression(node.initializer());

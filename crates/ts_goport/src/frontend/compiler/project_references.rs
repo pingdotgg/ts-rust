@@ -34,7 +34,6 @@ impl ProjectReferenceParseTask {
             )
         });
         self.resolved = loader
-            .opts
             .host
             .get_resolved_project_reference(&self.config_name, &loader.to_path(&self.config_name));
         let Some(resolved) = &self.resolved else {
@@ -128,7 +127,7 @@ impl<'a> ProjectReferenceParser<'a> {
         }
     }
 
-    // Go: projectreferenceparser.go:55 (*projectReferenceParser).start
+    // Go: projectreferenceparser.go:54 (*projectReferenceParser).start
     pub fn start(&mut self, tasks: &mut [ProjectReferenceParseTaskRef]) {
         for task in tasks.iter_mut() {
             let path = self.loader.to_path(&task.borrow().config_name);
@@ -142,7 +141,7 @@ impl<'a> ProjectReferenceParser<'a> {
         }
     }
 
-    // Go: projectreferenceparser.go:70 (*projectReferenceParser).initMapper
+    // Go: projectreferenceparser.go:69 (*projectReferenceParser).initMapper
     pub fn init_mapper(&mut self, tasks: &[ProjectReferenceParseTaskRef]) {
         let total_references = self.tasks_by_file_name.len() + 1;
         {
@@ -168,16 +167,24 @@ impl<'a> ProjectReferenceParser<'a> {
             .insert(config_path, references);
         let needs_faking_host = {
             let mapper = self.loader.project_reference_file_mapper.borrow();
-            mapper.opts.can_use_project_reference_source()
+            mapper.use_source_of_project_reference
                 && !mapper.output_dts_to_project_reference.is_empty()
         };
+        // Go: projectreferenceparser.go p.loader.projectReferences.host =
+        // p.loader.projectReferences.resolutionHost(p.loader.host) (ts#64519)
         if needs_faking_host {
-            let host = new_project_reference_dts_faking_host(self.loader);
+            let base: Rc<dyn ResolutionHost> =
+                Rc::new(CompilerResolutionHost::new(self.loader.host.clone()));
+            let host = new_project_reference_dts_faking_host(
+                base,
+                self.loader.project_reference_file_mapper.clone(),
+                self.loader.dts_directories.clone(),
+            );
             self.loader.project_reference_file_mapper.borrow_mut().host = Some(host);
         }
     }
 
-    // Go: projectreferenceparser.go:82 (*projectReferenceParser).initMapperWorker
+    // Go: projectreferenceparser.go:79 (*projectReferenceParser).initMapperWorker
     // PORT: Go `collections.Set[*projectReferenceParseTask]` keys by pointer;
     // `seen` keys by the `Rc` pointer.
     pub fn init_mapper_worker(
@@ -202,19 +209,14 @@ impl<'a> ProjectReferenceParser<'a> {
                 mapper
                     .config_to_project_reference
                     .insert(path.clone(), resolved.clone());
-                mapper.opts.can_use_project_reference_source()
+                mapper.use_source_of_project_reference
             };
             if let Some(resolved) = &resolved {
                 // PORT: Go compares `*TsConfigSourceFile` pointers. The config
                 // source file node identifies the parsed config file.
                 let is_root_config = {
                     let mapper = self.loader.project_reference_file_mapper.borrow();
-                    mapper
-                        .opts
-                        .config
-                        .config_file
-                        .as_ref()
-                        .map(|c| c.source_file)
+                    mapper.config.config_file.as_ref().map(|c| c.source_file)
                         == resolved.config_file.as_ref().map(|c| c.source_file)
                 };
                 if !is_root_config {
@@ -287,12 +289,12 @@ impl MapperLoader {
     #[must_use]
     pub fn new(loader: &FileLoader) -> Self {
         MapperLoader {
-            current_directory: loader.opts.host.get_current_directory(),
-            use_case_sensitive_file_names: loader.opts.host.fs().use_case_sensitive_file_names(),
+            current_directory: loader.host.get_current_directory(),
+            use_case_sensitive_file_names: loader.host.fs().use_case_sensitive_file_names(),
         }
     }
 
-    // Go: fileloader.go:187 (*fileLoader).toPath
+    // Go: fileloader.go:238 (*fileLoader).toPath
     #[must_use]
     pub fn to_path(&self, file: &str) -> Path {
         to_path(
@@ -303,16 +305,23 @@ impl MapperLoader {
     }
 }
 
-// Go: projectreferencefilemapper.go:14 projectReferenceFileMapper
-// PORT: Go `loader *fileLoader` is only used as a non-nil flag and for
-// `loader.toPath`; see `MapperLoader`.
+// Go: projectreferencefilemapper.go:12 projectReferenceFileMapper
+// PORT: the N Go `loader *fileLoader` was only used as a non-nil flag and
+// for `loader.toPath`; see `MapperLoader`.
 // PORT: the Go nil `*ParsedCommandLine` map values are `None`. Go
 // `collections.SyncMap` is a `RefCell` map, so lookups take `&self`.
-// PORT: `host` is `None` for the Go nil. Go starts it as `opts.Host` (a
-// `CompilerHost`, which is a `module.ResolutionHost`);
+// (ts#64519: `config`,
+// `useSourceOfProjectReference`; the host and the loader are in
+// `projectReferenceFileMapperBuilder`, projectreferencefilemapper.go:26)
+// PORT: the Go builder's fields `host` and the loader are `host` and
+// `loader` here. Both are set only while the program loads
+// (`process_all_program_files` clears them), so the program's mapper keeps
+// no host, as in Go. `host` is `None` for the Go nil. Go starts it as the
+// loader's host (a `CompilerHost`, which is a `module.ResolutionHost`);
 // `CompilerResolutionHost` wraps it.
 pub struct ProjectReferenceFileMapper {
-    pub opts: ProgramOptions,
+    pub config: Rc<ParsedCommandLine>,
+    pub use_source_of_project_reference: bool,
     pub host: Option<Rc<dyn ResolutionHost>>,
     // Only present during populating the mapper and parsing, released after that
     pub loader: Option<MapperLoader>,
@@ -330,13 +339,16 @@ pub struct ProjectReferenceFileMapper {
 }
 
 impl ProjectReferenceFileMapper {
-    // PORT: Go `&projectReferenceFileMapper{opts: p.opts, host: p.opts.Host}`
-    // (fileloader.go addProjectReferenceTasks).
+    // PORT: Go `&projectReferenceFileMapperBuilder{projectReferenceFileMapper:
+    // &projectReferenceFileMapper{config: p.opts.Config,
+    // useSourceOfProjectReference: p.opts.canUseProjectReferenceSource()},
+    // host: p.host}` (fileloader.go:340 addProjectReferenceTasks, ts#64519).
     #[must_use]
-    pub fn new(opts: ProgramOptions, host: Rc<dyn CompilerHost>) -> Self {
+    pub fn new(opts: &ProgramConfig, host: Rc<dyn CompilerHost>) -> Self {
         let host: Rc<dyn ResolutionHost> = Rc::new(CompilerResolutionHost::new(host));
         ProjectReferenceFileMapper {
-            opts,
+            config: opts.config.clone(),
+            use_source_of_project_reference: opts.can_use_project_reference_source(),
             host: Some(host),
             loader: None,
             config_to_project_reference: FxHashMap::default(),
@@ -347,18 +359,18 @@ impl ProjectReferenceFileMapper {
         }
     }
 
-    // Go: projectreferencefilemapper.go:28 (*projectReferenceFileMapper).rootConfigPath
+    // Go: projectreferencefilemapper.go:38 (*projectReferenceFileMapper).rootConfigPath
     pub(crate) fn root_config_path(&self) -> Path {
-        match self.opts.config.config_file.as_ref() {
+        match self.config.config_file.as_ref() {
             None => Path::default(),
             Some(config_file) => config_file.path.clone(),
         }
     }
 
-    // Go: projectreferencefilemapper.go:28 (*projectReferenceFileMapper).getParseFileRedirect
+    // Go: projectreferencefilemapper.go:45 (*projectReferenceFileMapper).getParseFileRedirect
     #[must_use]
     pub fn get_parse_file_redirect(&self, file: &dyn HasFileName) -> String {
-        if self.opts.can_use_project_reference_source() {
+        if self.use_source_of_project_reference {
             // Map to source file from project reference
             let mut source = self.get_project_reference_from_output_dts(&file.path());
             if source.is_none() {
@@ -379,7 +391,7 @@ impl ProjectReferenceFileMapper {
         String::new()
     }
 
-    // Go: projectreferencefilemapper.go:48 (*projectReferenceFileMapper).getResolvedProjectReferences
+    // Go: projectreferencefilemapper.go:65 (*projectReferenceFileMapper).getResolvedProjectReferences
     #[must_use]
     pub fn get_resolved_project_references(&self) -> Vec<Option<Rc<ParsedCommandLine>>> {
         let mut result = Vec::new();
@@ -397,7 +409,7 @@ impl ProjectReferenceFileMapper {
         result
     }
 
-    // Go: projectreferencefilemapper.go:64 (*projectReferenceFileMapper).getProjectReferenceFromSource
+    // Go: projectreferencefilemapper.go:78 (*projectReferenceFileMapper).getProjectReferenceFromSource
     #[must_use]
     pub fn get_project_reference_from_source(
         &self,
@@ -406,7 +418,7 @@ impl ProjectReferenceFileMapper {
         self.source_to_project_reference.get(path).cloned()
     }
 
-    // Go: projectreferencefilemapper.go:68 (*projectReferenceFileMapper).getProjectReferenceFromOutputDts
+    // Go: projectreferencefilemapper.go:82 (*projectReferenceFileMapper).getProjectReferenceFromOutputDts
     #[must_use]
     pub fn get_project_reference_from_output_dts(
         &self,
@@ -415,26 +427,26 @@ impl ProjectReferenceFileMapper {
         self.output_dts_to_project_reference.get(path).cloned()
     }
 
-    // Go: projectreferencefilemapper.go:72 (*projectReferenceFileMapper).isSourceFromProjectReference
+    // Go: projectreferencefilemapper.go:86 (*projectReferenceFileMapper).isSourceFromProjectReference
     #[must_use]
     pub fn is_source_from_project_reference(&self, path: &Path) -> bool {
-        self.opts.can_use_project_reference_source()
+        self.use_source_of_project_reference
             && self.get_project_reference_from_source(path).is_some()
     }
 
-    // Go: projectreferencefilemapper.go:76 (*projectReferenceFileMapper).getCompilerOptionsForFile
+    // Go: projectreferencefilemapper.go:90 (*projectReferenceFileMapper).getCompilerOptionsForFile
     #[must_use]
     pub fn get_compiler_options_for_file(&self, file: &dyn HasFileName) -> Rc<CompilerOptions> {
         let redirect = self.get_redirect_parsed_command_line_for_resolution(file);
         get_compiler_options_with_redirect(
-            self.opts.config.compiler_options(),
+            self.config.compiler_options(),
             redirect
                 .as_deref()
                 .map(|r| r as &dyn ModuleResolvedProjectReference),
         )
     }
 
-    // Go: projectreferencefilemapper.go:81 (*projectReferenceFileMapper).getRedirectParsedCommandLineForResolution
+    // Go: projectreferencefilemapper.go:95 (*projectReferenceFileMapper).getRedirectParsedCommandLineForResolution
     #[must_use]
     pub fn get_redirect_parsed_command_line_for_resolution(
         &self,
@@ -444,7 +456,7 @@ impl ProjectReferenceFileMapper {
         redirect
     }
 
-    // Go: projectreferencefilemapper.go:86 (*projectReferenceFileMapper).getRedirectForResolution
+    // Go: projectreferencefilemapper.go:100 (*projectReferenceFileMapper).getRedirectForResolution
     #[must_use]
     pub fn get_redirect_for_resolution(
         &self,
@@ -473,7 +485,7 @@ impl ProjectReferenceFileMapper {
         (None, file.file_name())
     }
 
-    // Go: projectreferencefilemapper.go:107 (*projectReferenceFileMapper).getResolvedReferenceFor
+    // Go: projectreferencefilemapper.go:121 (*projectReferenceFileMapper).getResolvedReferenceFor
     #[must_use]
     pub fn get_resolved_reference_for(&self, path: &Path) -> (Option<Rc<ParsedCommandLine>>, bool) {
         match self.config_to_project_reference.get(path) {
@@ -482,7 +494,7 @@ impl ProjectReferenceFileMapper {
         }
     }
 
-    // Go: projectreferencefilemapper.go:112 (*projectReferenceFileMapper).rangeResolvedProjectReference
+    // Go: projectreferencefilemapper.go:126 (*projectReferenceFileMapper).rangeResolvedProjectReference
     // PORT: Go `index int` is `usize`.
     pub fn range_resolved_project_reference(
         &self,
@@ -493,7 +505,7 @@ impl ProjectReferenceFileMapper {
             usize,
         ) -> bool,
     ) -> bool {
-        if self.opts.config.project_references().is_empty() {
+        if self.config.project_references().is_empty() {
             return false;
         }
         let mut seen_ref = FxHashSet::with_capacity_and_hasher(
@@ -507,10 +519,10 @@ impl ProjectReferenceFileMapper {
             .get(&root_config_path)
             .cloned()
             .unwrap_or_default();
-        self.range_resolved_reference_worker(&refs, &mut f, Some(&self.opts.config), &mut seen_ref)
+        self.range_resolved_reference_worker(&refs, &mut f, Some(&self.config), &mut seen_ref)
     }
 
-    // Go: projectreferencefilemapper.go:124 (*projectReferenceFileMapper).rangeResolvedReferenceWorker
+    // Go: projectreferencefilemapper.go:139 (*projectReferenceFileMapper).rangeResolvedReferenceWorker
     pub fn range_resolved_reference_worker(
         &self,
         references: &[Path],
@@ -542,7 +554,7 @@ impl ProjectReferenceFileMapper {
         true
     }
 
-    // Go: projectreferencefilemapper.go:145 (*projectReferenceFileMapper).rangeResolvedProjectReferenceInChildConfig
+    // Go: projectreferencefilemapper.go:160 (*projectReferenceFileMapper).rangeResolvedProjectReferenceInChildConfig
     // PORT: Go `childConfig` can be nil. All callers pass a config, so it is
     // a reference here; the `ConfigFile == nil` check stays.
     pub fn range_resolved_project_reference_in_child_config(
@@ -569,10 +581,16 @@ impl ProjectReferenceFileMapper {
             .get(&child_path)
             .cloned()
             .unwrap_or_default();
-        self.range_resolved_reference_worker(&refs, &mut f, Some(&self.opts.config), &mut seen_ref)
+        self.range_resolved_reference_worker(&refs, &mut f, Some(&self.config), &mut seen_ref)
     }
 
-    // Go: projectreferencefilemapper.go:158 (*projectReferenceFileMapper).getSourceToDtsIfSymlink
+    // Go: projectreferencefilemapper.go:163 (*projectReferenceFileMapper).getSourceToDtsIfSymlink (at 673a5f17d713; removed by ts#64519)
+    // (at 673a5f17d713; ts#64519 splits it: the builder's resolveSymlink,
+    // projectreferencefilemapper.go:197, fills `realpathDtsToSource` while
+    // the program loads, and the mapper then only reads it)
+    // PORT: `loader` is set only while a program with project references
+    // loads, which is Go's `len(ResolvedProjectReferencePaths()) != 0` on the
+    // builder; after the load this only reads the map, as in Go.
     #[must_use]
     pub fn get_source_to_dts_if_symlink(
         &self,
@@ -587,7 +605,7 @@ impl ProjectReferenceFileMapper {
             return realpath_dts_to_source.clone();
         }
         if let Some(loader) = &self.loader
-            && self.opts.config.compiler_options().preserve_symlinks == Tristate::True
+            && self.config.compiler_options().preserve_symlinks == Tristate::True
         {
             let file_name = file.file_name();
             if !file_name.contains("/node_modules/") {
@@ -654,70 +672,71 @@ impl ResolutionHost for CompilerResolutionHost {
     }
 }
 
-// Go: projectreferencedtsfakinghost.go:16 projectReferenceDtsFakingHost
-// PORT: `current_directory` caches Go `h.host.GetCurrentDirectory()`,
-// because `ResolutionHost` returns `&str`. The host value does not change.
+// Go: projectreferencedtsfakinghost.go:14 projectReferenceDtsFakingHost
+// (ts#64519: it keeps the current directory, not the compiler host)
 pub struct ProjectReferenceDtsFakingHost {
-    pub host: Rc<dyn CompilerHost>,
-    pub fs: Rc<CachedFs>,
     pub current_directory: String,
+    pub fs: Rc<CachedFs>,
 }
 
-// Go: projectreferencedtsfakinghost.go:23 newProjectReferenceDtsFakingHost
-// PORT: Go copies `loader.dtsDirectories` by value. The set is complete
-// when this runs (end of `initMapper`), so a clone is the same.
+// Go: projectreferencedtsfakinghost.go:21 newProjectReferenceDtsFakingHost
+// (ts#64519: it takes the host to fake and the mapper, not the loader)
+// PORT: Go ts#64519 reads `dtsDirectories` from the mapper; the set is
+// complete when this runs (end of `initMapper`), so the VFS keeps a copy of
+// the loader's set.
 #[must_use]
-pub fn new_project_reference_dts_faking_host(loader: &FileLoader) -> Rc<dyn ResolutionHost> {
+pub fn new_project_reference_dts_faking_host(
+    host: Rc<dyn ResolutionHost>,
+    references: Rc<RefCell<ProjectReferenceFileMapper>>,
+    dts_directories: FxHashSet<Path>,
+) -> Rc<dyn ResolutionHost> {
+    let current_directory = host.get_current_directory().to_string();
     // Create a new host that will fake the dts files
     let vfs: Rc<dyn Fs> = Rc::new(ProjectReferenceDtsFakingVfs {
-        project_reference_file_mapper: loader.project_reference_file_mapper.clone(),
-        dts_directories: loader.dts_directories.clone(),
+        host,
+        project_reference_file_mapper: references,
+        dts_directories,
         known_symlinks: RefCell::new(KnownSymlinks::default()),
     });
-    let host = ProjectReferenceDtsFakingHost {
-        host: loader.opts.host.clone(),
+    Rc::new(ProjectReferenceDtsFakingHost {
+        current_directory,
         fs: cachedvfs_from(vfs),
-        current_directory: loader.opts.host.get_current_directory(),
-    };
-    Rc::new(host)
+    })
 }
 
 impl ResolutionHost for ProjectReferenceDtsFakingHost {
-    // Go: projectreferencedtsfakinghost.go:38 (*projectReferenceDtsFakingHost).FS
+    // Go: projectreferencedtsfakinghost.go:34 (*projectReferenceDtsFakingHost).FS
     fn fs(&self) -> &dyn Fs {
         &*self.fs
     }
 
-    // Go: projectreferencedtsfakinghost.go:43 (*projectReferenceDtsFakingHost).GetCurrentDirectory
+    // Go: projectreferencedtsfakinghost.go:39 (*projectReferenceDtsFakingHost).GetCurrentDirectory
     fn get_current_directory(&self) -> &str {
         &self.current_directory
     }
 }
 
-// Go: projectreferencedtsfakinghost.go:46 projectReferenceDtsFakingVfs
+// Go: projectreferencedtsfakinghost.go:43 projectReferenceDtsFakingVfs
+// (ts#64519: it reads the host that it fakes, not the mapper's options)
 // PORT: the mapper is shared (`Rc<RefCell<..>>`). The loader clears
 // `mapper.host` after loading, which breaks the mapper -> host -> vfs ->
 // mapper cycle as in Go. `known_symlinks` is mutated from `&self` methods,
 // so it is a `RefCell`.
 pub struct ProjectReferenceDtsFakingVfs {
+    pub host: Rc<dyn ResolutionHost>,
     pub project_reference_file_mapper: Rc<RefCell<ProjectReferenceFileMapper>>,
     pub dts_directories: FxHashSet<Path>,
     pub known_symlinks: RefCell<KnownSymlinks>,
 }
 
 impl ProjectReferenceDtsFakingVfs {
-    fn host_fs(&self) -> Rc<dyn Fs> {
-        self.project_reference_file_mapper.borrow().opts.host.fs()
+    fn host_fs(&self) -> &dyn Fs {
+        self.host.fs()
     }
 
-    // Go: projectreferencedtsfakinghost.go:131 (*projectReferenceDtsFakingVfs).toPath
+    // Go: projectreferencedtsfakinghost.go:125 (*projectReferenceDtsFakingVfs).toPath (at 673a5f17d713; ts#64159 makes it pathKey, compiler/projectreferencedtsfakinghost.go:122)
     fn to_path(&self, path: &str) -> Path {
-        let current_directory = self
-            .project_reference_file_mapper
-            .borrow()
-            .opts
-            .host
-            .get_current_directory();
+        let current_directory = self.host.get_current_directory();
         to_path(
             path,
             &current_directory,
@@ -725,7 +744,7 @@ impl ProjectReferenceDtsFakingVfs {
         )
     }
 
-    // Go: projectreferencedtsfakinghost.go:135 (*projectReferenceDtsFakingVfs).handleDirectoryCouldBeSymlink
+    // Go: projectreferencedtsfakinghost.go:126 (*projectReferenceDtsFakingVfs).handleDirectoryCouldBeSymlink
     fn handle_directory_could_be_symlink(&self, directory: &str) {
         if contains_ignored_path(directory) {
             return;
@@ -764,13 +783,15 @@ impl ProjectReferenceDtsFakingVfs {
             directory,
             directory_path,
             Some(KnownDirectoryLink {
+                // `set_directory` sets the symlink spelling.
+                symlink: String::new(),
                 real: ensure_trailing_directory_separator(&real_directory),
                 real_path,
             }),
         );
     }
 
-    // Go: projectreferencedtsfakinghost.go:166 (*projectReferenceDtsFakingVfs).fileOrDirectoryExistsUsingSource
+    // Go: projectreferencedtsfakinghost.go:183 (*projectReferenceDtsFakingVfs).fileOrDirectoryExistsUsingSource
     // PORT: Go `SyncMap.Range` stops at the first match. The link list is
     // copied first so `set_file` can borrow the symlink cache mutably.
     fn file_or_directory_exists_using_source(
@@ -796,7 +817,12 @@ impl ProjectReferenceDtsFakingVfs {
             return false;
         }
         // Check if the directory or file is a symlinked package
-        let package_root = parse_node_module_from_path(file_or_directory, true /*isFolder*/);
+        // ts#64544: a file's package root is parsed as a file path.
+        let package_root = if is_file {
+            node_module_package_root_for_file(file_or_directory)
+        } else {
+            node_module_package_root_for_directory(file_or_directory)
+        };
         if !package_root.is_empty() {
             self.handle_directory_could_be_symlink(&package_root);
         }
@@ -830,36 +856,29 @@ impl ProjectReferenceDtsFakingVfs {
         // If it contains node_modules check if its one of the symlinked path we know of
         let mut exists = false;
         for (directory_path, known_directory_link) in &known_directory_links {
-            let Some(relative) = file_or_directory_path.strip_prefix(directory_path.as_str())
-            else {
+            if !file_or_directory_path.starts_with(directory_path.as_str()) {
                 continue;
-            };
-            exists = file_or_directory_exists_using_source(&format!(
-                "{}{}",
-                known_directory_link.real_path.as_str(),
-                relative
-            ))
-            .is_true();
+            }
+            // ts#64544: the real name keeps the spelling of the real
+            // directory and of `file_or_directory` below the symlink.
+            let real_file_or_directory = known_directory_link
+                .resolve_file_name(file_or_directory, self.use_case_sensitive_file_names())
+                .unwrap_or_else(|| {
+                    go_panic(
+                        "canonical symlink path did not match its presentation path".to_string(),
+                    )
+                });
+            exists = file_or_directory_exists_using_source(&real_file_or_directory).is_true();
             if exists {
                 if is_file {
                     // Store the real path for the file
-                    let current_directory = self
-                        .project_reference_file_mapper
-                        .borrow()
-                        .opts
-                        .host
-                        .get_current_directory();
+                    let current_directory = self.host.get_current_directory();
                     let absolute_path =
                         get_normalized_absolute_path(file_or_directory, &current_directory);
-                    let real = format!(
-                        "{}{}",
-                        known_directory_link.real,
-                        &absolute_path[directory_path.len()..]
-                    );
                     self.known_symlinks.borrow_mut().set_file(
                         &absolute_path,
                         file_or_directory_path.clone(),
-                        &real,
+                        &real_file_or_directory,
                     );
                 }
                 break;
@@ -868,7 +887,7 @@ impl ProjectReferenceDtsFakingVfs {
         exists
     }
 
-    // Go: projectreferencedtsfakinghost.go:213 (*projectReferenceDtsFakingVfs).fileExistsIfProjectReferenceDts
+    // Go: projectreferencedtsfakinghost.go:235 (*projectReferenceDtsFakingVfs).fileExistsIfProjectReferenceDts
     fn file_exists_if_project_reference_dts(&self, file: &str) -> Tristate {
         let source = self
             .project_reference_file_mapper
@@ -884,7 +903,7 @@ impl ProjectReferenceDtsFakingVfs {
         Tristate::Unknown
     }
 
-    // Go: projectreferencedtsfakinghost.go:221 (*projectReferenceDtsFakingVfs).directoryExistsIfProjectReferenceDeclDir
+    // Go: projectreferencedtsfakinghost.go:243 (*projectReferenceDtsFakingVfs).directoryExistsIfProjectReferenceDeclDir
     // PORT: Go ranges over the set keys in map order; the result does not
     // depend on the order.
     fn directory_exists_if_project_reference_decl_dir(&self, dir: &str) -> Tristate {
@@ -899,12 +918,12 @@ impl ProjectReferenceDtsFakingVfs {
 }
 
 impl Fs for ProjectReferenceDtsFakingVfs {
-    // Go: projectreferencedtsfakinghost.go:56 (*projectReferenceDtsFakingVfs).UseCaseSensitiveFileNames
+    // Go: projectreferencedtsfakinghost.go:55 (*projectReferenceDtsFakingVfs).UseCaseSensitiveFileNames (at 673a5f17d713; ts#64159 makes it CaseSensitivity, compiler/projectreferencedtsfakinghost.go:52)
     fn use_case_sensitive_file_names(&self) -> bool {
         self.host_fs().use_case_sensitive_file_names()
     }
 
-    // Go: projectreferencedtsfakinghost.go:61 (*projectReferenceDtsFakingVfs).FileExists
+    // Go: projectreferencedtsfakinghost.go:57 (*projectReferenceDtsFakingVfs).FileExists
     fn file_exists(&self, path: &str) -> bool {
         if self.host_fs().file_exists(path) {
             return true;
@@ -916,28 +935,28 @@ impl Fs for ProjectReferenceDtsFakingVfs {
         self.file_or_directory_exists_using_source(path, /*isFile*/ true)
     }
 
-    // Go: projectreferencedtsfakinghost.go:73 (*projectReferenceDtsFakingVfs).ReadFile
+    // Go: projectreferencedtsfakinghost.go:69 (*projectReferenceDtsFakingVfs).ReadFile
     fn read_file(&self, path: &str) -> (String, bool) {
         // Dont need to override as we cannot mimick read file
         self.host_fs().read_file(path)
     }
 
-    // Go: projectreferencedtsfakinghost.go:79 (*projectReferenceDtsFakingVfs).WriteFile
+    // Go: projectreferencedtsfakinghost.go:75 (*projectReferenceDtsFakingVfs).WriteFile
     fn write_file(&self, _path: &str, _data: &str) -> Result<(), FsError> {
         panic!("should not be called by resolver")
     }
 
-    // Go: projectreferencedtsfakinghost.go:84 (*projectReferenceDtsFakingVfs).AppendFile
+    // Go: projectreferencedtsfakinghost.go:80 (*projectReferenceDtsFakingVfs).AppendFile
     fn append_file(&self, _path: &str, _data: &str) -> Result<(), FsError> {
         panic!("should not be called by resolver")
     }
 
-    // Go: projectreferencedtsfakinghost.go:89 (*projectReferenceDtsFakingVfs).Remove
+    // Go: projectreferencedtsfakinghost.go:85 (*projectReferenceDtsFakingVfs).Remove
     fn remove(&self, _path: &str) -> Result<(), FsError> {
         panic!("should not be called by resolver")
     }
 
-    // Go: projectreferencedtsfakinghost.go:94 (*projectReferenceDtsFakingVfs).Chtimes
+    // Go: projectreferencedtsfakinghost.go:90 (*projectReferenceDtsFakingVfs).Chtimes
     fn chtimes(
         &self,
         _path: &str,
@@ -947,7 +966,7 @@ impl Fs for ProjectReferenceDtsFakingVfs {
         panic!("should not be called by resolver")
     }
 
-    // Go: projectreferencedtsfakinghost.go:99 (*projectReferenceDtsFakingVfs).DirectoryExists
+    // Go: projectreferencedtsfakinghost.go:95 (*projectReferenceDtsFakingVfs).DirectoryExists
     fn directory_exists(&self, path: &str) -> bool {
         if self.host_fs().directory_exists(path) {
             self.handle_directory_could_be_symlink(path);
@@ -956,17 +975,17 @@ impl Fs for ProjectReferenceDtsFakingVfs {
         self.file_or_directory_exists_using_source(path, /*isFile*/ false)
     }
 
-    // Go: projectreferencedtsfakinghost.go:108 (*projectReferenceDtsFakingVfs).GetAccessibleEntries
+    // Go: projectreferencedtsfakinghost.go:104 (*projectReferenceDtsFakingVfs).GetAccessibleEntries
     fn get_accessible_entries(&self, _path: &str) -> Entries {
         panic!("should not be called by resolver")
     }
 
-    // Go: projectreferencedtsfakinghost.go:113 (*projectReferenceDtsFakingVfs).Stat
+    // Go: projectreferencedtsfakinghost.go:109 (*projectReferenceDtsFakingVfs).Stat
     fn stat(&self, _path: &str) -> Option<FileInfo> {
         panic!("should not be called by resolver")
     }
 
-    // Go: projectreferencedtsfakinghost.go:123 (*projectReferenceDtsFakingVfs).Realpath
+    // Go: projectreferencedtsfakinghost.go:114 (*projectReferenceDtsFakingVfs).Realpath
     fn realpath(&self, path: &str) -> String {
         if let Some(result) = self
             .known_symlinks

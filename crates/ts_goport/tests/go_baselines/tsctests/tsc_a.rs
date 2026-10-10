@@ -306,7 +306,8 @@ fn tsc_commandline_inputs() -> Vec<TscInput> {
             ..Default::default()
         },
         TscInput {
-            sub_scenario: "Parse watch interval option".into(),
+            // ts#64457: the watch interval option is removed (TS5023).
+            sub_scenario: "Reject removed watch interval option".into(),
             files: file_map! {
                 "/home/src/workspaces/project/first.ts" => "export const a = 1",
                 "/home/src/workspaces/project/tsconfig.json" => dedent(r#"
@@ -321,7 +322,7 @@ fn tsc_commandline_inputs() -> Vec<TscInput> {
             ..Default::default()
         },
         TscInput {
-            sub_scenario: "Parse watch interval option without tsconfig.json".into(),
+            sub_scenario: "Reject removed watch interval option without tsconfig.json".into(),
             command_line_args: args!["-w", "--watchInterval", "1000"],
             ..Default::default()
         },
@@ -1264,9 +1265,6 @@ fn tsc_extends_inputs() -> Vec<TscInput> {
 						"paths": {
 							"@myscope/*": ["${configDir}/types/*"],
 						},
-					},
-					"watchOptions": {
-						"excludeFiles": ["${configDir}/main.ts"],
 					},
 				}"#),
                 "/home/src/projects/myproject/tsconfig.json" => dedent(r#"
@@ -2728,6 +2726,114 @@ fn tsc_incremental_inputs() -> Vec<TscInput> {
                     caption: "enable javascript checking".into(),
                     edit: edit(|sys: &TestSys| {
                         sys.replace_file_text("/home/src/workspaces/project/tsconfig.json", r#""allowJs": true"#, r#""allowJs": true, "checkJs": true"#);
+                    }),
+                    ..Default::default()
+                },
+                no_change(),
+            ],
+            ..Default::default()
+        },
+        TscInput {
+            sub_scenario: "reverse mapped declaration consumption".into(),
+            files: file_map! {
+                "/home/src/workspaces/project/producer/tsconfig.json" => r#"{
+					"compilerOptions": { "strict": true, "composite": true, "outDir": "dist" }
+				}"#,
+                "/home/src/workspaces/project/producer/index.ts" => dedent(r#"
+					declare function unwrap<T>(input: { [K in keyof T]: { value: T[K] } }): T;
+					declare const indexedInput: { [key: string]: { value: string } };
+					export const indexed = unwrap(indexedInput);
+					type Validator<T> = ((input: unknown) => T | undefined) | {
+						[K in keyof T]: Validator<T[K]>;
+					};
+					declare function decode<T>(input: { [K in keyof T]: Validator<T[K]> }): T;
+					declare const stringValidator: (input: unknown) => string | undefined;
+					export const deep = decode({ a: { b: { c: { d: stringValidator } } } });
+					interface NamedInput { leaf: typeof stringValidator }
+					declare const namedInput: { node: NamedInput };
+					export const named = decode(namedInput);
+				"#),
+                "/home/src/workspaces/project/consumer/tsconfig.json" => r#"{
+					"compilerOptions": { "strict": true, "noEmit": true },
+					"references": [{ "path": "../producer" }]
+				}"#,
+                "/home/src/workspaces/project/consumer/index.ts" => dedent(r#"
+					import { indexed, deep, named } from "../producer/dist/index.js";
+					const a: string = indexed["name"];
+					const b: string = deep.a.b.c.d;
+					const c: string = named.node.leaf;
+					type IsAny<T> = 0 extends (1 & T) ? true : false;
+					const notAny: false = null as unknown as
+						IsAny<typeof indexed[string] | typeof deep.a.b.c.d | typeof named.node.leaf>;
+					const invalidIndex: number = indexed["name"];
+					const invalidDeep: number = deep.a.b.c.d;
+					const invalidNamed: number = named.node.leaf;
+				"#),
+            },
+            command_line_args: args!["--build", "consumer"],
+            edits: vec![
+                no_change(),
+                TscEdit {
+                    caption: "add a comment to the producer".into(),
+                    edit: edit(|sys: &TestSys| {
+                        sys.append_file("/home/src/workspaces/project/producer/index.ts", "\n// comment-only edit\n");
+                    }),
+                    ..Default::default()
+                },
+                no_change(),
+            ],
+            ..Default::default()
+        },
+        TscInput {
+            sub_scenario: "recursive tagged tuple after incremental edits".into(),
+            files: file_map! {
+                "/home/src/workspaces/project/tsconfig.json" => r#"{"compilerOptions": {"strict": true, "incremental": true, "noEmit": true, "module": "esnext", "moduleResolution": "bundler"}}"#,
+                format!("{TSC_LIB_PATH}/lib.es2026.full.d.ts") => lib_with_readonly_array.clone(),
+                "/home/src/workspaces/project/doc.ts" => dedent(r#"
+					type Doc =
+						| string
+						| { [k: string]: Doc }
+						| readonly ["array", Doc]
+						| readonly ["array", Doc, { length: number }]
+						| readonly ["array", Doc, { min?: number; max?: number }]
+						| readonly ["union", Doc, ...Doc[]];
+					export declare const doc: Doc;
+				"#),
+                "/home/src/workspaces/project/consumer.ts" => dedent(r#"
+					import { doc } from "./doc";
+					export const value = doc;
+				"#),
+            },
+            edits: vec![
+                no_change(),
+                TscEdit {
+                    caption: "add a comment to the recursive type".into(),
+                    edit: edit(|sys: &TestSys| {
+                        sys.append_file("/home/src/workspaces/project/doc.ts", "\n// comment-only edit\n");
+                    }),
+                    ..Default::default()
+                },
+                no_change(),
+                TscEdit {
+                    caption: "add a union constituent".into(),
+                    edit: edit(|sys: &TestSys| {
+                        sys.replace_file_text("/home/src/workspaces/project/doc.ts", "| string", "| number\n    | string");
+                    }),
+                    ..Default::default()
+                },
+                no_change(),
+                TscEdit {
+                    caption: "verify the consumer type was not weakened".into(),
+                    edit: edit(|sys: &TestSys| {
+                        sys.append_file("/home/src/workspaces/project/consumer.ts", "\nexport const invalid: number = value;\n");
+                    }),
+                    ..Default::default()
+                },
+                no_change(),
+                TscEdit {
+                    caption: "delete build info and check the edited source afresh".into(),
+                    edit: edit(|sys: &TestSys| {
+                        sys.remove_no_error("/home/src/workspaces/project/tsconfig.tsbuildinfo");
                     }),
                     ..Default::default()
                 },

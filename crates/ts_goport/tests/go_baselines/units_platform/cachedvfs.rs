@@ -218,9 +218,10 @@ fn test_read_file() {
     assert_eq!(7, underlying.calls.borrow().read_file.len());
 }
 
-// Go: cachedvfs_test.go:220 TestUseCaseSensitiveFileNames
+// Go: cachedvfs_test.go:220 TestCaseSensitivity (ts#64159 renames
+// TestUseCaseSensitiveFileNames; the port keeps use_case_sensitive_file_names)
 #[test]
-fn test_use_case_sensitive_file_names() {
+fn test_case_sensitivity() {
     let (underlying, cached) = setup();
 
     let _ = cached.use_case_sensitive_file_names();

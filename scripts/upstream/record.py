@@ -25,6 +25,9 @@ A microsoft/TypeScript pin (layout "typescript") has no TypeScript submodule: th
 _submodules/TypeScript/tests/cases are in testdata/tests/cases, and a case that collided with a Go
 case has the new name that testdata/promotedTestCollisions.txt gives. corpus reads only
 testdata/tests/cases there and maps the old sample paths (corpus-int3 shard, f1 list) to the new ones.
+From #64457 (pin fed0bf24149f) the option declarations are generated: a pin without
+internal/tsoptions/declscompiler.go gets a prepare_full.py copy that reads the same two arrays
+(commonOptionsWithBuild, optionsForCompiler) from declarations_generated.go.
 """
 import argparse
 import concurrent.futures
@@ -216,14 +219,28 @@ def pinned_copy(src, dest, p, extra=()):
     dest.write_text(text)
 
 
+# prepare_full.py option_table at a pin with generated option declarations (#64457): the compiler options are
+# the two arrays that declscompiler.go held, so the text is cut to them (the file also declares build and
+# typeAcquisition options).
+GENERATED_OPTIONS = {
+    "    text = (go / 'internal/tsoptions/declscompiler.go').read_text()\n":
+        "    text = (go / 'internal/tsoptions/declarations_generated.go').read_text()\n"
+        "    text = text[text.index('\\nvar commonOptionsWithBuild = '):]\n"
+        "    text = text[:text.index('\\nvar ', text.index('\\nvar optionsForCompiler = ') + 1)]\n",
+}
+
+
 def step_corpus(p, jobs):
     full = p.at(R / 'corpus-full')
     if not (full / 'list.json').exists():
         full.mkdir(parents=True, exist_ok=True)
-        pinned_copy(R / 'corpus-full/prepare_full.py', full / 'prepare_full.py', p, {
+        extra = {
             ",\n          ('ts', ts / 'tests/cases', 'compiler'), ('ts', ts / 'tests/cases', 'conformance')]": ']',
             "    assert git(ts, 'rev-parse', 'HEAD') == TS_COMMIT and not git(ts, 'status', '--porcelain=v1')\n": '',
-        } if p.new_layout else ())
+        } if p.new_layout else {}
+        if not (p.checkout / 'internal/tsoptions/declscompiler.go').exists():
+            extra.update(GENERATED_OPTIONS)
+        pinned_copy(R / 'corpus-full/prepare_full.py', full / 'prepare_full.py', p, extra)
         for d in (full / 'cases', full / 'shards'):  # pin.py exec makes empty cache dirs; prepare_full wants none
             if d.is_dir() and not any(d.iterdir()):
                 d.rmdir()

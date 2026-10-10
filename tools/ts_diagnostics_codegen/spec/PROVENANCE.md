@@ -4,8 +4,8 @@ The files crates/ts_goport/src/diagnostics/catalog.rs and
 crates/ts_goport/src/diag.rs are generated from
 tsc/internal/diagnostics/diagnostics_generated.go in the cached
 microsoft/TypeScript checkout at commit
-673a5f17d713bdc8c7185f18a9c11e3c4ac5d781 (2026-09-29, the bump C pin).
-catalog.rs holds exactly the pin's 2,215 messages. There is no overlay.
+fed0bf24149fb1ed36039212648bafdafc1ea10e (2026-10-08, the bump D pin).
+catalog.rs holds exactly the pin's 2,222 messages. There is no overlay.
 
 diag.rs has one static per Go message, and after them the messages of
 `spec/removed.txt`: messages that Go removed at the pin while unported Rust

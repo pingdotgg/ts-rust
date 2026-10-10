@@ -231,7 +231,7 @@ pub fn is_expression_node(node: Node) -> bool {
         | SyntaxKind::YieldExpression
         | SyntaxKind::AwaitExpression => true,
         SyntaxKind::MetaProperty => {
-            // `import.defer` in `import.defer(...)` is not an expression
+            // `import.<phase>` in `import.<phase>(...)` is not an expression
             !is_import_call(node.parent()) || node.parent().expression() != node
         }
         SyntaxKind::ExpressionWithTypeArguments => !is_heritage_clause(node.parent()),
@@ -315,6 +315,10 @@ pub fn is_in_expression_context(node: Node) -> bool {
             parent.expression() == node && !is_part_of_type_node(parent)
         }
         SyntaxKind::ShorthandPropertyAssignment => parent.object_assignment_initializer() == node,
+        SyntaxKind::FunctionExpression | SyntaxKind::ClassExpression => {
+            // The name of a function or class expression is a declaration name, not an expression.
+            parent.name() != node
+        }
         _ => is_expression_node(parent),
     }
 }
@@ -459,16 +463,49 @@ pub fn is_super_call(node: Node) -> bool {
     is_call_expression(node) && node.expression().kind() == SyntaxKind::SuperKeyword
 }
 
-// Go: ast/utilities.go:2142 IsImportCall
+// Go: ast/utilities.go:2145 IsImportCall
 pub fn is_import_call(node: Node) -> bool {
     if !is_call_expression(node) {
         return false;
     }
     let e = node.expression();
-    e.kind() == SyntaxKind::ImportKeyword
-        || is_meta_property(e)
-            && e.keyword_token() == SyntaxKind::ImportKeyword
-            && e.text() == "defer"
+    e.kind() == SyntaxKind::ImportKeyword || is_import_phase_meta_property(e)
+}
+
+// Go: ast/utilities.go:2153 IsImportPhaseMetaProperty (ts#63915)
+pub fn is_import_phase_meta_property(node: Node) -> bool {
+    is_import_defer_meta_property(node) || is_import_source_meta_property(node)
+}
+
+// Go: ast/utilities.go:2157 IsImportDeferMetaProperty (ts#63915)
+pub fn is_import_defer_meta_property(node: Node) -> bool {
+    is_import_meta_property(node, "defer")
+}
+
+// Go: ast/utilities.go:2161 IsImportSourceMetaProperty (ts#63915)
+pub fn is_import_source_meta_property(node: Node) -> bool {
+    is_import_meta_property(node, "source")
+}
+
+// Go: ast/utilities.go:2165 isImportMetaProperty (ts#63915)
+fn is_import_meta_property(node: Node, name: &str) -> bool {
+    is_meta_property(node)
+        && node.keyword_token() == SyntaxKind::ImportKeyword
+        && node.name().text() == name
+}
+
+// Go: ast/utilities.go:2169 IsSourcePhaseImport (ts#63915)
+pub fn is_source_phase_import(node: Node) -> bool {
+    if is_import_declaration(node) {
+        let clause = node.import_clause();
+        return clause.is_some() && clause.phase_modifier() == SyntaxKind::SourceKeyword;
+    }
+    is_source_phase_import_call(node)
+}
+
+// Go: ast/utilities.go:2177 IsSourcePhaseImportCall (ts#63915)
+pub fn is_source_phase_import_call(node: Node) -> bool {
+    is_call_expression(node) && is_import_source_meta_property(node.expression())
 }
 
 // Go: ast/utilities.go:2150 IsComputedNonLiteralName

@@ -341,5 +341,62 @@ fn show_config() {
         },
     ];
 
+    // ts#64457 (showconfig_test.go:217): the file listing flags on the command
+    // line and in the config.
+    let mut test_cases = test_cases;
+    for value in ["true", "false"] {
+        test_cases.push(TscInput {
+            sub_scenario: format!("Show TSConfig with command line file listing flags {value}"),
+            files: file_map([
+                (
+                    "/home/src/workspaces/project/src/index.ts",
+                    "export const a = 1;".into(),
+                ),
+                (
+                    "/home/src/workspaces/project/tsconfig.json",
+                    r#"{"files": ["src/index.ts"]}"#.into(),
+                ),
+            ]),
+            command_line_args: args([
+                "--showConfig",
+                "--listFiles",
+                value,
+                "--listEmittedFiles",
+                value,
+                "--listFilesOnly",
+                value,
+                "--explainFiles",
+                value,
+            ]),
+            ..Default::default()
+        });
+        test_cases.push(TscInput {
+            sub_scenario: format!("Show TSConfig with configured file listing flags {value}"),
+            files: file_map([
+                (
+                    "/home/src/workspaces/project/src/index.ts",
+                    "export const a = 1;".into(),
+                ),
+                (
+                    "/home/src/workspaces/project/tsconfig.json",
+                    dedent(&format!(
+                        r#"
+                {{
+                    "compilerOptions": {{
+                        "listFiles": {value},
+                        "listEmittedFiles": {value},
+                        "explainFiles": {value}
+                    }},
+                    "files": ["src/index.ts"]
+                }}"#
+                    ))
+                    .into(),
+                ),
+            ]),
+            command_line_args: args(["--showConfig"]),
+            ..Default::default()
+        });
+    }
+
     run_tsc_inputs("showConfig", test_cases, WatchFilter::NonWatch);
 }

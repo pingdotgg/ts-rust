@@ -170,18 +170,16 @@ pub fn create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
 pub fn extra_key_diagnostics(s: &str) -> Option<&'static Message> {
     match s {
         "compilerOptions" => Some(diag::Unknown_compiler_option_0),
-        "watchOptions" => Some(diag::Unknown_watch_option_0),
         "typeAcquisition" => Some(diag::Unknown_type_acquisition_option_0),
         "buildOptions" => Some(diag::Unknown_build_option_0),
         _ => None,
     }
 }
 
-// Go: tsoptions/errors.go:118 extraKeyDidYouMeanDiagnostics
+// Go: tsoptions/errors.go:116 extraKeyDidYouMeanDiagnostics
 pub fn extra_key_did_you_mean_diagnostics(s: &str) -> Option<&'static Message> {
     match s {
         "compilerOptions" => Some(diag::Unknown_compiler_option_0_Did_you_mean_1),
-        "watchOptions" => Some(diag::Unknown_watch_option_0_Did_you_mean_1),
         "typeAcquisition" => Some(diag::Unknown_type_acquisition_option_0_Did_you_mean_1),
         "buildOptions" => Some(diag::Unknown_build_option_0_Did_you_mean_1),
         _ => None,
@@ -244,21 +242,7 @@ pub fn get_parse_command_line_worker_diagnostics(
     }
 }
 
-// Go: tsoptions/diagnostics.go:46 watchOptionsDidYouMeanDiagnostics
-pub static WATCH_OPTIONS_DID_YOU_MEAN_DIAGNOSTICS: LazyLock<ParseCommandLineWorkerDiagnostics> =
-    LazyLock::new(|| ParseCommandLineWorkerDiagnostics {
-        did_you_mean: DidYouMeanOptionsDiagnostics {
-            // no alternateMode
-            alternate_mode: None,
-            option_declarations: OPTIONS_FOR_WATCH.as_slice(),
-            unknown_option_diagnostic: diag::Unknown_watch_option_0,
-            unknown_did_you_mean_diagnostic: diag::Unknown_watch_option_0_Did_you_mean_1,
-        },
-        options_name_map: None,
-        option_type_mismatch_diagnostic: diag::Watch_option_0_requires_a_value_of_type_1,
-    });
-
-// Go: tsoptions/diagnostics.go:56 buildOptionsDidYouMeanDiagnostics
+// Go: tsoptions/diagnostics.go:46 buildOptionsDidYouMeanDiagnostics
 pub static BUILD_OPTIONS_DID_YOU_MEAN_DIAGNOSTICS: LazyLock<ParseCommandLineWorkerDiagnostics> =
     LazyLock::new(|| ParseCommandLineWorkerDiagnostics {
         did_you_mean: DidYouMeanOptionsDiagnostics {

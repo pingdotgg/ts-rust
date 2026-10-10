@@ -14,7 +14,9 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use ts_goport::frontend::module::{
     DefaultResolver, ResolutionHost, Resolver, ResolverOptions, StaticResolutionEntry,
-    new_resolver, new_static_resolutions, new_static_resolver, parse_node_module_from_path,
+    new_resolver, new_static_resolutions, new_static_resolver,
+    node_module_package_root_for_directory, node_module_package_root_for_file,
+    normalize_path_for_cjs_resolution,
 };
 use ts_goport::frontend::tspath::{self, Path};
 use ts_goport::frontend::vfs::{Fs, Replacements, wrapvfs_wrap};
@@ -109,6 +111,342 @@ fn test_resolve_module_name_trailing_slash() {
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+/// The cwd of the dynamic resolver tests (ts#64544).
+const DYNAMIC_ROOT: &str = "^/~ts-uri~/custom/ts-nul-authority/";
+
+/// Go `NewResolver(ResolverOptions{Host: &resolutionHostStub{fs: fs, cwd:
+/// "^/~ts-uri~/custom/ts-nul-authority/"}, CompilerOptions: opts})`.
+fn new_dynamic_resolver(files: &[(&str, &str)], options: CompilerOptions) -> DefaultResolver {
+    let fs = vfstest::from_map(files.iter().copied(), true);
+    let host: Rc<dyn ResolutionHost> = Rc::new(ResolutionHostStub {
+        fs,
+        cwd: DYNAMIC_ROOT.to_string(),
+    });
+    new_resolver(ResolverOptions {
+        host: Some(host),
+        compiler_options: Some(Rc::new(options)),
+        ..Default::default()
+    })
+}
+
+/// `bundler_options` with `rootDirs`.
+fn bundler_options_with_root_dirs(root_dirs: &[&str]) -> CompilerOptions {
+    CompilerOptions {
+        root_dirs: Some(root_dirs.iter().map(|d| d.to_string()).collect()),
+        ..(*bundler_options()).clone()
+    }
+}
+
+/// Go `resolved, _, _ := resolver.ResolveModuleName(name, sourceFile, mode,
+/// nil)`; the resolved file name, or `None` when it is not resolved.
+fn resolved_file(
+    resolver: &DefaultResolver,
+    name: &str,
+    source_file: &str,
+    mode: ModuleKind,
+) -> Option<String> {
+    let (resolved, _, _) = resolver.resolve_module_name(name, source_file, mode, None);
+    resolved
+        .is_resolved()
+        .then(|| resolved.resolved_file_name.clone())
+}
+
+// Go: module/resolver_test.go:128 TestResolveDynamicModuleNameUsingRootDirs (ts#64544)
+#[test]
+fn test_resolve_dynamic_module_name_using_root_dirs() {
+    let mut t = Subtests::new("TestResolveDynamicModuleNameUsingRootDirs");
+    for (name, target_root, target_file) in [
+        (
+            "dynamic roots",
+            "^/~ts-uri~/custom/ts-nul-authority/generated",
+            "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~7e74732d7572692d6573636170657e66696c65~.ts",
+        ),
+        (
+            "dynamic to disk",
+            "c:/generated",
+            "c:/generated/~ts-uri-escape~file.ts",
+        ),
+    ] {
+        t.run(name, || {
+            const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+            let resolver = new_dynamic_resolver(
+                &[(SOURCE_FILE, ""), (target_file, "export const value = 1;")],
+                bundler_options_with_root_dirs(&[
+                    "^/~ts-uri~/custom/ts-nul-authority/src",
+                    target_root,
+                ]),
+            );
+            let resolved = resolved_file(
+                &resolver,
+                "./~ts-uri-escape~file",
+                SOURCE_FILE,
+                ModuleKind::ES_NEXT,
+            );
+            if resolved.as_deref() != Some(target_file) {
+                return Err(format!(
+                    "resolved file = {resolved:?}, expected {target_file:?}"
+                ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:183 TestRootDirsPreservesExceptionalDynamicSegments (ts#64544)
+#[test]
+fn test_root_dirs_preserves_exceptional_dynamic_segments() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/~ts-uri-escape~2e2e~/main.ts";
+    const TARGET_FILE: &str =
+        "^/~ts-uri~/custom/ts-nul-authority/generated/~ts-uri-escape~2e2e~/dep.ts";
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (TARGET_FILE, "export const value = 1;"),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/dep.ts",
+                "export const wrong = 1;",
+            ),
+        ],
+        bundler_options_with_root_dirs(&[
+            "^/~ts-uri~/custom/ts-nul-authority/src",
+            "^/~ts-uri~/custom/ts-nul-authority/generated",
+        ]),
+    );
+    let resolved = resolved_file(&resolver, "./dep", SOURCE_FILE, ModuleKind::ES_NEXT);
+    assert_eq!(resolved.as_deref(), Some(TARGET_FILE));
+}
+
+// Go: module/resolver_test.go:218 TestRootDirsRejectsUnrepresentableDiskSegments (ts#64544)
+#[test]
+fn test_root_dirs_rejects_unrepresentable_disk_segments() {
+    let mut t = Subtests::new("TestRootDirsRejectsUnrepresentableDiskSegments");
+    for source_file in [
+        "^/~ts-uri~/custom/ts-nul-authority/src/~ts-uri-escape~2e2e~/main.ts",
+        "^/~ts-uri~/custom/ts-nul-authority/src/c:/main.ts",
+        "^/~ts-uri~/custom/ts-nul-authority/src/^/main.ts",
+    ] {
+        t.run(source_file, || {
+            let resolver = new_dynamic_resolver(
+                &[(source_file, ""), ("c:/dep.ts", "export const wrong = 1;")],
+                bundler_options_with_root_dirs(&[
+                    "^/~ts-uri~/custom/ts-nul-authority/src",
+                    "c:/generated",
+                ]),
+            );
+            if let Some(resolved) =
+                resolved_file(&resolver, "./dep", source_file, ModuleKind::ES_NEXT)
+            {
+                return Err(format!(
+                    "unexpectedly resolved unrepresentable disk path to {resolved:?}"
+                ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:465 TestResolveDynamicPackageSubpathFile (ts#64544)
+#[test]
+fn test_resolve_dynamic_package_subpath_file() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const TARGET_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/pkg/~ts-uri-escape~7e74732d7572692d6573636170657e3636366636667e~.ts";
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/pkg/package.json",
+                r#"{"name":"pkg"}"#,
+            ),
+            (TARGET_FILE, "export const value = 1;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+    let resolved = resolved_file(
+        &resolver,
+        "pkg/~ts-uri-escape~666f6f~.ts",
+        SOURCE_FILE,
+        ModuleKind::ES_NEXT,
+    );
+    assert_eq!(resolved.as_deref(), Some(TARGET_FILE));
+}
+
+// Go: module/resolver_test.go:529 TestResolveDynamicDottedDirectory (ts#64544)
+#[test]
+fn test_resolve_dynamic_dotted_directory() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const TARGET_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/~ts-uri-escape~7e74732d7572692d6573636170657e6469722e6a73~/index.ts";
+    let resolver = new_dynamic_resolver(
+        &[(SOURCE_FILE, ""), (TARGET_FILE, "export const value = 1;")],
+        CompilerOptions {
+            module: ModuleKind::COMMON_JS,
+            ..(*bundler_options()).clone()
+        },
+    );
+    let resolved = resolved_file(
+        &resolver,
+        "./~ts-uri-escape~dir.js",
+        SOURCE_FILE,
+        ModuleKind::COMMON_JS,
+    );
+    assert_eq!(resolved.as_deref(), Some(TARGET_FILE));
+}
+
+// Go: module/resolver_test.go:427 TestResolveDynamicPackageJSONPath (ts#64544)
+#[test]
+fn test_resolve_dynamic_package_json_path() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const FALLBACK_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/pkg/~ts-uri-escape~7e74732d7572692d6573636170657e7479706573~.d.ts";
+    const TARGET_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/pkg/ts3.1/~ts-uri-escape~7e74732d7572692d6573636170657e7479706573~.d.ts";
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/pkg/package.json",
+                r#"{"name":"pkg","types":"~ts-uri-escape~types.d.ts","typesVersions":{"*":{"*":["ts3.1/*"]}}}"#,
+            ),
+            (FALLBACK_FILE, "export const fallback: number;"),
+            (TARGET_FILE, "export const value: number;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+    let resolved = resolved_file(&resolver, "pkg", SOURCE_FILE, ModuleKind::ES_NEXT);
+    assert_eq!(resolved.as_deref(), Some(TARGET_FILE));
+}
+
+// Go: module/resolver_test.go:496 TestResolveDynamicESMPackageIndexFromReservedDirectory (ts#64544)
+#[test]
+fn test_resolve_dynamic_esm_package_index_from_reserved_directory() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PACKAGE_NAME: &str = "~ts-uri-escape~pkg.js";
+    const PACKAGE_DIRECTORY: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/~ts-uri-escape~7e74732d7572692d6573636170657e706b672e6a73~";
+    let package_json_file = format!("{PACKAGE_DIRECTORY}/package.json");
+    let package_json = format!(r#"{{"name":"{PACKAGE_NAME}"}}"#);
+    let target_file = format!("{PACKAGE_DIRECTORY}/index.js");
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (&package_json_file, &package_json),
+            (&target_file, "exports.value = 1;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+    let resolved = resolved_file(&resolver, PACKAGE_NAME, SOURCE_FILE, ModuleKind::ES_NEXT);
+    assert_eq!(resolved.as_deref(), Some(target_file.as_str()));
+}
+
+// Go: module/resolver_test.go:742 TestGeneratedDynamicEntrypointSpecifierResolvesEncodedFile (ts#64544)
+#[test]
+fn test_generated_dynamic_entrypoint_specifier_resolves_encoded_file() {
+    const SOURCE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/src/main.ts";
+    const PACKAGE_FILE: &str = "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/~ts-uri-escape~7e74732d7572692d6573636170657e76616c7565~.d.ts";
+    const MODULE_SPECIFIER: &str =
+        "Pkg/~ts-uri-spec~7e74732d7572692d6573636170657e76616c7565~.d.ts";
+    let resolver = new_dynamic_resolver(
+        &[
+            (SOURCE_FILE, ""),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/package.json",
+                r#"{"name":"Pkg"}"#,
+            ),
+            (PACKAGE_FILE, "export const value: number;"),
+        ],
+        (*bundler_options()).clone(),
+    );
+
+    let _ = resolver.resolve_module_name("Pkg", SOURCE_FILE, ModuleKind::ES_NEXT, None);
+    // PORT: Go takes the one package.json entry that exists from
+    // `PackageJsonCacheEntries`. The Rust cache range gives no
+    // `InfoCacheEntry`; the package scope of the package directory is that
+    // entry.
+    let package_json = resolver
+        .get_package_scope_for_path("^/~ts-uri~/custom/ts-nul-authority/node_modules/Pkg/")
+        .filter(|entry| entry.exists());
+    assert!(package_json.is_some(), "expected package JSON cache entry");
+    let entrypoints = resolver.get_entrypoints_from_package_json_info(&package_json, "Pkg", true);
+    assert!(
+        entrypoints.len() == 1 && entrypoints[0].module_specifier == MODULE_SPECIFIER,
+        "entrypoints = {:?}, expected {MODULE_SPECIFIER:?}",
+        entrypoints
+            .iter()
+            .map(|e| e.module_specifier.clone())
+            .collect::<Vec<_>>()
+    );
+
+    let resolved = resolved_file(
+        &resolver,
+        MODULE_SPECIFIER,
+        SOURCE_FILE,
+        ModuleKind::ES_NEXT,
+    );
+    assert_eq!(resolved.as_deref(), Some(PACKAGE_FILE));
+}
+
+// Go: module/resolver_internal_test.go:11 TestNormalizePathForCJSResolutionPreservesDirectoryIntent (ts#64159)
+// PORT: Go returns a resolution candidate; the Rust result is its text
+// (`AsString()`: a directory candidate ends with "/").
+#[test]
+fn test_normalize_path_for_cjs_resolution_preserves_directory_intent() {
+    let mut t = Subtests::new("TestNormalizePathForCJSResolutionPreservesDirectoryIntent");
+    #[rustfmt::skip]
+    let tests: &[(&str, &str, &str, &str)] = &[
+        ("file", "/project", "file", "/project/file"),
+        ("trailing separator", "/project", "directory/", "/project/directory/"),
+        ("current directory", "/project", ".", "/project/"),
+        ("current directory with backslash", "/project", ".\\", "/project/"),
+        ("nested parent directory", "/project/src", "../lib/", "/project/lib/"),
+        ("nested parent directory with backslashes", "/project/src", "..\\lib\\", "/project/lib/"),
+        ("posix root", "/project", "..", "/"),
+        ("drive root", "c:/project", "..", "c:/"),
+        ("drive root without separator", "/project", "c:", "c:/"),
+        ("UNC root without separator", "/project", "//server", "//server/"),
+        ("URL root", "file:///project", "..", "file:///"),
+        ("URL authority root without separator", "/project", "file://server", "file://server/"),
+        ("dynamic reserved prefix", "^/~ts-uri~/custom/ts-nul-authority/folder", "./~ts-uri-escape~file", "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~7e74732d7572692d6573636170657e66696c65~"),
+        ("dynamic reserved prefix with extension", "^/~ts-uri~/custom/ts-nul-authority/folder", "./~ts-uri-escape~file.ts", "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~7e74732d7572692d6573636170657e66696c65~.ts"),
+        ("dynamic reserved directory prefix", "^/~ts-uri~/custom/ts-nul-authority/folder", "./~ts-uri-escape~dir/file", "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~7e74732d7572692d6573636170657e646972~/file"),
+        ("dynamic dotted directory intent", "^/~ts-uri~/custom/ts-nul-authority/folder", "./~ts-uri-escape~dir.js/", "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~7e74732d7572692d6573636170657e6469722e6a73~/"),
+    ];
+    for &(name, containing_directory, module_name, text) in tests {
+        t.run(name, || {
+            let got = normalize_path_for_cjs_resolution(containing_directory, module_name);
+            if got != text {
+                return Err(format!("AsString() = {got:?}, expected {text:?}"));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: module/resolver_test.go:1224 TestResolveModuleNameExportTargetWithTrailingSlashDoesNotResolveAsFile (ts#64159)
+#[test]
+fn test_resolve_module_name_export_target_with_trailing_slash_does_not_resolve_as_file() {
+    let fs = vfstest::from_map(
+        [
+            (
+                "/repo/node_modules/pkg/package.json",
+                r#"{"name":"pkg","exports":{".":"./index.d.ts/"}}"#,
+            ),
+            (
+                "/repo/node_modules/pkg/index.d.ts",
+                "export const x: number;",
+            ),
+            ("/repo/src/file.ts", ""),
+        ],
+        true,
+    );
+    let resolver = new_repo_resolver(fs);
+    let (resolved, _, _) =
+        resolver.resolve_module_name("pkg", "/repo/src/file.ts", ModuleKind::ES_NEXT, None);
+    assert!(
+        !resolved.is_resolved(),
+        "expected directory-only export target to remain unresolved, got {:?}",
+        resolved.resolved_file_name
+    );
 }
 
 /// A second resolution that a wrapped FS runs inside a `FileExists` call.
@@ -303,9 +641,10 @@ fn test_resolve_subpath_nil_contents_race() {
     assert!(second, "\"/repo/src/b/file.ts\" failed to resolve pkg/sub");
 }
 
-// Go: module/resolver_test.go:301 TestParseNodeModuleFromPath
+// Go: module/resolver_test.go:1495 TestNodeModulePackageRoot (ts#64544 renames
+// TestParseNodeModuleFromPath)
 #[test]
-fn test_parse_node_module_from_path() {
+fn test_node_module_package_root() {
     let tests: &[(&str, &str, bool, &str)] = &[
         (
             "file in package",
@@ -343,6 +682,18 @@ fn test_parse_node_module_from_path() {
             true,
             "/a/node_modules/@scope/b",
         ),
+        (
+            "package root interpreted as file",
+            "/a/node_modules/b",
+            false,
+            "/a/node_modules/",
+        ),
+        (
+            "scoped package root interpreted as file",
+            "/a/node_modules/@scope/b",
+            false,
+            "/a/node_modules/@scope",
+        ),
         // A bare scope directory has no package name; must not panic (https://github.com/microsoft/typescript-go/issues/4373).
         (
             "scope-only folder",
@@ -359,13 +710,17 @@ fn test_parse_node_module_from_path() {
         ("not in node_modules", "/a/src/index.ts", false, ""),
     ];
 
-    let mut t = Subtests::new("TestParseNodeModuleFromPath");
+    let mut t = Subtests::new("TestNodeModulePackageRoot");
     for &(name, path, is_folder, want) in tests {
         t.run(name, || {
-            let got = parse_node_module_from_path(path, is_folder);
+            let got = if is_folder {
+                node_module_package_root_for_directory(path)
+            } else {
+                node_module_package_root_for_file(path)
+            };
             if got != want {
                 return Err(format!(
-                    "ParseNodeModuleFromPath({path:?}, {is_folder}) = {got:?}, want {want:?}"
+                    "nodeModulesPackageRoot({path:?}, {is_folder}) = {got:?}, want {want:?}"
                 ));
             }
             Ok(())
@@ -629,6 +984,10 @@ struct MockModuleSpecifierGenerationHost {
     content_mapper_extensions: Vec<String>,
     use_case_sensitive_file_names: bool,
     symlink_cache: Option<Rc<KnownSymlinks>>,
+    // ts#64159 (specifiers_test.go:16): `existing_files` None means every
+    // file exists.
+    existing_files: Option<Vec<String>>,
+    file_exists_calls: RefCell<Vec<String>>,
 }
 
 impl OutputPathsHost for MockModuleSpecifierGenerationHost {
@@ -679,7 +1038,12 @@ impl ModuleSpecifierGenerationHost for MockModuleSpecifierGenerationHost {
     fn get_source_of_project_reference_if_output_included(&self, file: Node) -> String {
         ts_goport::ast::source_file_file_name(file).to_string()
     }
-    fn file_exists(&self, _path: &str) -> bool {
+    // Go: modulespecifiers/specifiers_test.go:147 FileExists
+    fn file_exists(&self, path: &str) -> bool {
+        self.file_exists_calls.borrow_mut().push(path.to_string());
+        if let Some(existing_files) = &self.existing_files {
+            return existing_files.iter().any(|f| f == path);
+        }
         true // Mock implementation
     }
     fn get_nearest_ancestor_directory_with_package_json(&self, _dirname: &str) -> String {
@@ -712,6 +1076,8 @@ fn mock_host(symlink_cache: KnownSymlinks) -> MockModuleSpecifierGenerationHost 
         content_mapper_extensions: Vec::new(),
         use_case_sensitive_file_names: true,
         symlink_cache: Some(Rc::new(symlink_cache)),
+        existing_files: None,
+        file_exists_calls: RefCell::new(Vec::new()),
     }
 }
 
@@ -789,6 +1155,7 @@ fn test_get_each_file_name_of_module_with_symlinks() {
         real: "/real/path/".to_string(),
         real_path: tspath::to_path("/real/path", "/project", true)
             .ensure_trailing_directory_separator(),
+        ..Default::default()
     };
     symlink_cache.set_directory("/project/symlink", symlink_path, Some(real_directory));
     // PORT: Go sets the directory on the host's cache after making the
@@ -809,9 +1176,10 @@ fn test_get_each_file_name_of_module_with_symlinks() {
     );
 }
 
-// Go: modulespecifiers/specifiers_test.go:190 TestContainsNodeModules
+// Go: modulespecifiers/specifiers_test.go:288 TestModuleSpecifierContainsNodeModules (ts#64159
+// renames TestContainsNodeModules; ContainsNodeModules is moduleSpecifierContainsNodeModules)
 #[test]
-fn test_contains_node_modules() {
+fn test_module_specifier_contains_node_modules() {
     #[rustfmt::skip]
     let tests: &[(&str, &str, bool)] = &[
         ("contains node_modules", "/project/node_modules/lodash/index.js", true),
@@ -819,14 +1187,154 @@ fn test_contains_node_modules() {
         ("node_modules in middle", "/project/packages/node_modules/pkg/file.js", true),
         ("empty path", "", false),
     ];
-    let mut t = Subtests::new("TestContainsNodeModules");
+    let mut t = Subtests::new("TestModuleSpecifierContainsNodeModules");
     for &(name, path, expected) in tests {
         t.run(name, || {
             let result = contains_node_modules(path);
             if result != expected {
                 return Err(format!(
-                    "ContainsNodeModules({path:?}) = {result}, expected {expected}"
+                    "moduleSpecifierContainsNodeModules({path:?}) = {result}, expected {expected}"
                 ));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Not a Go test: a guard for getLocalModuleSpecifier at specifiers.go:633.
+// ts#64159 keeps `strings.HasPrefix(maybeNonRelative, "..")` there, so a
+// `paths` result like "..lib/thing" loses to the relative path. Go N'
+// (tsgo-oracle-fed0bf24149f) gives "../../lib/thing" for the auto-import fix
+// and completion of this layout (config skeptic, LSP battery skp-dotdot).
+// PORT: it runs in a child process, because the importing file must be
+// published (see `parse_type_script_published`).
+#[test]
+fn test_get_module_specifier_prefers_relative_over_dot_dot_paths_result() {
+    super::childprog::in_child(
+        module_path!(),
+        "test_get_module_specifier_prefers_relative_over_dot_dot_paths_result",
+        get_module_specifier_prefers_relative_over_dot_dot_paths_result,
+    );
+}
+
+fn get_module_specifier_prefers_relative_over_dot_dot_paths_result() {
+    use indexmap::IndexMap;
+    use ts_goport::modulespecifiers::{ModuleSpecifierOptions, get_module_specifier};
+
+    let host = mock_host(KnownSymlinks::new("/project", true));
+    let file =
+        super::parsetestutil::parse_type_script_published("thingValue;\n", false /*jsx*/);
+    // (paths key, expected specifier)
+    let tests: &[(&str, &str)] = &[("..lib/*", "../../lib/thing"), ("@lib/*", "@lib/thing")];
+    let mut t = Subtests::new("GetModuleSpecifierPathsKeyStartingWithDotDot");
+    for &(key, expected) in tests {
+        t.run(key, || {
+            let mut paths = IndexMap::new();
+            paths.insert(key.to_string(), Some(vec!["./src/lib/*".to_string()]));
+            let options = CompilerOptions {
+                module: ModuleKind::COMMON_JS,
+                target: ScriptTarget::ES2020,
+                paths: Some(paths),
+                paths_base_path: "/project".to_string(),
+                ..Default::default()
+            };
+            let got = get_module_specifier(
+                &options,
+                &host,
+                file,
+                "/project/src/a/b/index.ts",
+                "",
+                "/project/src/lib/thing.ts",
+                ModuleSpecifierOptions::default(),
+            );
+            if got != expected {
+                return Err(format!("got {got:?}, expected {expected:?}"));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// Go: modulespecifiers/specifiers_test.go:407 TestProcessEndingChecksRootedFilePath (ts#64159)
+// PORT: `processEnding` is private, so the test asks `get_module_specifier`
+// for the same specifier ("./lib/index.ts" from /project/src, minimal
+// ending). It runs in a child process, because the importing file must be
+// published (see `parse_type_script_published`).
+#[test]
+fn test_process_ending_checks_rooted_file_path() {
+    super::childprog::in_child(
+        module_path!(),
+        "test_process_ending_checks_rooted_file_path",
+        process_ending_checks_rooted_file_path,
+    );
+}
+
+fn process_ending_checks_rooted_file_path() {
+    use ts_goport::modulespecifiers::{ModuleSpecifierOptions, get_module_specifier};
+
+    let mut host = mock_host(KnownSymlinks::new("/wrong", true));
+    host.current_dir = "/wrong".to_string();
+    host.existing_files = Some(vec!["/project/src/lib.ts".to_string()]);
+    let file = super::parsetestutil::parse_type_script_published("", false /*jsx*/);
+    let result = get_module_specifier(
+        &CompilerOptions::default(),
+        &host,
+        file,
+        "/project/src/main.ts",
+        "",
+        "/project/src/lib/index.ts",
+        ModuleSpecifierOptions::default(),
+    );
+    assert_eq!(result, "./lib/index", "processEnding()");
+    let calls = host.file_exists_calls.borrow();
+    assert!(
+        calls.iter().any(|c| c == "/project/src/lib.ts"),
+        "FileExists calls = {calls:?}, expected a lookup for /project/src/lib.ts"
+    );
+}
+
+// Not a Go test: a guard for tryGetModuleNameAsNodeModule at specifiers.go:825.
+// ts#64159 asks whether the directory of the top-level node_modules contains
+// the importing directory; N tested a string prefix, so /ab/src could import
+// /a/node_modules/pkg by its package name. It runs in a child process, because
+// the importing file must be published.
+#[test]
+fn test_node_modules_search_root_contains_the_importing_directory() {
+    super::childprog::in_child(
+        module_path!(),
+        "test_node_modules_search_root_contains_the_importing_directory",
+        node_modules_search_root_contains_the_importing_directory,
+    );
+}
+
+fn node_modules_search_root_contains_the_importing_directory() {
+    use ts_goport::modulespecifiers::{ModuleSpecifierOptions, get_module_specifier};
+
+    let file = super::parsetestutil::parse_type_script_published("", false /*jsx*/);
+    // (importing file, expected specifier)
+    let tests: &[(&str, &str)] = &[
+        ("/a/src/main.ts", "pkg"),
+        ("/ab/src/main.ts", "../../a/node_modules/pkg"),
+    ];
+    let mut t = Subtests::new("NodeModulesSearchRoot");
+    for &(importing, expected) in tests {
+        t.run(importing, || {
+            let mut host = mock_host(KnownSymlinks::new("/", true));
+            host.current_dir = "/".to_string();
+            host.existing_files = Some(Vec::new());
+            let got = get_module_specifier(
+                &CompilerOptions::default(),
+                &host,
+                file,
+                importing,
+                "",
+                "/a/node_modules/pkg/index.d.ts",
+                ModuleSpecifierOptions::default(),
+            );
+            if got != expected {
+                return Err(format!("got {got:?}, expected {expected:?}"));
             }
             Ok(())
         });

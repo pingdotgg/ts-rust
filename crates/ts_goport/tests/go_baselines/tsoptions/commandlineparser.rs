@@ -5,11 +5,11 @@
 //! `testdata/fixtures/typescript/tests/baselines/reference/config/commandLineParsing`
 //! are test input (the submodule copy before microsoft/TypeScript 5f647a841a).
 //!
-//! PORT: Go `json.Unmarshal` of the options JSON into `core.CompilerOptions`,
-//! `core.BuildOptions` and `core.WatchOptions`, and the `assert.DeepEqual`
-//! with the TypeScript baseline options, are not ported: the Rust option
-//! structs have no JSON decoder, and the crate has no `WatchOptions`. Each
-//! site has a `// PORT:` note. The generated baseline, the file names and the
+//! PORT: Go `json.Unmarshal` of the options JSON into `core.CompilerOptions`
+//! and `core.BuildOptions`, and the `assert.DeepEqual` with the TypeScript
+//! baseline options, are not ported: the Rust option structs have no JSON
+//! decoder. Each site has a `// PORT:` note. ts#64457 removed the watch
+//! options and their rows. The generated baseline, the file names and the
 //! projects are compared as in Go.
 
 use std::path::PathBuf;
@@ -143,40 +143,6 @@ fn command_line_parse_result() {
             "allows tsconfig only option to be set to null",
             &["--composite", "null", "-tsBuildInfoFile", "null", "0.ts"],
         ),
-        // ****** Watch Options ******
-        SubScenarioInput::new("parse --watchFile", &["--watchFile", "UseFsEvents", "0.ts"]),
-        SubScenarioInput::new(
-            "parse --watchDirectory",
-            &["--watchDirectory", "FixedPollingInterval", "0.ts"],
-        ),
-        SubScenarioInput::new(
-            "parse --fallbackPolling",
-            &["--fallbackPolling", "PriorityInterval", "0.ts"],
-        ),
-        SubScenarioInput::new(
-            "parse --synchronousWatchDirectory",
-            &["--synchronousWatchDirectory", "0.ts"],
-        ),
-        SubScenarioInput::new(
-            "errors on missing argument to --fallbackPolling",
-            &["0.ts", "--fallbackPolling"],
-        ),
-        SubScenarioInput::new(
-            "parse --excludeDirectories",
-            &["--excludeDirectories", "**/temp", "0.ts"],
-        ),
-        SubScenarioInput::new(
-            "errors on invalid excludeDirectories",
-            &["--excludeDirectories", "**/../*", "0.ts"],
-        ),
-        SubScenarioInput::new(
-            "parse --excludeFiles",
-            &["--excludeFiles", "**/temp/*.ts", "0.ts"],
-        ),
-        SubScenarioInput::new(
-            "errors on invalid excludeFiles",
-            &["--excludeFiles", "**/../*", "0.ts"],
-        ),
     ];
 
     let mut t = Subtests::new("TestCommandLineParseResult");
@@ -188,7 +154,49 @@ fn command_line_parse_result() {
     t.finish();
 }
 
-// Go: commandlineparser_test.go:89 TestResponseFileDoesNotPanic
+// Go: commandlineparser_test.go:78 TestRemovedWatchOptions (ts#64457)
+#[test]
+fn removed_watch_options() {
+    let host = new_vfs_parse_config_host(&file_map(&[]), "/project", true);
+    let mut t = Subtests::new("TestRemovedWatchOptions");
+    for option in [
+        "watchInterval",
+        "watchFile",
+        "watchDirectory",
+        "fallbackPolling",
+        "synchronousWatchDirectory",
+        "excludeDirectories",
+        "excludeFiles",
+    ] {
+        t.run(option, || {
+            let args = strs(&["--watch", &format!("--{option}")]);
+            let parsed = parse_command_line(&args, &host);
+            assert!(parsed.compiler_options().watch.is_true());
+            assert_eq!(parsed.errors.len(), 1);
+            let build = command_line::parse_build_command_line(&args, &host);
+            assert!(build.compiler_options.watch.is_true());
+            assert_eq!(build.errors.len(), 1);
+            let mut errors = String::new();
+            let formatting = FormattingOptions {
+                new_line: "\n".to_string(),
+                ..Default::default()
+            };
+            write_format_diagnostics(&mut errors, &parsed.errors, &formatting);
+            write_format_diagnostics(&mut errors, &build.errors, &formatting);
+            baseline::run(
+                &format!("{option}.js"),
+                &errors,
+                &baseline::Options {
+                    subfolder: "tsoptions/removedWatchOptions".into(),
+                    ..Default::default()
+                },
+            )
+        });
+    }
+    t.finish();
+}
+
+// Go: commandlineparser_test.go:104 TestResponseFileDoesNotPanic
 #[test]
 fn response_file_does_not_panic() {
     // Passing `@` with an empty or relative filename should not panic.
@@ -477,7 +485,7 @@ fn create_verify_null_for_non_null_included(
 }
 
 impl CommandLineSubScenario {
-    // Go: commandlineparser_test.go:247 (commandLineSubScenario).assertParseResult
+    // Go: commandlineparser_test.go:286 (commandLineSubScenario).assertParseResult
     fn assert_parse_result(&self, t: &mut Subtests) {
         t.run(&self.test_name, || {
             let original_baseline = self.baseline.read_file()?;
@@ -500,12 +508,6 @@ impl CommandLineSubScenario {
             // compares it with `tsBaseline.options` (assert.DeepEqual). The
             // Rust `CompilerOptions` has no JSON decoder, so that step is
             // not ported.
-
-            // PORT: Go unmarshals `o` into a `core.WatchOptions`; the crate
-            // has no `WatchOptions` type.
-
-            // !!! useful for debugging but will not pass due to `none` as enum options
-            // assert.DeepEqual(t, tsBaseline.watchoptions, newParsedWatchOptions)
 
             let mut new_baseline_errors = String::new();
             write_format_diagnostics(
@@ -546,27 +548,24 @@ fn cut<'a>(s: &'a str, sep: &str) -> (&'a str, &'a str, bool) {
     }
 }
 
-// Go: commandlineparser_test.go:285 parseExistingCompilerBaseline
+// Go: commandlineparser_test.go:317 parseExistingCompilerBaseline
 fn parse_existing_compiler_baseline(baseline: &str) -> TestCommandLineParser {
     let (_, rest, _) = cut(baseline, "CompilerOptions::\n");
-    let (compiler_options, rest, watch_found) = cut(rest, "\nWatchOptions::\n");
-    let (watch_options, rest, _) = cut(rest, "\nFileNames::\n");
+    let (compiler_options, rest, _) = cut(rest, "\nWatchOptions::\n");
+    let (_, rest, _) = cut(rest, "\nFileNames::\n");
     let (file_names, errors, _) = cut(rest, "\nErrors::\n");
 
-    // PORT: Go unmarshals `compilerOptions` into `core.CompilerOptions`
-    // (and `watchOptions`, when found, into `core.WatchOptions`) and asserts
-    // no error. The Rust option types have no JSON decoder; the JSON text is
-    // kept instead.
-    let _ = watch_found;
+    // PORT: Go unmarshals `compilerOptions` into `core.CompilerOptions` and
+    // asserts no error. The Rust option types have no JSON decoder; the JSON
+    // text is kept instead.
     TestCommandLineParser {
         options: compiler_options.to_string(),
-        watchoptions: watch_options.to_string(),
         file_names: file_names.to_string(),
         errors: errors.to_string(),
     }
 }
 
-// Go: commandlineparser_test.go:309 formatNewBaseline
+// Go: commandlineparser_test.go:334 formatNewBaseline
 fn format_new_baseline(
     command_line: &[String],
     opts: &str,
@@ -587,8 +586,6 @@ fn format_new_baseline(
     formatted.push(']');
     formatted.push_str("\n\nCompilerOptions::\n");
     formatted.push_str(opts);
-    // todo: watch options not implemented
-    // formatted.WriteString("WatchOptions::\n")
     formatted.push_str("\n\nFileNames::\n");
     formatted.push_str(file_names);
     formatted.push_str("\n\nErrors::\n");
@@ -601,7 +598,7 @@ fn format_new_baseline(
 type GetTsBaseline<'a> = &'a dyn Fn() -> Result<TestCommandLineParserBuild, String>;
 
 impl CommandLineSubScenario {
-    // Go: commandlineparser_test.go:338 (commandLineSubScenario).assertBuildParseResult
+    // Go: commandlineparser_test.go:361 (commandLineSubScenario).assertBuildParseResult
     fn assert_build_parse_result(&self, t: &mut Subtests) {
         let get_ts_baseline = || -> Result<TestCommandLineParserBuild, String> {
             let original_baseline = self.baseline.read_file()?;
@@ -610,7 +607,7 @@ impl CommandLineSubScenario {
         self.assert_build_parse_result_with_ts_baseline(t, Some(&get_ts_baseline));
     }
 
-    // Go: commandlineparser_test.go:371 (commandLineSubScenario).assertBuildParseResultWithTsBaseline
+    // Go: commandlineparser_test.go:369 (commandLineSubScenario).assertBuildParseResultWithTsBaseline
     fn assert_build_parse_result_with_ts_baseline(
         &self,
         t: &mut Subtests,
@@ -650,12 +647,6 @@ impl CommandLineSubScenario {
             // `tsBaseline.compilerOptions` (assert.DeepEqual). Not ported,
             // as above.
 
-            // PORT: Go unmarshals `o` into a `core.WatchOptions`; the crate
-            // has no `WatchOptions` type.
-
-            // !!! useful for debugging but will not pass due to `none` as enum options
-            // assert.DeepEqual(t, tsBaseline.watchoptions, newParsedWatchOptions)
-
             let mut new_baseline_errors = String::new();
             write_format_diagnostics(
                 &mut new_baseline_errors,
@@ -688,28 +679,25 @@ impl CommandLineSubScenario {
     }
 }
 
-// Go: commandlineparser_test.go:402 parseExistingCompilerBaselineBuild
+// Go: commandlineparser_test.go:415 parseExistingCompilerBaselineBuild
 fn parse_existing_compiler_baseline_build(baseline: &str) -> TestCommandLineParserBuild {
     let (_, rest, _) = cut(baseline, "buildOptions::\n");
-    let (build_options, rest, watch_found) = cut(rest, "\nWatchOptions::\n");
-    let (watch_options, rest, _) = cut(rest, "\nProjects::\n");
+    let (build_options, rest, _) = cut(rest, "\nWatchOptions::\n");
+    let (_, rest, _) = cut(rest, "\nProjects::\n");
     let (projects, errors, _) = cut(rest, "\nErrors::\n");
 
     // PORT: Go unmarshals `buildOptions` into both `core.BuildOptions` and
-    // `core.CompilerOptions` (and `watchOptions`, when found, into
-    // `core.WatchOptions`) and asserts no error. The Rust option types have
+    // `core.CompilerOptions` and asserts no error. The Rust option types have
     // no JSON decoder; the JSON text is kept instead.
-    let _ = watch_found;
     TestCommandLineParserBuild {
         options: build_options.to_string(),
         compiler_options: build_options.to_string(),
-        watchoptions: watch_options.to_string(),
         projects: projects.to_string(),
         errors: errors.to_string(),
     }
 }
 
-// Go: commandlineparser_test.go:431 formatNewBaselineBuild
+// Go: commandlineparser_test.go:437 formatNewBaselineBuild
 fn format_new_baseline_build(
     command_line: &[String],
     opts: &str,
@@ -733,8 +721,6 @@ fn format_new_baseline_build(
     formatted.push_str(opts);
     formatted.push_str("\n\ncompilerOptions::\n");
     formatted.push_str(compiler_opts);
-    // todo: watch options not implemented
-    // formatted.WriteString("WatchOptions::\n")
     formatted.push_str("\n\nProjects::\n");
     formatted.push_str(projects);
     formatted.push_str("\n\nErrors::\n");
@@ -839,27 +825,25 @@ struct VerifyNull {
     opt_decls: &'static [&'static CommandLineOption],
 }
 
-// Go: commandlineparser_test.go:502 TestCommandLineParser
-// PORT: the Go option fields are the decoded `*core.CompilerOptions` and
-// `*core.WatchOptions`. Without a JSON decoder they hold the JSON text.
+// Go: commandlineparser_test.go:506 TestCommandLineParser
+// PORT: the Go option field is the decoded `*core.CompilerOptions`. Without
+// a JSON decoder it holds the JSON text.
 struct TestCommandLineParser {
     options: String,
-    watchoptions: String,
     file_names: String,
     errors: String,
 }
 
-// Go: commandlineparser_test.go:508 TestCommandLineParserBuild
+// Go: commandlineparser_test.go:511 TestCommandLineParserBuild
 // PORT: as `TestCommandLineParser`, the option fields hold the JSON text.
 struct TestCommandLineParserBuild {
     options: String,
     compiler_options: String,
-    watchoptions: String,
     projects: String,
     errors: String,
 }
 
-// Go: commandlineparser_test.go:540 TestParseBuildCommandLine
+// Go: commandlineparser_test.go:517 TestParseBuildCommandLine
 #[test]
 fn parse_build_command_line() {
     let parse_command_line_sub_scenarios: Vec<SubScenarioInput> = vec![
@@ -913,35 +897,6 @@ fn parse_build_command_line() {
             "--watch and --dry together is invalid",
             &["--watch", "--dry"],
         ),
-        SubScenarioInput::new(
-            "parse --watchFile",
-            &["--watchFile", "UseFsEvents", "--verbose"],
-        ),
-        SubScenarioInput::new(
-            "parse --watchDirectory",
-            &["--watchDirectory", "FixedPollingInterval", "--verbose"],
-        ),
-        SubScenarioInput::new(
-            "parse --fallbackPolling",
-            &["--fallbackPolling", "PriorityInterval", "--verbose"],
-        ),
-        SubScenarioInput::new(
-            "parse --synchronousWatchDirectory",
-            &["--synchronousWatchDirectory", "--verbose"],
-        ),
-        SubScenarioInput::new(
-            "errors on missing argument",
-            &["--verbose", "--fallbackPolling"],
-        ),
-        SubScenarioInput::new(
-            "errors on invalid excludeDirectories",
-            &["--excludeDirectories", "**/../*"],
-        ),
-        SubScenarioInput::new("parse --excludeFiles", &["--excludeFiles", "**/temp/*.ts"]),
-        SubScenarioInput::new(
-            "errors on invalid excludeFiles",
-            &["--excludeFiles", "**/../*"],
-        ),
     ];
 
     let mut t = Subtests::new("TestParseBuildCommandLine");
@@ -976,7 +931,10 @@ fn parse_build_command_line() {
     t.finish();
 }
 
-// Go: commandlineparser_test.go:561 TestAffectsBuildInfo
+// Go: commandlineparser_test.go:585 TestAffectsBuildInfo (at 673a5f17d713; removed by
+// ts#64457, whose option generator keeps this rule)
+// PORT: kept. The port has no option generator (bump D gen decision), so its
+// hand-written declarations still need this check.
 #[test]
 fn affects_build_info() {
     let mut t = Subtests::new("TestAffectsBuildInfo");

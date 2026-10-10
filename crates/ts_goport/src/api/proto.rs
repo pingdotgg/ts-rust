@@ -3049,20 +3049,14 @@ pub fn new_config_file_response(
 }
 
 // Go: proto.go:1011 toProtocolJSONValue
+// PORT: ts#64457 removes the Go function with the watch options (Go passes
+// `Raw` through). Only its watch kind cases are gone here; the api lane ports
+// the rest of that change.
 pub fn to_protocol_json_value(
     value: &tsoptions::CompilerOptionsValue,
 ) -> tsoptions::CompilerOptionsValue {
     use crate::frontend::tsoptions::CompilerOptionsValue;
     match value {
-        CompilerOptionsValue::WatchFileKind(value) => {
-            CompilerOptionsValue::Int(i64::from(value.0) - 1)
-        }
-        CompilerOptionsValue::WatchDirectoryKind(value) => {
-            CompilerOptionsValue::Int(i64::from(value.0) - 1)
-        }
-        CompilerOptionsValue::PollingKind(value) => {
-            CompilerOptionsValue::Int(i64::from(value.0) - 1)
-        }
         CompilerOptionsValue::Map(value) => {
             let mut result = IndexMap::with_capacity(value.len());
             for (key, child) in value {

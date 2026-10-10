@@ -462,7 +462,7 @@ impl VersionPaths {
     }
 }
 
-// Go: packagejson/cache.go:123 InfoCacheEntry
+// Go: packagejson/cache.go:182 InfoCacheEntry
 // PORT: Go `Contents *PackageJson` is an `Arc`, so the copy that
 // `with_package_directory` makes shares it, as Go's shallow copy does.
 #[derive(Debug, Default)]
@@ -478,17 +478,18 @@ impl InfoCacheEntry {
         self.contents.is_some()
     }
 
-    // Go: packagejson/cache.go:133 GetContents
+    // Go: packagejson/cache.go:192 GetContents
     pub fn get_contents(&self) -> Option<&PackageJson> {
         self.contents.as_deref()
     }
 
-    // Go: packagejson/cache.go:140 GetDirectory
+    // Go: packagejson/cache.go:140 GetDirectory (at 673a5f17d713;
+    // removed by ts#64159; the entry keeps a PackageDirectory, packagejson/cache.go:123)
     pub fn get_directory(&self) -> &str {
         &self.package_directory
     }
 
-    // Go: packagejson/cache.go:158 WithPackageDirectory
+    // Go: packagejson/cache.go:208 WithPackageDirectory
     // WithPackageDirectory returns an entry whose PackageDirectory matches the
     // caller's value. The package.json info cache is keyed by the canonical
     // path of the package.json file, so a lookup with another spelling of
