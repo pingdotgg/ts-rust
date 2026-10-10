@@ -176,9 +176,9 @@ of the same names. `checker_integration.rs` is the Effect-owned Go shim
   `FxIndexMap` (insertion order); Go sorts exports, member table keys and
   dependencies, and the port sorts them the same way with Go byte order
   (`scanner_util::compare_go_strings`).
-- `materialized_value_symbol_links` (the only `value_symbol_links` read) calls
-  `get_symbol_id` first, as Go `symbolArenaLinkStore.TryGet` gives the
-  symbol its id. Node ids from `nodeLinkStore.TryGet` are not given (the
+- `materialized_value_symbol_links` (the only `value_symbol_links` read) reads
+  with `try_get_by_id`, which gives the symbol its id, as Go
+  `symbolArenaLinkStore.TryGet` does. Node ids from `nodeLinkStore.TryGet` are not given (the
   port never gives them on link reads).
 - A surface clones its findings map where Go copies a struct that shares
   the map. Go never writes a shared map, so results are the same.
