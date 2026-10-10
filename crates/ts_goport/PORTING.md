@@ -640,8 +640,11 @@ The batch that adds it is not accepted until Theo approves.
   thread. So a project that imports another project's output without a
   reference can read it before or after Go's reader does:
   - G1: the reader references a project that builds before the writer.
-  - G2 (the rest): several large emit-only projects with the default
-    builders. Their affected-file walks wait for the loading thread.
+  - G2 (the rest): several large projects with the default builders.
+    Their affected-file walks wait for the loading thread: for an
+    emit-only task, and for a checked task too
+    (`incremental::Program::start_check`; Go runs `collectAllAffectedFiles`
+    on the task's goroutine). k2redis1 repro: 3 checked projects.
   - G3: a `noEmitOnError` project has no early emit. It finishes when its
     check ends, then emits and writes; Go's builder writes when that emit
     ends. Starting its emit when its check ends (k2gaps1 round 1) broke
@@ -665,6 +668,13 @@ The batch that adds it is not accepted until Theo approves.
   - A large `noEmitOnError` project with a syntax error (k2gaps1 probes
     `noeoe_syn_comp`, `noeoe_syn_inc`): it has no checker work, so it
     finishes at once, in start order. This is G1's family.
+  - G5, partial writes: Go writes each output when the emit of its file
+    ends, so a task that loads during that emit reads some files old and
+    some new. The port keeps an early emit's writes until the task
+    finishes (`buffer_early_emit_writes`), so it reads all old or all new.
+    node-redis step 2: Go reads `commands/index.d.ts` old and
+    `AGGREGATE.d.ts` and `CREATE.d.ts` new in 6 of 6 runs; the port reads
+    all old (k2redis1). A Go clock for G1 alone does not fix this.
 
 `program.rs` defines `SourceFileInfo`, `load`, `bind_all`, the Go
 `Program` methods as free functions with Go snake names (`get_resolved_module(file, name, mode)` ->
