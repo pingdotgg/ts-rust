@@ -3575,6 +3575,65 @@ pub fn to_rooted_path(path: &str, current_directory: &str) -> String {
     normalized
 }
 
+// Go: tspath/rooted_path.go:784 RootedDirectoryPath.ResolveDirectory (ts#64159)
+// Resolves `path` against the rooted directory `directory`. A relative
+// `path` with a query or fragment in a URL directory, and a result with a
+// URL query or fragment, are Go panics (a request handler answers
+// `panic: <message>`).
+// PORT: the API copy (see `try_path_key_from_canonical`).
+pub fn resolve_directory(directory: &str, path: &str) -> String {
+    if directory.is_empty() {
+        crate::core::go_panic("cannot resolve from an empty directory name".to_string());
+    }
+    if path.is_empty() {
+        return directory.to_string();
+    }
+    if tspath::get_encoded_root_length(path) == 0
+        && has_url_root(directory)
+        && path.contains(['?', '#'])
+    {
+        crate::core::go_panic("relative URL path must not contain a query or fragment".to_string());
+    }
+    if can_append_path_without_normalization(path) {
+        return rooted_file_path_from_resolved(append_path_to_directory(directory, path));
+    }
+    if is_normalized_slashes_relative_path(path) {
+        // Go `getNormalizedAbsolutePathFromNormalizedSlashes` (path.go:424):
+        // the rooted text has no backslash, so this is the same text.
+        let appended = append_path_to_directory(directory, path);
+        return rooted_file_path_from_resolved(tspath::get_normalized_absolute_path(&appended, ""));
+    }
+    to_rooted_path(path, directory)
+}
+
+// Go: tspath/rooted_path.go:803 rootedFilePathFromResolved (ts#64159)
+fn rooted_file_path_from_resolved(path: String) -> String {
+    if has_rooted_url_suffix(&path) {
+        crate::core::go_panic("path must not contain a URL query or fragment".to_string());
+    }
+    path
+}
+
+// Go: tspath/rooted_path.go:841 canAppendPathWithoutNormalization (ts#64159)
+fn can_append_path_without_normalization(path: &str) -> bool {
+    is_normalized_slashes_relative_path(path)
+        && !has_relative_path_segment(path)
+        && !tspath::has_trailing_directory_separator(path)
+}
+
+// Go: tspath/rooted_path.go:847 isNormalizedSlashesRelativePath (ts#64159)
+fn is_normalized_slashes_relative_path(path: &str) -> bool {
+    !path.is_empty() && tspath::get_encoded_root_length(path) == 0 && !path.contains('\\')
+}
+
+// Go: tspath/rooted_path.go:853 appendPathToDirectory (ts#64159)
+fn append_path_to_directory(directory: &str, path: &str) -> String {
+    if tspath::has_trailing_directory_separator(directory) {
+        return format!("{directory}{path}");
+    }
+    format!("{directory}/{path}")
+}
+
 // Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
 fn has_rooted_url_suffix(path: &str) -> bool {
     if !has_url_root(path) {
