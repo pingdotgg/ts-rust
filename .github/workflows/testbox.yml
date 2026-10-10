@@ -1,0 +1,102 @@
+# A Blacksmith testbox: a warm Linux x64 runner that runs builds and tests against the local tree
+# (scripts/goport/testbox.sh). `blacksmith testbox warmup` dispatches this workflow, `testbox run` syncs
+# the working tree to it and runs one command. The setup matches the Linux test job of ci.yml, with
+# zbook's toolchains. Sticky disks keep target/ and the cargo registry warm between testboxes.
+# A pull request that changes this file runs it in validation mode (no testbox_id).
+name: Blacksmith Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/testbox.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testbox-${{ inputs.testbox_id || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The toolchain of shipped bins and --profile goport. Edit-loop builds use the nightly of
+  # scripts/run-cargo-capped.sh.
+  RUSTUP_TOOLCHAIN: 1.93.0
+  NIGHTLY_TOOLCHAIN: nightly-2026-06-17
+
+jobs:
+  testbox:
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 360
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@v2
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # After checkout: its clean step would empty a disk mounted in the workspace.
+      - uses: useblacksmith/stickydisk@v1
+        with:
+          key: ts-rust-testbox-target
+          path: ${{ github.workspace }}/target
+      - uses: useblacksmith/stickydisk@v1
+        with:
+          key: ts-rust-testbox-cargo
+          path: ~/.cargo/registry
+      # main's Go pin is the saved state's batch.upstreamPin.to (AGENTS.md, "Pin"). The Go checkout sits
+      # outside the workspace, so a sync of the local tree does not touch it.
+      - name: Resolve the Go pin
+        id: pin
+        run: |
+          key=$(jq -r '.batch.upstreamPin.to // empty' docs/typechecker-state/current.json)
+          python3 scripts/upstream/pin.py show ${key:+"$key"} > "$RUNNER_TEMP/pin.json"
+          jq -r '"repo=\(.repo)", "commit=\(.commit)", "subdir=\(.subdir // "")", "go=\(.oracle.go | ltrimstr("go"))"' "$RUNNER_TEMP/pin.json" >> "$GITHUB_OUTPUT"
+      - name: Check out the pinned Go source
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.pin.outputs.repo }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: go-pin
+          sparse-checkout: ${{ steps.pin.outputs.subdir }}
+          persist-credentials: false
+      - name: Install the Go repo's typescript package
+        run: |
+          url=$(jq -r '.packages["node_modules/typescript"].resolved' go-pin/package-lock.json)
+          mkdir -p go-pin/node_modules/typescript
+          curl -sSfL "$url" | tar xz -C go-pin/node_modules/typescript --strip-components=1
+          mv go-pin "$HOME/go-pin"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.pin.outputs.go }}
+          cache: false
+      - run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal -c rustfmt,clippy
+          rustup toolchain install "$NIGHTLY_TOOLCHAIN" --profile minimal
+      # testbox.sh sources this file before each command: commands run over SSH, without this job's env.
+      # TS_CARGO_CGROUP_ACTIVE=1 skips the systemd user scope of run-cargo-capped.sh (no user session here).
+      - name: Write the testbox env
+        env:
+          SUBDIR: ${{ steps.pin.outputs.subdir }}
+        run: |
+          cat > "$HOME/testbox.env" <<EOF
+          export PATH="$(dirname "$(command -v go)"):$HOME/.cargo/bin:\$PATH"
+          export CARGO_TERM_COLOR=always
+          export TS_GO_REPO="$HOME/go-pin${SUBDIR:+/$SUBDIR}"
+          export TSCTEST_TMP="$RUNNER_TEMP/tsctest"
+          export COMPILER_RUNNER_TMP="$RUNNER_TEMP/compiler-runner"
+          export TS_CARGO_CGROUP_ACTIVE=1
+          export TS_CARGO_JOBS=32
+          export TS_CARGO_SLOTS=1
+          EOF
+          cat "$HOME/testbox.env"
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@v2
+        if: always()
