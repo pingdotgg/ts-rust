@@ -295,8 +295,18 @@ fn test_non_file_document_uri_round_trips_through_normalized_file_name() {
             "{uri}"
         );
     }
-    assert_ne!(file_name("custom:name.ts\\"), file_name("custom:name..ts"));
     assert!(file_name("custom:~ts-uri-escape~types.d.css.ts").ends_with(".d.css.ts"));
+    // Go :191-203: a dynamic name without the `~ts-uri~` part keeps its
+    // escape text, and an escape that is not UTF-8 stays an escape.
+    assert_eq!(
+        file_name_to_document_uri("^/custom/ts-nul-authority/~ts-uri-escape~666f6f~.ts").0,
+        "custom:~ts-uri-escape~666f6f~.ts"
+    );
+    assert_eq!(
+        file_name_to_document_uri("^/~ts-uri~/custom/ts-nul-authority/~ts-uri-escape~ff~").0,
+        "custom:~ts-uri-escape~ff~"
+    );
+    assert_ne!(file_name("custom:name.ts\\"), file_name("custom:name..ts"));
 }
 
 // Go: ls/lsconv/converters_test.go:61 TestFileNameToDocumentURI
