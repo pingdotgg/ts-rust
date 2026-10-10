@@ -1920,14 +1920,15 @@ impl Checker {
             let mut type_argument_nodes = NodeList::NIL;
             if !type_arguments.is_empty() {
                 let mut type_parameter_count = 0usize;
-                let type_params: Vec<TypeId> = self
-                    .ty(target)
-                    .as_interface_type()
-                    .type_parameters()
-                    .to_vec();
-                // PORT: Go checks `typeParams != nil`; an empty slice gives a
-                // count of 0, as in Go.
-                if !type_params.is_empty() {
+                let target_type = self.ty(target).as_interface_type();
+                // PORT: Go `typeParams != nil` (nodebuilderimpl.go:3198 at N').
+                // `TypeParameters()` (types.go:1046) is nil only when
+                // `allTypeParameters` is empty. A class or interface that has only a
+                // `this` type gives an empty slice that is not nil, so Go still runs the
+                // global `Iterable` checks below, and they resolve (create) those types.
+                let has_type_params = !target_type.all_type_parameters.is_empty();
+                let type_params: Vec<TypeId> = target_type.type_parameters().to_vec();
+                if has_type_params {
                     type_parameter_count = type_params.len().min(type_arguments.len());
 
                     // Maybe we should do this for more types, but for now we only elide type arguments that are
