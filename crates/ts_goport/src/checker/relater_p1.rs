@@ -1811,7 +1811,10 @@ impl Checker {
                 .intersects(ObjectFlags::MEMBERS_RESOLVED)
                 && self.lazy_members
             {
-                return self.is_weak_object_type_lazy(t);
+                let lazy = crate::checker::lazy_members::opaque(
+                    Self::is_weak_object_type_lazy as fn(&mut Self, TypeId) -> bool,
+                );
+                return lazy(self, t);
             }
             // PORT: the resolved members are read in place, not copied.
             self.resolve_structured_type_members(t);

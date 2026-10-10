@@ -16,7 +16,7 @@
 //!
 //! PERF (lazymem1 round 2): each hook in the checker keeps its old body and
 //! adds one test before it: for a type whose members are not resolved, it
-//! tests the switch and calls one cold function here. A resolved type does
+//! tests the switch and calls one cold function here, through `opaque`. A resolved type does
 //! not test the switch (`is_string_index_signature_only_type_worker` tests
 //! it for every object type). This module calls no checker function that
 //! LLVM inlines at all its call sites: it has copies of those (see
@@ -166,6 +166,48 @@ fn concat_lazy<T: Copy + Default>(a: SharedList<T>, b: SharedList<T>) -> SharedL
     items.extend_from_slice(&a);
     items.extend_from_slice(&b);
     SharedList::from(&items[..])
+}
+
+/// `f`, through a value that LLVM cannot see through (`black_box`). The
+/// hooks in the checker call this module with it.
+/// PERF (lazymem1 round 2): this module calls back into the checker, so a
+/// direct call from a hook put its functions in the call graph cycle of the
+/// checker, and LLVM then inlined differently along that cycle in the PGO +
+/// BOLT release build. An indirect call adds no call edge. With the switch
+/// off it never runs, so PGO does not promote it to a direct call.
+#[inline(always)]
+pub(crate) fn opaque<F>(f: F) -> F {
+    std::hint::black_box(f)
+}
+
+/// Copy of `is_thisless_variable_like_declaration` (checker_p23.rs; see
+/// the PERF note at `resolve_declared_members_lazy`).
+fn is_thisless_variable_like_declaration_lazy(node: Node) -> bool {
+    let type_node = node.type_();
+    if type_node.is_some() {
+        return is_thisless_type(type_node);
+    }
+    node.initializer().is_nil()
+}
+
+/// Copy of `is_thisless_function_like_declaration` (checker_p23.rs).
+fn is_thisless_function_like_declaration_lazy(node: Node) -> bool {
+    let return_type = node.type_();
+    (is_constructor_declaration(node) || return_type.is_some() && is_thisless_type(return_type))
+        && node
+            .parameters()
+            .iter()
+            .all(is_thisless_variable_like_declaration_lazy)
+        && node
+            .type_parameters()
+            .iter()
+            .all(is_thisless_type_parameter_lazy)
+}
+
+/// Copy of `is_thisless_type_parameter` (checker_p23.rs).
+fn is_thisless_type_parameter_lazy(node: Node) -> bool {
+    let constraint = node.constraint();
+    constraint.is_nil() || is_thisless_type(constraint)
 }
 
 // Go: mayHaveLazyMembers (#64475)
@@ -944,14 +986,14 @@ impl Checker {
                     SyntaxKind::Parameter
                     | SyntaxKind::PropertyDeclaration
                     | SyntaxKind::PropertySignature => {
-                        return is_thisless_variable_like_declaration(declaration);
+                        return is_thisless_variable_like_declaration_lazy(declaration);
                     }
                     SyntaxKind::MethodDeclaration
                     | SyntaxKind::MethodSignature
                     | SyntaxKind::Constructor
                     | SyntaxKind::GetAccessor
                     | SyntaxKind::SetAccessor => {
-                        return is_thisless_function_like_declaration(declaration);
+                        return is_thisless_function_like_declaration_lazy(declaration);
                     }
                     _ => {}
                 }

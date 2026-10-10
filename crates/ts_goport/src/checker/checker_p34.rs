@@ -550,7 +550,10 @@ impl Checker {
             .intersects(ObjectFlags::MEMBERS_RESOLVED)
             && self.lazy_members
         {
-            return self.is_function_object_type_lazy(t);
+            let lazy = crate::checker::lazy_members::opaque(
+                Self::is_function_object_type_lazy as fn(&mut Self, TypeId) -> bool,
+            );
+            return lazy(self, t);
         }
         // We do a quick check for a "bind" property before performing the more expensive subtype
         // check. This gives us a quicker out in the common case where an object type is not a function.

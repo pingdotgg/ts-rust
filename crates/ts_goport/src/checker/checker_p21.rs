@@ -502,7 +502,12 @@ impl Checker {
                 .intersects(ObjectFlags::MEMBERS_RESOLVED)
                 && self.lazy_members
             {
-                if let Some(symbol) = self.get_property_of_lazy_object_type(
+                let lazy = crate::checker::lazy_members::opaque(
+                    Self::get_property_of_lazy_object_type
+                        as fn(&mut Self, TypeId, TableKey<'a>, bool, bool) -> Option<SymbolId>,
+                );
+                if let Some(symbol) = lazy(
+                    self,
                     t,
                     name,
                     skip_object_function_property_augment,
@@ -784,7 +789,11 @@ impl Checker {
             .intersects(ObjectFlags::MEMBERS_RESOLVED)
             && self.lazy_members
         {
-            if let Some(signatures) = self.lazy_signatures_of_structured_type(t, kind) {
+            let lazy = crate::checker::lazy_members::opaque(
+                Self::lazy_signatures_of_structured_type
+                    as fn(&mut Self, TypeId, SignatureKind) -> Option<SharedList<SignatureId>>,
+            );
+            if let Some(signatures) = lazy(self, t, kind) {
                 return signatures;
             }
         }
@@ -842,7 +851,11 @@ impl Checker {
                 .intersects(ObjectFlags::MEMBERS_RESOLVED)
                 && self.lazy_members
             {
-                if let Some(index_infos) = self.lazy_index_infos_of_structured_type(t) {
+                let lazy = crate::checker::lazy_members::opaque(
+                    Self::lazy_index_infos_of_structured_type
+                        as fn(&mut Self, TypeId) -> Option<SharedList<IndexInfoId>>,
+                );
+                if let Some(index_infos) = lazy(self, t) {
                     return index_infos;
                 }
             }
@@ -1029,7 +1042,11 @@ impl Checker {
     pub fn resolve_type_reference_members(&mut self, t: TypeId) {
         // lazymem1: Go (#64475) builds the members from a ready lazy member
         // table (lazy_members.rs).
-        if self.lazy_members && self.resolve_type_reference_members_lazy(t) {
+        if self.lazy_members
+            && crate::checker::lazy_members::opaque(
+                Self::resolve_type_reference_members_lazy as fn(&mut Self, TypeId) -> bool,
+            )(self, t)
+        {
             return;
         }
         let source = self.ty(t).target();
@@ -1640,7 +1657,11 @@ impl Checker {
                 .intersects(ObjectFlags::MEMBERS_RESOLVED)
                 && self.lazy_members
             {
-                return self.get_single_signature_lazy(t, kind, allow_members);
+                let lazy = crate::checker::lazy_members::opaque(
+                    Self::get_single_signature_lazy
+                        as fn(&mut Self, TypeId, SignatureKind, bool) -> SignatureId,
+                );
+                return lazy(self, t, kind, allow_members);
             }
             let resolved = self.resolve_structured_type_members(t);
             if allow_members || resolved.properties.is_empty() && resolved.index_infos().is_empty()
