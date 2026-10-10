@@ -63,6 +63,13 @@ To try the example, run `python3 -m http.server -d npm/wasm` and open
 
 ## Editor language service
 
+The current interface uses asynchronous LSP requests. The required drop-in contract for classic
+`ts.createLanguageService(host)` is tracked in [the compatibility plan](TYPESCRIPT_API_PLAN.md).
+That contract includes synchronous calls, host callbacks and TypeScript result objects. It is
+not implemented by the interface below. `npm run check:typescript-api -- <reference-directory>`
+checks the current declarations against a classic TypeScript package and reports the remaining
+type incompatibilities.
+
 `createLanguageService` keeps an in-memory project in its own WebAssembly instance. In browsers,
 call it in a module Web Worker so requests do not block the page. The Node entry owns a persistent
 worker with a 256 MB stack, configurable through `stackSizeMb`. The core entry runs on its caller's

@@ -37,6 +37,8 @@
         "node.js",
         "node-language-service.js",
         "language-service-worker.js",
+        "scripts/check-typescript-api.mjs",
+        "TYPESCRIPT_API_PLAN.md",
         "ts_rust.wasm"
     ],
     "engines": {
@@ -45,6 +47,7 @@
     "sideEffects": false,
     "scripts": {
         "build": "../../scripts/wasm/build.sh",
-        "test": "node --test test/*.test.mjs"
+        "test": "node --test test/*.test.mjs",
+        "check:typescript-api": "node scripts/check-typescript-api.mjs"
     }
 }
