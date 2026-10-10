@@ -1095,6 +1095,31 @@ type T0 = Derived<number>;
         );
     }
 
+    /// `A<number>` is resolved inside its own prepare step (the base
+    /// `C<U["x"]>` reads `A<number>["x"]`). The first lookup then reads the
+    /// members that the prepare step set and does not resolve them again:
+    /// Go with #64475 makes as many types and instantiations here as Go at
+    /// the pin, and so does the port.
+    #[test]
+    fn resolve_inside_prepare_is_not_repeated() {
+        const NESTED: &str = r#"
+interface A<T> extends B<A<T>> { x: T; }
+interface B<U extends { x: unknown }> extends C<U["x"]> {}
+interface C<V> { v: V; }
+declare const a: A<number>;
+const ax = a.x;
+const av = a.v;
+"#;
+        let run = |lazy| {
+            with_checked("a.ts", NESTED, lazy, |c, errors, _| {
+                (errors, c.type_count, c.total_instantiation_count)
+            })
+        };
+        let (eager, lazy) = (run(false), run(true));
+        assert_eq!(eager.0.matches("error TS5114").count(), 2, "{}", eager.0);
+        assert_eq!(lazy, eager);
+    }
+
     /// A reserved member name takes the full table, as in Go.
     #[test]
     fn switch_on_reserved_name_resolves_full_table() {

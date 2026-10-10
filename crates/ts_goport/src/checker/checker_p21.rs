@@ -1036,7 +1036,10 @@ impl Checker {
         if self.lazy_members && self.get_ready_lazy_member_table(t).is_some() {
             return None;
         }
-        Some(self.resolve_structured_type_members_slow(t))
+        // The first read can prepare the table, and the prepare step can
+        // resolve `t`: then this reads those members (Go
+        // getMemberOfUnresolvedStructuredType calls resolveStructuredTypeMembers).
+        Some(self.resolve_structured_type_members(t))
     }
 
     /// The member resolution dispatch of `resolve_structured_type_members`.
