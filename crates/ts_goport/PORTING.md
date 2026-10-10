@@ -1568,9 +1568,30 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
     request's context: Go's read loop sees the end at once and returns
     (`ipc/conn_async.go:89-91`), and its deferred `cancelHandlers` (`:73`)
     cancels it, so a long check answers early with what it has. The port
-    answers in full and then ends, with Go's exit code. A SIGINT or
-    SIGTERM while a request waits for a client callback ends that call in
-    Go at once; the port ends it after the next message.
+    answers in full and then ends, with Go's exit code.
+  - The end on SIGINT or SIGTERM in `--api --async` is an open Go
+    difference (state note `r187-repair-withdraw-2026-10-09`, lane
+    apisig4). Go's read loop checks the context at the top of each turn
+    (`ipc/conn_async.go:83`) and then waits in the read while a request
+    runs on its own goroutine (`:98`). The port runs the request inline
+    and checks the context after it (`run_loop`). The cases:
+    - A signal during a request: Go answers it, then ends after the next
+      message (it answers that message too) or at the end of the input.
+      The port ends right after the answer and reads no more.
+    - Pipelined requests: a signal during request 1 while request 2 is
+      already sent. Go answers both (2 first) and then waits for the next
+      message. The port answers request 1 and ends: request 2 gets no
+      answer.
+    - A signal while a request waits for a client callback: Go's `Call`
+      returns the context error at once (`:290`), so request 1 is answered
+      at the signal. The port's `call` waits in its read, so it answers
+      request 1 after the next message. Both end after that message.
+  - apisig2 (R187) moved the run's check before an inline request to
+    match the first case. The run then read until the end of the input in
+    the callback case. Its repair apisig3 closed the pending calls at the
+    signal, so the callbacks that a handler makes after the signal
+    (writeFile, removeFile) lost their requests. Both are withdrawn, and
+    `ipc/conn_async.rs` is R186's code.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of

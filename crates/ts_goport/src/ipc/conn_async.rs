@@ -153,24 +153,15 @@ impl AsyncConn {
 
     /// The loop of Go `Run`, without its deferred function. Requests and
     /// notifications get `handler_ctx` (Go `handlerCtx`).
-    ///
-    /// PORT: Go checks `ctx` at the top of each turn, and a request or
-    /// notification runs on its own goroutine, so the next check comes
-    /// right after it starts: a SIGINT or SIGTERM while it runs finds the
-    /// loop waiting in the read, and the run ends only after the next
-    /// message or the end of the input. Here the handler runs inline, so
-    /// the check for the next turn is taken before it (`checked`). A
-    /// response is handled inside Go's loop, so its check comes after it.
     fn run_loop(&self, ctx: &Context, handler_ctx: &Context) -> Result<(), GoError> {
         self.running.set(true);
-        let mut checked = ctx.err();
         loop {
             // PORT: a read in `call` panicked. Go's `Run` panicked at that
             // read, before it checked `ctx` again.
             if let Some(payload) = self.read_panic.take() {
                 resume_unwind(payload);
             }
-            if let Some(err) = checked.take() {
+            if let Some(err) = ctx.err() {
                 return Err(err);
             }
 
@@ -185,13 +176,7 @@ impl AsyncConn {
                 Err(err) => return read_loop_result(err),
             };
 
-            if msg.is_response() {
-                self.dispatch(handler_ctx, msg);
-                checked = ctx.err();
-            } else {
-                checked = ctx.err();
-                self.dispatch(handler_ctx, msg);
-            }
+            self.dispatch(handler_ctx, msg);
         }
     }
 
