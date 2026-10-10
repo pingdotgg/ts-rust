@@ -934,110 +934,43 @@ impl Checker {
     }
 
     // Go: checker/checker.go:22216 somePropertyReducesToNever
-    // PORT: Go N ranged over a map, so its order was random. Since ts#64521
-    // (Go N' checker.go:22283) Go counts in a `collections.OrderedMap` and
-    // tests the names in first-seen order, so it makes the combined
+    // ts#64521, Go N' checker.go:22283: Go counts the names in a
+    // `collections.OrderedMap` and tests them in first-seen order
+    // (constituent order, then property order), so it makes the combined
     // properties in the same order every time. Every order gives the same
-    // answer; the order only decides how many synthetic properties are made
-    // before the first match. The port keeps its own deterministic order
-    // (a PERF deviation from Go N' first-seen order):
-    // first the names that are not a public method in some constituent, then
-    // the names that are a public method in every constituent, each group in
-    // the order in which the names are first seen (constituent order, then
-    // property order). A method's type is a function type, never a literal
-    // type, so a method is no discriminant. A method reduces to never only as
-    // a conflicting private member, so a method that can be private (the
-    // `getDeclarationModifierFlagsFromSymbol` test that sets
-    // `CheckFlagsContainsPrivate`) stays in the first group, and a
-    // conflicting private method is found as early as in first-seen order.
-    // A `#private` name sets no such flag and is unique to its class, so it is
-    // no conflicting private member. In first-seen order alone, the `length`
-    // of a tuple intersection (`[] & [a: A] & ...`) came after the array
-    // methods, and the mongodb test check made 2.2 times Go's symbols.
+    // answer, but each name tested before the first match makes a synthetic
+    // property (a Symbol, and Types and Instantiations when a constituent
+    // property type is new), and `--extendedDiagnostics` prints those
+    // counts. So the port tests the names in Go's order too.
     // PERF: the counts are keyed by the name id with FxHash, and each lookup
     // passes the `Name`, so no name text is hashed, compared or copied (Go
     // hashes the text).
     pub fn some_property_reduces_to_never(&mut self, t: TypeId) -> bool {
         // Collect declaration counts for each property across all constituent types of the intersection.
-        // PORT: with each count, whether every declaration of the name is a
-        // public method (`is_public_method`), and the value declaration of
-        // the first property of the name.
-        // PERF: a name seen again with that value declaration is not tested
-        // again. That is almost always the same member (an instantiation of
-        // it). It can be another symbol: a union or intersection property of
-        // two or more properties is a property, not a method, with their
-        // value declaration when they have one and the same (Go
-        // `createUnionOrIntersectionProperty`, checker.go:21821 and :21988).
-        // So in `A<string> & T`, where `T extends A<string> | A<number>` and
-        // `A.m` is a public method, the `m` of `T` (a property of its
-        // apparent type `A<string> | A<number>`, checker.go:19187) is
-        // skipped, and `m` stays with the public methods
-        // (`tests::a_skipped_property_can_be_a_union_property`). An
-        // intersection has no union constituent: Go distributes
-        // `A & (A | B)` over the union (checker.go:26508), so that type is
-        // the union `A | (A & B)`. That changes only the order of the tests
-        // below, not the answer: both groups are tested. The tuples of an intersection
-        // share the lib declarations of their array methods, so this saves
-        // a test for each method of each tuple (mongodb test check: the test
-        // cost 6.5% more instructions, 1.6% with the parent of the first
-        // declaration as the key). The key is not the parent: an instance
-        // and a static member of one class have the same parent, so in
-        // `A & typeof A` a `private static m()` after a public `m()` went
-        // last, after every property of the class.
-        let mut counts: FxIndexMap<u32, (i32, bool, Node)> = FxIndexMap::default();
+        let mut counts: FxIndexMap<u32, i32> = FxIndexMap::default();
         for i in 0..self.ty(t).types().len() {
             let u = self.type_at(t, i);
             let props = self.get_properties_of_type(u);
             for &prop in props.iter() {
-                let symbol = self.sym(prop);
-                match counts.entry(symbol.name.id()) {
-                    indexmap::map::Entry::Occupied(entry) => {
-                        let entry = entry.into_mut();
-                        entry.0 += 1;
-                        if entry.1 && symbol.value_declaration != entry.2 {
-                            entry.1 = self.is_public_method(prop);
-                        }
-                    }
-                    indexmap::map::Entry::Vacant(entry) => {
-                        entry.insert((1, self.is_public_method(prop), symbol.value_declaration));
-                    }
-                }
+                *counts.entry(self.sym(prop).name.id()).or_insert(0) += 1;
             }
         }
         // Check if any property appears in more than one constituent type and reduces to 'never'.
-        for public_methods in [false, true] {
-            for (&id, &(count, all_public_methods, _)) in &counts {
-                if count > 1 && all_public_methods == public_methods {
-                    let prop_name = Name::from_id(id);
-                    let prop = self.get_property_of_union_or_intersection_type_key(
-                        t,
-                        TableKey::Name(&prop_name),
-                        true, /*skipObjectFunctionPropertyAugment*/
-                    );
-                    if prop.is_some() && self.is_never_reduced_property(prop) {
-                        return true;
-                    }
+        // Go in the order the properties were found so the combined properties are created in the same order every time.
+        for (&id, &count) in &counts {
+            if count > 1 {
+                let prop_name = Name::from_id(id);
+                let prop = self.get_property_of_union_or_intersection_type_key(
+                    t,
+                    TableKey::Name(&prop_name),
+                    true, /*skipObjectFunctionPropertyAugment*/
+                );
+                if prop.is_some() && self.is_never_reduced_property(prop) {
+                    return true;
                 }
             }
         }
         false
-    }
-
-    /// Whether `prop` is a method that cannot be private, for the name order
-    /// of `some_property_reduces_to_never`.
-    // PORT: no Go counterpart. A method is never synthetic, and Go
-    // `getDeclarationModifierFlagsFromSymbol` drops the accessibility
-    // modifiers of a member whose parent is no class, so only a class method
-    // needs the modifier test. A method that is also a property takes the
-    // property's type, so it does not count as a method.
-    fn is_public_method(&self, prop: SymbolId) -> bool {
-        let symbol = self.sym(prop);
-        symbol.flags & (SymbolFlags::METHOD | SymbolFlags::PROPERTY) == SymbolFlags::METHOD
-            && !(symbol.parent.is_some()
-                && self.sym(symbol.parent).flags.intersects(SymbolFlags::CLASS)
-                && self
-                    .get_declaration_modifier_flags_from_symbol(prop)
-                    .intersects(ModifierFlags::PRIVATE))
     }
 
     // Go: checker/checker.go:22235 getReducedUnionType
@@ -2370,64 +2303,40 @@ mod tests {
     use super::*;
     use crate::checker::utilities_p1::union_sort_tests::with_alias_types;
 
-    /// The example of `some_property_reduces_to_never`. In
-    /// `A<string> & T & { kind: "b" }`, where
-    /// `T extends A<string> | A<number>`, the first `m` is the public method
-    /// of `A<string>`. The `m` of `T` comes next: the union property of
-    /// `A<string> | A<number>`, a property with the same value declaration
-    /// (Go `createUnionOrIntersectionProperty`, checker.go:21821 and
-    /// :21988). So it is skipped, and `m` stays with the public methods:
-    /// `kind` (`"a" & "a" & "b"` is never, a discriminant, Go
-    /// `isDiscriminantWithNeverType`, checker.go:22273) is tested first,
-    /// though `m` is seen first, and the test returns there. The property
-    /// cache of the intersection then has no `m`. With no skip, `m` would
-    /// be tested first. Go keeps the order of an intersection
-    /// (`addTypeToIntersection`, checker.go:26723), and distributes an
-    /// intersection over a union (checker.go:26508), so
-    /// `A<string> & (A<string> | B)` is a union.
+    /// `some_property_reduces_to_never` tests the shared names in first-seen
+    /// order, as Go N' does (ts#64521, checker.go:22283). In `A & B` the
+    /// method `m` is seen first, so its synthetic property is made before
+    /// `kind` (`"a" & "b"` is never, a discriminant, Go
+    /// `isDiscriminantWithNeverType`, checker.go:22341) ends the test. In
+    /// `C & D` `kind` is seen first, so the test ends before `m` is tested,
+    /// and the property cache of the intersection has no `m`.
     #[test]
-    fn a_skipped_property_can_be_a_union_property() {
+    fn never_reduction_tests_names_in_first_seen_order() {
         const SOURCE: &str = r#"
-interface A<X> { m(): X; kind: "a" }
-interface B { m: number }
-type D = A<string> & (A<string> | B);
-type I<T extends A<string> | A<number>> = A<string> & T & { kind: "b" };
+interface A { m(): string; kind: "a" }
+interface B { m(): number; kind: "b" }
+interface C { kind: "c"; m(): string }
+interface D { kind: "d"; m(): number }
+type MK = A & B;
+type KM = C & D;
 "#;
         let got = with_alias_types(SOURCE, |c, types| {
-            let (d, i) = (types[0], types[1]);
-            let constituents = c.ty(i).types().to_vec();
-            let props: Vec<SymbolId> = constituents[..2]
+            types[..2]
                 .iter()
-                .map(|&u| {
-                    let props = c.get_properties_of_type(u);
-                    props
-                        .iter()
-                        .copied()
-                        .find(|&p| c.sym(p).name == "m")
-                        .expect("A<string> and T have m")
+                .map(|&i| {
+                    let reduces = c.some_property_reduces_to_never(i);
+                    let cache = c
+                        .ty(i)
+                        .as_union_or_intersection_type()
+                        .property_cache_without_function_property_augment;
+                    (
+                        reduces,
+                        ["kind", "m"].map(|name| c.symbols.get(cache, name).is_some()),
+                    )
                 })
-                .collect();
-            let public_methods: Vec<bool> = props.iter().map(|&p| c.is_public_method(p)).collect();
-            let reduces = c.some_property_reduces_to_never(i);
-            let cache = c
-                .ty(i)
-                .as_union_or_intersection_type()
-                .property_cache_without_function_property_augment;
-            (
-                c.ty(d).flags.intersects(TypeFlags::UNION),
-                c.ty(i).flags.intersects(TypeFlags::INTERSECTION),
-                constituents.len(),
-                c.sym(props[0]).value_declaration.is_some()
-                    && c.sym(props[0]).value_declaration == c.sym(props[1]).value_declaration,
-                public_methods,
-                reduces,
-                ["kind", "m"].map(|name| c.symbols.get(cache, name).is_some()),
-            )
+                .collect::<Vec<_>>()
         });
-        assert_eq!(
-            got,
-            (true, true, 3, true, vec![true, false], true, [true, false])
-        );
+        assert_eq!(got, vec![(true, [true, true]), (true, [true, false])]);
     }
 
     /// `get_reduced_apparent_type` returns early for object types (plain,

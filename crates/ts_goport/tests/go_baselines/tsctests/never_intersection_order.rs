@@ -1,21 +1,22 @@
 //! Port-only test of the name order of `some_property_reduces_to_never`
 //! (Go `checker/checker.go:22216 somePropertyReducesToNever`).
 //!
-//! PORT: no Go counterpart. Go ranges over a map, so it checks the shared
-//! names of an intersection in a random order and stops at the first one
-//! that reduces to never. Each name that it checks before that one makes a
-//! synthetic property. The port checks the names that are not a method in
-//! every constituent first. Here `A & B` reduces to never by `kind`, and the
-//! 30 methods of `A` and `B` have different types, so each method checked
-//! before `kind` makes one symbol and one intersection type. The counts must
-//! not depend on where `kind` is declared. In first-seen order alone, `kind`
-//! after the methods made 30 more symbols and 30 more types.
+//! PORT: no Go counterpart. Since ts#64521 (Go N' checker.go:22283) Go
+//! tests the shared names of an intersection in first-seen order and stops
+//! at the first one that reduces to never. Each name that it tests before
+//! that one makes a synthetic property, and `--extendedDiagnostics` counts
+//! it. Here `A & B` reduces to never by `kind`, and the 30 methods of `A`
+//! and `B` have different types, so each method tested before `kind` makes
+//! one symbol, and the methods' types are made. With `kind` after the
+//! methods, the Go N' oracle (tsgo-oracle-fed0bf24149f, this text in a
+//! project of its own) prints 30 more symbols and 90 more types: Symbols
+//! 59,957 against 59,927, Types 34,981 against 34,891.
 //!
-//! A method that can be private stays with the properties, in first-seen
-//! order, so a conflicting private method declared first is found before the
-//! properties are checked. That holds for a private static method that
-//! shares its name with a public instance method too; that test also checks
-//! Go's error text, which names the private `m`.
+//! A conflicting private method declared first is found before the
+//! properties are tested, and one declared last after them. That holds for
+//! a private static method that shares its name with a public instance
+//! method too; that test also checks Go's error text, which names the
+//! private `m`. The Go N' oracle gives the same differences (30 symbols).
 
 use crate::support::child::run_command_in_child;
 use crate::support::runner::TscInput;
@@ -23,9 +24,9 @@ use crate::support::test_sys::new_test_sys;
 
 const PROJECT: &str = "/home/src/workspaces/project";
 
-/// The `Symbols` and `Types` lines of `tsc --extendedDiagnostics` on
+/// The `Symbols` and `Types` counts of `tsc --extendedDiagnostics` on
 /// `A & B`, with `kind` declared before or after the methods.
-fn counts(kind_first: bool) -> (String, String) {
+fn counts(kind_first: bool) -> (u64, u64) {
     let methods =
         |ret: &str| -> String { (0..30).map(|i| format!("    m{i}(): {ret};\n")).collect() };
     let interface = |name: &str, ret: &str, kind: &str| {
@@ -41,21 +42,8 @@ fn counts(kind_first: bool) -> (String, String) {
         interface("A", "string", "a"),
         interface("B", "number", "b")
     );
-    counts_of(text)
-}
-
-/// The `Symbols` and `Types` lines of `tsc --extendedDiagnostics` on the
-/// project with the one file `a.ts`.
-fn counts_of(text: String) -> (String, String) {
     let output = output_of(text);
-    let line = |name: &str| {
-        output
-            .lines()
-            .find(|line| line.starts_with(name))
-            .unwrap_or_else(|| panic!("no {name} line in:\n{output}"))
-            .to_string()
-    };
-    (line("Symbols:"), line("Types:"))
+    (count_of(&output, "Symbols:"), count_of(&output, "Types:"))
 }
 
 /// The output of `tsc --extendedDiagnostics --pretty false` on the project
@@ -88,10 +76,14 @@ fn output_of(text: String) -> String {
 }
 
 #[test]
-fn never_intersection_checks_properties_before_methods() {
-    let first = counts(true);
-    let last = counts(false);
-    assert_eq!(first, last, "kind declared first, then last");
+fn never_intersection_checks_names_in_first_seen_order() {
+    let (first_symbols, first_types) = counts(true);
+    let (last_symbols, last_types) = counts(false);
+    assert_eq!(
+        (last_symbols - first_symbols, last_types - first_types),
+        (30, 90),
+        "kind declared last, then first"
+    );
 }
 
 /// The `Symbols` count on `A & B` of two classes whose `private m()` is
@@ -111,24 +103,20 @@ fn private_symbols(method_first: bool) -> u64 {
         class("A", "string"),
         class("B", "number")
     );
-    symbols_of(text)
+    count_of(&output_of(text), "Symbols:")
 }
 
-/// The `Symbols` count of `tsc --extendedDiagnostics` on `text`.
-fn symbols_of(text: String) -> u64 {
-    symbols_of_output(&output_of(text))
-}
-
-/// The `Symbols` count in a `tsc --extendedDiagnostics` output.
-fn symbols_of_output(output: &str) -> u64 {
-    let symbols = output
+/// The count of the `name` line (`"Symbols:"`, `"Types:"`) in a
+/// `tsc --extendedDiagnostics` output.
+fn count_of(output: &str, name: &str) -> u64 {
+    let count = output
         .lines()
-        .find_map(|line| line.strip_prefix("Symbols:"))
-        .unwrap_or_else(|| panic!("no Symbols line in:\n{output}"));
-    symbols
+        .find_map(|line| line.strip_prefix(name))
+        .unwrap_or_else(|| panic!("no {name} line in:\n{output}"));
+    count
         .trim()
         .parse()
-        .unwrap_or_else(|err| panic!("{symbols:?}: {err}"))
+        .unwrap_or_else(|err| panic!("{count:?}: {err}"))
 }
 
 #[test]
@@ -141,8 +129,8 @@ fn never_intersection_checks_private_methods_with_properties() {
 /// of a class with a public `m()`, a `private static m()` and 30 names that
 /// are an instance and a static property of different types, with the
 /// methods declared before or after the properties. The output must have
-/// Go N's error (tsgo-oracle-673a5f17d713, the same for both orders): the
-/// intersection is never because of `m`.
+/// Go's error (tsgo-oracle-673a5f17d713 and tsgo-oracle-fed0bf24149f, the
+/// same for both orders): the intersection is never because of `m`.
 fn private_static_symbols(methods_first: bool) -> u64 {
     let methods = "    m(): void {}\n    private static m(): void {}\n";
     let fields: String = (0..30)
@@ -163,14 +151,14 @@ fn private_static_symbols(methods_first: bool) -> u64 {
         output.contains(error),
         "methods first {methods_first}:\n{output}"
     );
-    symbols_of_output(&output)
+    count_of(&output, "Symbols:")
 }
 
 #[test]
 fn never_intersection_checks_a_private_static_method_with_properties() {
-    // The instance `m` and the static `m` have one parent, the class. The
-    // static `m` is private, so `m` stays with the properties, and each
-    // property checked before it makes one synthetic property.
+    // The instance `m` and the static `m` have different declarations, and
+    // the static `m` is private, so `m` is a conflicting private member.
+    // Each property checked before it makes one synthetic property.
     assert_eq!(
         private_static_symbols(false) - private_static_symbols(true),
         30
