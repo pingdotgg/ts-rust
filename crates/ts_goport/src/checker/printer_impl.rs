@@ -187,10 +187,12 @@ impl Checker {
         if no_truncation {
             combined_flags = combined_flags | NodeBuilderFlags::NO_TRUNCATION;
         }
-        // PORT: Go defers the release func from getNodeBuilder, which only lets
-        // the factory free its arenas. Rust frees nodes by ownership, so there
-        // is nothing to release.
+        // PORT: Go defers the release func from getNodeBuilder, which lets
+        // the factory drop its arenas. Here `PrintScope` frees the nodes of
+        // the call when it ends; it drops after the printer.
         let node_builder = self.get_node_builder();
+        // Go `defer release()`: the nodes of this call are freed when it ends.
+        let _print = PrintScope::open(&node_builder);
         let _verbosity = VerbosityRestore::install(&node_builder, vc);
         self.serialization_level += 1;
         // PORT: Go does not restore serializationLevel when TypeToTypeNode
@@ -302,6 +304,8 @@ impl Checker {
 
         // PORT: see type_to_string_ex about the release func.
         let node_builder = self.get_node_builder();
+        // Go `defer release()`: the nodes of this call are freed when it ends.
+        let _print = PrintScope::open(&node_builder);
         let source_file = source_file_of_enclosing(enclosing_declaration);
         let emit_context = node_builder.borrow().emit_context();
         // add neverAsciiEscape for GH#39027
@@ -374,6 +378,8 @@ impl Checker {
 
         // PORT: see type_to_string_ex about the release func.
         let node_builder = self.get_node_builder();
+        // Go `defer release()`: the nodes of this call are freed when it ends.
+        let _print = PrintScope::open(&node_builder);
         let _verbosity = VerbosityRestore::install(&node_builder, vc);
         let combined_flags = to_node_builder_flags(flags)
             | NodeBuilderFlags::IGNORE_ERRORS
@@ -425,6 +431,8 @@ impl Checker {
         let writer = Rc::new(RefCell::new(get_single_line_string_writer()));
         // PORT: see type_to_string_ex about the release func.
         let node_builder = self.get_node_builder();
+        // Go `defer release()`: the nodes of this call are freed when it ends.
+        let _print = PrintScope::open(&node_builder);
         let combined_flags = to_node_builder_flags(flags)
             | NodeBuilderFlags::IGNORE_ERRORS
             | NodeBuilderFlags::WRITE_TYPE_PARAMETERS_IN_QUALIFIED_NAME;
@@ -524,8 +532,11 @@ impl Checker {
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
     ) -> Node {
-        // PORT: see type_to_string_ex about the release func.
+        // PORT: Go releases here too (see type_to_string_ex), but the caller
+        // keeps the node. Inside a to-string call the to-string factory puts
+        // it in the print owner, so the call keeps its nodes.
         let node_builder = self.get_node_builder();
+        crate::ast::synthetic::pin_print_scope();
         self.node_builder_signature_to_signature_declaration(
             &node_builder,
             signature,
@@ -549,6 +560,8 @@ impl Checker {
     ) -> String {
         // PORT: see type_to_string_ex about the release func.
         let node_builder = self.get_node_builder();
+        // Go `defer release()`: the nodes of this call are freed when it ends.
+        let _print = PrintScope::open(&node_builder);
         let _verbosity = VerbosityRestore::install(&node_builder, vc);
         let nodes = self.node_builder_expand_symbol_for_hover(&node_builder, symbol, meaning);
         let result = if nodes.is_empty() {
@@ -584,6 +597,8 @@ impl Checker {
     ) -> String {
         // PORT: see type_to_string_ex about the release func.
         let node_builder = self.get_node_builder();
+        // Go `defer release()`: the nodes of this call are freed when it ends.
+        let _print = PrintScope::open(&node_builder);
         let _verbosity = VerbosityRestore::install(&node_builder, vc);
         let type_param_node = self.node_builder_type_parameter_to_declaration(
             &node_builder,
@@ -644,5 +659,85 @@ impl Checker {
             InternalNodeBuilderFlags::NONE,
             None,
         )
+    }
+}
+
+/// The print scope of a to-string call. Go `getNodeBuilder` returns
+/// `release` (`Factory.ReleaseArenas`), which each caller defers. While the
+/// outermost scope is open, the nodes and lists that the to-string factory
+/// makes belong to the print owner (`ast::synthetic::enter_print_scope`).
+/// The end of that scope frees them, with the side data that the builder
+/// keeps for them: emit records, original links, idToSymbol entries, the
+/// cache records of fake scopes, and the serialized types under the nil key.
+// PORT: Go keeps these side tables, and the nodes that they reach, for the
+// life of the checker, but no Go code reads them for a node of an ended
+// call. The one later reader is the serialized type cache under an
+// enclosing declaration, and a store there pins the call
+// (`visit_and_transform_type`). `GOPORT_N1=0` turns print scopes off (an A/B
+// switch).
+struct PrintScope(Option<Rc<RefCell<NodeBuilder>>>);
+
+impl PrintScope {
+    fn open(nb: &Rc<RefCell<NodeBuilder>>) -> Self {
+        static ON: std::sync::LazyLock<bool> =
+            std::sync::LazyLock::new(|| std::env::var("GOPORT_N1").as_deref() != Ok("0"));
+        if !*ON {
+            return Self(None);
+        }
+        crate::ast::synthetic::enter_print_scope();
+        Self(Some(nb.clone()))
+    }
+}
+
+impl Drop for PrintScope {
+    fn drop(&mut self) {
+        let Some(nb) = self.0.take() else {
+            return;
+        };
+        // `None` for a nested scope, a pinned call and a panic.
+        let Some(ranges) = crate::ast::synthetic::exit_print_scope() else {
+            return;
+        };
+        if ranges.is_empty() {
+            return;
+        }
+        // `try_borrow`, so a drop never panics. A borrow that is still held
+        // only leaves records of freed handles, which no read can name.
+        let Ok(b) = nb.try_borrow() else {
+            return;
+        };
+        let (e, imp) = (b.emit_context(), b.impl_.clone());
+        drop(b);
+        e.forget_synthetic_slots(&ranges);
+        let Ok(mut imp) = imp.try_borrow_mut() else {
+            return;
+        };
+        let imp = &mut *imp;
+        forget_print_keys(&mut imp.id_to_symbol, &ranges);
+        if !imp.links.map_is_empty() {
+            for n in crate::ast::synthetic::print_range_nodes(&ranges) {
+                imp.links.remove(n);
+            }
+        }
+        // Read only under an enclosing declaration (`visit_and_transform_type`).
+        if imp.links.has(Node::NIL) {
+            imp.links.get(Node::NIL).serialized_types = FxHashMap::default();
+        }
+    }
+}
+
+/// Removes the entries of the freed nodes in `ranges` (from
+/// `ast::synthetic::exit_print_scope`) from `map`, key by key, so the cost
+/// follows the size of the call, not of the map.
+fn forget_print_keys<V>(map: &mut FxHashMap<Node, V>, ranges: &[(u32, u32)]) {
+    if map.is_empty() {
+        return;
+    }
+    for n in crate::ast::synthetic::print_range_nodes(ranges) {
+        map.remove(&n);
+    }
+    // A big call leaves a big empty table.
+    if map.is_empty() && map.capacity() > 1024 {
+        *map = FxHashMap::default();
     }
 }

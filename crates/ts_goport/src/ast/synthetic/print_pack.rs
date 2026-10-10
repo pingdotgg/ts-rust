@@ -84,6 +84,7 @@ pub fn export_print_pack(roots: &[Node], mut more: impl FnMut(Node, &mut Vec<Nod
                     }
                 }
                 Slot::Absent => panic!("{ABSENT}"),
+                Slot::Freed => panic!("{PRINT_FREED}"),
             }
         }
     });

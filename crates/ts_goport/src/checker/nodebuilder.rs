@@ -571,13 +571,21 @@ impl Checker {
     }
 
     // Go: checker/nodebuilder.go:288 Checker.getNodeBuilder
-    // PORT: Go also returns a release func that frees the factory arenas.
-    // Rust frees nodes by ownership, so there is nothing to release.
+    // PORT: Go also returns a release func (`Factory.ReleaseArenas`) that the
+    // to-string entries defer. Here those entries open a print scope
+    // (`PrintScope` in printer_impl.rs), and this builder's factory puts its
+    // nodes in the print owner while one is open, so the end of the call
+    // frees them.
     pub fn get_node_builder(&mut self) -> Rc<RefCell<NodeBuilder>> {
         if let Some(nb) = &self.type_to_string_nodebuilder {
             return nb.clone();
         }
         let nb = self.get_node_builder_ex(None /*idToSymbol*/);
+        nb.borrow()
+            .emit_context()
+            .factory()
+            .as_node_factory()
+            .set_print_owned();
         self.type_to_string_nodebuilder = Some(nb.clone());
         nb
     }

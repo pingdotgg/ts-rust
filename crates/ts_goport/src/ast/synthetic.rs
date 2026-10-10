@@ -60,7 +60,12 @@
 //!   list or list copy goes to the file version of a parsed node in the
 //!   same way. Lazy JSDoc opens one: its cache keeps the JSDoc nodes of a
 //!   parsed node for as long as that node lives;
-//! - node slices always go to the base owner.
+//! - node slices always go to the base owner;
+//! - in a print scope (`enter_print_scope`, a to-string call of the
+//!   checker), a new node or list of a to-string factory
+//!   (`NodeFactory::set_print_owned`) goes to the print owner of the
+//!   thread. The end of the call frees them, unless the call is pinned
+//!   (`pin_print_scope`): then they go to the current owner.
 //!
 //! Code whose nodes a cache keeps across program versions (the token cache,
 //! parses) opens a base scope.
@@ -108,6 +113,9 @@ enum Slot {
     /// A slot of a checker thread that no print pack copied to its d.ts
     /// twin (`print_pack`). A read panics.
     Absent,
+    /// A node of a to-string call that ended (`exit_print_scope`). A read
+    /// panics.
+    Freed,
 }
 
 /// The mutable Go `NodeBase` fields of a factory node.
@@ -191,6 +199,8 @@ pub struct SyntheticSourceFileData {
 enum OwnList {
     Nodes(crate::astdata::NodeList),
     Modifiers(crate::astdata::ModifierList),
+    /// A list of a to-string call that ended. A read panics.
+    Freed,
 }
 
 impl OwnList {
@@ -198,6 +208,7 @@ impl OwnList {
         match self {
             Self::Nodes(l) => AnyList::Nodes(l),
             Self::Modifiers(m) => AnyList::Modifiers(m),
+            Self::Freed => panic!("{PRINT_FREED}"),
         }
     }
 }
@@ -224,6 +235,10 @@ type DataChunk = Rc<[OnceCell<crate::astdata::Node>]>;
 
 /// The panic of a read of an entry whose owner was freed.
 const FREED: &str = "synthetic entry of a released program or file version is read";
+
+/// The panic of a read of an entry of a to-string call that ended
+/// (`Slot::Freed`, `OwnList::Freed`; see `exit_print_scope`).
+const PRINT_FREED: &str = "a synthetic node of a to-string call that ended is read";
 
 /// The panic of a read on a d.ts twin of a checker entry that no print pack
 /// copied (`Slot::Absent`).
@@ -252,6 +267,10 @@ enum OwnerKey {
     /// The alias slots of the nodes of a freeable file version (its file
     /// id) and the entries made in its file scopes, in chunks of their own.
     File(u32),
+    /// The nodes and lists that a to-string factory makes in a print scope
+    /// (`enter_print_scope`). One per thread. Its entries are freed when
+    /// their call ends.
+    Print,
 }
 
 /// The chunk numbers of one owner, oldest first. New entries of the owner
@@ -321,6 +340,35 @@ struct SyntheticArena {
     /// chunks take their numbers from it, and a table has no chunk (`None`)
     /// at the numbers of the other thread.
     shared: Option<Arc<SharedChunks>>,
+    /// The chunks of `OwnerKey::Print` and the open print scopes.
+    print: PrintState,
+}
+
+/// The print owner of a thread (`enter_print_scope`).
+#[derive(Default)]
+struct PrintState {
+    chunks: OwnerChunks,
+    /// Open print scopes. Only the outermost frees.
+    depth: u32,
+    /// The open call keeps its nodes (`pin_print_scope`).
+    pinned: bool,
+    /// When the outermost scope opened: the index in `chunks.slots` and the
+    /// filled slots of that chunk.
+    start: (usize, usize),
+    /// The same for `chunks.datas` (filled cells) and `chunks.lists`.
+    data_start: (usize, usize),
+    list_start: (usize, usize),
+}
+
+impl PrintState {
+    const EMPTY: Self = Self {
+        chunks: OwnerChunks::EMPTY,
+        depth: 0,
+        pinned: false,
+        start: (0, 0),
+        data_start: (0, 0),
+        list_start: (0, 0),
+    };
 }
 
 impl SyntheticArena {
@@ -345,6 +393,7 @@ impl SyntheticArena {
             last: None,
             slots_made: 1,
             shared: None,
+            print: PrintState::EMPTY,
         }
     }
 
@@ -389,6 +438,16 @@ impl SyntheticArena {
         };
         self.last = Some((program, owner));
         owner
+    }
+
+    /// The owner of a new node or list: the print owner for a to-string
+    /// factory (`print`) in a print scope, else `current_owner`.
+    #[inline]
+    fn owner_for(&mut self, print: bool) -> OwnerKey {
+        if print && self.print.depth > 0 {
+            return OwnerKey::Print;
+        }
+        self.current_owner()
     }
 
     /// The owner of a new alias slot for parsed node `n`, or of a file
@@ -474,9 +533,10 @@ impl SyntheticArena {
             owners,
             alias_files,
             shared,
+            print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         push_slot_into(slots, slot_owner, shared, chunks, owner, slot)
     }
 
@@ -502,9 +562,10 @@ impl SyntheticArena {
             owners,
             alias_files,
             shared,
+            print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         let data = push_data_into(datas, shared, chunks, node);
         push_slot_into(slots, slot_owner, shared, chunks, owner, slot(data))
     }
@@ -527,9 +588,10 @@ impl SyntheticArena {
             owners,
             alias_files,
             shared,
+            print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         push_data_into(datas, shared, chunks, node)
     }
 
@@ -548,9 +610,10 @@ impl SyntheticArena {
             owners,
             alias_files,
             shared,
+            print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         let open = chunks
             .lists
             .last()
@@ -594,6 +657,7 @@ impl SyntheticArena {
             Slot::Alias(target) => *target,
             Slot::Node(_) => handle(index as u32),
             Slot::Absent => panic!("{ABSENT}"),
+            Slot::Freed => panic!("{PRINT_FREED}"),
         }
     }
 
@@ -638,10 +702,12 @@ fn owner_chunks<'a>(
     base: &'a mut OwnerChunks,
     owners: &'a mut FxHashMap<u32, OwnerChunks>,
     alias_files: &'a mut FxHashMap<u32, OwnerChunks>,
+    print: &'a mut OwnerChunks,
     owner: OwnerKey,
 ) -> &'a mut OwnerChunks {
     match owner {
         OwnerKey::Base => base,
+        OwnerKey::Print => print,
         OwnerKey::Program(id) => owners.get_mut(&id).expect("synthetic owner is not open"),
         OwnerKey::File(file) => alias_files
             .get_mut(&file)
@@ -721,6 +787,7 @@ fn push_data_into(
 fn not_a_node_slot(slot: &Slot) -> ! {
     match slot {
         Slot::Absent => panic!("{ABSENT}"),
+        Slot::Freed => panic!("{PRINT_FREED}"),
         _ => panic!("synthetic handle does not name a node slot"),
     }
 }
@@ -822,6 +889,273 @@ pub fn free_synthetic_owner(id: u32) {
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Print scopes (Go `getNodeBuilder` release: `Factory.ReleaseArenas`)
+// ──────────────────────────────────────────────────────────────────────
+
+/// Opens a print scope on this thread, for a to-string call of the checker
+/// (Go `getNodeBuilder`, whose callers defer its `release`). While a scope
+/// is open, the new nodes and lists of a to-string factory
+/// (`NodeFactory::set_print_owned`) belong to the print owner. A nested
+/// call joins the outermost scope. `exit_print_scope` closes it.
+// PORT: Go `release` (`Factory.ReleaseArenas`) only drops the factory's
+// arena slices, and the GC frees the nodes that nothing reaches. Here the end
+// of the outermost scope frees the nodes of the call at once, unless a cache
+// that a later call reads keeps one of them (`pin_print_scope`).
+pub fn enter_print_scope() {
+    ARENA.with(|a| {
+        let mut a = a.borrow_mut();
+        let SyntheticArena {
+            slots,
+            lists,
+            print,
+            ..
+        } = &mut *a;
+        print.depth += 1;
+        if print.depth > 1 {
+            return;
+        }
+        print.pinned = false;
+        // (the index in the chunk list of the chunk that the next entry
+        // goes to, the filled entries of that chunk).
+        let next = |chunks: &[u32], fill: Option<usize>, per_chunk: usize| match fill {
+            Some(fill) if fill < per_chunk => (chunks.len() - 1, fill),
+            _ => (chunks.len(), 0),
+        };
+        let c = &print.chunks;
+        print.start = next(
+            &c.slots,
+            c.slots
+                .last()
+                .map(|&c| slots[c as usize].as_ref().expect(FREED).len()),
+            SLOT_CHUNK,
+        );
+        print.data_start = next(
+            &c.datas,
+            c.datas.last().map(|_| c.data_fill as usize),
+            DATA_CHUNK,
+        );
+        print.list_start = next(
+            &c.lists,
+            c.lists
+                .last()
+                .map(|&c| lists[c as usize].as_ref().expect(FREED).len()),
+            LIST_CHUNK,
+        );
+    });
+}
+
+/// Keeps the nodes of the open print call: a cache that a later call reads
+/// (the node builder's serialized types under an enclosing declaration)
+/// stored one of them, or the call returns one. Does nothing outside a print
+/// scope.
+pub fn pin_print_scope() {
+    ARENA.with(|a| {
+        let mut a = a.borrow_mut();
+        if a.print.depth > 0 {
+            a.print.pinned = true;
+        }
+    });
+}
+
+/// True when `n` is a node of the print owner: a node of the open print
+/// call.
+#[must_use]
+pub fn is_print_node(n: Node) -> bool {
+    is_synthetic_node(n)
+        && ARENA.with(|a| {
+            a.borrow().slot_owner.get(slot_index(n) / SLOT_CHUNK) == Some(&OwnerKey::Print)
+        })
+}
+
+/// The handles of the nodes in the slot index ranges of an ended print call
+/// (`exit_print_scope`).
+pub fn print_range_nodes(ranges: &[(u32, u32)]) -> impl Iterator<Item = Node> + '_ {
+    ranges.iter().flat_map(|&(lo, hi)| (lo..hi).map(handle))
+}
+
+/// Closes a print scope (`enter_print_scope`). At the end of the outermost
+/// scope of a call that is not pinned, it frees the entries of the call:
+/// their slots become `Slot::Freed`, their lists `OwnList::Freed` and their
+/// data cells empty, so a later read panics. The print chunks that are full
+/// go. It returns the slot index ranges `[lo, hi)` of the freed nodes, so
+/// the caller drops their side data (emit records, idToSymbol entries). The
+/// chunks of a pinned call go to the current owner and live on, as before
+/// print scopes. During a panic it frees nothing (as for a pinned call).
+/// Returns `None` when it frees nothing.
+pub fn exit_print_scope() -> Option<Vec<(u32, u32)>> {
+    let panicking = std::thread::panicking();
+    let (ranges, freed) = ARENA.with(|a| {
+        let mut a = a.borrow_mut();
+        // 0 when the arena was replaced while the scope was open
+        // (`free_synthetic_nodes`, a seed): there is nothing to close.
+        if a.print.depth == 0 {
+            return (None, None);
+        }
+        a.print.depth -= 1;
+        if a.print.depth > 0 {
+            return (None, None);
+        }
+        if std::mem::take(&mut a.print.pinned) || panicking {
+            a.adopt_print_chunks();
+            return (None, None);
+        }
+        let ranges = a.print_call_ranges();
+        let SyntheticArena {
+            slots,
+            datas,
+            lists,
+            print,
+            ..
+        } = &mut *a;
+        clear_print_call(print, slots, datas, lists, &ranges);
+        let freed = take_full_print_chunks(&mut print.chunks, slots, datas, lists);
+        (Some(ranges), Some(freed))
+    });
+    // The payloads drop after the arena borrow ends.
+    drop(freed);
+    ranges
+}
+
+impl SyntheticArena {
+    /// The slot index ranges of the open print call: from `print.start` to
+    /// the end of each print slot chunk.
+    fn print_call_ranges(&self) -> Vec<(u32, u32)> {
+        let (first, filled) = self.print.start;
+        let mut ranges = Vec::new();
+        for (i, &c) in self.print.chunks.slots.iter().enumerate().skip(first) {
+            let len = self.slots[c as usize].as_ref().expect(FREED).len();
+            let lo = if i == first { filled } else { 0 };
+            if len > lo {
+                let base = c as usize * SLOT_CHUNK;
+                ranges.push(((base + lo) as u32, (base + len) as u32));
+            }
+        }
+        ranges
+    }
+
+    /// Gives all print chunks to the current owner, before the chunk that
+    /// the owner fills now, so the owner keeps filling that one. The next
+    /// print call starts new chunks.
+    fn adopt_print_chunks(&mut self) {
+        let owner = self.current_owner();
+        let chunks = std::mem::take(&mut self.print.chunks);
+        for &c in &chunks.slots {
+            self.slot_owner[c as usize] = owner;
+        }
+        let SyntheticArena {
+            base,
+            owners,
+            alias_files,
+            print,
+            ..
+        } = self;
+        let target = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
+        fn put(dst: &mut Vec<u32>, src: Vec<u32>) {
+            let at = dst.len().saturating_sub(1);
+            dst.splice(at..at, src);
+        }
+        if target.datas.is_empty() {
+            target.data_fill = chunks.data_fill;
+        }
+        put(&mut target.slots, chunks.slots);
+        put(&mut target.datas, chunks.datas);
+        put(&mut target.lists, chunks.lists);
+    }
+}
+
+/// Frees in place the entries of the ended print call (`ranges`: its slot
+/// ranges) that are in the last print chunk of each table, the chunk that
+/// the next call fills. Its slots become `Slot::Freed`, its lists
+/// `OwnList::Freed`, and its data cells are emptied (their payloads are
+/// freed now, while they are hot). `take_full_print_chunks` takes the other
+/// chunks whole.
+fn clear_print_call(
+    print: &PrintState,
+    slots: &mut [Option<Vec<Slot>>],
+    datas: &mut [Option<DataChunk>],
+    lists: &mut [Option<Vec<OwnList>>],
+    ranges: &[(u32, u32)],
+) {
+    let c = &print.chunks;
+    if let (Some(&last), Some(&(lo, hi))) = (c.slots.last(), ranges.last())
+        && lo as usize / SLOT_CHUNK == last as usize
+    {
+        let base = last as usize * SLOT_CHUNK;
+        let chunk = slots[last as usize].as_mut().expect(FREED);
+        for slot in &mut chunk[lo as usize - base..hi as usize - base] {
+            *slot = Slot::Freed;
+        }
+    }
+    // The filled entries of the call in the last chunk of a table: from its
+    // start when the call started in that chunk, else from 0.
+    // `None` when the call put no entry in the table.
+    let call_from = |(first, filled): (usize, usize), chunk_count: usize| {
+        if first >= chunk_count {
+            None
+        } else if first + 1 == chunk_count {
+            Some(filled)
+        } else {
+            Some(0)
+        }
+    };
+    if let Some(&last) = c.datas.last()
+        && let Some(lo) = call_from(print.data_start, c.datas.len())
+        // A read that still holds the chunk (none at a call end) keeps it.
+        && let Some(cells) = datas[last as usize].as_mut().and_then(Rc::get_mut)
+    {
+        for cell in &mut cells[lo..(c.data_fill as usize).max(lo)] {
+            drop(cell.take());
+        }
+    }
+    if let Some(&last) = c.lists.last()
+        && let Some(lo) = call_from(print.list_start, c.lists.len())
+    {
+        let chunk = lists[last as usize].as_mut().expect(FREED);
+        for list in chunk.iter_mut().skip(lo) {
+            *list = OwnList::Freed;
+        }
+    }
+}
+
+/// Chunks that `take_full_print_chunks` took out of the tables.
+type FreedChunks = (
+    Vec<Option<Vec<Slot>>>,
+    Vec<Option<DataChunk>>,
+    Vec<Option<Vec<OwnList>>>,
+);
+
+/// Takes all print chunks but the last of each table out of the tables (the
+/// holes stay `None`, so a read of their entries panics). Each of them is
+/// full, and every call that put entries in it has ended.
+fn take_full_print_chunks(
+    chunks: &mut OwnerChunks,
+    slots: &mut [Option<Vec<Slot>>],
+    datas: &mut [Option<DataChunk>],
+    lists: &mut [Option<Vec<OwnList>>],
+) -> FreedChunks {
+    fn all_but_last(v: &mut Vec<u32>) -> Vec<u32> {
+        let last = v.pop();
+        let full = std::mem::take(v);
+        v.extend(last);
+        full
+    }
+    (
+        all_but_last(&mut chunks.slots)
+            .into_iter()
+            .map(|c| slots[c as usize].take())
+            .collect(),
+        all_but_last(&mut chunks.datas)
+            .into_iter()
+            .map(|c| datas[c as usize].take())
+            .collect(),
+        all_but_last(&mut chunks.lists)
+            .into_iter()
+            .map(|c| lists[c as usize].take())
+            .collect(),
+    )
+}
+
 /// New synthetic entries of this thread belong to the thread (the base
 /// owner) while the scope lives, whatever program is current. Open it
 /// around code whose nodes a cache keeps across program versions: the token
@@ -876,8 +1210,9 @@ impl Drop for SyntheticOwnerScope {
 pub struct SyntheticSeed {
     slots: Vec<Option<Vec<Slot>>>,
     aliases: FxHashMap<Node, u32>,
-    /// The filled cells of each chunk of `SyntheticArena::datas`.
-    datas: Vec<Option<Vec<crate::astdata::Node>>>,
+    /// The cells of each chunk of `SyntheticArena::datas`, up to the last
+    /// filled one (`None` for an empty cell).
+    datas: Vec<Option<Vec<Option<crate::astdata::Node>>>>,
     lists: Vec<Option<Vec<OwnList>>>,
     slices: Vec<Box<[Node]>>,
     slots_made: usize,
@@ -895,6 +1230,7 @@ pub struct SyntheticSeed {
 pub fn synthetic_seed() -> SyntheticSeed {
     ARENA.with(|a| {
         let a = a.borrow();
+        debug_assert_eq!(a.print.depth, 0, "a synthetic seed in a print scope");
         SyntheticSeed {
             slots: a.slots.clone(),
             aliases: a.aliases.clone(),
@@ -903,10 +1239,16 @@ pub fn synthetic_seed() -> SyntheticSeed {
                 .iter()
                 .map(|chunk| {
                     chunk.as_ref().map(|chunk| {
-                        chunk
-                            .iter()
-                            .map_while(|cell| cell.get().cloned())
-                            .collect::<Vec<_>>()
+                        // Empty cells stay in place: a print call that ended
+                        // empties its cells, and a chunk that a pinned call
+                        // gave to another owner can have live cells after
+                        // them (`exit_print_scope`).
+                        let mut cells: Vec<_> =
+                            chunk.iter().map(|cell| cell.get().cloned()).collect();
+                        while cells.last().is_some_and(Option::is_none) {
+                            cells.pop();
+                        }
+                        cells
                     })
                 })
                 .collect(),
@@ -941,7 +1283,12 @@ pub fn install_synthetic_seed(seed: SyntheticSeed) {
             .datas
             .into_iter()
             .map(|chunk| {
-                chunk.map(|nodes| nodes.into_iter().map(OnceCell::from).collect::<DataChunk>())
+                chunk.map(|cells| {
+                    cells
+                        .into_iter()
+                        .map(|cell| cell.map_or_else(OnceCell::new, OnceCell::from))
+                        .collect::<DataChunk>()
+                })
             })
             .collect(),
         lists: seed.lists,
@@ -953,6 +1300,7 @@ pub fn install_synthetic_seed(seed: SyntheticSeed) {
         last: None,
         slots_made: seed.slots_made,
         shared: None,
+        print: PrintState::EMPTY,
     };
     ARENA.with(|a| *a.borrow_mut() = arena);
 }
@@ -997,6 +1345,7 @@ pub fn install_twin_synthetic_arena(shared: Arc<SharedChunks>) {
         last: None,
         slots_made: 0,
         shared: Some(shared),
+        print: PrintState::EMPTY,
     };
     ARENA.with(|a| *a.borrow_mut() = arena);
 }
@@ -1007,6 +1356,11 @@ pub fn install_twin_synthetic_arena(shared: Arc<SharedChunks>) {
 /// `program::create_checkers`).
 pub fn forget_synthetic_nodes() {
     ARENA.with(|a| {
+        debug_assert_eq!(
+            a.borrow().print.depth,
+            0,
+            "synthetic nodes forgotten in a print scope"
+        );
         std::mem::forget(std::mem::replace(
             &mut *a.borrow_mut(),
             SyntheticArena::new(),
@@ -1018,7 +1372,14 @@ pub fn forget_synthetic_nodes() {
 /// again on this thread. A checker worker of a released program calls it
 /// (`program::release_program`).
 pub fn free_synthetic_nodes() {
-    let nodes = ARENA.with(|a| std::mem::replace(&mut *a.borrow_mut(), SyntheticArena::new()));
+    let nodes = ARENA.with(|a| {
+        debug_assert_eq!(
+            a.borrow().print.depth,
+            0,
+            "synthetic nodes freed in a print scope"
+        );
+        std::mem::replace(&mut *a.borrow_mut(), SyntheticArena::new())
+    });
     drop(nodes);
 }
 
@@ -1787,9 +2148,13 @@ pub fn synthetic_missing_list(list: SyntheticList) -> SyntheticList {
 }
 
 fn push_own_list(list: OwnList) -> SyntheticList {
+    push_own_list_in(false, list)
+}
+
+fn push_own_list_in(print: bool, list: OwnList) -> SyntheticList {
     ARENA.with(|a| {
         let mut a = a.borrow_mut();
-        let owner = a.current_owner();
+        let owner = a.owner_for(print);
         SyntheticList::Own {
             index: a.push_list(owner, list),
         }
@@ -1992,6 +2357,17 @@ pub fn set_node_locals(n: Node, locals: SymbolTable) {
 /// `Loc = UndefinedTextRange()`, nil parent, no flags and no binder data. It
 /// belongs to the current owner (see "Owners" in the module comment).
 pub fn alloc_synthetic_node(kind: SyntaxKind, data: NodeData) -> Node {
+    alloc_synthetic_node_in(false, kind, data)
+}
+
+/// `alloc_synthetic_node` for a to-string factory
+/// (`NodeFactory::set_print_owned`): in a print scope the node belongs to
+/// the print owner.
+pub fn alloc_synthetic_print_node(kind: SyntaxKind, data: NodeData) -> Node {
+    alloc_synthetic_node_in(true, kind, data)
+}
+
+fn alloc_synthetic_node_in(print: bool, kind: SyntaxKind, data: NodeData) -> Node {
     debug_assert!(
         data.matches_syntax_kind(kind),
         "{kind:?} does not fit its NodeData"
@@ -1999,7 +2375,7 @@ pub fn alloc_synthetic_node(kind: SyntaxKind, data: NodeData) -> Node {
     let node = new_ts_node(kind, data);
     ARENA.with(|a| {
         let mut a = a.borrow_mut();
-        let owner = a.current_owner();
+        let owner = a.owner_for(print);
         handle(a.push_node(owner, node, |data| {
             Slot::Node(SyntheticNode {
                 data,
@@ -2199,19 +2575,33 @@ fn ts_list(nodes: &[Node], loc: TextRange, has_trailing_comma: bool) -> crate::a
 // creation. Callers that set `list.Loc` later pass it here instead.
 #[must_use]
 pub fn new_synthetic_node_list(nodes: &[Node], loc: TextRange) -> NodeList {
+    new_synthetic_node_list_in(false, nodes, loc)
+}
+
+/// `new_synthetic_node_list`; with `print` (a to-string factory), in a
+/// print scope the list belongs to the print owner
+/// (`alloc_synthetic_print_node`).
+#[must_use]
+pub fn new_synthetic_node_list_in(print: bool, nodes: &[Node], loc: TextRange) -> NodeList {
     let list = ts_list(nodes, loc, false);
-    NodeList::synthetic(push_own_list(OwnList::Nodes(list)))
+    NodeList::synthetic(push_own_list_in(print, OwnList::Nodes(list)))
 }
 
 /// Go `f.NewModifierList(nodes)` with a given `Loc`. `modifier_flags()` in
 /// node.rs recomputes `ModifiersToFlags(nodes)`, as the Go factory does.
 #[must_use]
 pub fn new_synthetic_modifier_list(nodes: &[Node], loc: TextRange) -> ModifierList {
+    new_synthetic_modifier_list_in(false, nodes, loc)
+}
+
+/// `new_synthetic_modifier_list` (`print`: see `new_synthetic_node_list_in`).
+#[must_use]
+pub fn new_synthetic_modifier_list_in(print: bool, nodes: &[Node], loc: TextRange) -> ModifierList {
     let list = crate::astdata::ModifierList {
         list: ts_list(nodes, loc, false),
         flags: crate::astdata::ModifierFlags(modifiers_to_flags(nodes).0 as u32),
     };
-    ModifierList::synthetic(push_own_list(OwnList::Modifiers(list)))
+    ModifierList::synthetic(push_own_list_in(print, OwnList::Modifiers(list)))
 }
 
 /// A list value to store inside new synthetic `NodeData`. Go stores the
@@ -2437,6 +2827,201 @@ mod tests {
             assert_eq!(local::garbage_len(), 1, "the chunks do not wait");
             local::drop_garbage(|| false);
             assert_eq!(local::garbage_len(), 0);
+            free_synthetic_nodes();
+        })
+        .join()
+        .expect("test thread panicked");
+    }
+
+    /// The number of chunks of each table of the print owner of this
+    /// thread.
+    fn print_chunk_counts() -> (usize, usize, usize) {
+        ARENA.with(|a| {
+            let c = &a.borrow().print.chunks;
+            (c.slots.len(), c.datas.len(), c.lists.len())
+        })
+    }
+
+    /// The panic message of `read`, or `None` when it does not panic.
+    fn read_panic<R>(read: impl FnOnce() -> R) -> Option<String> {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).err()?;
+        Some(panic_message(&*payload).unwrap_or("").to_string())
+    }
+
+    // The end of a print scope frees the nodes and lists of the to-string
+    // factory made in it: a read of one panics. The nodes of other
+    // factories and of earlier calls stay, and a handle is never used again.
+    #[test]
+    fn print_scope_frees_the_nodes_of_its_call() {
+        std::thread::spawn(|| {
+            let printer = NodeFactory::new();
+            printer.set_print_owned();
+            let plain = NodeFactory::new();
+            let before = printer.new_identifier("before");
+
+            enter_print_scope();
+            let a = printer.new_identifier("a");
+            let list = printer.new_node_list(&[a, before]);
+            let block = printer.new_block(list, false);
+            let cloned = printer.new_synthetic_node_list(&[a], TextRange::new(-1, -1));
+            let other = plain.new_identifier("other");
+            assert!(is_print_node(a) && is_print_node(block));
+            assert!(!is_print_node(before) && !is_print_node(other));
+            assert_eq!(block.statement_list().nodes().to_vec(), vec![a, before]);
+            let ranges = exit_print_scope().expect("an unpinned call frees");
+
+            let freed: Vec<Node> = print_range_nodes(&ranges).collect();
+            assert_eq!(freed, vec![a, block]);
+            for read in [read_panic(|| a.text()), read_panic(|| block.kind())] {
+                assert_eq!(read.as_deref(), Some(PRINT_FREED));
+            }
+            assert_eq!(
+                read_panic(|| list.nodes().to_vec()).as_deref(),
+                Some(PRINT_FREED)
+            );
+            assert_eq!(
+                read_panic(|| cloned.nodes().to_vec()).as_deref(),
+                Some(PRINT_FREED)
+            );
+            assert_eq!(before.text(), "before");
+            assert_eq!(other.text(), "other");
+
+            // Outside a scope the to-string factory makes ordinary nodes.
+            let after = printer.new_identifier("after");
+            assert!(!is_print_node(after));
+            enter_print_scope();
+            let b = printer.new_identifier("b");
+            assert!(b != a && b != block && b != after);
+            exit_print_scope();
+            assert_eq!(after.text(), "after");
+            free_synthetic_nodes();
+        })
+        .join()
+        .expect("test thread panicked");
+    }
+
+    // A pinned call keeps its nodes: they go to the current owner. A seed
+    // keeps them in place, also behind the emptied cells of an earlier call
+    // in the same data chunk.
+    #[test]
+    fn a_pinned_print_scope_keeps_its_nodes() {
+        std::thread::spawn(|| {
+            let printer = NodeFactory::new();
+            printer.set_print_owned();
+            enter_print_scope();
+            let gone = printer.new_identifier("gone");
+            exit_print_scope();
+
+            enter_print_scope();
+            let kept = printer.new_identifier("kept");
+            let list = printer.new_node_list(&[kept]);
+            pin_print_scope();
+            assert_eq!(exit_print_scope(), None);
+            assert!(!is_print_node(kept));
+            assert_eq!(print_chunk_counts(), (0, 0, 0));
+            assert_eq!(kept.text(), "kept");
+            assert_eq!(list.nodes().to_vec(), vec![kept]);
+            assert_eq!(read_panic(|| gone.text()).as_deref(), Some(PRINT_FREED));
+
+            // The next call starts new chunks, and the base keeps filling its own.
+            enter_print_scope();
+            let next = printer.new_identifier("next");
+            exit_print_scope();
+            assert!(read_panic(|| next.text()).is_some());
+            let base = printer.new_identifier("base");
+
+            let seed = synthetic_seed();
+            std::thread::spawn(move || {
+                install_synthetic_seed(seed);
+                assert_eq!(kept.text(), "kept");
+                assert_eq!(list.nodes().to_vec(), vec![kept]);
+                assert_eq!(base.text(), "base");
+                assert!(read_panic(|| gone.text()).is_some());
+            })
+            .join()
+            .expect("seed thread panicked");
+            free_synthetic_nodes();
+        })
+        .join()
+        .expect("test thread panicked");
+    }
+
+    // A nested scope joins the outermost one: its nodes live until the
+    // outermost scope ends.
+    #[test]
+    fn nested_print_scopes_free_at_the_outermost_end() {
+        std::thread::spawn(|| {
+            let printer = NodeFactory::new();
+            printer.set_print_owned();
+            enter_print_scope();
+            let outer = printer.new_identifier("outer");
+            enter_print_scope();
+            let inner = printer.new_identifier("inner");
+            assert_eq!(exit_print_scope(), None);
+            assert_eq!(inner.text(), "inner");
+            let late = printer.new_identifier("late");
+            let ranges = exit_print_scope().expect("the outermost scope frees");
+            assert_eq!(
+                print_range_nodes(&ranges).collect::<Vec<_>>(),
+                vec![outer, inner, late]
+            );
+            for n in [outer, inner, late] {
+                assert!(read_panic(|| n.text()).is_some());
+            }
+            free_synthetic_nodes();
+        })
+        .join()
+        .expect("test thread panicked");
+    }
+
+    // Calls across many chunks: each ended call's nodes panic, the full
+    // chunks go, and the print owner keeps one chunk per table.
+    #[test]
+    fn print_scopes_free_full_chunks() {
+        std::thread::spawn(|| {
+            let printer = NodeFactory::new();
+            printer.set_print_owned();
+            let mut last = Vec::new();
+            for i in 0..3 * SLOT_CHUNK {
+                enter_print_scope();
+                let id = printer.new_identifier(format!("n{i}"));
+                let list = printer.new_node_list(&[id, id]);
+                last = vec![printer.new_type_literal_node(list)];
+                assert_eq!(list.nodes().len(), 2);
+                exit_print_scope().expect("an unpinned call frees");
+                assert!(print_chunk_counts().0 <= 1);
+            }
+            assert_eq!(print_chunk_counts(), (1, 1, 1));
+            assert!(read_panic(|| last[0].kind()).is_some());
+            // Freed slots stay in the kept chunk; the rest went.
+            assert!(synthetic_live_slot_count() <= 1 + SLOT_CHUNK);
+            free_synthetic_nodes();
+        })
+        .join()
+        .expect("test thread panicked");
+    }
+
+    // A scope that ends while its call panics keeps the call's nodes.
+    #[test]
+    fn a_print_scope_that_unwinds_keeps_its_nodes() {
+        struct Scope;
+        impl Drop for Scope {
+            fn drop(&mut self) {
+                assert_eq!(exit_print_scope(), None);
+            }
+        }
+        std::thread::spawn(|| {
+            let printer = NodeFactory::new();
+            printer.set_print_owned();
+            let made = std::cell::Cell::new(Node::NIL);
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                enter_print_scope();
+                let _scope = Scope;
+                made.set(printer.new_identifier("made"));
+                panic!("in a to-string call");
+            }));
+            assert!(caught.is_err());
+            assert_eq!(made.get().text(), "made");
             free_synthetic_nodes();
         })
         .join()

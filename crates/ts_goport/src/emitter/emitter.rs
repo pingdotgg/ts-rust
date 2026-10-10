@@ -675,6 +675,13 @@ impl Emitter {
             writer,
             source_map_generator.clone(),
         );
+        // PORT: Go N' (ts#64649) calls `emitContext.Factory.ReleaseArenas()`
+        // here (emitter.go:329), after each file, on the file's own emit
+        // context. It only lets the GC take nodes that nothing reaches. Here
+        // the transform and declaration emit nodes stay with their thread or
+        // program version (`ast::synthetic` owners); only the checker's
+        // to-string builder frees its nodes per call (`PrintScope` in
+        // checker/printer_impl.rs).
         // PORT: not in Go. See `js_part`.
         self.wait_for_js_part();
 

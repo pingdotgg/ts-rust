@@ -1495,7 +1495,11 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
             // PORT: Go clones the list when unchanged and then sets Loc in
             // place. NodeList Loc is fixed at creation, so always build a new
             // list with the (-1, -1) range.
-            res = new_synthetic_node_list(&res.nodes().to_vec(), TextRange::new(-1, -1));
+            res = self
+                .ctx
+                .e
+                .factory()
+                .new_synthetic_node_list(&res.nodes().to_vec(), TextRange::new(-1, -1));
         }
         res
     }

@@ -31,6 +31,11 @@ pub struct NodeFactory {
     node_count: std::cell::Cell<usize>,
     text_count: std::cell::Cell<usize>,
     target: NodeFactoryTarget,
+    /// Set on the factory of the checker's to-string node builder
+    /// (`Checker::get_node_builder`). In a print scope
+    /// (`ast::synthetic::enter_print_scope`) its new nodes and lists belong
+    /// to the print owner, which frees them when the to-string call ends.
+    print_owned: std::cell::Cell<bool>,
 }
 
 /// Where a `NodeFactory` puts new nodes.
@@ -67,6 +72,28 @@ impl NodeFactory {
             target: NodeFactoryTarget::File(store),
             ..Self::default()
         }
+    }
+
+    /// Makes this the factory of a to-string node builder (see
+    /// `print_owned`).
+    pub fn set_print_owned(&self) {
+        self.print_owned.set(true);
+    }
+
+    /// A synthetic list of `nodes` with `loc`, for code that builds lists
+    /// beside this factory (deep clone, node copy). It goes where this
+    /// factory's own lists go: the print owner for a to-string factory in a
+    /// print scope. Other factories (and a parser factory) give it to the
+    /// current owner, like `ast::synthetic::new_synthetic_node_list`.
+    #[must_use]
+    pub fn new_synthetic_node_list(&self, nodes: &[Node], loc: TextRange) -> NodeList {
+        crate::ast::synthetic::new_synthetic_node_list_in(self.print_owned.get(), nodes, loc)
+    }
+
+    /// `new_synthetic_node_list` for a modifier list.
+    #[must_use]
+    pub fn new_synthetic_modifier_list(&self, nodes: &[Node], loc: TextRange) -> ModifierList {
+        crate::ast::synthetic::new_synthetic_modifier_list_in(self.print_owned.get(), nodes, loc)
     }
 
     /// Where this factory puts new nodes.
@@ -133,6 +160,9 @@ impl NodeFactory {
     pub(crate) fn new_node(&self, kind: SyntaxKind, data: D) -> Node {
         self.node_count.set(self.node_count.get() + 1);
         let node = match self.target {
+            NodeFactoryTarget::Synthetic if self.print_owned.get() => {
+                crate::ast::synthetic::alloc_synthetic_print_node(kind, data)
+            }
             NodeFactoryTarget::Synthetic => alloc_synthetic_node(kind, data),
             NodeFactoryTarget::File(store) => alloc_store_node(store, kind, data),
         };
@@ -280,7 +310,11 @@ impl NodeFactory {
     #[must_use]
     pub fn new_node_list_with_loc(&self, nodes: &[Node], loc: TextRange) -> NodeList {
         match self.target {
-            NodeFactoryTarget::Synthetic => new_synthetic_node_list(nodes, loc),
+            NodeFactoryTarget::Synthetic => crate::ast::synthetic::new_synthetic_node_list_in(
+                self.print_owned.get(),
+                nodes,
+                loc,
+            ),
             NodeFactoryTarget::File(store) => new_store_node_list(store, nodes, loc),
         }
     }
@@ -296,7 +330,11 @@ impl NodeFactory {
     #[must_use]
     pub fn new_modifier_list_with_loc(&self, nodes: &[Node], loc: TextRange) -> ModifierList {
         match self.target {
-            NodeFactoryTarget::Synthetic => new_synthetic_modifier_list(nodes, loc),
+            NodeFactoryTarget::Synthetic => crate::ast::synthetic::new_synthetic_modifier_list_in(
+                self.print_owned.get(),
+                nodes,
+                loc,
+            ),
             NodeFactoryTarget::File(store) => new_store_modifier_list(store, nodes, loc),
         }
     }

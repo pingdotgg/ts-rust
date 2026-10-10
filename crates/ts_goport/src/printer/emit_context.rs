@@ -1775,6 +1775,37 @@ impl<V> SyntheticPages<V> {
     fn values(&self) -> impl Iterator<Item = &V> {
         self.pages.iter().flatten().flat_map(|p| p.iter().flatten())
     }
+
+    /// Drops the values of the synthetic keys in the slot index ranges
+    /// `ranges` (the freed nodes of a to-string call; handle = index + 1)
+    /// that are in the window, and the pages that become empty. The page
+    /// list keeps its length.
+    fn forget(&mut self, ranges: &[(u32, u32)]) {
+        if self.first == NO_WINDOW {
+            return;
+        }
+        for &(lo, hi) in ranges {
+            let (h0, h1) = (lo as usize + 1, hi as usize + 1);
+            let mut page = h0 / NODE_PAGE;
+            while page * NODE_PAGE < h1 {
+                let rel = page.wrapping_sub(self.first);
+                if let Some(Some(p)) = self.pages.get_mut(rel) {
+                    let from = h0.max(page * NODE_PAGE) - page * NODE_PAGE;
+                    let to = h1.min((page + 1) * NODE_PAGE) - page * NODE_PAGE;
+                    for cell in &mut p[from..to] {
+                        *cell = None;
+                    }
+                    if p.iter().all(Option::is_none) {
+                        self.pages[rel] = None;
+                    }
+                }
+                page += 1;
+            }
+        }
+        // PERF: n1note. A pop of the empty tail pages here made the next
+        // call's `add_page` resize the list from the last live page again
+        // (12.6% of the cycles on Excalidraw).
+    }
 }
 
 /// Go `EmitContext.original`: the original node of each node that has one.
@@ -1899,6 +1930,35 @@ impl EmitNodes {
                     self.parsed_keys.push(node);
                 }
                 self.other.get(node)
+            }
+        }
+    }
+}
+
+impl EmitContext {
+    /// Drops the emit nodes and original links of the freed nodes of a
+    /// to-string call (slot index `ranges` from
+    /// `ast::synthetic::exit_print_scope`). Their handles are never given
+    /// out again, so no read can reach these records.
+    // PORT: not in Go, where these maps keep the nodes alive (the checker's
+    // to-string builder never clears them) but no code reads them again.
+    pub fn forget_synthetic_slots(&self, ranges: &[(u32, u32)]) {
+        let nodes = || crate::ast::synthetic::print_range_nodes(ranges);
+        {
+            let mut emit_nodes = self.emit_nodes.borrow_mut();
+            emit_nodes.synthetic.forget(ranges);
+            // Keys outside the window.
+            if !emit_nodes.other.map_is_empty() {
+                for n in nodes() {
+                    emit_nodes.other.remove(n);
+                }
+            }
+        }
+        let mut original = self.original.borrow_mut();
+        original.synthetic.forget(ranges);
+        if !original.other.is_empty() {
+            for n in nodes() {
+                original.other.remove(&n);
             }
         }
     }

@@ -1,0 +1,59 @@
+src/a.ts(12,14): error TS2322: Type '{ a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }' is not assignable to type 'Big'.
+  Types of property 'a' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+src/a.ts(13,14): error TS2322: Type '{ a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }' is not assignable to type 'Mapped<Big>'.
+  Types of property 'a' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+src/a.ts(14,14): error TS2322: Type '{ a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }' is not assignable to type 'Big'.
+  Types of property 'a' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+src/a.ts(15,14): error TS2741: Property 'z' is missing in type '{ a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }' but required in type '{ a: number; z: string; }'.
+src/a.ts(18,14): error TS2322: Type '<T>(x: T, y: Box<T>) => Box<readonly [T, T]>' is not assignable to type '(x: number) => string'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/a.ts(19,14): error TS2322: Type '<T>(x: T, y: Box<T>) => Box<readonly [T, T]>' is not assignable to type '<U>(x: U) => U'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/a.ts(20,14): error TS2322: Type '<T>(x: T, y: Box<T>) => Box<readonly [T, T]>' is not assignable to type 'Box<string>'.
+src/a.ts(23,14): error TS2741: Property 'other' is missing in type 'LateKeys' but required in type '{ other: number; }'.
+src/a.ts(24,14): error TS2322: Type 'LateKeys' is not assignable to type 'string'.
+src/a.ts(27,14): error TS2322: Type '{ s: "a"; } | { n: 1; }' is not assignable to type '{ s: number; }'.
+  Type '{ s: "a"; }' is not assignable to type '{ s: number; }'.
+    Types of property 's' are incompatible.
+      Type 'string' is not assignable to type 'number'.
+src/a.ts(30,14): error TS2322: Type 'Klass' is not assignable to type '{ p: number; q: string; }'.
+  Property 'p' is private in type 'Klass' but not in type '{ p: number; q: string; }'.
+src/a.ts(31,61): error TS2322: Type 'string' is not assignable to type 'keyof T'.
+  Type '"x"' is not assignable to type 'never'.
+src/a.ts(34,14): error TS2322: Type '(x: unknown) => x is string' is not assignable to type '(x: unknown) => x is number'.
+  Type predicate 'x is string' is not assignable to 'x is number'.
+    Type 'string' is not assignable to type 'number'.
+src/a.ts(39,54): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Object literal may only specify known properties, and 'z' does not exist in type 'Mapped<Big>'.
+src/a.ts(40,24): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type 'boolean' is not assignable to parameter of type 'number'.
+src/a.ts(45,14): error TS2322: Type 'Deep' is not assignable to type '{ a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: { l: 5; }; }; }; }; }; }; }; }; }; }; }; }'.
+  The types of 'a.b.c.d.e.f.g.h.i.j.k.l' are incompatible between these types.
+    Type 'LongUnion' is not assignable to type '5'.
+      Type '"a1"' is not assignable to type '5'.
+src/a.ts(46,14): error TS2322: Type 'Deep' is not assignable to type 'number'.
+src/a.ts(47,14): error TS2740: Type '{ a1: number; }' is missing the following properties from type 'Record<LongUnion, number>': a10, a11, a12, a13, and 45 more.
+src/a.ts(50,14): error TS2322: Type '{ x: { a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }; y: <T>(x: T, y: Box<T>) => Box<readonly [T, T]>; z: LateKeys; w: Klass; }' is not assignable to type '{ x: Big; y: (x: number) => string; }'.
+  The types of 'x.a' are incompatible between these types.
+    Type 'number' is not assignable to type 'string'.
+src/a.ts(51,14): error TS2322: Type '{ x: { a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }; y: <T>(x: T, y: Box<T>) => Box<readonly [T, T]>; z: LateKeys; w: Klass; }' is not assignable to type '{ x: Big; y: (x: number) => string; }'.
+  The types of 'x.a' are incompatible between these types.
+    Type 'number' is not assignable to type 'string'.
+src/b.ts(3,4): error TS2339: Property 'nope' does not exist on type '{ a: number; b: string; c: boolean[]; d: { e: [string, number]; f: string[]; }; h: { k: number; }; }'.
+src/b.ts(4,5): error TS2339: Property 'nope' does not exist on type '<T>(x: T, y: Box<T>) => Box<readonly [T, T]>'.
+src/b.ts(5,10): error TS2322: Type 'string' is not assignable to type '1'.
+src/b.ts(5,34): error TS2322: Type '(x: 1) => U' is not assignable to type 'Box<U>'.
+src/b.ts(9,9): error TS2322: Type 'Map<number, T>' is not assignable to type 'Map<string, T>'.
+  Type 'number' is not assignable to type 'string'.
+src/b.ts(10,9): error TS2322: Type '(t: T) => string' is not assignable to type '(t: T) => number'.
+  Type 'string' is not assignable to type 'number'.
+src/b.ts(15,7): error TS2322: Type 'Wrapper<{ deep: { list: number[]; fn: (x: number) => number; }; }>' is not assignable to type 'Wrapper<{ deep: { list: string[]; }; }>'.
+  Type '{ deep: { list: number[]; fn: (x: number) => number; }; }' is not assignable to type '{ deep: { list: string[]; }; }'.
+    The types of 'deep.list' are incompatible between these types.
+      Type 'number[]' is not assignable to type 'string[]'.
+        Type 'number' is not assignable to type 'string'.

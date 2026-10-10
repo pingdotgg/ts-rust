@@ -4180,6 +4180,28 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
             slot => self.cell(slot)?.as_ref(),
         }
     }
+
+    /// Removes the record of `key` and returns it.
+    // PORT: not in Go, whose `core.LinkStore` never deletes. The print
+    // scopes of the checker drop the records of freed synthetic nodes.
+    pub fn remove(&mut self, key: K) -> Option<V> {
+        match key.link_slot() {
+            LinkSlot::Map => self.map.remove(&key),
+            slot => {
+                if !self.cell(slot).is_some_and(Option::is_some) {
+                    return None;
+                }
+                self.cell_mut(key, slot).take()
+            }
+        }
+    }
+
+    /// True when no key without a slot (a synthetic node, for a `Node` key)
+    /// has a record.
+    #[must_use]
+    pub fn map_is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }
 
 // PORT: no Go counterpart. The filter of a symbol table (`Table::filter`)

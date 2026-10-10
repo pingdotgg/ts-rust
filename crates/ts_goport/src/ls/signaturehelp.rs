@@ -913,6 +913,11 @@ impl LanguageService {
                 // Use a temporary writer for p.Write since the printer calls Clear() on its writer
                 let temp_dpw = new_display_parts_writer(vs_capability);
                 p.write_exported(param_node, source_file, temp_dpw.clone(), None);
+                // PORT: Go N' (ts#64649) calls `emitContext.Factory.ReleaseArenas()` here (signaturehelp.go:573).
+                // It only lets the GC take nodes that nothing reaches. Here these nodes
+                // belong to the program version of the request and go with it
+                // (`ast::synthetic` owners); only the checker's to-string builder frees
+                // its nodes per call (`PrintScope` in checker/printer_impl.rs).
                 let param_label = temp_dpw.borrow().string();
                 param_dpw.borrow_mut().write_from(&temp_dpw.borrow());
 
@@ -1029,6 +1034,11 @@ impl LanguageService {
                 // Use a temporary writer for p.Write since the printer calls Clear() on its writer
                 let temp_dpw = new_display_parts_writer(vs_capability);
                 p.write_exported(param_node, source_file, temp_dpw.clone(), None);
+                // PORT: Go N' (ts#64649) calls `emitContext.Factory.ReleaseArenas()` here (signaturehelp.go:652).
+                // It only lets the GC take nodes that nothing reaches. Here these nodes
+                // belong to the program version of the request and go with it
+                // (`ast::synthetic` owners); only the checker's to-string builder frees
+                // its nodes per call (`PrintScope` in checker/printer_impl.rs).
                 let param_label = temp_dpw.borrow().string();
                 param_dpw.borrow_mut().write_from(&temp_dpw.borrow());
 
@@ -1136,6 +1146,11 @@ impl LanguageService {
         doc_format: &lsproto::MarkupKind,
     ) -> SignatureHelpParameter {
         // ts#64649: the caller's node builder.
+        // PORT: Go N' (ts#64649) calls `emitContext.Factory.ReleaseArenas()` in a defer (signaturehelp.go:700).
+        // It only lets the GC take nodes that nothing reaches. Here these nodes
+        // belong to the program version of the request and go with it
+        // (`ast::synthetic` owners); only the checker's to-string builder frees
+        // its nodes per call (`PrintScope` in checker/printer_impl.rs).
         let parameter_node = c.node_builder_symbol_to_parameter_declaration(
             builder,
             parameter,
@@ -1159,6 +1174,11 @@ pub fn create_signature_help_parameter_for_type_parameter(
     p: &mut Printer,
 ) -> SignatureHelpParameter {
     // ts#64649: the caller's node builder.
+    // PORT: Go N' (ts#64649) calls `emitContext.Factory.ReleaseArenas()` in a defer (signaturehelp.go:706).
+    // It only lets the GC take nodes that nothing reaches. Here these nodes
+    // belong to the program version of the request and go with it
+    // (`ast::synthetic` owners); only the checker's to-string builder frees
+    // its nodes per call (`PrintScope` in checker/printer_impl.rs).
     let type_parameter_node = c.node_builder_type_parameter_to_declaration(
         builder,
         t,

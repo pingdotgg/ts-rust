@@ -732,6 +732,11 @@ impl QuickInfoWriter<'_> {
             return;
         }
         let emit_context = self.get_emit_context();
+        // PORT: Go N' (ts#64649) calls `emitContext.Factory.ReleaseArenas()` in a defer (hover.go:458).
+        // It only lets the GC take nodes that nothing reaches. Here these nodes
+        // belong to the program version of the request and go with it
+        // (`ast::synthetic` owners); only the checker's to-string builder frees
+        // its nodes per call (`PrintScope` in checker/printer_impl.rs).
         // PORT: Go shares one idToSymbol map between the node builder and the
         // printer. The Rust builder owns the map; it is moved into the printer
         // after the node is built.
@@ -802,6 +807,8 @@ impl QuickInfoWriter<'_> {
             SyntaxKind::CallSignature
         };
         let emit_context = self.get_emit_context();
+        // PORT: Go N' (ts#64649) defers `emitContext.Factory.ReleaseArenas()`
+        // here too (hover.go:497); see write_type_classified.
         // PORT: shared idToSymbol map, see write_type_classified.
         let nb = Rc::new(RefCell::new(new_node_builder_ex(
             self.c,

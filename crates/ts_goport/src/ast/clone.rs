@@ -2289,7 +2289,7 @@ fn get_deep_clone_visitor<'a>(f: &'a NodeFactory, synthetic_location: bool) -> N
                     };
                     if synthetic_location {
                         let new_nodes = new_list.nodes().to_vec();
-                        new_list = new_synthetic_node_list(&new_nodes, TextRange::new(-1, -1));
+                        new_list = f.new_synthetic_node_list(&new_nodes, TextRange::new(-1, -1));
                         if nodes.has_trailing_comma() {
                             set_node_loc(new_nodes[new_nodes.len() - 1], TextRange::new(-2, -2));
                         }
@@ -2310,7 +2310,8 @@ fn get_deep_clone_visitor<'a>(f: &'a NodeFactory, synthetic_location: bool) -> N
                     };
                     if synthetic_location {
                         let new_nodes = new_list.nodes().to_vec();
-                        new_list = new_synthetic_modifier_list(&new_nodes, TextRange::new(-1, -1));
+                        new_list =
+                            f.new_synthetic_modifier_list(&new_nodes, TextRange::new(-1, -1));
                         if nodes.node_list().has_trailing_comma() {
                             set_node_loc(new_nodes[new_nodes.len() - 1], TextRange::new(-2, -2));
                         }
