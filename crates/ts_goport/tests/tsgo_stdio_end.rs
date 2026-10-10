@@ -77,12 +77,33 @@ fn watch_ends_soon_after_sigint_or_sigterm() {
     );
 }
 
+/// How a run ends after the answer to the request that a signal came in.
+#[derive(Clone, Copy)]
+enum ApiEnd {
+    /// The sync API ends right after the answer.
+    Answer,
+    /// The async API waits in the read. It answers the next request, then
+    /// ends: Go's loop checks the context before the read after it.
+    NextAnswer,
+    /// The async API waits in the read and ends at the end of stdin.
+    Eof,
+}
+
 #[test]
 fn api_signal_during_a_request() {
-    // (protocol flag, whether the run ends right after the answer)
-    for (flags, ends_after_answer) in [(&["--async"][..], false), (&[][..], true)] {
+    for (flags, end) in [
+        (&["--async"][..], ApiEnd::Eof),
+        (&["--async"][..], ApiEnd::NextAnswer),
+        (&[][..], ApiEnd::Answer),
+    ] {
         let dir = TempDir::new("api");
         dir.write("src/a.ts", "export const a: number = 1;\n");
+        // The project of the next request (`ApiEnd::NextAnswer`).
+        dir.write(
+            "next/tsconfig.json",
+            r#"{"compilerOptions":{"strict":true},"include":["src"]}"#,
+        );
+        dir.write("next/src/b.ts", "export const b: number = 1;\n");
         let config = dir.fifo("tsconfig.json");
         let cwd = dir.0.to_str().unwrap();
         let mut args = vec!["--api", "--cwd", cwd];
@@ -107,16 +128,28 @@ fn api_signal_during_a_request() {
             .unwrap();
         drop(writer);
         tsgo.wait_stdout(answered);
-        let (since, what) = if ends_after_answer {
-            (Instant::now(), "the sync API after the answer")
-        } else {
-            assert!(
-                tsgo.wait_exit(Duration::from_millis(500)).is_none(),
-                "the async API ended after the answer; Go waits in the read"
-            );
-            let eof = Instant::now();
-            tsgo.close_stdin();
-            (eof, "the async API at EOF")
+        let (since, what) = match end {
+            ApiEnd::Answer => (Instant::now(), "the sync API after the answer"),
+            ApiEnd::NextAnswer | ApiEnd::Eof => {
+                assert!(
+                    tsgo.wait_exit(Duration::from_millis(500)).is_none(),
+                    "the async API ended after the answer; Go waits in the read"
+                );
+                if let ApiEnd::Eof = end {
+                    let eof = Instant::now();
+                    tsgo.close_stdin();
+                    (eof, "the async API at EOF")
+                } else {
+                    let from = tsgo.stdout_len();
+                    let next = dir.0.join("next/tsconfig.json");
+                    tsgo.send(&frame(&format!(
+                        r#"{{"jsonrpc":"2.0","id":2,"method":"createSnapshot","params":{{"openProjects":["{}"]}}}}"#,
+                        next.display()
+                    )));
+                    tsgo.wait_stdout_from(from, r#""id":2"#);
+                    (Instant::now(), "the async API after the next answer")
+                }
+            }
         };
         tsgo.expect_end(since, what, 0, "");
     }
@@ -212,9 +245,19 @@ impl Tsgo {
     }
 
     fn wait_stdout(&self, text: &str) {
+        self.wait_stdout_from(0, text);
+    }
+
+    /// The number of stdout bytes so far.
+    fn stdout_len(&self) -> usize {
+        self.stdout.lock().unwrap().len()
+    }
+
+    /// Waits until `text` is on stdout after its first `from` bytes.
+    fn wait_stdout_from(&self, from: usize, text: &str) {
         let end = Instant::now() + LIMIT;
         loop {
-            if String::from_utf8_lossy(&self.stdout.lock().unwrap()).contains(text) {
+            if String::from_utf8_lossy(&self.stdout.lock().unwrap()[from..]).contains(text) {
                 return;
             }
             assert!(

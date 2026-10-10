@@ -529,9 +529,11 @@ The batch that adds it is not accepted until Theo approves.
   (`Orchestrator::start`) does the same for the program of each task. Go
   parses every file of each project that it builds again in each cycle
   (`resetCaches`); here a file keeps its parse while its modification time
-  does not change, no watch event names it and no build of the cycle
-  wrote it (`BuildHost::watch_source_file`, as Go `tsc --watch` keeps its
-  files), so a cycle parses only the changed files, on the loading thread.
+  does not change, no watch event names it and no build wrote it since the
+  parse (`BuildHost::watch_source_file`, as Go `tsc --watch` keeps its
+  files; the end of each build drops the kept parses of the files that it
+  wrote, `BuildHost::drop_written_watch_sources`), so a cycle parses only
+  the changed files, on the loading thread.
   A `.d.ts` or `.json` file still comes through `source_files` (Go
   `sourceFiles`) first, which keeps the first parse of a cycle until the
   cycle ends, as in Go: a project that builds beside an upstream project
@@ -928,7 +930,8 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   (`get_symbol_name_for_private_identifier`), so such a class gets its id
   later, at its first id site. The 4 check-time private name sites give an
   id to the symbol that they look in, as Go does: the class, or the symbol
-  of a `this` or source type (`Checker::private_identifier_symbol_name`).
+  of the type that the site looks in
+  (`Checker::private_identifier_symbol_name`).
 - Several programs in one process: Go's one counter runs on from one
   program to the next, and a bound file keeps the ids of its symbols. The
   one-checker pool of a program with `singleThreaded` (on the command line
@@ -1592,6 +1595,13 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
     answers in full and then ends, with Go's exit code. A SIGINT or
     SIGTERM while a request waits for a client callback ends that call in
     Go at once; the port ends it after the next message.
+  - A pipelined request and a signal: request 1 waits (for example on a
+    FIFO tsconfig) and request 2 is already in the input. Go answers
+    request 2 at once, on its own goroutine. A SIGINT or SIGTERM then does
+    not end the run: Go answers request 1 and waits in its read until the
+    next message or the end of the input. The port answers request 1, then
+    request 2, and then ends at once. Both exit with code 0 (int58
+    skeptic; apisig2 skeptic table case `api --async fifo pipelined`).
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of

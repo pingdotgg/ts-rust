@@ -590,10 +590,14 @@ impl Checker {
     }
 
     /// Go `binder.GetSymbolNameForPrivateIdentifier` in the checker: the
-    /// symbol table key of private name `description` in class
-    /// `containing_class_symbol`. Go puts the id of the class in the key
-    /// (`ast.GetSymbolId`), so it gives the class its id here.
-    // PORT: the key holds the arena index of the class
+    /// symbol table key of private name `description` in
+    /// `containing_class_symbol`. That is the class, or the symbol of the
+    /// type that the site looks in, which can be an interface (for example
+    /// at the `this.#x = ...` contextual type, checker_p32.rs). Go names
+    /// the parameter `containingClassSymbol` too. Go puts the id of the
+    /// symbol in the key (`ast.GetSymbolId`), so it gives the symbol its id
+    /// here.
+    // PORT: the key holds the arena index of the symbol
     // (`get_symbol_name_for_private_identifier`); the id is only given, as
     // Go gives it. The binder gives no id (PORTING.md, Threads).
     pub fn private_identifier_symbol_name(

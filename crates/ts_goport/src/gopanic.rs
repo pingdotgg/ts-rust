@@ -497,8 +497,6 @@ mod tests {
         range.map(Duration::from_millis).collect()
     }
 
-    // Go: runtime/retry.go:14 retryOnEAGAIN: 20 calls while the error is
-    // EAGAIN, with a sleep of 1, 2, ... 20 ms after each, then EAGAIN.
     /// The payload of `f`'s panic.
     fn panic_of(f: impl FnOnce()) -> Box<dyn std::any::Any + Send> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).expect_err("no panic")
@@ -539,6 +537,8 @@ mod tests {
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"write panic"));
     }
 
+    // Go: runtime/retry.go:14 retryOnEAGAIN: 20 calls while the error is
+    // EAGAIN, with a sleep of 1, 2, ... 20 ms after each, then EAGAIN.
     #[test]
     fn retry_on_eagain_tries_20_times_with_growing_sleeps() {
         let mut calls = 0;
