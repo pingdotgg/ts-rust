@@ -256,15 +256,11 @@ impl Checker {
                 .get(as_symbol(r.target))
                 .declared_type
                 .is_some(),
-            TypeSystemPropertyName::RESOLVED_TYPE_ARGUMENTS => {
-                // PORT: Go checks `resolvedTypeArguments != nil`. The Rust field
-                // is a `SharedList`, so an empty list reads as unresolved.
-                !self
-                    .ty(as_type(r.target))
-                    .as_type_reference()
-                    .resolved_type_arguments
-                    .is_empty()
-            }
+            TypeSystemPropertyName::RESOLVED_TYPE_ARGUMENTS => !self
+                .ty(as_type(r.target))
+                .as_type_reference()
+                .resolved_type_arguments
+                .is_nil(),
             TypeSystemPropertyName::RESOLVED_BASE_TYPES => {
                 self.ty(as_type(r.target))
                     .as_interface_type()
@@ -405,14 +401,11 @@ impl Checker {
     /// The body of Go `getPropertiesOfUnionOrIntersectionType`. It stores the
     /// list in `resolved_properties`.
     fn resolve_properties_of_union_or_intersection_type(&mut self, t: TypeId) {
-        // PORT: Go checks `resolvedProperties == nil`. The Rust field is a
-        // `SharedList`, so an empty result is recomputed; the recomputation is
-        // idempotent because the property lookups are cached.
         if self
             .ty(t)
             .as_union_or_intersection_type()
             .resolved_properties
-            .is_empty()
+            .is_nil()
         {
             let mut checked: FxHashSet<Name> = FxHashSet::default();
             let mut props: Vec<SymbolId> = Vec::new();
@@ -449,7 +442,7 @@ impl Checker {
             }
             self.ty_mut(t)
                 .as_union_or_intersection_type_mut()
-                .resolved_properties = props.into();
+                .resolved_properties = SharedList::non_nil(&props);
         }
     }
 

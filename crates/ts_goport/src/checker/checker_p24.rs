@@ -1189,14 +1189,18 @@ impl Checker {
     /// resolve, it stores nothing and returns the count of error types that
     /// Go returns in place of the list.
     fn resolve_type_arguments(&mut self, t: TypeId) -> Option<usize> {
-        // PORT: Go tests `resolvedTypeArguments == nil`. The Rust field is a
-        // `SharedList`, so an empty list reads as unresolved. An empty list resolves
-        // to an empty list again, so the result is the same.
+        // PORT: Go tests `resolvedTypeArguments == nil`. The port stores a
+        // non-nil list (`SharedList::non_nil`), also for an empty result where
+        // Go stores nil and so resolves again on each call. The result is the
+        // same: an empty result has no node (a deferred reference has at
+        // least one type argument: see `getTypeFromClassOrInterfaceReference`
+        // and `getTypeFromArrayOrTupleTypeNode`), so nothing runs between the
+        // push and the pop, and the push finds no cycle.
         if self
             .ty(t)
             .as_type_reference()
             .resolved_type_arguments
-            .is_empty()
+            .is_nil()
         {
             let target = self.ty(t).as_type_reference().object.target;
             let type_parameter_count = self.ty(target).as_interface_type().type_parameters().len();
@@ -1242,25 +1246,26 @@ impl Checker {
                     .ty(t)
                     .as_type_reference()
                     .resolved_type_arguments
-                    .is_empty()
+                    .is_nil()
                 {
                     let mapper = self.ty(t).as_type_reference().object.mapper;
                     let resolved = self.instantiate_types(&type_arguments, mapper);
                     self.ty_mut(t)
                         .as_type_reference_mut()
-                        .resolved_type_arguments = resolved.into();
+                        .resolved_type_arguments = SharedList::non_nil(&resolved);
                 }
             } else {
                 if self
                     .ty(t)
                     .as_type_reference()
                     .resolved_type_arguments
-                    .is_empty()
+                    .is_nil()
                 {
                     let error_type = self.error_type;
                     self.ty_mut(t)
                         .as_type_reference_mut()
-                        .resolved_type_arguments = vec![error_type; type_parameter_count].into();
+                        .resolved_type_arguments =
+                        SharedList::non_nil(&vec![error_type; type_parameter_count]);
                 }
                 let error_node = if node.is_some() {
                     node
@@ -2302,6 +2307,37 @@ fn ordered_symbol_set_add(
 mod tests {
     use super::*;
     use crate::checker::utilities_p1::union_sort_tests::with_alias_types;
+
+    /// An empty type argument list and an empty intersection property list
+    /// are resolved once: the resolver stores a non-nil empty list, so the
+    /// next call does not resolve again (Go `resolvedTypeArguments` and
+    /// `resolvedProperties` are `== nil` tests).
+    #[test]
+    fn empty_resolved_lists_are_not_nil() {
+        const SOURCE: &str = r#"
+type E = [];
+type I<T, U> = T & U;
+"#;
+        let got = with_alias_types(SOURCE, |c, types| {
+            let (e, i) = (types[0], types[1]);
+            let nil = |c: &Checker| {
+                [
+                    c.ty(e).as_type_reference().resolved_type_arguments.is_nil(),
+                    c.ty(i)
+                        .as_union_or_intersection_type()
+                        .resolved_properties
+                        .is_nil(),
+                ]
+            };
+            let before = nil(c);
+            let lens = [
+                c.get_type_arguments(e).len(),
+                c.get_properties_of_union_or_intersection_type(i).len(),
+            ];
+            (before, lens, nil(c))
+        });
+        assert_eq!(got, ([true, true], [0, 0], [false, false]));
+    }
 
     /// `some_property_reduces_to_never` tests the shared names in first-seen
     /// order, as Go N' does (ts#64521, checker.go:22283). In `A & B` the
