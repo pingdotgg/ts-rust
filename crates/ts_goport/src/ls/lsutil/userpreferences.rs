@@ -289,7 +289,7 @@ impl IncludeInlayParameterNameHints {
     pub const LITERALS: IncludeInlayParameterNameHints = IncludeInlayParameterNameHints("literals");
 }
 
-// Go: ls/lsutil/userpreferences.go:263 OrganizeImportsSort
+// Go: ls/lsutil/userpreferences.go:73 OrganizeImportsSort
 go_enum!(OrganizeImportsSort, i32 {
     AUTO = 0;
     ORDINAL = 1;
@@ -307,14 +307,14 @@ impl OrganizeImportsCollation {
     pub const UNICODE: OrganizeImportsCollation = OrganizeImportsCollation(true);
 }
 
-// Go: ls/lsutil/userpreferences.go:280 OrganizeImportsCaseFirst
+// Go: ls/lsutil/userpreferences.go:90 OrganizeImportsCaseFirst
 go_enum!(OrganizeImportsCaseFirst, i32 {
     FALSE = 0;
     LOWER = 1;
     UPPER = 2;
 });
 
-// Go: ls/lsutil/userpreferences.go:288 OrganizeImportsTypeOrder
+// Go: ls/lsutil/userpreferences.go:98 OrganizeImportsTypeOrder
 go_enum!(OrganizeImportsTypeOrder, i32 {
     AUTO = 0;
     LAST = 1;

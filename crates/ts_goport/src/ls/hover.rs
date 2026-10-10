@@ -719,7 +719,7 @@ impl QuickInfoWriter<'_> {
             .clone()
     }
 
-    // Go: ls/hover.go:444 writeTypeClassified (closure)
+    // Go: ls/hover.go:451 writeTypeClassified (closure)
     // writeTypeClassified writes a type to dpw with proper classification (punctuation, symbols, keywords).
     // Falls back to flat text when vsCapability is false or when TypeToTypeNode fails.
     fn write_type_classified(&mut self, t: TypeId, enclosing: Node, flags: TypeFormatFlags) {
@@ -772,7 +772,7 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_from(&temp_dpw.borrow());
     }
 
-    // Go: ls/hover.go:467 writeSignatureClassified (closure)
+    // Go: ls/hover.go:475 writeSignatureClassified (closure)
     // writeSignatureClassified writes a signature to dpw with proper classification.
     fn write_signature_classified(
         &mut self,
@@ -841,7 +841,7 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_from(&temp_dpw.borrow());
     }
 
-    // Go: ls/hover.go:505 writeSymbolClassified (closure)
+    // Go: ls/hover.go:514 writeSymbolClassified (closure)
     // writeSymbolClassified writes a symbol name to dpw with proper classification based on symbol flags.
     fn write_symbol_classified(
         &mut self,
@@ -864,7 +864,7 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_symbol(&text, symbol);
     }
 
-    // Go: ls/hover.go:515 writeModuleImportAttributes (closure)
+    // Go: ls/hover.go:523 writeModuleImportAttributes (closure)
     fn write_module_import_attributes(&mut self, symbol: SymbolId) {
         let declaration = self
             .c
@@ -901,14 +901,14 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_from(&temp_dpw.borrow());
     }
 
-    // Go: ls/hover.go:545 setDeclaration (closure)
+    // Go: ls/hover.go:554 setDeclaration (closure)
     fn set_declaration(&mut self, declaration: Node) {
         if self.first_declaration.is_nil() {
             self.first_declaration = declaration;
         }
     }
 
-    // Go: ls/hover.go:550 writeNewLine (closure)
+    // Go: ls/hover.go:559 writeNewLine (closure)
     fn write_new_line(&mut self) {
         if !self.dpw.borrow().string().is_empty() {
             self.dpw.borrow_mut().write("\n");
@@ -920,7 +920,7 @@ impl QuickInfoWriter<'_> {
         }
     }
 
-    // Go: ls/hover.go:560 writeSignatures (closure)
+    // Go: ls/hover.go:569 writeSignatures (closure)
     fn write_signatures(
         &mut self,
         signatures: &[SignatureId],
@@ -962,7 +962,7 @@ impl QuickInfoWriter<'_> {
         }
     }
 
-    // Go: ls/hover.go:581 writeTypeParams (closure)
+    // Go: ls/hover.go:590 writeTypeParams (closure)
     fn write_type_params(&mut self, params: &[TypeId]) {
         if !params.is_empty() {
             self.dpw.borrow_mut().write_punctuation("<");
@@ -992,7 +992,7 @@ impl QuickInfoWriter<'_> {
         }
     }
 
-    // Go: ls/hover.go:604 canExpandSymbol (closure)
+    // Go: ls/hover.go:613 canExpandSymbol (closure)
     fn can_expand_symbol(&mut self, symbol: SymbolId) -> bool {
         // PORT: Go returns false for a nil vc here. vc is never nil at this
         // point (a nil vc is replaced at the start), so the check is dropped.
@@ -1022,7 +1022,7 @@ impl QuickInfoWriter<'_> {
         false
     }
 
-    // Go: ls/hover.go:631 tryExpandSymbol (closure)
+    // Go: ls/hover.go:640 tryExpandSymbol (closure)
     // tryExpandSymbol checks if a symbol can be expanded at the current verbosity level.
     fn try_expand_symbol(&mut self, symbol: SymbolId, meaning: SymbolFlags) -> bool {
         if self.symbol_was_expanded {
@@ -1052,7 +1052,7 @@ impl QuickInfoWriter<'_> {
         false
     }
 
-    // Go: ls/hover.go:652 writeSymbol (closure)
+    // Go: ls/hover.go:661 writeSymbol (closure)
     fn write_symbol(&mut self, symbol: SymbolId) {
         // Recursively write all meanings of alias
         if self.c.sym(symbol).flags.intersects(SymbolFlags::ALIAS)

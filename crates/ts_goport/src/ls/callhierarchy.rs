@@ -438,7 +438,7 @@ pub fn find_all_initial_declarations(c: &mut Checker, node: Node) -> Vec<Node> {
     }
     let symbol_declarations: Vec<Node> = c.sym(symbol).declarations.to_vec();
 
-    // Go: callhierarchy.go:347 declKey
+    // Go: callhierarchy.go:349 declKey
     struct DeclKey {
         file: &'static str,
         pos: i32,
@@ -782,7 +782,7 @@ impl IncomingEntry<'_> {
     }
 }
 
-// Go: ls/callhierarchy.go:607 var _ lsproto.HasTextDocumentPosition = (*incomingEntry)(nil)
+// Go: ls/callhierarchy.go:609 var _ lsproto.HasTextDocumentPosition = (*incomingEntry)(nil)
 impl lsproto::HasTextDocumentURI for IncomingEntry<'_> {
     // Go: ls/callhierarchy.go:618 TextDocumentURI
     fn text_document_uri(&self) -> lsproto::DocumentUri {

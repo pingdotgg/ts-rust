@@ -306,7 +306,7 @@ impl Tracker {
         text + &*String::from_utf8_lossy(before_point)
     }
 
-    // Go: ls/change/trackerimpl.go:230 getFormattedTextOfNode
+    // Go: ls/change/trackerimpl.go:231 getFormattedTextOfNode
     /** Note: this may mutate `nodeIn`. */
     // PORT: Go passes `options NodeOptions` by value; it is only read, so it
     // is passed by reference.

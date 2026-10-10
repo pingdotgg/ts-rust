@@ -5,7 +5,7 @@ use crate::gostd::unicode;
 
 // Port of Go `ls/lsutil/formatcodeoptions.go`.
 
-// Go: ls/lsutil/formatcodeoptions.go:11 IndentStyle
+// Go: ls/lsutil/formatcodeoptions.go:9 IndentStyle
 go_enum!(IndentStyle, i32 {
     NONE = 0;
     BLOCK = 1;

@@ -29,7 +29,7 @@ pub struct NodeOptions {
     pub(crate) joiner: String,
 }
 
-// Go: ls/change/tracker.go:39 LeadingTriviaOption
+// Go: ls/change/tracker.go:40 LeadingTriviaOption
 go_enum!(LeadingTriviaOption, i32 {
     NONE = 0; // LeadingTriviaOptionNone
     EXCLUDE = 1; // LeadingTriviaOptionExclude
@@ -38,7 +38,7 @@ go_enum!(LeadingTriviaOption, i32 {
     START_LINE = 4; // LeadingTriviaOptionStartLine
 });
 
-// Go: ls/change/tracker.go:49 TrailingTriviaOption
+// Go: ls/change/tracker.go:50 TrailingTriviaOption
 go_enum!(TrailingTriviaOption, i32 {
     NONE = 0; // TrailingTriviaOptionNone
     EXCLUDE = 1; // TrailingTriviaOptionExclude
@@ -46,7 +46,7 @@ go_enum!(TrailingTriviaOption, i32 {
     INCLUDE = 3; // TrailingTriviaOptionInclude
 });
 
-// Go: ls/change/tracker.go:58 trackerEditKind
+// Go: ls/change/tracker.go:59 trackerEditKind
 go_enum!(TrackerEditKind, i32 {
     TEXT = 1; // trackerEditKindText
     REMOVE = 2; // trackerEditKindRemove
@@ -681,7 +681,7 @@ impl Tracker {
         self.get_adjusted_end_position(source_file, after, TrailingTriviaOption::NONE)
     }
 
-    // Go: ls/change/tracker.go:420 InsertNodeInListAfter
+    // Go: ls/change/tracker.go:421 InsertNodeInListAfter
     /**
      * This function should be used to insert nodes in lists when nodes don't carry separators as the part of the node range,
      * i.e. arguments in arguments lists, parameters in parameter lists etc.

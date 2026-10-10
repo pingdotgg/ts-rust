@@ -1436,7 +1436,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
                 .seen_containing_type_references
                 .insert(type_having_node)
         {
-            // Go: ls/findallreferences.go:2148 addIfImplementation (closure)
+            // Go: ls/findallreferences.go:2145 addIfImplementation (closure)
             let mut add_if_implementation = |e: Node /*Expression*/| {
                 if is_implementation_expression(e) {
                     add_ref(e);
@@ -1663,7 +1663,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
             self.add_reference(reference_location, symbol, EntryKind::NODE);
         }
 
-        // Go: ls/findallreferences.go:2297 pusher (closure)
+        // Go: ls/findallreferences.go:2294 pusher (closure)
         let pusher = |state: &mut Self| state.reference_adder(search.symbol);
 
         if is_class_like(reference_location.parent()) {
@@ -1718,7 +1718,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
             // Go: `members == nil`; an empty list has no members to walk either.
             return;
         }
-        // Go: ls/findallreferences.go:2340 cb (closure)
+        // Go: ls/findallreferences.go:2337 cb (closure)
         fn cb(node: Node, add_ref: &dyn Fn(Node, EntryKind)) {
             if node.kind() == SyntaxKind::ThisKeyword {
                 add_ref(node, EntryKind::NODE);
@@ -1822,7 +1822,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
             return;
         }
 
-        // Go: ls/findallreferences.go:2288 addRef (closure)
+        // Go: ls/findallreferences.go:2398 addRef (closure)
         let add_ref = |state: &mut Self| {
             if add_references_here {
                 state.add_reference(reference_location, local_symbol, EntryKind::NODE);
@@ -2124,7 +2124,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
         )
     }
 
-    // Go: ls/findallreferences.go:2603 fromRoot (closure in forEachRelatedSymbol)
+    // Go: ls/findallreferences.go:2600 fromRoot (closure in forEachRelatedSymbol)
     // PORT: the closure captures `cbSymbol` and `allowBaseTypes`, which
     // `forEachRelatedSymbol` also calls directly, so it is a method that takes
     // them as arguments.

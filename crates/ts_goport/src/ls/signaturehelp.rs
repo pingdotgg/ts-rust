@@ -40,7 +40,7 @@ pub struct Invocation {
     pub contextual_invocation: Option<ContextualInvocation>,
 }
 
-// Go: ls/signaturehelp.go:76 signatureHelpTriggerReasonKind (local type of GetSignatureHelpItems)
+// Go: ls/signaturehelp.go:92 signatureHelpTriggerReasonKind (local type of GetSignatureHelpItems)
 const SIGNATURE_HELP_TRIGGER_REASON_KIND_NONE: i32 = 0; // was undefined
 const SIGNATURE_HELP_TRIGGER_REASON_KIND_INVOKED: i32 = 1; // was "invoked"
 const SIGNATURE_HELP_TRIGGER_REASON_KIND_CHARACTER_TYPED: i32 = 2; // was "characterTyped"
@@ -1043,7 +1043,7 @@ impl LanguageService {
             let close_paren = token_to_string(SyntaxKind::CloseParenToken);
             param_dpw.borrow_mut().write_punctuation(close_paren);
 
-            // Go: the isVariadic closure (signaturehelp.go:600), called here.
+            // Go: the isVariadic closure (signaturehelp.go:627), called here.
             let is_variadic = if !c.has_effective_rest_parameter_exported(candidate_signature) {
                 false
             } else if lists.len() == 1 {

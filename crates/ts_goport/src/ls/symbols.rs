@@ -177,7 +177,7 @@ fn doc_symbols_to_lsp(symbols: &[DocSymbol]) -> Vec<lsproto::DocumentSymbol> {
         .collect()
 }
 
-// Go: ls/symbols.go:94 (the state of the closures in getDocumentSymbolsForChildren)
+// Go: ls/symbols.go:95 (the state of the closures in getDocumentSymbolsForChildren)
 struct DocumentSymbolsVisitor<'a> {
     ls: &'a LanguageService,
     ctx: &'a Context,
@@ -196,7 +196,7 @@ struct EndNode {
 }
 
 impl DocumentSymbolsVisitor<'_> {
-    // Go: ls/symbols.go:97 addSymbolForNode
+    // Go: ls/symbols.go:98 addSymbolForNode
     fn add_symbol_for_node(&mut self, node: Node, name: Node, children: Vec<DocSymbol>) {
         if !node.flags().intersects(NodeFlags::REPARSED) {
             let symbol = self.ls.new_document_symbol(node, name, children);
@@ -206,7 +206,7 @@ impl DocumentSymbolsVisitor<'_> {
         }
     }
 
-    // Go: ls/symbols.go:106 getSymbolsForChildren
+    // Go: ls/symbols.go:107 getSymbolsForChildren
     fn get_symbols_for_children(&mut self, node: Node) -> Vec<DocSymbol> {
         let mut result: Vec<DocSymbol> = Vec::new();
         if node.is_some() {
@@ -219,7 +219,7 @@ impl DocumentSymbolsVisitor<'_> {
         result
     }
 
-    // Go: ls/symbols.go:120 startNode
+    // Go: ls/symbols.go:121 startNode
     fn start_node(&mut self, node: Node, name: Node) -> Option<EndNode> {
         if node.is_nil() {
             return None;
@@ -234,7 +234,7 @@ impl DocumentSymbolsVisitor<'_> {
         })
     }
 
-    // Go: ls/symbols.go:128 (the func returned by startNode)
+    // Go: ls/symbols.go:129 (the func returned by startNode)
     fn end_node(&mut self, end: Option<EndNode>) {
         let Some(end) = end else {
             return;
@@ -244,7 +244,7 @@ impl DocumentSymbolsVisitor<'_> {
         self.add_symbol_for_node(end.node, end.name, result);
     }
 
-    // Go: ls/symbols.go:135 getSymbolsForNode
+    // Go: ls/symbols.go:136 getSymbolsForNode
     fn get_symbols_for_node(&mut self, node: Node) -> Vec<DocSymbol> {
         let mut result: Vec<DocSymbol> = Vec::new();
         if node.is_some() {
@@ -255,7 +255,7 @@ impl DocumentSymbolsVisitor<'_> {
         result
     }
 
-    // Go: ls/symbols.go:146 visit
+    // Go: ls/symbols.go:147 visit
     fn visit(&mut self, node: Node) -> bool {
         if self.ctx.err().is_some() {
             return true;

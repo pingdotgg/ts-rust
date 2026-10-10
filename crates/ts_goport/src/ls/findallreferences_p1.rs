@@ -1986,7 +1986,7 @@ impl<P: ProgramView> LanguageService<P> {
                 let reference = Rc::clone(&result[ref_index]);
                 let mut sorted_refs = reference.borrow().references.clone();
                 sorted_refs.extend(entry.borrow().references.iter().cloned());
-                // Go: ls/findallreferences.go:1179 slices.SortStableFunc(sortedRefs, ...)
+                // Go: ls/findallreferences.go:1182 slices.SortStableFunc(sortedRefs, ...)
                 crate::gostd::slices::sort_stable_func(&mut sorted_refs, |entry1, entry2| {
                     let entry1_file = get_source_file_index_of_entry(program, entry1);
                     let entry2_file = get_source_file_index_of_entry(program, entry2);

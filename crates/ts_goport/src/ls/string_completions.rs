@@ -1746,7 +1746,7 @@ fn deduplicate_module_completions(
     result
 }
 
-// Go: ls/string_completions.go:1231 moduleCompletionKind
+// Go: ls/string_completions.go:1214 moduleCompletionKind
 go_enum!(ModuleCompletionKind, i32 {
     DIRECTORY = 0; // moduleCompletionKindDirectory
     FILE = 1; // moduleCompletionKindFile
@@ -1788,7 +1788,7 @@ struct ExtensionOptions {
     resolution_mode: ResolutionMode,
 }
 
-// Go: ls/string_completions.go:1264 referenceKind
+// Go: ls/string_completions.go:1247 referenceKind
 go_enum!(ReferenceKind, i32 {
     FILE_NAME = 0; // referenceKindFileName
     MODULE_SPECIFIER = 1; // referenceKindModuleSpecifier

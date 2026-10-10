@@ -57,7 +57,7 @@ fn parse(name: &str, text: &str, kind: ScriptKind) -> Node {
 // ls/format_test.go
 // ---------------------------------------------------------------------------
 
-// Go: ls/format.go:97 getFormattingEditsAfterKeystroke
+// Go: ls/format.go:226 getFormattingEditsAfterKeystroke
 // PORT: the Go tests call the unexported LanguageService method with a nil
 // program; the Rust method is private. The method only reads its arguments,
 // so this is its body, with the same public format entry points.
@@ -85,7 +85,7 @@ fn get_formatting_edits_after_keystroke(
     Vec::new()
 }
 
-// Go: ls/format.go:78 getFormattingEditsForRange
+// Go: ls/format.go:207 getFormattingEditsForRange
 // PORT: see `get_formatting_edits_after_keystroke`.
 fn get_formatting_edits_for_range(
     file: Node,
@@ -100,7 +100,7 @@ fn get_formatting_edits_for_range(
     format::format_selection(ctx, file, r.pos(), r.end())
 }
 
-// Go: ls/format_test.go:15 TestGetFormattingEditsAfterKeystroke_EmptyFile
+// Go: ls/format_test.go:59 TestGetFormattingEditsAfterKeystroke_EmptyFile
 /// Test for issue: Panic Handling textDocument/onTypeFormatting
 /// This reproduces the panic when pressing enter in an empty file
 #[test]
@@ -120,7 +120,7 @@ fn test_get_formatting_edits_after_keystroke_empty_file() {
     );
 }
 
-// Go: ls/format_test.go:45 TestGetFormattingEditsAfterKeystroke_SimpleStatement
+// Go: ls/format_test.go:89 TestGetFormattingEditsAfterKeystroke_SimpleStatement
 /// Test with a simple statement
 #[test]
 fn test_get_formatting_edits_after_keystroke_simple_statement() {
@@ -138,7 +138,7 @@ fn test_get_formatting_edits_after_keystroke_simple_statement() {
     );
 }
 
-// Go: ls/format_test.go:76 TestGetFormattingEditsForRange_FunctionBody
+// Go: ls/format_test.go:120 TestGetFormattingEditsForRange_FunctionBody
 /// Test for issue: Crash in range formatting when requested on a line that is different from the containing function
 /// This reproduces the panic when formatting a range inside a function body
 #[test]
@@ -192,7 +192,7 @@ fn test_get_formatting_edits_for_range_function_body() {
 // ls/lsconv/converters_test.go
 // ---------------------------------------------------------------------------
 
-// Go: ls/lsconv/converters_test.go:17 TestDocumentURIToFileName
+// Go: ls/lsconv/converters_test.go:22 TestDocumentURIToFileName
 #[test]
 fn test_document_uri_to_file_name() {
     #[rustfmt::skip]
@@ -287,7 +287,7 @@ impl Script for TestScript {
     }
 }
 
-// Go: ls/lsconv/converters_test.go:99 newTestConverters
+// Go: ls/lsconv/converters_test.go:232 newTestConverters
 fn new_test_converters(text: &str) -> (Rc<Converters>, TestScript) {
     let script = TestScript {
         name: "test.ts".to_string(),
@@ -321,7 +321,7 @@ fn from_lsp_position_all(
     }
 }
 
-// Go: ls/lsconv/converters_test.go:159 TestConvertersInvalidUTF8
+// Go: ls/lsconv/converters_test.go:279 TestConvertersInvalidUTF8
 /// TestConvertersInvalidUTF8 verifies behavior on text containing invalid UTF-8
 /// sequences (e.g. lone continuation bytes). Node's TextDecoder substitutes such
 /// bytes with U+FFFD, so the JS-reference test cannot cover this; we assert the
@@ -386,7 +386,7 @@ fn test_converters_invalid_utf8() {
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
-// Go: ls/lsconv/converters_test.go:170 jsReferenceScript
+// Go: ls/lsconv/converters_test.go:340 jsReferenceScript
 /// jsReferenceScript is a Node.js script that, given a list of UTF-8 byte buffers,
 /// computes the authoritative mapping between (line, character in UTF-16 code units)
 /// and UTF-8 byte offsets. See the Go file for the full description.
@@ -462,7 +462,7 @@ function utf8SeqLen(b) {
 /// Go `jsTuple`: (bytePos, line, char).
 type JsTuple = (i32, u32, u32);
 
-// Go: ls/lsconv/converters_test.go:245 runJSReference
+// Go: ls/lsconv/converters_test.go:415 runJSReference
 /// None when node is not available (Go `t.Skipf`).
 fn run_js_reference(texts: &[&str]) -> Option<Vec<Vec<JsTuple>>> {
     // Build a length-prefixed binary stream of the raw UTF-8 bytes:
@@ -542,7 +542,7 @@ fn run_js_reference(texts: &[&str]) -> Option<Vec<Vec<JsTuple>>> {
     Some(out)
 }
 
-// Go: ls/lsconv/converters_test.go:329 TestConvertersAgainstJSReference
+// Go: ls/lsconv/converters_test.go:449 TestConvertersAgainstJSReference
 /// TestConvertersAgainstJSReference cross-checks the Go UTF-16 conversions against
 /// authoritative results computed by Node.js using real UTF-16 string semantics.
 #[test]
@@ -739,8 +739,8 @@ fn test_resolve_organize_imports_sort() {
 // ls/lsutil/userpreferences_test.go
 // ---------------------------------------------------------------------------
 
-// Go: ls/lsutil/userpreferences_test.go:13 fillNonZeroValues
-// Go: ls/lsutil/userpreferences_test.go:40 getValidStringValue
+// Go: ls/lsutil/userpreferences_test.go:101 fillNonZeroValues
+// Go: ls/lsutil/userpreferences_test.go:128 getValidStringValue
 // PORT: Go fills every settable field by reflection: bool true, ints 1,
 // unsigned ints (core.Tristate) 1 (TSFalse), a valid value for the string
 // enums, "test" for other strings, []string{"test"}, and nested structs the
@@ -845,7 +845,7 @@ fn fill_non_zero_values() -> UserPreferences {
     }
 }
 
-// Go: ls/lsutil/userpreferences_test.go:60 TestUserPreferencesRoundtrip
+// Go: ls/lsutil/userpreferences_test.go:150 TestUserPreferencesRoundtrip
 // PORT: the `withConfig` subtest is not ported (see the module comment).
 #[test]
 fn test_user_preferences_roundtrip() {
@@ -889,7 +889,7 @@ fn object<'a>(
     }
 }
 
-// Go: ls/lsutil/userpreferences_test.go:87 TestUserPreferencesSerialize
+// Go: ls/lsutil/userpreferences_test.go:177 TestUserPreferencesSerialize
 #[test]
 fn test_user_preferences_serialize() {
     let mut t = Subtests::new("TestUserPreferencesSerialize");
@@ -998,7 +998,7 @@ fn items(entries: &[(&str, LspAny)]) -> IndexMap<String, LspAny> {
     }
 }
 
-// Go: ls/lsutil/userpreferences_test.go:429 TestUserPreferencesLocale
+// Go: ls/lsutil/userpreferences_test.go:517 TestUserPreferencesLocale
 #[test]
 fn test_user_preferences_locale() {
     let prefs = parse_user_preferences(&items(&[
@@ -1012,7 +1012,7 @@ fn test_user_preferences_locale() {
     assert_eq!(prefs.locale, "fr");
 }
 
-// Go: ls/lsutil/userpreferences_test.go:427 TestUserPreferencesReportStyleChecksAsWarnings
+// Go: ls/lsutil/userpreferences_test.go:532 TestUserPreferencesReportStyleChecksAsWarnings
 #[test]
 fn test_user_preferences_report_style_checks_as_warnings() {
     let mut t = Subtests::new("TestUserPreferencesReportStyleChecksAsWarnings");
@@ -1056,7 +1056,7 @@ fn test_user_preferences_report_style_checks_as_warnings() {
     t.finish();
 }
 
-// Go: ls/lsutil/userpreferences_test.go:328 TestUserPreferencesParseATA
+// Go: ls/lsutil/userpreferences_test.go:711 TestUserPreferencesParseATA
 #[test]
 fn test_user_preferences_parse_ata() {
     let mut t = Subtests::new("TestUserPreferencesParseATA");
@@ -1141,7 +1141,7 @@ fn test_user_preferences_parse_ata() {
     t.finish();
 }
 
-// Go: ls/lsutil/userpreferences_test.go:531 TestParseUserPreferencesEditorFormatting
+// Go: ls/lsutil/userpreferences_test.go:619 TestParseUserPreferencesEditorFormatting
 // PORT: Go writes the numbers as Go `int`; a JSON number is `LspAny::Number`.
 #[test]
 fn test_parse_user_preferences_editor_formatting() {
