@@ -22,7 +22,7 @@
 # linked in (+crt-static), so tsc.exe needs no Visual C++ redistributable. jemalloc does not build
 # there: it uses the system allocator. Each tsc builds natively, so the PGO training runs on its
 # own platform: Blacksmith has no Intel Mac and no arm64 Windows runner, so darwin-x64 builds on
-# GitHub's macos-15-intel (4 vCPU; GitHub retires its last Intel image in August 2027) and
+# GitHub's macos-15-intel (4 vCPU) and
 # win32-arm64 on GitHub's windows-11-arm (4 vCPU).
 name: Release
 
