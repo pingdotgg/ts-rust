@@ -64,15 +64,15 @@ when the condition no longer holds.
   Compare it with `internal/{ast,binder,checker,core}` at the new pin.
 - `Checker::is_distribution_dependent` (`checker/relater_p5.rs`) keeps the answer of its first walk
   on the conditional root (chkperf3). That is exact only while the walk
-  (`isTypeParameterPossiblyReferenced`, checker.go:22823 at `673a5f17d713`) reads only state that
+  (`isTypeParameterPossiblyReferenced`, checker.go:22891 at `fed0bf24149f`) reads only state that
   its first read fixes: the AST; `resolvedSymbol` of TypeReference nodes, whose one writer is
-  `getSymbolFromTypeReference` (checker.go:23538; TypeScript's JS `getTypeFromTypeReference` also
-  writes it); the write-once `getResolvedSymbol` links (checker.go:14132); and the declarations of a
+  `getSymbolFromTypeReference` (checker.go:23606; TypeScript's JS `getTypeFromTypeReference` also
+  writes it); the write-once `getResolvedSymbol` links (checker.go:14169); and the declarations of a
   resolved value symbol (check-time `mergeSymbol` clones a non-transient target before it appends,
-  checker.go:14387-14412). A transient target is not cloned: `mergeSymbol` appends to its
-  declarations in place (checker.go:14412). The merges of `initializeChecker` (checker.go:1306-1395:
+  checker.go:14424-14449). A transient target is not cloned: `mergeSymbol` appends to its
+  declarations in place (checker.go:14449). The merges of `initializeChecker` (checker.go:1309-1398:
   globals, pattern ambient modules, module augmentations) do that before any walk. At check time
-  only `combineSymbolTables` (checker.go:16293) merges, when a late-bound member or export of a
+  only `combineSymbolTables` (checker.go:16360) merges, when a late-bound member or export of a
   late-binding container has the name of an early one. The early symbol is transient only when an
   init merge made it, and it is a value that name resolution returns only in a corner (a function
   merged with a namespace across files, with a late-bound expando of the same name). That corner
