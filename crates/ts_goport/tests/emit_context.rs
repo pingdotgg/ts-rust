@@ -6,7 +6,7 @@
 //!   transform changed (legacydecorators.go:145, esdecorator.go:1821): the
 //!   d.ts map loses the segment after the name;
 //! - `EFNoLeadingComments` on member names of a class with decorators
-//!   (esdecorator.go:1439): the d.ts loses the JSDoc before the name;
+//!   (esdecorator.go:1439): the d.ts loses the doc comment before the name;
 //! - the type node of a typed variable name (typeeraser.go:192): the d.ts
 //!   repeats the comment after the type.
 //!
@@ -28,7 +28,7 @@
 //!   checker runs both transforms and its twin prints them.
 //! - In `legacy-vms` and `es-vms` (`verbatimModuleSyntax`) the JS part of
 //!   each file runs on the emit pool and the d.ts part on the checker.
-//!   `js-split` has both: `a.js` (allowJs, isolatedModules, JSDoc `@type`
+//!   `js-split` has both: `a.js` (allowJs, isolatedModules, `@type` tags on
 //!   variables) splits, `b.ts` (import elision) does not.
 //!
 //! The tests need the emit pool on: do not set `GOPORT_EMIT_THREADS=0`.
@@ -530,12 +530,15 @@ impl Api {
 
 /// `text` as a JSON string.
 fn json_string(text: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::from("\"");
     for c in text.chars() {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c if u32::from(c) < 0x20 => {
+                write!(out, "\\u{:04x}", u32::from(c)).expect("write to a String");
+            }
             c => out.push(c),
         }
     }
@@ -634,7 +637,7 @@ impl JsonParser {
                     self.space();
                     match self.next() {
                         '}' => return Json::Object(fields),
-                        ',' => continue,
+                        ',' => {}
                         '"' => {
                             let key = self.string();
                             self.space();
