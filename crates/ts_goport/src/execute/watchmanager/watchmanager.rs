@@ -130,7 +130,8 @@ impl GoMutex {
 /// while the receiver waits hands the value to it and leaves the buffer
 /// empty, so a second send fits before the receiver runs. A std
 /// `sync_channel(1)` keeps the first value in its slot until the receiver
-/// thread runs, and then drops the second send.
+/// thread runs, and then drops the second send. `recv` is the whole
+/// `RunLoop` select, with the `ctx.Done()` case (`wake`).
 #[derive(Default)]
 pub struct DoCycleCh {
     state: Mutex<DoCycleState>,
@@ -139,13 +140,22 @@ pub struct DoCycleCh {
 
 #[derive(Default)]
 struct DoCycleState {
-    /// Values sent and not received yet: one handed to the waiting
-    /// receiver and one in the buffer at most.
-    pending: u8,
-    /// The receiver waits in `recv`.
+    /// A value is in the buffer.
+    buffered: bool,
+    /// The receiver waits in `recv` and no case has reached it yet.
     waiting: bool,
-    /// The context of `run_loop` is done (`wake`): `recv` waits no more.
+    /// The case that reached the waiting receiver first (Go: the send or
+    /// close that wakes a goroutine parked in a select completes that
+    /// select with its own case).
+    handed: Option<DoCycleCase>,
+    /// The context of `run_loop` is done (`wake`).
     woken: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DoCycleCase {
+    Value,
+    Done,
 }
 
 impl DoCycleCh {
@@ -153,39 +163,52 @@ impl DoCycleCh {
     /// value does not fit.
     pub fn try_send(&self) -> bool {
         let mut state = self.state.lock().unwrap();
-        let capacity = if state.waiting { 2 } else { 1 };
-        if state.pending >= capacity {
+        if state.waiting {
+            state.waiting = false;
+            state.handed = Some(DoCycleCase::Value);
+        } else if state.buffered {
             return false;
+        } else {
+            state.buffered = true;
         }
-        state.pending += 1;
         self.cond.notify_one();
         true
     }
 
     /// Go `select { case <-ctx.Done(): ...; case <-ch: ... }` of
-    /// `RunLoop`: waits for a value or for `wake` (the `ctx.Done()` case).
-    /// True when a value came.
+    /// `RunLoop`, where `wake` is the `ctx.Done()` case: waits until a case
+    /// is ready. True when the select takes a value. When both cases are
+    /// ready, it picks one at random, as Go does (`go_select_picks_first`).
+    /// A wait ends with the case that came first.
     pub fn recv(&self) -> bool {
         let mut state = self.state.lock().unwrap();
-        if state.pending == 0 && !state.woken {
+        if !state.buffered && !state.woken {
             state.waiting = true;
             state = self
                 .cond
-                .wait_while(state, |state| state.pending == 0 && !state.woken)
+                .wait_while(state, |state| state.handed.is_none())
                 .unwrap();
-            state.waiting = false;
         }
-        if state.pending == 0 {
+        if let Some(case) = state.handed.take() {
+            return case == DoCycleCase::Value;
+        }
+        if !state.buffered || (state.woken && go_select_picks_first()) {
             return false;
         }
-        state.pending -= 1;
+        state.buffered = false;
         true
     }
 
     /// The `ctx.Done()` case of the `RunLoop` select: ends the wait in
-    /// `recv`, and each later one until `reset_wake`.
+    /// `recv`, and makes the case ready for each later one until
+    /// `reset_wake`.
     pub fn wake(&self) {
-        self.state.lock().unwrap().woken = true;
+        let mut state = self.state.lock().unwrap();
+        state.woken = true;
+        if state.waiting {
+            state.waiting = false;
+            state.handed = Some(DoCycleCase::Done);
+        }
         self.cond.notify_all();
     }
 
@@ -197,13 +220,18 @@ impl DoCycleCh {
     /// Go `select { case <-ch: return true; default: return false }`.
     #[cfg(test)]
     fn try_recv(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if state.pending == 0 {
-            return false;
-        }
-        state.pending -= 1;
-        true
+        std::mem::take(&mut self.state.lock().unwrap().buffered)
     }
+}
+
+/// Go `selectgo` (runtime/select.go) polls the cases of a select in a
+/// random order (`cheaprandn`), so when two cases are ready, each is taken
+/// half the time. True for the first case of `RunLoop`'s select
+/// (`ctx.Done()`).
+fn go_select_picks_first() -> bool {
+    use std::hash::BuildHasher;
+    // `RandomState::new` gives new keys on each call.
+    std::collections::hash_map::RandomState::new().hash_one(()) & 1 == 0
 }
 
 // Go: watchmanager.go:50 NewWatchManager
@@ -503,37 +531,35 @@ impl WatchManager {
 
     // Go: watchmanager.go:354 WatchManager.RunLoop
     // PORT: Go selects on `ctx.Done()` and `doCycleCh`. Here a waker on
-    // `ctx.Done()` ends the wait on the channel (`DoCycleCh::wake`), so a
-    // SIGINT or SIGTERM ends the loop at once, as in Go (a wait with a
-    // 50 ms timeout ended it up to 50 ms later). When both cases are ready
-    // Go picks one at random; the port takes the context. `doCycle` is the
-    // caller's DoCycle method value. After a signal, the cycle waits until
-    // the debouncer has delivered the fire that sent it
-    // (`fswatch::wait_for_fires`), as Go's does: otherwise it can drain a
-    // deleted directory's event before that fire's "watch terminated"
-    // overflow, and then build a second time.
+    // `ctx.Done()` makes that case ready in the channel
+    // (`DoCycleCh::wake`), so a SIGINT or SIGTERM ends a wait at once, as
+    // in Go, and `recv` is the whole select: when both cases are ready it
+    // picks one at random, as Go does. `doCycle` is the caller's DoCycle
+    // method value. After a signal, the cycle waits until the debouncer has
+    // delivered the fire that sent it (`fswatch::wait_for_fires`), as Go's
+    // does: otherwise it can drain a deleted directory's event before that
+    // fire's "watch terminated" overflow, and then build a second time.
     pub fn run_loop(&self, ctx: &Context, do_cycle: &mut dyn FnMut()) {
-        self.shared.do_cycle_ch.reset_wake();
+        let do_cycle_ch = &self.shared.do_cycle_ch;
+        do_cycle_ch.reset_wake();
         let done = ctx.done();
-        // `None`: the context is never done (a nil channel), or it is done
-        // already, which the first check below sees.
-        let waker = done.as_ref().and_then(|done| {
+        // `None` from `register_waker`: the context is done already. A nil
+        // channel (`done` is `None`) is never ready.
+        let waker = done.as_ref().map(|done| {
             let shared = self.shared.clone();
             done.register_waker(move || shared.do_cycle_ch.wake())
         });
-        loop {
-            if ctx.err().is_some() {
-                if let (Some(done), Some(id)) = (&done, waker) {
-                    done.unregister_waker(id);
-                }
-                self.close_all_watches();
-                return;
-            }
-            if self.shared.do_cycle_ch.recv() {
-                fswatch::wait_for_fires();
-                do_cycle();
-            }
+        if let Some(None) = waker {
+            do_cycle_ch.wake();
         }
+        while do_cycle_ch.recv() {
+            fswatch::wait_for_fires();
+            do_cycle();
+        }
+        if let (Some(done), Some(Some(id))) = (&done, waker) {
+            done.unregister_waker(id);
+        }
+        self.close_all_watches();
     }
 }
 
@@ -711,6 +737,35 @@ fn write_stdout(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// The longest wait for a step that ends at once when it works. A lost
+    /// send or wake fails the test at this limit and does not hang it.
+    const LIMIT: Duration = Duration::from_secs(20);
+
+    /// Runs `ch.recv()` on a new thread. `recv_timeout(LIMIT)` on the
+    /// result gives what `recv` returned, so a lost send or wake fails the
+    /// test and does not hang it.
+    fn recv_on_thread(ch: &Arc<DoCycleCh>) -> mpsc::Receiver<bool> {
+        let (tx, rx) = mpsc::channel();
+        let receiver = ch.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(receiver.recv());
+        });
+        rx
+    }
+
+    /// `recv_on_thread`, and returns once that `recv` waits.
+    fn waiting_receiver(ch: &Arc<DoCycleCh>) -> mpsc::Receiver<bool> {
+        let rx = recv_on_thread(ch);
+        let end = Instant::now() + LIMIT;
+        while !ch.state.lock().unwrap().waiting {
+            assert!(Instant::now() < end, "the receiver does not wait");
+            std::thread::yield_now();
+        }
+        rx
+    }
 
     // PORT: not in Go. `DoCycleCh` keeps the Go channel rule: without a
     // waiting receiver one value fits; a waiting receiver takes the first
@@ -756,6 +811,46 @@ mod tests {
         ch.reset_wake();
         assert!(ch.try_send());
         assert!(ch.recv());
+    }
+
+    // Go `selectgo` (runtime/select.go) polls the ready cases in a random
+    // order. With a value and the context both ready, `recv` takes each
+    // about half the time: in 200 tries each comes 60 to 140 times (more
+    // than 5 standard deviations from 100).
+    #[test]
+    fn do_cycle_ch_picks_a_ready_case_at_random() {
+        let ch = DoCycleCh::default();
+        ch.wake();
+        let mut values = 0;
+        for _ in 0..200 {
+            ch.try_send();
+            if ch.recv() {
+                values += 1;
+            }
+        }
+        assert!((60..=140).contains(&values), "{values} values of 200");
+    }
+
+    // In Go, the send or close that finds the receiver parked in the
+    // select completes the select with its own case. The other case that
+    // comes before the receiver runs does not change it: a send stays in
+    // the buffer.
+    #[test]
+    fn do_cycle_ch_wait_ends_with_the_case_that_came_first() {
+        let ch = Arc::new(DoCycleCh::default());
+        let receiver = waiting_receiver(&ch);
+        assert!(ch.try_send());
+        ch.wake();
+        assert_eq!(receiver.recv_timeout(LIMIT), Ok(true));
+        assert!(!ch.try_recv());
+
+        ch.reset_wake();
+        let receiver = waiting_receiver(&ch);
+        ch.wake();
+        assert!(ch.try_send());
+        assert!(!ch.try_send());
+        assert_eq!(receiver.recv_timeout(LIMIT), Ok(false));
+        assert!(ch.try_recv());
     }
 
     // PORT: not in Go. A cancel ends a waiting `run_loop` at once, as Go's
