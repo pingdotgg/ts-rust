@@ -1,6 +1,6 @@
 //! Print scopes (n1free): the checker frees the nodes of each to-string call
 //! when the call ends (`ast::synthetic::enter_print_scope`, `PrintScope` in
-//! checker/printer_impl.rs), as Go `getNodeBuilder`'s `release` lets the GC
+//! `checker/printer_impl.rs`), as Go `getNodeBuilder`'s `release` lets the GC
 //! take them. A read of a freed node panics, so a run that ends with exit
 //! code 2 and Go's text read none.
 //!

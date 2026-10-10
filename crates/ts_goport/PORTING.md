@@ -302,6 +302,20 @@ methods reach the AST through it.
   files published outside a program) opens `enter_base_synthetic_owner()`
   so they belong to the thread. `GOPORT_SYNTHETIC_OWNERS=0` turns owners
   off.
+- Print scopes (n1free): Go `getNodeBuilder` returns `release`
+  (`Factory.ReleaseArenas`), which the to-string entries of
+  `checker/printer.go` defer. Here those entries open a `PrintScope`
+  (`checker/printer_impl.rs`): the checker's to-string factory
+  (`NodeFactory::set_print_owned`) puts its nodes and lists in the print
+  owner of the thread, and the end of the outermost scope frees them in
+  place (a later read panics), with their emit records, idToSymbol
+  entries, fake scope records and the nil-key serialized types. A store
+  in the serialized type cache under an enclosing declaration pins the
+  call: its nodes go to the current owner. `GOPORT_N1=0` turns print
+  scopes off. Go N' also releases the arenas of the emitter's per-file
+  emit context and of the hover and signature help display builders; the
+  port keeps those nodes with their thread or program version (PORT notes
+  at each site).
 - Store columns and the other registry tables of a published file are read
   through one file lookup, `file_block` in `ast/store.rs` (AST node records
   step 3). Each published file id has one block (`FileBlock`: kinds,
