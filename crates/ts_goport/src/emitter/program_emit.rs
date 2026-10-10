@@ -7,12 +7,13 @@
 use crate::prelude::*;
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use super::emitter::{DeclarationPrint, EmitOnly, Emitter, JsPrint, js_emit_needs_checker};
 use crate::frontend::outputpaths::{ForceEmitPaths, OutputPaths};
 use crate::frontend::tspath::{Path, has_extension, path_is_relative, to_path};
-use crate::printer::emit_context::PrintTables;
+use crate::printer::emit_context::{ParseEmitNodes, PrintTables};
 use crate::sourcemap::generator::RawSourceMap;
 
 // Go: compiler/program.go:1860 WriteFileData
@@ -584,7 +585,25 @@ struct CheckerPart {
     target: EmitterOptions,
     /// The JS part on the emit pool when the file's emit is split; this is
     /// then the d.ts part.
-    js_part: Option<EmitPoolJob<EmitResult>>,
+    js_part: Option<PoolJs>,
+}
+
+/// The JS part of a split file on the emit pool, as its d.ts part sees it.
+struct PoolJs {
+    job: EmitPoolJob<EmitResult>,
+    /// ts#64649: what the JS transforms wrote on parse-tree nodes
+    /// (`emit_source_file_on_pool`). The pool job sends it after its
+    /// transforms, or drops the sender when it ran none (skipped, blocked) or
+    /// panicked.
+    emit_nodes: Receiver<ParseEmitNodes>,
+}
+
+impl PoolJs {
+    /// Waits until the JS transforms ended, and returns what they wrote on
+    /// parse-tree nodes, or None when they did not run.
+    fn js_emit_nodes(&self) -> Option<ParseEmitNodes> {
+        self.emit_nodes.recv().ok()
+    }
 }
 
 /// PORT: not in Go. Starts `emit_with` and `emit_batch_with` of `files`
@@ -599,10 +618,13 @@ struct CheckerPart {
 /// as with the pool off: each checker thread gets its files in file order,
 /// with the whole emit or the d.ts part, so each checker gets the same
 /// checker calls in the same order. The JS part makes no checker call.
-/// A d.ts part waits for its JS part before it writes (`Emitter::js_part`),
-/// so the outputs of a file are written in Go's order. With the twins on,
-/// a checker thread runs only the transforms of its parts, and its twin
-/// prints and writes them (`emit_declaration_part`, `emit_on_twin`).
+/// A d.ts part waits for the JS transforms of its file before its own
+/// transforms (ts#64649, `PoolJs::js_emit_nodes`), and for its JS part
+/// before it writes (`Emitter::js_part`), so the outputs of a file are
+/// written in Go's order. The pool jobs never wait for a checker, and they
+/// are sent first, so the wait always ends. With the twins on, a checker
+/// thread runs only the transforms of its parts, and its twin prints and
+/// writes them (`emit_declaration_part`, `emit_on_twin`).
 fn start_emit_files_with_pool(
     files: &[Node],
     target: impl Fn(Node) -> EmitterOptions,
@@ -623,19 +645,23 @@ fn start_emit_files_with_pool(
         return None;
     }
 
-    let pool_jobs: Vec<_> = files
-        .iter()
-        .zip(&ways)
-        .filter(|&(_, &way)| way != FileEmit::OnChecker)
-        .map(|(&file, &way)| {
-            let mut target = target(file);
-            if way == FileEmit::Split {
-                target.emit_only = EmitOnly::Js;
-            }
-            move || wrap(&|| emit_source_file_on_pool(file, &target))
-        })
-        .collect();
+    let mut pool_jobs = Vec::new();
+    let mut js_emit_nodes = Vec::new();
+    for (&file, &way) in files.iter().zip(&ways) {
+        if way == FileEmit::OnChecker {
+            continue;
+        }
+        let mut target = target(file);
+        let sender = (way == FileEmit::Split).then(|| {
+            target.emit_only = EmitOnly::Js;
+            let (sender, receiver) = sync_channel(1);
+            js_emit_nodes.push(receiver);
+            sender
+        });
+        pool_jobs.push(move || wrap(&|| emit_source_file_on_pool(file, &target, sender.as_ref())));
+    }
     let mut pool_jobs = send_emit_pool_jobs(pool_jobs).into_iter();
+    let mut js_emit_nodes = js_emit_nodes.into_iter();
 
     let mut checker_files = Vec::new();
     let mut checker_parts = FxHashMap::default();
@@ -645,8 +671,12 @@ fn start_emit_files_with_pool(
             on_pool.push((index, pool_jobs.next().expect("a pool job per pool file")));
             continue;
         }
-        let js_part =
-            (way == FileEmit::Split).then(|| pool_jobs.next().expect("a pool job per split file"));
+        let js_part = (way == FileEmit::Split).then(|| PoolJs {
+            job: pool_jobs.next().expect("a pool job per split file"),
+            emit_nodes: js_emit_nodes
+                .next()
+                .expect("a JS emit node channel per split file"),
+        });
         checker_files.push(file);
         checker_parts.insert(
             file,
@@ -779,7 +809,7 @@ impl PoolJsPart {
 fn emit_declaration_part(
     source_file: Node,
     target: EmitterOptions,
-    js_part: EmitPoolJob<EmitResult>,
+    js_part: PoolJs,
     wrap: Wrap,
 ) -> CheckerOutput {
     let target = EmitterOptions {
@@ -800,7 +830,7 @@ fn emit_declaration_part(
     let dts = catch_unwind(AssertUnwindSafe(|| {
         wrap(&|| {
             let mut emitter = new_emitter(new_emit_host(source_file), source_file, &target, None);
-            match emitter.transform_declaration_part() {
+            match emitter.transform_declaration_part(js_part.js_emit_nodes()) {
                 Some(print) => {
                     *twin_print.borrow_mut() = Some(TwinPrint::declaration(
                         emitter,
@@ -816,6 +846,7 @@ fn emit_declaration_part(
             }
         })
     }));
+    let js_part = js_part.job;
     match (dts, twin_print.into_inner()) {
         (Ok(_), Some(twin_print)) => {
             CheckerOutput::Twin(send_dts_twin_job(move || twin_print.run(js_part, wrap)))
@@ -893,11 +924,17 @@ fn emit_on_twin(
             emit_only,
             ..target.clone()
         };
+        // ts#64649: what the JS transforms wrote on parse-tree nodes, for
+        // the d.ts part (`Emitter::transform_declaration_part`).
+        let mut js_emit_nodes = None;
         let js = matches!(target.emit_only, EmitOnly::All | EmitOnly::Js).then(|| {
             let mut emitter =
                 new_emitter(host.clone(), source_file, &part_target(EmitOnly::Js), None);
             match emitter.transform_js_part() {
-                Some(print) => TwinPart::Print(TwinPrint::js(emitter, print, check)),
+                Some(print) => {
+                    js_emit_nodes = Some(print.emit_context.export_parse_emit_nodes());
+                    TwinPart::Print(TwinPrint::js(emitter, print, check))
+                }
                 None => TwinPart::Done(emitter.emit_result),
             }
         });
@@ -905,7 +942,7 @@ fn emit_on_twin(
             catch_unwind(AssertUnwindSafe(|| {
                 let mut emitter =
                     new_emitter(host.clone(), source_file, &part_target(EmitOnly::Dts), None);
-                match emitter.transform_declaration_part() {
+                match emitter.transform_declaration_part(js_emit_nodes) {
                     Some(print) => TwinPart::Print(TwinPrint::declaration(emitter, print, check)),
                     None => TwinPart::Done(emitter.emit_result),
                 }
@@ -1010,21 +1047,28 @@ impl TwinFile {
 fn emit_declaration_part_here(
     source_file: Node,
     target: &EmitterOptions,
-    js_part: EmitPoolJob<EmitResult>,
+    js_part: PoolJs,
     wrap: Wrap,
 ) -> EmitResult {
+    let PoolJs { job, emit_nodes } = js_part;
     let js_part = Rc::new(RefCell::new(PoolJsPart {
-        job: Some(js_part),
+        job: Some(job),
         result: None,
     }));
     let dts = catch_unwind(AssertUnwindSafe(|| {
         wrap(&|| {
-            emit_source_file_with(
+            let mut emitter = new_emitter(
                 new_emit_host(source_file),
                 source_file,
                 target,
                 Some(js_part.clone()),
-            )
+            );
+            // `PoolJs::js_emit_nodes`
+            if let Some(print) = emitter.transform_declaration_part(emit_nodes.recv().ok()) {
+                emitter.finish_declaration_part(print);
+            }
+            emitter.writer = None;
+            emitter.emit_result
         })
     }));
     let js = js_part.borrow_mut().take_result();
@@ -1385,25 +1429,43 @@ fn merge_emit_parts(js: EmitResult, dts: EmitResult) -> EmitResult {
 
 /// The JS part of a file's emit on the emit pool (`emit_only` is `Js`), or
 /// its whole emit when it has no d.ts part: `emit_source_file` with a host
-/// that has no checker.
-fn emit_source_file_on_pool(source_file: Node, target: &EmitterOptions) -> EmitResult {
-    emit_source_file_with(new_emit_host_without_checker(), source_file, target, None)
+/// that has no checker. A JS part sends what its transforms wrote on
+/// parse-tree nodes to `js_emit_nodes`, for the file's d.ts part
+/// (ts#64649, `Emitter::transform_declaration_part`), before its print, so
+/// the d.ts part can start. When it runs no transforms (skipped, blocked)
+/// or panics, it sends nothing, and the sender drops when the job ends.
+fn emit_source_file_on_pool(
+    source_file: Node,
+    target: &EmitterOptions,
+    js_emit_nodes: Option<&SyncSender<ParseEmitNodes>>,
+) -> EmitResult {
+    let host = new_emit_host_without_checker();
+    let Some(js_emit_nodes) = js_emit_nodes else {
+        return emit_source_file_with(host, source_file, target);
+    };
+    let mut emitter = new_emitter(host, source_file, target, None);
+    if let Some(print) = emitter.transform_js_part() {
+        // The channel holds one value, and only this job sends. The d.ts
+        // part may have dropped the receiver after a panic.
+        let _ = js_emit_nodes.try_send(print.emit_context.export_parse_emit_nodes());
+        emitter.finish_js_part(print);
+    }
+    emitter.writer = None;
+    emitter.emit_result
 }
 
 /// The body of the Go `wg.Queue` closure in `Program.Emit`.
 fn emit_source_file(source_file: Node, target: &EmitterOptions) -> EmitResult {
-    emit_source_file_with(new_emit_host(source_file), source_file, target, None)
+    emit_source_file_with(new_emit_host(source_file), source_file, target)
 }
 
-/// `emit_source_file` with the emit host, and for a d.ts part (`emit_only`
-/// is `Dts`) the JS part on the emit pool.
+/// `emit_source_file` with the emit host.
 fn emit_source_file_with(
     host: Rc<crate::program::EmitHost>,
     source_file: Node,
     target: &EmitterOptions,
-    js_part: Option<Rc<RefCell<PoolJsPart>>>,
 ) -> EmitResult {
-    let mut emitter = new_emitter(host, source_file, target, js_part);
+    let mut emitter = new_emitter(host, source_file, target, None);
     emitter.emit();
     emitter.writer = None;
     emitter.emit_result

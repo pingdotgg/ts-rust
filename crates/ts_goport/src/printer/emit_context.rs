@@ -182,6 +182,81 @@ impl EmitContext {
     }
 }
 
+/// PORT: not in Go. ts#64649: the emit nodes of parse-tree nodes in the
+/// emit context of a file's JS part after its script transforms
+/// (`EmitContext::export_parse_emit_nodes`). Go runs the JS and d.ts parts
+/// of a file in one context (compiler/emitter.go:50-53), so the d.ts
+/// transforms and printer read what the JS transforms wrote on parse-tree
+/// nodes: `EFNoTrailingSourceMap` on the names of changed parameters
+/// (legacydecorators.go:145, esdecorator.go:1821), `EFNoLeadingComments` on
+/// member names (esdecorator.go:1439), the type nodes of typed variable
+/// names (typeeraser.go:192). Where the port runs the two parts in two
+/// emitters (`program_emit`: the emit pool and the d.ts twins), the d.ts
+/// part imports all of these entries into its new context before its
+/// transforms (`EmitContext::import_parse_emit_nodes`). It is `Send`, so it
+/// can go from the emit pool to the checker thread.
+///
+/// What the d.ts part does not get, none of which a d.ts part reads:
+/// - entries whose key the JS part made: a d.ts tree holds parse-tree nodes
+///   and nodes that the d.ts part made, never a node that the JS part made;
+/// - the other tables (`original`, `auto_generate`, ...): the JS transforms
+///   key them only with nodes that they made;
+/// - the external helpers module name (an identifier that the JS part made,
+///   see `export_parse_emit_nodes`);
+/// - what the JS print writes after the export (Go printer.go:1601,
+///   `EFNoSourceMap` on a function body): a d.ts never prints a body.
+pub struct ParseEmitNodes(Vec<(Node, EmitNode)>);
+
+impl EmitContext {
+    /// The emit node of every parse-tree key of this context, each a full
+    /// copy (`ParseEmitNodes`). The one field that is not copied is the
+    /// external helpers module name: the JS part makes that identifier on
+    /// its own thread, and the d.ts printer has `NoEmitHelpers` and no
+    /// helper name identifier (Go printer.go:1157, :4638), so it never reads
+    /// it.
+    ///
+    /// # Panics
+    ///
+    /// When a type node (Go typeeraser.go:192 `SetTypeNode(name, n.Type)`)
+    /// is not a parse-tree node: another thread could not read it. Go sets
+    /// only the parsed or reparsed (JSDoc `@type`) type of a parse-tree
+    /// variable declaration, so this is a port error, and it stops the emit
+    /// instead of a d.ts that differs from Go.
+    #[must_use]
+    pub fn export_parse_emit_nodes(&self) -> ParseEmitNodes {
+        let emit_nodes = self.emit_nodes.borrow();
+        let entries = emit_nodes
+            .parsed_keys
+            .iter()
+            .filter(|&&node| is_parse_tree_node(node))
+            .filter_map(|&node| {
+                let mut emit_node = (**emit_nodes.other.try_get(node)?).clone();
+                emit_node.external_helpers_module_name = Node::NIL;
+                assert!(
+                    emit_node.type_node.is_nil() || is_parse_tree_node(emit_node.type_node),
+                    "the JS transforms set a type node that is not a parse-tree node"
+                );
+                Some((node, emit_node))
+            })
+            .collect();
+        ParseEmitNodes(entries)
+    }
+
+    /// Adds the emit nodes `nodes` (`export_parse_emit_nodes` of a JS part)
+    /// to this new context of the file's d.ts part, before its declaration
+    /// transforms: an update or clone in those transforms copies them
+    /// (Go `SetOriginalEx`, emitcontext.go:433), so they must be here first.
+    pub fn import_parse_emit_nodes(&self, nodes: ParseEmitNodes) {
+        let mut emit_nodes = self.emit_nodes.borrow_mut();
+        for (node, emit_node) in nodes.0 {
+            if emit_node.type_node.is_some() {
+                self.emit_node_refs.set(true);
+            }
+            **emit_nodes.get(node) = emit_node;
+        }
+    }
+}
+
 // Go: printer/emitcontext.go:57 GetEmitContext (at 673a5f17d713; removed by
 // ts#64649 with `emitContextPool`: callers use `NewEmitContext`)
 // PORT: not in Go N'. Kept only for `baseline/type_symbol.rs` (harness lane)
@@ -1825,6 +1900,10 @@ pub(crate) struct EmitNodes {
     synthetic: SyntheticPages<Box<EmitNode>>,
     /// Parsed keys, and synthetic keys outside the window.
     other: LinkStore<Node, Box<EmitNode>>,
+    /// PORT: not in Go. The keys of `other` that are not synthetic handles
+    /// (parse-tree nodes), in the order of their first record, for
+    /// `EmitContext::export_parse_emit_nodes`.
+    parsed_keys: Vec<Node>,
 }
 
 impl EmitNodes {
@@ -1842,7 +1921,14 @@ impl EmitNodes {
     fn get(&mut self, node: Node) -> &mut Box<EmitNode> {
         match self.synthetic.cell_mut(node) {
             Some(cell) => cell.get_or_insert_with(Box::default),
-            None => self.other.get(node),
+            None => {
+                if node.file_index() != crate::ast::synthetic::SYNTHETIC_NODE_FILE
+                    && !self.other.has(node)
+                {
+                    self.parsed_keys.push(node);
+                }
+                self.other.get(node)
+            }
         }
     }
 }
