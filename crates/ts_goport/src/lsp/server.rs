@@ -2229,6 +2229,13 @@ static TEST_IDLE_QUIET_PERIOD_US: std::sync::atomic::AtomicU64 =
 /// a test wait between its messages longer than `IDLE_QUIET_PERIOD`, so a
 /// loaded host can finish an idle job that starts at once before the next
 /// message, while one that waits for quiet still does not start.
+///
+/// It is public and in the release bins because its caller is the
+/// go_baselines integration test (`auto_import_warm_runs_before_the_next_change`),
+/// a separate crate: `cfg(test)` does not reach it, and a test feature
+/// would need `build-goport-tests.sh` (protected) to pass it. No bin calls
+/// it. Its cost is one relaxed atomic load per idle wait
+/// (`idle_quiet_period`).
 #[doc(hidden)]
 pub fn set_idle_quiet_period(period: Duration) {
     let us = u64::try_from(period.as_micros()).unwrap_or(u64::MAX).max(1);

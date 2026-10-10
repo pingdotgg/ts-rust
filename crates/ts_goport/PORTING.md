@@ -668,7 +668,29 @@ The batch that adds it is not accepted until Theo approves.
   - A large `noEmitOnError` project with a syntax error (k2gaps1 probes
     `noeoe_syn_comp`, `noeoe_syn_inc`): it has no checker work, so it
     finishes at once, in start order. This is G1's family.
-  - G5, partial writes: Go writes each output when the emit of its file
+  - G5: the other projects with no early emit finish when their check
+    ends, then emit and write, as in G3; Go's builder writes when that
+    emit ends. These are the projects where `check_cannot_see_outputs`
+    fails (F1: node16 or nodenext with a checked relative module name
+    without an extension; F2: a program file inside `outDir` or
+    `declarationDir`; F3: a `node_modules` segment in either), and the
+    other `early_emit_options_allow` cases: `preserveSymlinks` (F4),
+    `outFile`, `--generateTrace`, and every project with
+    `GOPORT_EARLY_EMIT=0`. `--singleThreaded` is not a gap: Go's build
+    then runs one task at a time (execute/build/orchestrator.go:925
+    `rangeTasks`).
+  - C1 rate shift (int56; state note `int56-decision-2026-10-09`). C1
+    makes a task with early emit finish when its emit pool jobs and d.ts
+    twins end (`program::send_checker_barrier`), as Go's task finishes
+    when its emit ends. In probes `c1_fan_imp_b2` and `c1_fan_nc_k600_b2x`
+    a small project k (one big file) and a big emit project w build
+    together, and readers read w's output without a reference. On loaded
+    zbook the rare answer (rc 0) came from int56 in 13 of 90 runs, from
+    R184 in 1 of 90 and from Go in 2 of 90 (Fisher p about 0.001). The
+    answer stays in Go's set, and quiet hosts gave one answer. Cause: in
+    the full build the port's k finishes late (350 to 460 ms against Go's
+    140 to 180 ms), so k and w almost tie, and C1 moves k a little later.
+  - G6, partial writes: Go writes each output when the emit of its file
     ends, so a task that loads during that emit reads some files old and
     some new. The port keeps an early emit's writes until the task
     finishes (`buffer_early_emit_writes`), so it reads all old or all new.
@@ -1510,6 +1532,27 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   boundaries. Without an API session, the results of LSP requests are
   Go's and only order and timing differ. With an API session, the limits
   below also change which messages are answered and when.
+- The end of a run: when SIGINT, SIGTERM, the parent watchdog or the end
+  of stdin ends the context while the dispatch thread runs work that Go
+  runs on a goroutine (the async part of a request, an API session), Go's
+  `Run` (`lsp/server.go:859`) returns without that work and the process
+  ends at once. The port waits until that work ends, then ends with Go's
+  exit code and message. A request that the end cancels can also log
+  "error handling method" on stderr. Go and the port both wait for the
+  sync part of a handler (`server.go:1013`).
+  - A fix ends the run from a watcher thread while the dispatch thread is
+    in Go's goroutine work. So it tracks the phase of Go's dispatch
+    goroutine: in `requestQueue.Get`, in the sync part of a handler, or in
+    goroutine work.
+  - Every dispatch level must set the phase of its own turn, and give the
+    outer phase back when it returns. This includes the inner
+    `dispatch_next` that an API connection's read runs while it waits, and
+    the `dispatch_request` that it runs while an API request waits for a
+    client call (`ApiConnProtocol::read_message`).
+  - The apisig1 lane (branch `goport-apisig1`, `lsp/run_end.rs`) set the
+    phase only at the outermost level. With an API session connection
+    open, the sync part of an LSP message ran in `Work`, so a signal or
+    the end of stdin ended the run at once, where Go waits.
 - API sessions of the LSP server (`custom/initializeAPISession`) are
   served on the dispatch thread too (`lsp/server.rs` `ApiConnProtocol`).
   LSP messages and API requests do not run at the same time. These
@@ -1530,6 +1573,35 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   - `--api --async` and the API sessions run requests one at a time
     (`ipc/conn_async.rs`). A pipelined request sees the result of the one
     before it. Go runs them at the same time.
+  - The async connection reads its next message only after the running
+    request. So the end of the input during a request does not cancel the
+    request's context: Go's read loop sees the end at once and returns
+    (`ipc/conn_async.go:89-91`), and its deferred `cancelHandlers` (`:73`)
+    cancels it, so a long check answers early with what it has. The port
+    answers in full and then ends, with Go's exit code.
+  - The end on SIGINT or SIGTERM in `--api --async` is an open Go
+    difference (state note `r187-repair-withdraw-2026-10-09`, lane
+    apisig4). Go's read loop checks the context at the top of each turn
+    (`ipc/conn_async.go:83`) and then waits in the read while a request
+    runs on its own goroutine (`:98`). The port runs the request inline
+    and checks the context after it (`run_loop`). The cases:
+    - A signal during a request: Go answers it, then ends after the next
+      message (it answers that message too) or at the end of the input.
+      The port ends right after the answer and reads no more.
+    - Pipelined requests: a signal during request 1 while request 2 is
+      already sent. Go answers both (2 first) and then waits for the next
+      message. The port answers request 1 and ends: request 2 gets no
+      answer.
+    - A signal while a request waits for a client callback: Go's `Call`
+      returns the context error at once (`:290`), so request 1 is answered
+      at the signal. The port's `call` waits in its read, so it answers
+      request 1 after the next message. Both end after that message.
+  - apisig2 (R187) moved the run's check before an inline request to
+    match the first case. The run then read until the end of the input in
+    the callback case. Its repair apisig3 closed the pending calls at the
+    signal, so the callbacks that a handler makes after the signal
+    (writeFile, removeFile) lost their requests. Both are withdrawn, and
+    `ipc/conn_async.rs` is R186's code.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of
