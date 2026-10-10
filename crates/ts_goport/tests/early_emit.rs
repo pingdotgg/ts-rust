@@ -33,7 +33,8 @@
 //! waits for the emit pool and the d.ts twins. The emitretry1 tests (Unix)
 //! make their own project there too: a read-only output, or a `writeFile`
 //! callback that gives an error, makes a write fail in `tsc -b`, `tsc -p`
-//! or the API build, and the output must be Go N''s.
+//! or the API build, and the output must be Go N''s. So do the noeediag1
+//! tests, for each case that turns the port's early emit off.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -597,6 +598,241 @@ fn api_build_writes_each_output_once_after_a_failed_write() {
     }
 }
 
+/// noeediag1. The cases that turn the port's early emit off: a name, the
+/// compiler options (with `incremental`), the output dir and the build info
+/// path. Go has no early emit, so its output is the same in each.
+#[cfg(unix)]
+const NO_EARLY_EMIT: [(&str, &str, &str, &str); 5] = [
+    (
+        "noEmitOnError",
+        r#""incremental": true, "noEmitOnError": true"#,
+        "out",
+        "tsconfig.tsbuildinfo",
+    ),
+    (
+        "F1 nodenext, extensionless relative imports",
+        r#""incremental": true, "module": "nodenext""#,
+        "out",
+        "tsconfig.tsbuildinfo",
+    ),
+    (
+        "F3 outDir under node_modules",
+        r#""incremental": true, "outDir": "node_modules/out""#,
+        "node_modules/out",
+        "node_modules/tsconfig.tsbuildinfo",
+    ),
+    (
+        "F4 preserveSymlinks",
+        r#""incremental": true, "preserveSymlinks": true"#,
+        "out",
+        "tsconfig.tsbuildinfo",
+    ),
+    (
+        "GOPORT_EARLY_EMIT=0",
+        r#""incremental": true"#,
+        "out",
+        "tsconfig.tsbuildinfo",
+    ),
+];
+
+/// The `GOPORT_EARLY_EMIT` value of a `NO_EARLY_EMIT` case.
+#[cfg(unix)]
+fn early_emit_env(case: &str) -> &'static str {
+    if case == "GOPORT_EARLY_EMIT=0" {
+        "0"
+    } else {
+        "1"
+    }
+}
+
+/// noeediag1. `tsc -b` without the port's early emit (`NO_EARLY_EMIT`),
+/// with read-only `a.js` and `c.js`: the program emits them in its order
+/// (b, c, a), and Go N' (fed0bf24149f) reports the TS5033s sorted (a, then
+/// c), and its build info keeps them in `emitDiagnosticsPerFile`. The port
+/// writes directly here, so this passed before noeediag1 too.
+#[cfg(unix)]
+#[test]
+fn build_without_the_early_emit_reports_failed_writes_as_go() {
+    if rustix::process::geteuid().is_root() {
+        return; // root writes a read-only file
+    }
+    for (case, options, out_dir, build_info) in NO_EARLY_EMIT {
+        let project = sort_failure_project(options, out_dir, true);
+        let root = norm(&project.root);
+        let output = Command::new(env!("CARGO_BIN_EXE_tsgo"))
+            .current_dir(&project.root)
+            .args([
+                "-b",
+                "tsconfig.json",
+                "--listEmittedFiles",
+                "--pretty",
+                "false",
+            ])
+            .env("GOPORT_EARLY_EMIT", early_emit_env(case))
+            .output()
+            .expect("run tsgo -b");
+        let error = |file: &str| format!("open {root}/{out_dir}/{file}: permission denied");
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            ),
+            (
+                Some(2),
+                format!(
+                    "error TS5033: Could not write file '{root}/{out_dir}/a.js': {}.\n\
+                     error TS5033: Could not write file '{root}/{out_dir}/c.js': {}.\n\
+                     TSFILE: {root}/{out_dir}/b.js\nTSFILE: {root}/{build_info}\n",
+                    error("a.js"),
+                    error("c.js")
+                )
+            ),
+            "{case}: Go N' output"
+        );
+        let build_info = project.read(build_info);
+        let expected = emit_diagnostics_per_file(&build_info, &root, out_dir, error);
+        assert!(
+            build_info.contains(&expected),
+            "{case}: Go N' build info has {expected}; the port's: {build_info}"
+        );
+        project.remove();
+    }
+}
+
+/// noeediag1. The API build without the port's early emit (`NO_EARLY_EMIT`):
+/// the client answers the `writeFile` requests of `a.js` and `c.js` with an
+/// error and the others with `useOS`. Go N''s emitter gets each error at
+/// the write and puts the TS5033 into the file's result, so its answer has
+/// them sorted (a, then c) and its build info has `emitDiagnosticsPerFile`.
+/// Before noeediag1 the port's checker threads only kept these writes
+/// (`build_task.rs` `DeferredWrites`), and their TS5033s came after the emit:
+/// c before a, and no `emitDiagnosticsPerFile`. The last case is the API
+/// build with the client's `build` option and no `incremental`: Go emits
+/// without the incremental state, and its build info has `errors`.
+#[cfg(unix)]
+#[test]
+fn api_build_without_the_early_emit_keeps_failed_writes_in_their_files() {
+    let answer = |root: &str, out_dir: &str| {
+        let diagnostic = |file: &str| {
+            format!(
+                r#"{{"pos":-1,"end":-1,"code":5033,"category":1,"text":"Could not write file '{root}/{out_dir}/{file}': ipc: remote error [-32000]: client says no."}}"#
+            )
+        };
+        format!(
+            r#"{{"jsonrpc":"2.0","id":7,"result":{{"status":2,"diagnostics":[{},{}],"statistics":{{"Projects":1,"ProjectsBuilt":1,"TimestampUpdates":0}}}}}}"#,
+            diagnostic("a.js"),
+            diagnostic("c.js")
+        )
+    };
+    let ok = |_: usize, file: &str| !matches!(file, "a.js" | "c.js");
+    for (case, options, out_dir, build_info) in NO_EARLY_EMIT {
+        let project = sort_failure_project(options, out_dir, false);
+        let root = norm(&project.root);
+        let env = [("GOPORT_EARLY_EMIT", early_emit_env(case))];
+        let (_, got) = api_build_with(&project.root, &env, "", "useOS", &ok);
+        assert_eq!(got, answer(&root, out_dir), "{case}: Go N' answer");
+        let build_info = project.read(build_info);
+        let expected = emit_diagnostics_per_file(&build_info, &root, out_dir, |_| {
+            "ipc: remote error [-32000]: client says no".to_string()
+        });
+        assert!(
+            build_info.contains(&expected),
+            "{case}: Go N' build info has {expected}; the port's: {build_info}"
+        );
+        project.remove();
+    }
+    let project = sort_failure_project("", "out", false);
+    let root = norm(&project.root);
+    let params = r#","compilerOptions":{"build":true}"#;
+    let (_, got) = api_build_with(&project.root, &[], params, "useOS", &ok);
+    assert_eq!(got, answer(&root, "out"), "build option: Go N' answer");
+    let build_info = project.read("tsconfig.tsbuildinfo");
+    assert!(
+        build_info.ends_with(r#","errors":true,"root":["./src/a.ts","./src/b.ts","./src/c.ts"]}"#),
+        "build option: Go N' build info has errors; the port's: {build_info}"
+    );
+    project.remove();
+}
+
+/// The project of the noeediag1 tests: `src/a.ts` imports `src/b.ts` and
+/// `src/c.ts` (so the program order is b, c, a), with `options` added to
+/// `strict`, `outDir` (`out_dir`) and `rootDir`. With `read_only`,
+/// `{out_dir}/a.js` and `{out_dir}/c.js` exist, hold `old` and are
+/// read-only.
+#[cfg(unix)]
+fn sort_failure_project(options: &str, out_dir: &str, read_only: bool) -> Solution {
+    let project = Solution::new();
+    let options = if options.is_empty() {
+        String::new()
+    } else {
+        format!(", {options}")
+    };
+    // `options` can name the `outDir`: a JSON object takes a key once.
+    let out_dir_option = if options.contains("\"outDir\"") {
+        String::new()
+    } else {
+        format!(r#", "outDir": "{out_dir}""#)
+    };
+    project.write(
+        "tsconfig.json",
+        &format!(
+            r#"{{"compilerOptions": {{"strict": true, "rootDir": "src"{out_dir_option}{options}}}, "include": ["src"]}}"#
+        ),
+    );
+    project.write(
+        "src/a.ts",
+        "import { b } from \"./b\";\nimport { c } from \"./c\";\nexport const a: number = b + c;\n",
+    );
+    project.write("src/b.ts", "export const b: number = 1;\n");
+    project.write("src/c.ts", "export const c: number = 2;\n");
+    if read_only {
+        for file in ["a.js", "c.js"] {
+            let file = format!("{out_dir}/{file}");
+            project.write(&file, "old\n");
+            let path = project.root.join(file);
+            fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+                .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
+        }
+    }
+    project
+}
+
+/// Go N''s `emitDiagnosticsPerFile` for a `sort_failure_project` build whose
+/// writes of `{out_dir}/a.js` and `{out_dir}/c.js` failed with `error(file)`.
+/// Go sorts the entries by path (incremental/snapshottobuildinfo.go
+/// `setEmitDiagnostics`), so a's comes first. The file ids are the places of
+/// `src/a.ts` and `src/c.ts` in the build info's `fileNames`.
+#[cfg(unix)]
+fn emit_diagnostics_per_file(
+    build_info: &str,
+    root: &str,
+    out_dir: &str,
+    error: impl Fn(&str) -> String,
+) -> String {
+    let names = build_info
+        .split(r#""fileNames":["#)
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .unwrap_or_else(|| panic!("no fileNames in {build_info}"));
+    let entry = |file: &str| {
+        let source = format!("src/{}.ts\"", &file[..1]);
+        let id = names
+            .split(',')
+            .position(|name| name.ends_with(&source))
+            .unwrap_or_else(|| panic!("no {source} in the fileNames {names}"))
+            + 1;
+        format!(
+            r#"[{id},[{{"noFile":true,"pos":-1,"end":-1,"code":5033,"category":1,"messageKey":"Could_not_write_file_0_Colon_1_5033","messageArgs":["{root}/{out_dir}/{file}","{}"]}}]]"#,
+            error(file)
+        )
+    };
+    format!(
+        r#""emitDiagnosticsPerFile":[{},{}]"#,
+        entry("a.js"),
+        entry("c.js")
+    )
+}
+
 /// The project of the write failure tests: `src/a.ts` imports `src/b.ts`,
 /// with `options` added to `strict`, `outDir` and `rootDir`. `out/a.js`
 /// exists, holds `old` and is read-only.
@@ -628,16 +864,33 @@ fn write_failure_project(options: &str) -> Solution {
 
 /// Builds the project in `root` through `tsgo --api --async --callbacks
 /// writeFile` (createBuildOrchestrator, then build 7). The client answers
-/// the first `writeFile` request with success when `first` and with an
-/// error else, every later one as `rest`. Returns the file name of each
-/// request in order, and the build answer.
+/// the first `writeFile` request with success (`noop`) when `first` and
+/// with an error else, every later one as `rest`. Returns the file name of
+/// each request in order, and the build answer.
 #[cfg(unix)]
 fn api_build(root: &Path, first: bool, rest: bool) -> (Vec<String>, String) {
+    let ok = |index: usize, _: &str| if index == 0 { first } else { rest };
+    api_build_with(root, &[], "", "noop", &ok)
+}
+
+/// `api_build` with tsgo's `env`, `params` added to the
+/// createBuildOrchestrator params (`,"name":value` or empty), and the
+/// client's answers: `ok(index, file name)` of each `writeFile` request
+/// gives success (`{"kind": ok_kind}`) or an error.
+#[cfg(unix)]
+fn api_build_with(
+    root: &Path,
+    env: &[(&str, &str)],
+    params: &str,
+    ok_kind: &str,
+    ok: &dyn Fn(usize, &str) -> bool,
+) -> (Vec<String>, String) {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::Stdio;
     let mut child = Command::new(env!("CARGO_BIN_EXE_tsgo"))
         .args(["--api", "--async", "--callbacks", "writeFile", "--cwd"])
         .arg(norm(root))
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -682,7 +935,7 @@ fn api_build(root: &Path, first: bool, rest: bool) -> (Vec<String>, String) {
     };
     let config = norm(&root.join("tsconfig.json"));
     send(format!(
-        r#"{{"jsonrpc":"2.0","id":1,"method":"createBuildOrchestrator","params":{{"rootNames":["{config}"],"cwd":"{}"}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"createBuildOrchestrator","params":{{"rootNames":["{config}"],"cwd":"{}"{params}}}}}"#,
         norm(root)
     ));
     let created = next();
@@ -709,10 +962,11 @@ fn api_build(root: &Path, first: bool, rest: bool) -> (Vec<String>, String) {
             call.0.to_owned(),
             call.1.split('"').next().unwrap_or_default(),
         );
-        requests.push(path.rsplit('/').next().unwrap_or_default().to_owned());
-        let ok = if requests.len() == 1 { first } else { rest };
-        send(if ok {
-            format!(r#"{{"jsonrpc":"2.0","id":"{call_id}","result":{{"kind":"noop"}}}}"#)
+        let file = path.rsplit('/').next().unwrap_or_default().to_owned();
+        let answer_ok = ok(requests.len(), &file);
+        requests.push(file);
+        send(if answer_ok {
+            format!(r#"{{"jsonrpc":"2.0","id":"{call_id}","result":{{"kind":"{ok_kind}"}}}}"#)
         } else {
             format!(
                 r#"{{"jsonrpc":"2.0","id":"{call_id}","error":{{"code":-32000,"message":"client says no"}}}}"#
