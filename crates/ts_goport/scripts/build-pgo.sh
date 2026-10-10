@@ -56,7 +56,8 @@
 #   PGO_TRAIN         training command, in place of the default training
 #                     (which needs the project inputs and the corpus of
 #                     GOPORT_DATA_ROOT). The script runs `$PGO_TRAIN <dir>`,
-#                     where <dir> holds the instrumented bins. Example:
+#                     where <dir> holds the instrumented bins, with
+#                     PGO_PROFILE_DIR set to the profile dir. Example:
 #                     "scripts/goport/pgo-train.sh run <train-dir>".
 #   PGO_CARGO         cargo command of both builds. Default:
 #                     scripts/run-cargo-capped.sh when present, else cargo.
@@ -277,8 +278,9 @@ trap 'rm -rf "$tmp"' EXIT
 [[ -z $exe ]] || tmp="$(cygpath -m "$tmp")"
 if [[ -n $train_cmd ]]; then
   echo "== train: $train_cmd $gen"
+  # pgo-train.sh gives each run its own profile file in PGO_PROFILE_DIR (see its `one`).
   # shellcheck disable=SC2086 # a command with its args
-  $train_cmd "$gen"
+  PGO_PROFILE_DIR="$profiles" $train_cmd "$gen"
 else
   default_train
 fi

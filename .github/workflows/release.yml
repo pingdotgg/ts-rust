@@ -1,11 +1,12 @@
 # Builds, packs and tests the tsc-rs release: the npm packages tsc-rs, @tsc-rs/linux-x64,
-# @tsc-rs/linux-arm64, @tsc-rs/darwin-arm64 and @tsc-rs/win32-x64, and one standalone archive per
-# platform (tsc and the lib files; a .zip with tsc.exe for Windows).
+# @tsc-rs/linux-arm64, @tsc-rs/darwin-arm64, @tsc-rs/darwin-x64, @tsc-rs/win32-x64 and
+# @tsc-rs/win32-arm64, and one standalone archive per platform (tsc and the lib files; a .zip with
+# tsc.exe for Windows).
 #
 # A tag v<version> also publishes the npm packages and creates a GitHub release. A stable version
 # (v0.1.0) goes to the dist-tag `latest` and a normal release. A prerelease version (v0.2.0-beta.1)
 # goes to `next` and a GitHub prerelease. npm trusted publishing (OIDC) authenticates the
-# publish: no npm token. Each of the 5 packages trusts this workflow file and the environment `npm`
+# publish: no npm token. Each of the 7 packages trusts this workflow file and the environment `npm`
 # (npm/README.md, "Trusted publishing"). Pull requests that change the release files, and a manual
 # run, do everything but the release and the publish.
 #
@@ -17,9 +18,12 @@
 # is experimental, macOS has no perf branch sampling for its profile, and BOLT has no PE support.
 # Linux is static musl and non-PIE, so it starts on any x86-64 or arm64 Linux, Alpine too
 # (npm/README.md, "Linux libc"). Each Linux tsc builds natively on a Blacksmith runner of its arch.
-# Windows (x86_64-pc-windows-msvc) builds on a Blacksmith Windows runner, in Git Bash, with the C
-# runtime linked in (+crt-static), so tsc.exe needs no Visual C++ redistributable. jemalloc does
-# not build there: it uses the system allocator.
+# Windows (x86_64-pc-windows-msvc, aarch64-pc-windows-msvc) builds in Git Bash, with the C runtime
+# linked in (+crt-static), so tsc.exe needs no Visual C++ redistributable. jemalloc does not build
+# there: it uses the system allocator. Each tsc builds natively, so the PGO training runs on its
+# own platform: Blacksmith has no Intel Mac and no arm64 Windows runner, so darwin-x64 builds on
+# GitHub's macos-15-intel (4 vCPU) and
+# win32-arm64 on GitHub's windows-11-arm (4 vCPU).
 name: Release
 
 on:
@@ -90,12 +94,21 @@ jobs:
           - platform: darwin-arm64
             target: aarch64-apple-darwin
             runner: blacksmith-12vcpu-macos-26
+          - platform: darwin-x64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
           - platform: win32-x64
             target: x86_64-pc-windows-msvc
             runner: blacksmith-16vcpu-windows-2025
             exe: .exe
+          - platform: win32-arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            exe: .exe
+            linker: rust-lld
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    # The 4 vCPU GitHub-hosted runners (darwin-x64, win32-arm64) build slower.
+    timeout-minutes: 180
     # Git Bash on Windows.
     defaults:
       run:
@@ -111,6 +124,20 @@ jobs:
       - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }} --component llvm-tools
       - if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -yq musl-tools
+      # win32-arm64 links with rust-lld (lld-link), all three builds. On arm64, link.exe aligns each
+      # section contribution to 4 bytes, also the 1-byte start markers of the LLVM profile sections
+      # (IMAGE_SCN_ALIGN_1BYTES). The instrumented tsc then wrote 3 zero bytes before the names, and
+      # llvm-profdata rejected each profile ("symbol name is empty"). lld-link keeps the 1-byte
+      # alignment, as link.exe does on x64.
+      - name: Linker
+        if: matrix.linker == 'rust-lld'
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          lld="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin/rust-lld.exe"
+          [[ -x $lld ]] || { echo "::error::no $lld"; exit 1; }
+          target=${{ matrix.target }}
+          target=${target^^}
+          echo "CARGO_TARGET_${target//-/_}_LINKER=$(cygpath -m "$lld")" | tee -a "$GITHUB_ENV"
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -245,7 +272,8 @@ jobs:
           chmod +x "$bins"/tsc-*/tsc "$bins"/tsc-*/tsc.exe
           scripts/goport/npm-pack.sh --name tsc-rs --package-version "$VERSION" \
             --also "linux-arm64=$bins/tsc-linux-arm64/tsc" --also "darwin-arm64=$bins/tsc-darwin-arm64/tsc" \
-            --also "win32-x64=$bins/tsc-win32-x64/tsc.exe" \
+            --also "darwin-x64=$bins/tsc-darwin-x64/tsc" \
+            --also "win32-x64=$bins/tsc-win32-x64/tsc.exe" --also "win32-arm64=$bins/tsc-win32-arm64/tsc.exe" \
             "$RUNNER_TEMP/pkg" "$bins/tsc-linux-x64/tsc"
       # One archive per platform: the platform package's lib dir (tsc and the lib files, which a
       # noembed tsc reads next to it), LICENSE and NOTICE.txt. A .tar.gz, and a .zip for Windows.
@@ -253,7 +281,7 @@ jobs:
         run: |
           pkg="$RUNNER_TEMP/pkg" dist="$RUNNER_TEMP/dist"
           mkdir -p "$dist"
-          for platform in linux-x64 linux-arm64 darwin-arm64 win32-x64; do
+          for platform in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64 win32-arm64; do
             name="tsc-rs-$VERSION-$platform"
             mkdir -p "$RUNNER_TEMP/archive/$name"
             cp -r "$pkg/tsc-rs-$platform/lib/." "$pkg/tsc-rs-$platform/LICENSE" "$pkg/tsc-rs-$platform/NOTICE.txt" "$RUNNER_TEMP/archive/$name/"
@@ -273,8 +301,9 @@ jobs:
           if-no-files-found: error
 
   # Installs the npm packages in a fresh project on each platform, as a user would. These are
-  # GitHub-hosted runners, so the check runs on another host than the build. ubuntu-24.04-arm is
-  # GitHub's arm64 standard runner (2 vCPU in a private repo, 4 in a public one).
+  # GitHub-hosted runners, so the check runs on another host than the build (for darwin-x64 and
+  # win32-arm64, another VM of the build's runner image). ubuntu-24.04-arm is GitHub's arm64
+  # standard runner (2 vCPU in a private repo, 4 in a public one).
   verify:
     name: verify (${{ matrix.platform }})
     needs: [version, package]
@@ -288,8 +317,12 @@ jobs:
             runner: ubuntu-24.04-arm
           - platform: darwin-arm64
             runner: macos-latest
+          - platform: darwin-x64
+            runner: macos-15-intel
           - platform: win32-x64
             runner: windows-latest
+          - platform: win32-arm64
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     # Git Bash on Windows.
@@ -310,6 +343,10 @@ jobs:
         run: |
           dist="$RUNNER_TEMP/dist"
           [[ $RUNNER_OS != Windows ]] || dist=$(cygpath -m "$dist")
+          # Node of the runner's own arch: getExePath.js picks the package of process.arch.
+          node_platform=$(node -p 'process.platform + "-" + process.arch')
+          echo "node $node_platform"
+          [[ $node_platform == "${{ matrix.platform }}" ]]
           mkdir proj && cd proj
           echo '{"name":"smoke","private":true}' > package.json
           # The other platform's package is not on npm yet: --offline skips that optional dependency.
@@ -376,7 +413,8 @@ jobs:
           [[ $VERSION != *-* ]] || tag=next
           echo "dist-tag $tag"
           for pkg in @tsc-rs/linux-x64:tsc-rs-linux-x64 @tsc-rs/linux-arm64:tsc-rs-linux-arm64 \
-            @tsc-rs/darwin-arm64:tsc-rs-darwin-arm64 @tsc-rs/win32-x64:tsc-rs-win32-x64 tsc-rs:tsc-rs; do
+            @tsc-rs/darwin-arm64:tsc-rs-darwin-arm64 @tsc-rs/darwin-x64:tsc-rs-darwin-x64 \
+            @tsc-rs/win32-x64:tsc-rs-win32-x64 @tsc-rs/win32-arm64:tsc-rs-win32-arm64 tsc-rs:tsc-rs; do
             name=${pkg%%:*} file=./dist/${pkg#*:}-$VERSION.tgz
             [[ -f $file ]] || { echo "::error::missing package $file"; exit 1; }
             if npm view "$name@$VERSION" version > /dev/null 2>&1; then

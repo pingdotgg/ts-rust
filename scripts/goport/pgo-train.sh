@@ -173,10 +173,20 @@ run_set() {
 
 # one <name> <run> <tsc args>...: runs the tsc in the project dir and keeps its stdout, stderr
 # and exit code in <dir>/out/<name>/<run>.{out,err,rc}.
+# Under build-pgo.sh (PGO_PROFILE_DIR set), each run writes its own profile file, and llvm-profdata
+# merges them. rustc's default name for -Cprofile-generate is default_%m.profraw (no PID), so every
+# run merged into one file inside the profile runtime. On arm64 Windows that runtime merge crashed
+# (access violation in lprofMergeValueProfData) with link.exe's section padding; one file per run
+# avoids the runtime merge on every platform.
 one() {
   local name=$1 run=$2 o="$dir/out/$1/$2" rc=0
   shift 2
-  (cd "$dir/projects/$name" && "$dir/bin/tsc$exe" "$@") > "$o.out" 2> "$o.err" || rc=$?
+  (
+    # Exit above 2: rc 1 and 2 are expected diagnostics, so a failed cd must not look like one.
+    cd "$dir/projects/$name" || exit 3
+    [[ -z ${PGO_PROFILE_DIR:-} ]] || export LLVM_PROFILE_FILE="$PGO_PROFILE_DIR/$name-$run-%p.profraw"
+    "$dir/bin/tsc$exe" "$@"
+  ) > "$o.out" 2> "$o.err" || rc=$?
   echo "$rc" > "$o.rc"
   if ((rc > 2)); then
     echo "error: tsc exited $rc on $name $run: $*" >&2
