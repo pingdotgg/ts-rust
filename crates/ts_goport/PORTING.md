@@ -624,7 +624,13 @@ The batch that adds it is not accepted until Theo approves.
   started projects work at the same time, like Go's goroutines. A
   project's emit starts behind its check when `Program::start_emit`
   allows it, and its writes wait in a buffer
-  (`buffer_early_emit_writes`) until the task finishes. A task finishes
+  (`buffer_early_emit_writes`) until the task finishes. The flush makes
+  each write once, as Go's emit goroutines do, also after a failed write.
+  When one failed, the files emit again from the start state and each
+  write gives the flush's result with no write (`emit_files::Writes`), so
+  the TS5033s, the emitted files, the d.ts signatures and the build info
+  are Go's. The API build flushes on its orchestrator thread only
+  (`flush_writes_on_this_thread`). A task finishes
   when its check and its early emit (when it has one) have ended (the
   barrier jobs behind them also
   wait for the d.ts twins and the emit pool,
@@ -746,7 +752,13 @@ runs `f` under `core::go_wait_group_task`. Where the port runs it inline
 inside work that a Go `recover()` guards (the auto-import registry build
 under a request), it runs `f` under `core::go_wait_group_goroutine`: a Go
 panic ends the process there, because Go's recover sees only its own
-goroutine.
+goroutine. Not done for the emit jobs: Go's `Program.Emit` emits each file
+on a work group goroutine, so a Go panic in an emit (an `es_decorator`
+nil dereference, or the d.ts signature of a file after a failed write,
+incremental/snapshot.go:411) ends with the suffix in Go. `tsc -b` adds it
+for its builder goroutine (`BuildTask::keep_go_panic`); `tsc -p` and the
+API build print the line without it, and the API build answers the request
+with the panic where Go's process ends.
 
 ## Process start
 
