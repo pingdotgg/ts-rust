@@ -56,7 +56,7 @@ use crate::execute::build::config_prefetch::{
 };
 use crate::execute::build::host::BuildHost;
 use crate::execute::build::shared_outputs::{PathKeys, outputs_overlap};
-use crate::execute::incremental::build_info::{BuildInfo, is_build_info_file_name_default_library};
+use crate::execute::incremental::build_info::{BuildInfo, resolve_build_info_file_name};
 use crate::execute::incremental::incremental::new_build_info_reader;
 use crate::execute::tsc::compile::{
     CommandLineResult, ExitStatus, System, Watcher, Writer, new_content_mapper_host, write_str,
@@ -230,13 +230,11 @@ impl Orchestrator {
     // 673a5f17d713; ts#64159 makes it incremental.ResolveBuildInfoFileName,
     // incremental/buildInfo.go:529)
     pub fn resolve_build_info_file_name(&self, file_name: &str, build_info_dir: &str) -> String {
-        if is_build_info_file_name_default_library(file_name) {
-            return combine_paths(
-                &CompilerHost::default_library_path(&*self.host),
-                &[file_name],
-            );
-        }
-        get_normalized_absolute_path(file_name, build_info_dir)
+        resolve_build_info_file_name(
+            file_name,
+            build_info_dir,
+            &CompilerHost::default_library_path(&*self.host),
+        )
     }
 
     // Go: build/orchestrator.go:105 (*Orchestrator).Order

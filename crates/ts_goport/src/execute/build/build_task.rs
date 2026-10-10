@@ -5,7 +5,7 @@ use crate::execute::build::host::{BuildCompilerHost, BuildHost, WrittenPaths};
 use crate::execute::build::up_to_date_status::*;
 use crate::execute::incremental::build_info::{
     BuildInfoRootInfoReader, build_info_version, content_mapper_identities,
-    is_build_info_file_name_default_library,
+    is_build_info_file_name_default_library, resolve_build_info_file_name,
 };
 use crate::execute::incremental::emit_files::{buffer_early_emit_writes, fs_error_text};
 use crate::execute::incremental::incremental::Host as IncrementalHost;
@@ -1971,9 +1971,10 @@ impl BuildTask {
             }
             UpToDateStatusType::TsVersionOutputOfDate => new_compiler_diagnostic(
                 diag::Project_0_is_out_of_date_because_output_for_it_was_generated_with_version_1_that_differs_with_current_version_2,
+                // ts#64159: the build info version as it is (buildtask.go:737).
                 args![
                     config,
-                    o.relative_file_name(status.data_string()),
+                    status.data_string(),
                     build_info_version(self.resolved.as_ref().is_some_and(|r| {
                         crate::effect::rulerunner::enabled_options(r.compiler_options()).is_some()
                     }))
@@ -2231,11 +2232,15 @@ impl BuildTask {
         let Some(build_info) = entry.build_info.as_ref() else {
             crate::core::go_nil_dereference()
         };
-        // ts#64159: the name resolves against the build info file's
-        // directory, not its path key's (buildtask.go:899).
-        let dts_time = orchestrator.get_m_time(&get_normalized_absolute_path(
+        // ts#64159: `incremental.ResolveBuildInfoFileName` against the build
+        // info file's directory, not its path key's (buildtask.go:898-904).
+        // An empty name (no .d.ts emitted yet) is a default library name: it
+        // gives the default library directory, whose bundled `Stat` has the
+        // zero mtime.
+        let dts_time = orchestrator.get_m_time(&resolve_build_info_file_name(
             &build_info.latest_changed_dts_file,
             &get_directory_path(&entry.file_name),
+            &CompilerHost::default_library_path(&*orchestrator.host()),
         ));
         entry.dts_time = Some(dts_time);
         dts_time
@@ -2247,7 +2252,7 @@ impl BuildTask {
             && !self.resolved().compiler_options().is_incremental()
     }
 
-    // Go: build/buildtask.go:906 (*BuildTask).writeFile
+    // Go: build/buildtask.go:913 (*BuildTask).writeFile
     // PORT: see `new_task_write_file`.
 }
 

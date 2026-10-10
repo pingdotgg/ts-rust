@@ -2880,3 +2880,135 @@ fn generate_trace() {
         WatchFilter::NonWatch,
     );
 }
+
+/// Port-only tests of two `tsc -b --verbose` statuses that ts#64159 changed
+/// in build/buildtask.go (the bump D build skeptic's probes).
+///
+/// PORT: no Go counterpart. The expected text is what the Go N'
+/// (fed0bf24149f) oracle prints for the same steps. They run the real
+/// `tsgo` on a temp dir, because the first status needs the bundled default
+/// library directory.
+#[cfg(unix)]
+mod build_status_64159 {
+    use std::path::PathBuf;
+    use std::process::{Command, Stdio};
+
+    use ts_goport::execute::incremental::build_info::build_info_version;
+
+    /// A new empty dir under the system temp dir; removed on drop.
+    struct TmpDir(PathBuf);
+
+    impl TmpDir {
+        fn new(name: &str) -> TmpDir {
+            let dir = std::env::temp_dir().join(format!("goport-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir)
+                .unwrap_or_else(|e| panic!("mkdir {}: {e}", dir.display()));
+            TmpDir(dir)
+        }
+
+        fn write(&self, name: &str, text: &str) {
+            let path = self.0.join(name);
+            std::fs::create_dir_all(path.parent().expect("a parent dir"))
+                .unwrap_or_else(|e| panic!("mkdir for {name}: {e}"));
+            std::fs::write(path, text).unwrap_or_else(|e| panic!("write {name}: {e}"));
+        }
+
+        /// Runs `tsgo` with `args`: the exit code and stdout without the
+        /// `-b` time stamps and empty lines.
+        fn tsgo(&self, args: &[&str]) -> (Option<i32>, String) {
+            let output = Command::new(env!("CARGO_BIN_EXE_tsgo"))
+                .args(args)
+                .current_dir(&self.0)
+                .stdin(Stdio::null())
+                .output()
+                .expect("run tsgo");
+            let stdout = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(|line| match line.split_once(" - ") {
+                    Some((time, rest)) if time.ends_with("AM") || time.ends_with("PM") => rest,
+                    _ => line,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (output.status.code(), stdout)
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // buildtask.go:892-905 getLatestChangedDtsMTime: an upstream with
+    // `noEmitOnError` and an error has an empty `latestChangedDtsFile`.
+    // `incremental.ResolveBuildInfoFileName` gives the default library
+    // directory for it, whose bundled `Stat` has the zero mtime, so the
+    // downstream is not "up to date with .d.ts files" (buildtask.go:565).
+    // Before ts#64159 the name resolved against the build info directory.
+    #[test]
+    fn empty_latest_changed_dts_file_has_the_zero_mtime() {
+        let dir = TmpDir::new("empty-latest-changed-dts");
+        dir.write(
+            "a/tsconfig.json",
+            r#"{"compilerOptions":{"composite":true,"noEmitOnError":true},"files":["x.ts"]}"#,
+        );
+        dir.write("a/x.ts", "export const x: number = \"s\";\n");
+        dir.write(
+            "sub/tsconfig.json",
+            r#"{"compilerOptions":{"composite":true},"files":["y.ts"],"references":[{"path":"../a"}]}"#,
+        );
+        dir.write("sub/y.ts", "export const y = 1;\n");
+        assert_eq!(dir.tsgo(&["-b", "sub"]).0, Some(1));
+        assert_eq!(
+            dir.tsgo(&["-b", "sub", "--verbose"]),
+            (
+                Some(1),
+                [
+                    "Projects in this build: ",
+                    "    * a/tsconfig.json",
+                    "    * sub/tsconfig.json",
+                    "Project 'a/tsconfig.json' is out of date because buildinfo file 'a/tsconfig.tsbuildinfo' indicates that program needs to report errors.",
+                    "Building project 'a/tsconfig.json'...",
+                    "a/x.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+                    "Project 'sub/tsconfig.json' is out of date because output 'sub/tsconfig.tsbuildinfo' is older than input 'a'",
+                    "Building project 'sub/tsconfig.json'...",
+                    "Updating unchanged output timestamps of project 'sub/tsconfig.json'...",
+                ]
+                .join("\n")
+            )
+        );
+    }
+
+    // buildtask.go:733-739 TsVersionOutputOfDate: since ts#64159 the build
+    // info version is printed as it is, not as a file name relative to the
+    // current directory.
+    #[test]
+    fn ts_version_output_of_date_prints_the_version_as_is() {
+        let dir = TmpDir::new("ts-version-as-is");
+        dir.write("tsconfig.json", r#"{"compilerOptions":{"composite":true}}"#);
+        dir.write("a.ts", "export const a = 1;\n");
+        assert_eq!(dir.tsgo(&["-b"]).0, Some(0));
+        let build_info = dir.0.join("tsconfig.tsbuildinfo");
+        let text = std::fs::read_to_string(&build_info).expect("build info");
+        let start = text.find(r#""version":""#).expect("a version") + r#""version":""#.len();
+        let end = start + text[start..].find('"').expect("the version end");
+        std::fs::write(
+            &build_info,
+            format!("{}/weird/ver{}", &text[..start], &text[end..]),
+        )
+        .expect("write build info");
+        let current = build_info_version(false);
+        assert_eq!(
+            dir.tsgo(&["-b", "--verbose"]),
+            (
+                Some(0),
+                format!(
+                    "Projects in this build: \n    * tsconfig.json\nProject 'tsconfig.json' is out of date because output for it was generated with version '/weird/ver' that differs with current version '{current}'\nBuilding project 'tsconfig.json'..."
+                )
+            )
+        );
+    }
+}

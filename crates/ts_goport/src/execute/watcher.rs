@@ -591,7 +591,7 @@ impl Watcher {
         self.wm.borrow().reconcile_watches(&desired_dirs)
     }
 
-    // Go: execute/watcher.go:206 (*Watcher).comparePathsOptions (at 673a5f17d713; ts#64159
+    // Go: execute/watcher.go:271 (*Watcher).comparePathsOptions (at 673a5f17d713; ts#64159
     // makes it caseSensitivity, execute/watcher.go:287)
     pub fn compare_paths_options(&self) -> ComparePathsOptions {
         ComparePathsOptions {

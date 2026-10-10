@@ -1827,7 +1827,24 @@ pub fn is_build_info_file_name_default_library(file_name: &str) -> bool {
     !path_is_relative(file_name) && !path_is_absolute(file_name)
 }
 
-// Go: incremental/buildInfo.go:552 getNormalizedPaths (at 673a5f17d713; ts#64159 renames
+// Go: incremental/buildInfo.go:529 ResolveBuildInfoFileName (ts#64159)
+// A default library name (also the empty name) resolves in the default
+// library directory, any other name against the build info directory.
+// PORT: Go `RootedDirectoryPath.ResolveFile("")` gives the directory itself;
+// `combine_paths` skips the empty part, so it gives the same name.
+#[must_use]
+pub fn resolve_build_info_file_name(
+    file_name: &str,
+    build_info_directory: &str,
+    default_library_path: &str,
+) -> String {
+    if is_build_info_file_name_default_library(file_name) {
+        return combine_paths(default_library_path, &[file_name]);
+    }
+    get_normalized_absolute_path(file_name, build_info_directory)
+}
+
+// Go: incremental/buildInfo.go:572 getNormalizedPaths (at 673a5f17d713; ts#64159 renames
 // it getBuildInfoFileNames, incremental/buildInfo.go:598)
 // PORT: both lifetimes stay separate (edition 2024 captures both) so the
 // public getters can return this opaque type.
@@ -2010,6 +2027,30 @@ mod tests {
             round_tripped.latest_changed_dts_file,
             build_info.latest_changed_dts_file
         );
+    }
+
+    // PORT: no Go test. incremental/buildInfo.go:529 ResolveBuildInfoFileName
+    // (ts#64159): the empty name and a default library name resolve in the
+    // default library directory, and the bundled `Stat` of that directory has
+    // the zero mtime (bundled/embed.go:85-89). build/buildtask.go:892
+    // getLatestChangedDtsMTime needs both.
+    #[test]
+    fn resolve_build_info_file_name_of_default_library_names() {
+        let lib = crate::frontend::bundled::lib_path();
+        let resolve = |name: &str| resolve_build_info_file_name(name, "/p/out", &lib);
+        assert_eq!(resolve(""), lib);
+        assert_eq!(resolve("lib.es5.d.ts"), format!("{lib}/lib.es5.d.ts"));
+        assert_eq!(resolve("./dist/a.d.ts"), "/p/out/dist/a.d.ts");
+        assert_eq!(resolve("../a.d.ts"), "/p/a.d.ts");
+        assert_eq!(resolve("/q/a.d.ts"), "/q/a.d.ts");
+
+        // A `noembed` build reads the libs from disk.
+        if crate::frontend::bundled::EMBEDDED {
+            let fs = crate::frontend::bundled::wrap_fs(crate::frontend::vfs::osvfs_fs());
+            let stat = fs.stat(&lib).expect("the default library directory");
+            assert!(stat.is_dir());
+            assert_eq!(stat.mod_time(), None);
+        }
     }
 
     #[test]
