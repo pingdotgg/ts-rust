@@ -25,8 +25,11 @@
 //!   multiples of 2 MiB.
 //! - For A: a parked thread bound to the last arena (`HOLDER_NAME`). With
 //!   the THP watcher (the default CLI path), main, the watcher, the work
-//!   thread and this thread each keep one of the 4 arenas (`narenas:4`) for
-//!   the whole run. Without the watcher (LSP, API, watch mode,
+//!   thread and this thread each keep one of the 4 arenas (`narenas:4`)
+//!   while the watcher runs. The watcher stops after 60 s
+//!   (`thp_guard::WATCH_FOR`), or sooner when it turns THP off or cannot
+//!   read `/proc/buddyinfo`; then its arena can lose its last thread, as
+//!   without the watcher. Without the watcher (LSP, API, watch mode,
 //!   `GOPORT_THP_GUARD=0` or `start`), one arena can still lose its last
 //!   parse worker; jemlayout1 measured the same faults there as with the
 //!   watcher. Before this, only the watcher kept the fourth arena, by
