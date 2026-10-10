@@ -8,7 +8,8 @@
 #        pgo-train.sh compare <dir> <tsc-a> <tsc-b>
 #                                                  run the set with both; fail when the stdout, stderr,
 #                                                  exit code or emitted files of any run differ
-#   <tsc> is a tsc bin, or a dir that holds tsgo (build-pgo.sh passes its bin dir).
+#   <tsc> is a tsc bin, or a dir that holds tsgo (build-pgo.sh passes its bin dir). On Windows
+#   (Git Bash) the bins are tsc.exe and tsgo.exe, and node_modules is a junction.
 #
 # The set: the gate's 4 projects (query, hono, zod, effect) and 3 realworld4 configs (playcanvas:
 # JS with JSDoc types and declaration emit; umami: a React TSX app; nestjs-cqrs: decorators and
@@ -38,6 +39,21 @@ usage() { sed -n '2,/^set -euo/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 2
 cmd=$1
 dir=$2
 repo="$(cd -- "$(dirname -- "$0")/../.." && pwd)"
+exe=""
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) exe=.exe ;; esac
+# abs <dir>: the absolute path of <dir>; on Windows a C:/... path, which the tsc also gets.
+abs() {
+  if [[ -n $exe ]]; then cygpath -m "$(cd -- "$1" && pwd)"; else (cd -- "$1" && pwd); fi
+}
+# link_dir <target> <link>: a dir symlink; on Windows a junction, which needs no privilege (Git
+# Bash ln -s copies the dir).
+link_dir() {
+  if [[ -n $exe ]]; then
+    MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" > /dev/null
+  else
+    ln -s "$1" "$2"
+  fi
+}
 # The day the package lists below were taken (npm --before).
 npm_before=2026-10-07
 
@@ -126,7 +142,7 @@ setup() {
     echo '{ "private": true }' > "$deps/package.json"
     (cd "$deps" && npm install --ignore-scripts --no-audit --no-fund --no-package-lock --legacy-peer-deps \
       --before="$npm_before" --loglevel=error "$@")
-    ln -s "$deps/node_modules" "$p/node_modules"
+    link_dir "$deps/node_modules" "$p/node_modules"
     touch "$deps/.done"
   }
   projects
@@ -135,12 +151,12 @@ setup() {
 # run_set <tsc>: runs the set with <tsc>, into a new <dir>/out.
 run_set() {
   local tsc=$1
-  [[ -d $tsc ]] && tsc=$tsc/tsgo
+  [[ -d $tsc ]] && tsc=$tsc/tsgo$exe
   [[ -x $tsc ]] || { echo "error: $tsc is not an executable tsc" >&2; exit 2; }
   rm -rf "${dir:?}/bin" "${dir:?}/out"
   mkdir -p "$dir/bin" "$dir/out"
   "$repo/crates/ts_goport/scripts/copy-libs.sh" "$dir/bin"
-  cp "$tsc" "$dir/bin/tsc"
+  cp "$tsc" "$dir/bin/tsc$exe"
   project() {
     local name=$1 config=$5 runs=$6 o="$dir/out/$1" s
     [[ -f $dir/deps/$name/.done ]] || { echo "error: $name is not set up (pgo-train.sh setup $dir)" >&2; exit 2; }
@@ -160,7 +176,7 @@ run_set() {
 one() {
   local name=$1 run=$2 o="$dir/out/$1/$2" rc=0
   shift 2
-  (cd "$dir/projects/$name" && "$dir/bin/tsc" "$@") > "$o.out" 2> "$o.err" || rc=$?
+  (cd "$dir/projects/$name" && "$dir/bin/tsc$exe" "$@") > "$o.out" 2> "$o.err" || rc=$?
   echo "$rc" > "$o.rc"
   if ((rc > 2)); then
     echo "error: tsc exited $rc on $name $run: $*" >&2
@@ -173,17 +189,17 @@ case $cmd in
   setup)
     [[ $# == 2 ]] || usage
     mkdir -p "$dir"
-    dir="$(cd -- "$dir" && pwd)"
+    dir="$(abs "$dir")"
     setup
     ;;
   run)
     [[ $# == 3 ]] || usage
-    dir="$(cd -- "$dir" && pwd)"
+    dir="$(abs "$dir")"
     run_set "$3"
     ;;
   compare)
     [[ $# == 4 ]] || usage
-    dir="$(cd -- "$dir" && pwd)"
+    dir="$(abs "$dir")"
     rm -rf "$dir/out-a" "$dir/out-b"
     run_set "$3"
     mv "$dir/out" "$dir/out-a"

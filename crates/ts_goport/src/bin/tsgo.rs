@@ -34,6 +34,8 @@
 //! `OsSystem` and `new_os_system` in execute/tsc/compile.rs.
 //! PORT: `enablevtprocessing_windows.go` (the Windows console) is not
 //! ported.
+//! PORT: on Windows the main thread ends the process: it returns the exit
+//! code from `main` (`exit`).
 
 use std::any::Any;
 use std::io::Write;
@@ -83,8 +85,15 @@ struct Worker {
     launcher: rustix::process::Pid,
 }
 
+/// What `main` returns: the exit code on Windows (see `exit`). Elsewhere
+/// the work thread ends the process.
+#[cfg(windows)]
+type MainResult = std::process::ExitCode;
+#[cfg(not(windows))]
+type MainResult = ();
+
 // Go: cmd/tsc/main.go:14 main
-fn main() {
+fn main() -> MainResult {
     // First: before any thread starts (`thp_guard` can start one), so each
     // thread gets Go's mask. It allocates nothing.
     #[cfg(target_os = "linux")]
@@ -148,9 +157,17 @@ fn main() {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = signals;
+    #[cfg(windows)]
+    {
+        drop(work);
+        windows_exit::wait_code()
+    }
     // The work thread ends the process (above), so this join does not end.
-    let _ = work.join();
-    std::process::exit(EXIT_UNPORTED);
+    #[cfg(not(windows))]
+    {
+        let _ = work.join();
+        std::process::exit(EXIT_UNPORTED);
+    }
 }
 
 /// Copied from `goport.rs` `set_malloc_tunables`, which explains the
@@ -840,6 +857,7 @@ fn end_by_signal(signal: i32) {
 
 /// Ends the process with `code` once the work has written its output. A
 /// worker (see `launch`) flushes stdout and sends the code (`send_code`).
+/// On Windows it hands the code to the main thread (`windows_exit`).
 fn exit(code: i32) -> ! {
     #[cfg(target_os = "linux")]
     if let Some(worker) = worker() {
@@ -847,7 +865,44 @@ fn exit(code: i32) -> ! {
         let _ = std::io::stderr().flush();
         send_code(worker, code);
     }
-    std::process::exit(code)
+    #[cfg(windows)]
+    windows_exit::hand_off(code);
+    #[cfg(not(windows))]
+    std::process::exit(code);
+}
+
+/// On Windows `std::process::exit` is `ExitProcess`, which skips the C
+/// runtime's `atexit` handlers. A PGO-instrumented build writes its profile
+/// in one (the release workflow trains on Windows), so the work thread hands
+/// its code to the main thread, which returns it from `main`; the C runtime
+/// then runs the handlers and ends the process.
+#[cfg(windows)]
+mod windows_exit {
+    use std::process::ExitCode;
+    use std::sync::{Condvar, Mutex, PoisonError};
+
+    static CODE: Mutex<Option<i32>> = Mutex::new(None);
+    static CODE_SET: Condvar = Condvar::new();
+
+    /// Sets the exit code for the main thread and waits for the end.
+    pub(super) fn hand_off(code: i32) -> ! {
+        *CODE.lock().unwrap_or_else(PoisonError::into_inner) = Some(code);
+        CODE_SET.notify_one();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    /// Waits for the code of `hand_off`. The tsc exit codes fit in a byte.
+    pub(super) fn wait_code() -> ExitCode {
+        let mut code = CODE.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if let Some(code) = *code {
+                return ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX));
+            }
+            code = CODE_SET.wait(code).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
 }
 
 /// Sends `code` to the launcher of `worker` (see `launch`). First it points

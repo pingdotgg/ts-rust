@@ -10,7 +10,7 @@ mkdir -p repos logs
 
 # Compilers. TypeScript 6 and 7 both name their bin tsc, so run.sh calls each one by path.
 [[ -f package.json ]] || echo '{ "private": true }' >package.json
-npm i -q --no-audit --no-fund tsc-rs@0.1.0 typescript@7.0.2 ts6@npm:typescript@6.0.3
+npm i -q --no-audit --no-fund tsc-rs@0.2.0 typescript@7.0.2 ts6@npm:typescript@6.0.3
 # bun check is in Bun canary. The README numbers are from bd599f5af; the canary URL always has the latest.
 curl -fsSL -o bun.zip https://github.com/oven-sh/bun/releases/download/canary/bun-darwin-aarch64.zip
 unzip -oq bun.zip && rm bun.zip
