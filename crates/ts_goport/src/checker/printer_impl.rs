@@ -721,20 +721,31 @@ impl Drop for PrintScope {
         }
         // Read only under an enclosing declaration (`visit_and_transform_type`).
         if imp.links.has(Node::NIL) {
-            imp.links.get(Node::NIL).serialized_types = FxHashMap::default();
+            let types = &mut imp.links.get(Node::NIL).serialized_types;
+            if types.capacity() > 1024 {
+                *types = FxHashMap::default();
+            } else {
+                types.clear();
+            }
         }
     }
 }
 
 /// Removes the entries of the freed nodes in `ranges` (from
-/// `ast::synthetic::exit_print_scope`) from `map`, key by key, so the cost
+/// `ast::synthetic::exit_print_scope`) from `map`: one removal per node of
+/// the call, or one walk of the table when that is smaller, so the cost
 /// follows the size of the call, not of the map.
 fn forget_print_keys<V>(map: &mut FxHashMap<Node, V>, ranges: &[(u32, u32)]) {
     if map.is_empty() {
         return;
     }
-    for n in crate::ast::synthetic::print_range_nodes(ranges) {
-        map.remove(&n);
+    let nodes: usize = ranges.iter().map(|&(lo, hi)| (hi - lo) as usize).sum();
+    if map.capacity() <= nodes {
+        map.retain(|&n, _| !crate::ast::synthetic::in_print_ranges(ranges, n));
+    } else {
+        for n in crate::ast::synthetic::print_range_nodes(ranges) {
+            map.remove(&n);
+        }
     }
     // A big call leaves a big empty table.
     if map.is_empty() && map.capacity() > 1024 {

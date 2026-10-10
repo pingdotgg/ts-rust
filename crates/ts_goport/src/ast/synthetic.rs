@@ -968,6 +968,17 @@ pub fn is_print_node(n: Node) -> bool {
         })
 }
 
+/// True when `n` is a node in the slot index ranges of an ended print call
+/// (`exit_print_scope`).
+#[must_use]
+pub fn in_print_ranges(ranges: &[(u32, u32)], n: Node) -> bool {
+    if !is_synthetic_node(n) {
+        return false;
+    }
+    let i = slot_index(n) as u32;
+    ranges.iter().any(|&(lo, hi)| (lo..hi).contains(&i))
+}
+
 /// The handles of the nodes in the slot index ranges of an ended print call
 /// (`exit_print_scope`).
 pub fn print_range_nodes(ranges: &[(u32, u32)]) -> impl Iterator<Item = Node> + '_ {
