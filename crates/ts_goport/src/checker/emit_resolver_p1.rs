@@ -151,9 +151,9 @@ impl EmitResolver {
             .clone()
     }
 
-    // Go: checker/emitsupport.go:12 Checker.isDeclarationVisible
-    // PORT: not in Go N' (ts#64649 moved it to the checker). Kept for
-    // `ls/findallreferences_p1.rs` until the ls lane ports its ts#64649 part.
+    // Go: checker/emitresolver.go:123 EmitResolver.IsDeclarationVisible
+    // (findallreferences.go:562 calls it). PORT: the checker comes as `c`, as
+    // in the other resolver methods; Go locks `checkerMu` here.
     pub fn is_declaration_visible(&self, c: &mut Checker, node: Node) -> bool {
         c.is_declaration_visible(node)
     }

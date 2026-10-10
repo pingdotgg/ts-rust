@@ -789,8 +789,9 @@ impl FlatKey for TypeId {
 //   `Option<Context>`. `tracer` is the last field (see `crate::tracing`).
 //   `emitResolverLinks` (ts#64649) is `emit_resolver_links`. The
 //   `emit_resolver` field is not in Go N' (ts#64649 removed `emitResolver`
-//   and `emitResolverOnce`): it keeps the resolver of `get_emit_resolver`
-//   until the program, emit and ls lanes port their ts#64649 parts.
+//   and `emitResolverOnce`): it keeps the resolver of `get_emit_resolver`,
+//   which the declarations symbol tracker and declaration diagnostics use
+//   (see its note).
 // - `sync.Once` fields become `bool` "done" flags.
 // - `*T` pools and shared structs (`*Relation`, `*Relater`, `*FlowState`,
 //   `*InferenceState`) are `Rc<RefCell<T>>`; nil-able ones are `Option`.
