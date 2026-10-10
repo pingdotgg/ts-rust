@@ -330,7 +330,7 @@ pub fn create_checker_pool(
     };
 
     let get_checker: Box<dyn Fn() -> (Rc<RefCell<Checker>>, ls_program::Release) + '_> = {
-        let pool = pool.clone();
+        let pool = pool;
         let created = created.clone();
         Box::new(move || {
             // PORT: the checker runs with its program current until the
@@ -358,7 +358,7 @@ pub fn create_checker_pool(
     };
 
     let close_pool: Box<dyn Fn()> = {
-        let closed = closed.clone();
+        let closed = closed;
         Box::new(move || {
             // Go: close(pool)
             if closed.get() {
@@ -369,7 +369,7 @@ pub fn create_checker_pool(
     };
 
     let get_created_count: Box<dyn Fn() -> i32> = {
-        let created = created.clone();
+        let created = created;
         Box::new(move || created.get())
     };
 
@@ -419,7 +419,7 @@ pub fn get_package_realpath_funcs(
         let fs = fs.clone();
         let package_dir = package_dir.to_string();
         let real_package_dir = real_package_dir.clone();
-        let dir_cache = dir_cache.clone();
+        let dir_cache = dir_cache;
         Rc::new(move |file_name: &str| -> String {
             // Fast path: files within the package use prefix substitution.
             if is_symlinked {

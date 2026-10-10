@@ -918,7 +918,7 @@ impl Checker {
             let start = name.find('@').map_or(0, |i| i + 1);
             self.factory.new_private_identifier(&name[start..])
         } else {
-            self.factory.new_identifier(name.clone())
+            self.factory.new_identifier(name)
         };
         let this_keyword = self.factory.new_keyword_expression(SyntaxKind::ThisKeyword);
         let reference = self.factory.new_property_access_expression(
@@ -964,7 +964,7 @@ impl Checker {
             let start = name.find('@').map_or(0, |i| i + 1);
             self.factory.new_private_identifier(&name[start..])
         } else {
-            self.factory.new_identifier(name.clone())
+            self.factory.new_identifier(name)
         };
         for &static_block in static_blocks {
             let this_keyword = self.factory.new_keyword_expression(SyntaxKind::ThisKeyword);

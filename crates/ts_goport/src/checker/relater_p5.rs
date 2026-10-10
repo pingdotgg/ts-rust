@@ -1825,7 +1825,7 @@ impl Checker {
                 self.report_error(
                     r,
                     diag::X_0_is_only_assignable_to_the_non_distributed_1_but_1_has_been_distributed_here,
-                    args![generalized_source_type.clone(), target_type.clone()],
+                    args![generalized_source_type, target_type],
                 );
             } else if constraint.is_some()
                 && self.is_type_assignable_to(generalized_source, constraint)
@@ -1834,21 +1834,21 @@ impl Checker {
                 self.report_error(
                     r,
                     diag::X_0_is_assignable_to_the_constraint_of_type_1_but_1_could_be_instantiated_with_a_different_subtype_of_constraint_2,
-                    args![generalized_source_type.clone(), target_type.clone(), constraint_str],
+                    args![generalized_source_type, target_type, constraint_str],
                 );
             } else if constraint.is_some() && self.is_type_assignable_to(source, constraint) {
                 let constraint_str = self.type_to_string_exported(constraint);
                 self.report_error(
                     r,
                     diag::X_0_is_assignable_to_the_constraint_of_type_1_but_1_could_be_instantiated_with_a_different_subtype_of_constraint_2,
-                    args![source_type.clone(), target_type.clone(), constraint_str],
+                    args![source_type, target_type, constraint_str],
                 );
             } else {
                 r.borrow_mut().error_chain = None; // Only report this error once
                 self.report_error(
                     r,
                     diag::X_0_could_be_instantiated_with_an_arbitrary_type_which_could_be_unrelated_to_1,
-                    args![target_type.clone(), generalized_source_type.clone()],
+                    args![target_type, generalized_source_type],
                 );
             }
         }

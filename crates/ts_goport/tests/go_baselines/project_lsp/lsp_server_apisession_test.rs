@@ -3,7 +3,11 @@
 //! handleInitializeAPISession`).
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream as ApiStream;
+// The API pipe is a named pipe on Windows; a client opens it as a file.
+#[cfg(windows)]
+use std::fs::File as ApiStream;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
@@ -91,9 +95,14 @@ fn hover(client: &LspClient) {
     assert!(hover.is_some_and(|hover| hover.hover.is_some()), "no hover");
 }
 
-/// Sends `custom/initializeAPISession` with a pipe in the temp dir.
+/// Sends `custom/initializeAPISession` with a pipe in the temp dir (a socket
+/// file on Unix, a name under `\\.\pipe\` on Windows, which has no files
+/// for pipes).
 fn init_api_session(client: &LspClient) -> PathBuf {
+    #[cfg(unix)]
     let pipe = std::env::temp_dir().join(format!("goport-apisess-{}.sock", std::process::id()));
+    #[cfg(windows)]
+    let pipe = PathBuf::from(format!(r"\\.\pipe\goport-apisess-{}", std::process::id()));
     let _ = std::fs::remove_file(&pipe);
     let (session_msg, session) = client.send_request(
         &lsproto::CUSTOM_INITIALIZE_API_SESSION_INFO,
@@ -106,19 +115,72 @@ fn init_api_session(client: &LspClient) -> PathBuf {
     pipe
 }
 
+/// How long a read of the API pipe waits for the server.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[cfg(unix)]
+type ApiReader = ApiStream;
+#[cfg(windows)]
+type ApiReader = PipeReader;
+
+/// The read half of the API pipe on Windows. A pipe handle has no read
+/// timeout, so each read runs on its own thread and `read` waits for it for
+/// `READ_TIMEOUT`. The thread reads only while `read` waits: a read that is
+/// pending on the handle would block the writes of `send`.
+#[cfg(windows)]
+struct PipeReader(Arc<ApiStream>);
+
+#[cfg(windows)]
+impl Read for PipeReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let (done, result) = std::sync::mpsc::channel();
+        let pipe = self.0.clone();
+        let len = buf.len();
+        std::thread::spawn(move || {
+            let mut chunk = vec![0u8; len];
+            let read = (&*pipe).read(&mut chunk).map(|n| {
+                chunk.truncate(n);
+                chunk
+            });
+            let _ = done.send(read);
+        });
+        match result.recv_timeout(READ_TIMEOUT) {
+            Ok(read) => read.map(|chunk| {
+                buf[..chunk.len()].copy_from_slice(&chunk);
+                chunk.len()
+            }),
+            Err(_) => Err(std::io::ErrorKind::TimedOut.into()),
+        }
+    }
+}
+
 /// A connected API client.
 struct ApiClient {
-    stream: UnixStream,
-    reader: BufReader<UnixStream>,
+    stream: ApiStream,
+    reader: BufReader<ApiReader>,
 }
 
 impl ApiClient {
     fn connect(pipe: &PathBuf) -> Self {
-        let stream = UnixStream::connect(pipe).expect("connect to the API pipe");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(60)))
-            .expect("set a read timeout");
-        let reader = BufReader::new(stream.try_clone().expect("clone the API socket"));
+        #[cfg(unix)]
+        let stream = {
+            let stream = ApiStream::connect(pipe).expect("connect to the API pipe");
+            stream
+                .set_read_timeout(Some(READ_TIMEOUT))
+                .expect("set a read timeout");
+            stream
+        };
+        #[cfg(windows)]
+        let stream = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(pipe)
+            .expect("connect to the API pipe");
+        let clone = stream.try_clone().expect("clone the API socket");
+        #[cfg(unix)]
+        let reader = BufReader::new(clone);
+        #[cfg(windows)]
+        let reader = BufReader::new(PipeReader(Arc::new(clone)));
         Self { stream, reader }
     }
 

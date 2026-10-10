@@ -663,7 +663,7 @@ impl Checker {
                 break;
             }
         }
-        let diag_name = declaration_name_to_string(right).to_string();
+        let diag_name = declaration_name_to_string(right);
         if property_on_type.is_some() {
             let type_value_decl = self.sym(property_on_type).value_declaration;
             let type_class = get_containing_class(type_value_decl);
@@ -751,7 +751,7 @@ impl Checker {
                         .get_applicable_index_info_for_name(subtype, prop_node.text())
                         .is_nil()
                 {
-                    let prop_name = declaration_name_to_string(prop_node).to_string();
+                    let prop_name = declaration_name_to_string(prop_node);
                     let type_string = self.type_to_string(subtype);
                     diagnostic = Some(new_diagnostic_chain_for_node(
                         diagnostic.take(),
@@ -764,7 +764,7 @@ impl Checker {
             }
         }
         if self.type_has_static_property(prop_node.text(), containing_type) {
-            let prop_name = declaration_name_to_string(prop_node).to_string();
+            let prop_name = declaration_name_to_string(prop_node);
             let type_name = self.type_to_string(containing_type);
             let static_name = format!("{type_name}.{prop_name}");
             diagnostic = Some(new_diagnostic_chain_for_node(
@@ -780,7 +780,7 @@ impl Checker {
                     .get_property_of_type(promised_type, prop_node.text())
                     .is_some()
             {
-                let prop_name = declaration_name_to_string(prop_node).to_string();
+                let prop_name = declaration_name_to_string(prop_node);
                 let type_string = self.type_to_string(containing_type);
                 let mut d = new_diagnostic_chain_for_node(
                     diagnostic.take(),
@@ -795,7 +795,7 @@ impl Checker {
                 )));
                 diagnostic = Some(d);
             } else {
-                let missing_property = declaration_name_to_string(prop_node).to_string();
+                let missing_property = declaration_name_to_string(prop_node);
                 let container = self.type_to_string(containing_type);
                 let lib_suggestion = self.get_suggested_lib_for_non_existent_property(
                     &missing_property,

@@ -669,11 +669,11 @@ impl Checker {
                             // Get outDir paths, defaulting to root directories if not specified
                             let mut own_out_dir = self.compiler_options.out_dir.clone();
                             if own_out_dir.is_empty() {
-                                own_out_dir = own_root_dir.clone();
+                                own_out_dir = own_root_dir;
                             }
                             let mut other_out_dir = redirect.compiler_options().out_dir.clone();
                             if other_out_dir.is_empty() {
-                                other_out_dir = other_root_dir.clone();
+                                other_out_dir = other_root_dir;
                             }
                             let out_dir_path = tspath_p17::get_relative_path_from_directory(
                                 &own_out_dir,
@@ -1734,7 +1734,7 @@ impl Checker {
                         resolve_name(
                             self,
                             resolve_location,
-                            resolver_name_text(name_key.clone()),
+                            resolver_name_text(name_key),
                             meaning,
                             message,
                             true,  /*isUse*/
@@ -1746,7 +1746,7 @@ impl Checker {
                     let resolved = resolve_name(
                         self,
                         resolve_location,
-                        resolver_name_text(name_key.clone()),
+                        resolver_name_text(name_key),
                         meaning,
                         message,
                         true,  /*isUse*/

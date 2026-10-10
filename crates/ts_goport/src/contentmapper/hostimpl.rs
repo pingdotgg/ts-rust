@@ -2085,7 +2085,7 @@ impl Host for HostImpl {
         let lease = Rc::new(ProjectLease {
             host: self.rc(),
             key: key.clone(),
-            mappers: spec.mappers.clone(),
+            mappers: spec.mappers,
             entries,
             refs: Cell::new(1),
             once: Cell::new(false),
@@ -3145,7 +3145,7 @@ mod tests {
                     .marshal()?;
                     Ok(Some(Box::new(TransformResult {
                         mapped_output: MappedOutput {
-                            text: p.content.clone(),
+                            text: p.content,
                             extension: ".ts".to_string(),
                             mappings: JsonValue(mappings),
                             ..Default::default()
@@ -4419,7 +4419,7 @@ mod tests {
         let svelte = mapper("", "svelte", "2.0.0", "svelte-mapper");
 
         let release_vue_a = r.acquire(&[vue_a.clone(), vue_a.clone()]);
-        let release_vue_b = r.acquire(&[vue_b.clone()]);
+        let release_vue_b = r.acquire(&[vue_b]);
         let release_svelte = r.acquire(&[svelte.clone()]);
         for mapper in [&vue_a, &svelte] {
             r.transform(mapper, request("/x", "y")).expect("transform");

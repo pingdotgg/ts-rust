@@ -2048,7 +2048,7 @@ impl Session {
                 .program
                 .clone()
                 .unwrap_or_else(|| crate::core::go_nil_dereference()),
-            snapshot.clone(),
+            snapshot,
             &uri.file_name(),
         ))
     }
@@ -2133,7 +2133,7 @@ impl Session {
                 .program
                 .clone()
                 .unwrap_or_else(|| crate::core::go_nil_dereference()),
-            snapshot.clone(),
+            snapshot,
             &uri.file_name(),
         ))
     }
@@ -2214,7 +2214,7 @@ impl Session {
                 .program
                 .clone()
                 .unwrap_or_else(|| crate::core::go_nil_dereference()),
-            new_snapshot.clone(),
+            new_snapshot,
             &uri.file_name(),
         ))
     }
@@ -2380,7 +2380,7 @@ impl Session {
         // Enqueue logging, watch updates, and diagnostic refresh tasks
         // !!! userPreferences/configuration updates
         let s = self.clone();
-        let task_old_snapshot = old_snapshot.clone();
+        let task_old_snapshot = old_snapshot;
         let task_new_snapshot = new_snapshot.clone();
         // PORT: with push diagnostics, the task reads the programs of the new
         // snapshot (`publish_program_diagnostics`). Go's pointers keep them
@@ -3540,7 +3540,7 @@ impl Session {
                     if let Some(client) = s.client.as_ref() {
                         client.progress_start(
                             diag::Installing_types_for_0,
-                            args![project_display_name.clone()],
+                            args![project_display_name],
                         );
                     }
                     let typings_installer = s

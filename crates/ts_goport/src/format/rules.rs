@@ -169,7 +169,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         rule(
             "IgnoreBeforeComment",
             any_token.clone(),
-            comments.clone(),
+            comments,
             ANY_CONTEXT.clone(),
             RuleAction::STOP_PROCESSING_SPACE_ACTIONS,
             &[],
@@ -274,8 +274,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // them and their target unary expression.
         rule(
             "NoSpaceAfterUnaryPrefixOperator",
-            unary_prefix_operators.clone(),
-            unary_prefix_expressions.clone(),
+            unary_prefix_operators,
+            unary_prefix_expressions,
             preds![is_non_jsx_same_line_token_context, is_not_binary_op_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -283,7 +283,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         rule(
             "NoSpaceAfterUnaryPreincrementOperator",
             SyntaxKind::PlusPlusToken,
-            unary_preincrement_expressions.clone(),
+            unary_preincrement_expressions,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -291,14 +291,14 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         rule(
             "NoSpaceAfterUnaryPredecrementOperator",
             SyntaxKind::MinusMinusToken,
-            unary_predecrement_expressions.clone(),
+            unary_predecrement_expressions,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBeforeUnaryPostincrementOperator",
-            unary_postincrement_expressions.clone(),
+            unary_postincrement_expressions,
             SyntaxKind::PlusPlusToken,
             preds![
                 is_non_jsx_same_line_token_context,
@@ -309,7 +309,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeUnaryPostdecrementOperator",
-            unary_postdecrement_expressions.clone(),
+            unary_postdecrement_expressions,
             SyntaxKind::MinusMinusToken,
             preds![
                 is_non_jsx_same_line_token_context,
@@ -560,7 +560,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceAfterBinaryKeywordOperator",
-            binary_keyword_operators.clone(),
+            binary_keyword_operators,
             any_token.clone(),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
@@ -1008,7 +1008,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterKeywordInControl",
-            keywords.clone(),
+            keywords,
             SyntaxKind::OpenParenToken,
             preds![
                 is_option_disabled_or_undefined(
@@ -1417,7 +1417,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterBinaryOperator",
-            binary_operators.clone(),
+            binary_operators,
             any_token.clone(),
             preds![
                 is_option_disabled_or_undefined(
@@ -1555,7 +1555,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         rule(
             "OptionalSemicolon",
             any_token.clone(),
-            any_token_including_eof.clone(),
+            any_token_including_eof,
             preds![
                 option_equals(semicolon_option, lsutil::SemicolonPreference::INSERT),
                 is_semicolon_insertion_context
@@ -1578,7 +1578,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeOpenBraceInControl",
-            control_open_brace_left_token_range.clone(),
+            control_open_brace_left_token_range,
             SyntaxKind::OpenBraceToken,
             preds![
                 is_option_disabled_or_undefined_or_tokens_on_same_line(
@@ -1593,7 +1593,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeOpenBraceInFunction",
-            function_open_brace_left_token_range.clone(),
+            function_open_brace_left_token_range,
             SyntaxKind::OpenBraceToken,
             preds![
                 is_option_disabled_or_undefined_or_tokens_on_same_line(
@@ -1609,7 +1609,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeOpenBraceInTypeScriptDeclWithBlock",
-            type_script_open_brace_left_token_range.clone(),
+            type_script_open_brace_left_token_range,
             SyntaxKind::OpenBraceToken,
             preds![
                 is_option_disabled_or_undefined_or_tokens_on_same_line(
@@ -1686,7 +1686,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
                 SyntaxKind::ElseKeyword,
                 SyntaxKind::CaseKeyword,
             ],
-            any_token.clone(),
+            any_token,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_non_jsx_element_or_fragment_context,

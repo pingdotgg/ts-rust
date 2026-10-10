@@ -238,7 +238,7 @@ impl LanguageService {
             true, /*forItemResolve*/
         ) {
             Ok(completion_data) => completion_data,
-            Err(err) => crate::core::go_panic(err.error().to_string()),
+            Err(err) => crate::core::go_panic(err.error()),
         };
 
         let Some(completion_data) = completion_data else {
@@ -1525,11 +1525,7 @@ impl LanguageService {
                     )
                 })
                 .collect();
-            let new_line_char = self
-                .format_options()
-                .editor_settings
-                .new_line_character
-                .clone();
+            let new_line_char = self.format_options().editor_settings.new_line_character;
             let mut printer = create_snippet_printer(
                 PrinterOptions {
                     remove_comments: true,

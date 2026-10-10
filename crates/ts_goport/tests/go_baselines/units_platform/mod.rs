@@ -25,7 +25,11 @@ mod diagnostics;
 mod diagnostics_locale;
 mod fswatch_eventlist;
 mod fswatch_fallback;
+// These two files test `walkdir_unix`, which Windows does not have (Go
+// `walkdir_windows.go` is not ported).
+#[cfg(unix)]
 mod fswatch_n;
+#[cfg(unix)]
 mod fswatch_walkdir;
 mod fswatch_watcher;
 mod jsnum;

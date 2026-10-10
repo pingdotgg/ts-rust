@@ -948,11 +948,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.ts"), "export {};").unwrap();
         std::fs::write(dir.join("tsconfig.json"), r#"{"files": ["a.ts"]}"#).unwrap();
-        let config = dir.join("tsconfig.json").to_str().unwrap().to_string();
+        // The compiler takes normalized paths: a Windows temp dir has backslashes.
+        let normalized =
+            |p: &std::path::Path| crate::frontend::tspath::normalize_slashes(p.to_str().unwrap());
+        let config = normalized(&dir.join("tsconfig.json"));
         lock(&PANIC_AFTER_PARSE).push(config.clone());
         let compare_paths_options = ComparePathsOptions {
             use_case_sensitive_file_names: true,
-            current_directory: dir.to_str().unwrap().to_string(),
+            current_directory: normalized(&dir),
         };
         let path = to_path(&config, &compare_paths_options.current_directory, true);
         let pool = PrefetchPool::start(

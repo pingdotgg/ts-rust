@@ -84,7 +84,7 @@ fn make_tmp_dir() -> TmpDir {
 /// report. Removed when the `TmpDir` drops.
 pub(crate) fn new_tmp_dir() -> (TmpDir, PathBuf) {
     let d = make_tmp_dir();
-    let resolved = d.0.canonicalize().expect("EvalSymlinks");
+    let resolved = crate::support::eval_symlinks(&d.0).expect("EvalSymlinks");
     (d, resolved)
 }
 
@@ -268,7 +268,7 @@ pub(crate) fn watcher_event_timeout_base(w: &Arc<dyn Watcher>) -> Duration {
 // Go: watcher_test.go:111 newTmpDir
 fn new_t_tmp_dir(t: &T) -> String {
     let d = t.temp_dir();
-    std::fs::canonicalize(&d)
+    crate::support::eval_symlinks(&d)
         .unwrap_or_else(|e| fatal(format!("EvalSymlinks: {e}")))
         .to_str()
         .unwrap()
@@ -296,8 +296,11 @@ fn sub_path(dir: &str) -> String {
 }
 
 /// Go `filepath.Join(dir, name)`.
+// PORT: the tests join clean paths, so Go's `Clean` is only the separator:
+// on Windows `Join` gives backslashes, also for a `/` inside `name`.
 fn join(dir: &str, name: &str) -> String {
-    format!("{dir}/{name}")
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    format!("{dir}{sep}{name}").replace('/', sep)
 }
 
 // Go: watcher_test.go:150 newDirectWatcher
@@ -691,15 +694,41 @@ fn remove_all(p: &str) {
     }
 }
 
+#[cfg(unix)]
 fn symlink(target: &str, link: &str) {
     std::os::unix::fs::symlink(target, link)
         .unwrap_or_else(|e| fatal(format!("Symlink {link}: {e}")));
 }
 
+// Go: os/file_windows.go:392 Symlink (a directory link when the target is
+// a directory).
+#[cfg(windows)]
+fn symlink(target: &str, link: &str) {
+    let result = if std::fs::metadata(target).is_ok_and(|m| m.is_dir()) {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    result.unwrap_or_else(|e| fatal(format!("Symlink {link}: {e}")));
+}
+
+#[cfg(unix)]
 fn chmod(p: &str, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
         .unwrap_or_else(|e| fatal(format!("Chmod {p}: {e}")));
+}
+
+// Go: os/file_posix.go:60 syscallMode and syscall_windows.go Chmod: on
+// Windows only the owner write bit counts; it clears or sets read-only.
+#[cfg(windows)]
+fn chmod(p: &str, mode: u32) {
+    let result = std::fs::metadata(p).and_then(|m| {
+        let mut permissions = m.permissions();
+        permissions.set_readonly(mode & 0o200 == 0);
+        std::fs::set_permissions(p, permissions)
+    });
+    result.unwrap_or_else(|e| fatal(format!("Chmod {p}: {e}")));
 }
 
 fn ms(n: u64) -> Duration {
@@ -1776,7 +1805,7 @@ fn test_rename_dir_out_of_tree_no_stale_events() {
         write_file(&moved_nested, "v2-longer");
 
         let extra = r.drain_quiet(ms(800));
-        let old_prefix = format!("{sub}/");
+        let old_prefix = format!("{sub}{}", std::path::MAIN_SEPARATOR);
         for e in &extra {
             if e.path == sub || e.path.starts_with(&old_prefix) {
                 fatal(format!(
@@ -2101,7 +2130,7 @@ fn nudge_until_update(
 ) -> Result<(), Vec<W>> {
     let deadline = Instant::now() + total;
     let mut all_seen = Vec::new();
-    let under = format!("{dir}/");
+    let under = format!("{dir}{}", std::path::MAIN_SEPARATOR);
     let mut attempt = 0;
     while Instant::now() < deadline {
         let f = join(dir, &format!("{prefix}-{attempt}.txt"));

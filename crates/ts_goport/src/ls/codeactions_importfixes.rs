@@ -607,8 +607,8 @@ fn sort_fix_info(
         return fixes;
     }
 
-    // Create a copy to avoid modifying the original
-    let mut sorted: Vec<FixInfo> = fixes.clone();
+    // Sort the owned fixes.
+    let mut sorted: Vec<FixInfo> = fixes;
 
     // Sort by:
     // 1. JSX namespace fixes last

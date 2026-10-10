@@ -33,7 +33,8 @@ fn get_node_exe_once() -> Option<&'static Path> {
     static NODE_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
     NODE_EXE
         .get_or_init(|| {
-            const EXE_NAME: &str = "node";
+            // Go `exec.LookPath("node")` adds the PATHEXT extensions on Windows.
+            const EXE_NAME: &str = if cfg!(windows) { "node.exe" } else { "node" };
             let path = std::env::var_os("PATH")?;
             std::env::split_paths(&path)
                 .map(|dir| dir.join(EXE_NAME))
@@ -42,6 +43,13 @@ fn get_node_exe_once() -> Option<&'static Path> {
         .as_deref()
 }
 
+// Go: os/exec/lp_windows.go:22 findExecutable (a file that is not a directory)
+#[cfg(windows)]
+fn is_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file())
+}
+
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)

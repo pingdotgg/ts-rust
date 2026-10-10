@@ -21,6 +21,7 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+redundant_clone = "warn"
 
 # Release profile for the goport binaries: `cargo build --profile goport`.
 # Binaries land in <target>/goport/. Other crates keep the default release
