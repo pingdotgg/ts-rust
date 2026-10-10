@@ -94,6 +94,7 @@ mod lsp_server_apisession_test;
 mod lsp_server_completion_test;
 mod lsp_server_contentmapper_internal_test;
 mod lsp_server_contentmapper_test;
+mod lsp_server_flakydiagnostics_test;
 mod lsp_server_progress_test;
 mod lsp_server_projectinfo_test;
 mod lsp_server_projectreference_updates_test;
