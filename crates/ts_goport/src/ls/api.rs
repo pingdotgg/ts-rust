@@ -4,16 +4,16 @@ use crate::ls::prelude::*;
 
 use std::sync::LazyLock;
 
-// Go: ls/api.go:14 ErrNoSourceFile
+// Go: ls/api.go:15 ErrNoSourceFile
 pub static ERR_NO_SOURCE_FILE: LazyLock<GoError> =
     LazyLock::new(|| gostd::errors::new("source file not found"));
 
-// Go: ls/api.go:15 ErrNoTokenAtPosition
+// Go: ls/api.go:16 ErrNoTokenAtPosition
 pub static ERR_NO_TOKEN_AT_POSITION: LazyLock<GoError> =
     LazyLock::new(|| gostd::errors::new("no token found at position"));
 
 impl LanguageService {
-    // Go: ls/api.go:18 GetSymbolAtPosition
+    // Go: ls/api.go:19 GetSymbolAtPosition
     pub fn get_symbol_at_position(
         &self,
         ctx: &Context,
@@ -47,7 +47,7 @@ impl LanguageService {
         Ok(result)
     }
 
-    // Go: ls/api.go:32 GetSymbolAtLocation
+    // Go: ls/api.go:33 GetSymbolAtLocation
     pub fn get_symbol_at_location(&self, ctx: &Context, node: Node) -> SymbolId {
         let program = self.get_program();
         let (checker, _done) =
@@ -57,7 +57,7 @@ impl LanguageService {
         result
     }
 
-    // Go: ls/api.go:39 GetTypeOfSymbol
+    // Go: ls/api.go:40 GetTypeOfSymbol
     pub fn get_type_of_symbol(&self, ctx: &Context, symbol: SymbolId) -> TypeId {
         let program = self.get_program();
         let (checker, _done) = ls_program::get_type_checker(program, ctx);

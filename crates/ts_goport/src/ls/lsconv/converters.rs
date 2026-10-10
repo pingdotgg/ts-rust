@@ -10,6 +10,7 @@ use crate::locale;
 use crate::lsp::lsproto;
 use crate::scanner_util::{go_byte_offset, port_byte_offset};
 use crate::spanmap::{self, Feature, Fidelity, SpanMap};
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::LazyLock;
 
@@ -138,7 +139,7 @@ impl Script for Node {
         source_file_file_name(*self)
     }
 
-    // Go: ast/ast.go:2556 (*SourceFile).OriginalFileName
+    // Go: ast/ast.go:2553 (*SourceFile).OriginalFileName
     fn original_file_name(&self) -> &str {
         source_file_original_file_name(*self)
     }
@@ -147,12 +148,12 @@ impl Script for Node {
         ScriptText::File(source_file_text(*self))
     }
 
-    // Go: ast/ast.go:2566 (*SourceFile).SpanMap
+    // Go: ast/ast.go:2563 (*SourceFile).SpanMap
     fn span_map(&self) -> Option<&SpanMap> {
         source_file_span_map(*self)
     }
 
-    // Go: ast/ast.go:2548 (*SourceFile).OriginalText
+    // Go: ast/ast.go:2545 (*SourceFile).OriginalText
     fn original_text(&self) -> ScriptText<'_> {
         ScriptText::File(source_file_original_text(*self))
     }
@@ -663,7 +664,7 @@ fn virtual_position_to_original(
     )
 }
 
-// Go: ls/lsconv/converters.go:596 originalTextScript
+// Go: ls/lsconv/converters.go:590 originalTextScript
 // originalTextScript presents a content-mapped file's original (untransformed) text as a Script, so that
 // ranges already mapped into that text convert to the correct line/character positions.
 // PORT: Go copies the two strings; here the script borrows them.
@@ -673,27 +674,27 @@ struct OriginalTextScript<'a> {
 }
 
 impl Script for OriginalTextScript<'_> {
-    // Go: ls/lsconv/converters.go:601 originalTextScript.FileName
+    // Go: ls/lsconv/converters.go:595 originalTextScript.FileName
     fn file_name(&self) -> &str {
         self.file_name
     }
 
-    // Go: ls/lsconv/converters.go:602 originalTextScript.OriginalFileName
+    // Go: ls/lsconv/converters.go:596 originalTextScript.OriginalFileName
     fn original_file_name(&self) -> &str {
         self.file_name
     }
 
-    // Go: ls/lsconv/converters.go:603 originalTextScript.Text
+    // Go: ls/lsconv/converters.go:597 originalTextScript.Text
     fn text(&self) -> ScriptText<'_> {
         ScriptText::Borrowed(&self.text)
     }
 
-    // Go: ls/lsconv/converters.go:604 originalTextScript.OriginalText
+    // Go: ls/lsconv/converters.go:598 originalTextScript.OriginalText
     fn original_text(&self) -> ScriptText<'_> {
         ScriptText::Borrowed(&self.text)
     }
 
-    // Go: ls/lsconv/converters.go:605 originalTextScript.SpanMap
+    // Go: ls/lsconv/converters.go:599 originalTextScript.SpanMap
     fn span_map(&self) -> Option<&SpanMap> {
         None
     }
@@ -769,16 +770,7 @@ pub fn file_name_to_document_uri(file_name: &str) -> lsproto::DocumentUri {
         return lsproto::DocumentUri(file_name.to_string());
     }
     if tspath::is_dynamic_file_name(file_name) {
-        let Some((scheme, rest)) = file_name[2..].split_once('/') else {
-            crate::core::go_panic(format!("invalid file name: {file_name}"));
-        };
-        let Some((authority, path)) = rest.split_once('/') else {
-            crate::core::go_panic(format!("invalid file name: {file_name}"));
-        };
-        if authority == "ts-nul-authority" {
-            return lsproto::DocumentUri(format!("{scheme}:{path}"));
-        }
-        return lsproto::DocumentUri(format!("{scheme}://{authority}/{path}"));
+        return dynamic_file_name_to_document_uri(file_name);
     }
 
     let (mut volume, file_name, _) = tspath::split_volume_path(file_name);
@@ -794,6 +786,49 @@ pub fn file_name_to_document_uri(file_name: &str) -> lsproto::DocumentUri {
         .collect();
 
     lsproto::DocumentUri(format!("file://{volume}{}", parts.join("/")))
+}
+
+// Go: lsp/lsproto/lsp.go:85 DynamicFileNameToDocumentUri (ts#64544)
+// PORT: Go has it in lsproto. The server lane owns `lsp/lsproto/lsp.rs`, so
+// the ls lane keeps this copy until lsproto has it. It decodes both the
+// encoded names (`^/~ts-uri~/...`) and the literal names that
+// `DocumentUri::file_name` gives before its ts#64544 part.
+fn dynamic_file_name_to_document_uri(file_name: &str) -> lsproto::DocumentUri {
+    // Go: lsp/lsproto/lsp.go:97 dynamicFileNameToDocumentUri, strict = false
+    let encoded = tspath::is_encoded_dynamic_file_name(file_name);
+    let start = if encoded {
+        tspath::DYNAMIC_URI_FILE_NAME_PREFIX.len()
+    } else {
+        2
+    };
+    let invalid = || -> ! { crate::core::go_panic(format!("invalid file name: {file_name}")) };
+    let Some((scheme, rest)) = file_name[start..].split_once('/') else {
+        invalid();
+    };
+    let Some((authority, uri_path)) = rest.split_once('/') else {
+        invalid();
+    };
+    let has_authority = authority != "ts-nul-authority";
+    let authority = if encoded {
+        Cow::Owned(tspath::decode_dynamic_uri_path_segment(authority))
+    } else {
+        Cow::Borrowed(authority)
+    };
+    if encoded
+        && has_authority
+        && let Some(suffix) = tspath::decode_dynamic_uri_no_path(uri_path)
+    {
+        return lsproto::DocumentUri(format!("{scheme}://{authority}{suffix}"));
+    }
+    let uri_path = if encoded {
+        Cow::Owned(tspath::decode_dynamic_uri_path(uri_path))
+    } else {
+        Cow::Borrowed(uri_path)
+    };
+    if !has_authority {
+        return lsproto::DocumentUri(format!("{scheme}:{uri_path}"));
+    }
+    lsproto::DocumentUri(format!("{scheme}://{authority}/{uri_path}"))
 }
 
 /// Go `utf16.RuneLen(r)`.
@@ -820,7 +855,7 @@ fn utf16_rune_len(r: i32) -> i32 {
 // line (`port_byte_offset`, `go_byte_offset`). Otherwise the decoder follows
 // Go `utf8.DecodeRuneInString`, also at a position inside a character.
 impl Converters {
-    // Go: ls/lsconv/converters.go:366 lineAndCharacterToPosition
+    // Go: ls/lsconv/converters.go:360 lineAndCharacterToPosition
     // PORT: Go passes the position by value; here by reference.
     // Private as in Go since tsgo#4712: the LS uses `from_lsp_position`,
     // `from_lsp_range` and their SourceFile forms.
@@ -901,7 +936,7 @@ impl Converters {
         pos as i32
     }
 
-    // Go: ls/lsconv/converters.go:417 positionToLineAndCharacter
+    // Go: ls/lsconv/converters.go:411 positionToLineAndCharacter
     // Private as in Go since tsgo#4712: the LS uses `to_lsp_position`.
     fn position_to_line_and_character(
         &self,
@@ -979,7 +1014,7 @@ impl Converters {
     }
 }
 
-// Go: ls/lsconv/converters.go:451 diagnosticOptions
+// Go: ls/lsconv/converters.go:445 diagnosticOptions
 struct DiagnosticOptions {
     report_style_checks_as_warnings: bool,
     related_information: bool,
@@ -987,7 +1022,7 @@ struct DiagnosticOptions {
     visual_studio: bool,
 }
 
-// Go: ls/lsconv/converters.go:459 DiagnosticToLSPPull
+// Go: ls/lsconv/converters.go:453 DiagnosticToLSPPull
 // DiagnosticToLSPPull converts a diagnostic for pull diagnostics (textDocument/diagnostic)
 pub fn diagnostic_to_lsp_pull(
     ctx: &Context,
@@ -1010,7 +1045,7 @@ pub fn diagnostic_to_lsp_pull(
     )
 }
 
-// Go: ls/lsconv/converters.go:471 DiagnosticToLSPPush
+// Go: ls/lsconv/converters.go:465 DiagnosticToLSPPush
 // DiagnosticToLSPPush converts a diagnostic for push diagnostics (textDocument/publishDiagnostics)
 pub fn diagnostic_to_lsp_push(
     ctx: &Context,
@@ -1032,7 +1067,7 @@ pub fn diagnostic_to_lsp_push(
     )
 }
 
-// Go: ls/lsconv/converters.go:482 styleCheckDiagnostics
+// Go: ls/lsconv/converters.go:476 styleCheckDiagnostics
 // https://github.com/microsoft/vscode/blob/93e08afe0469712706ca4e268f778cfadf1a43ef/extensions/typescript-language-features/src/typeScriptServiceClientHost.ts#L40C7-L40C29
 static STYLE_CHECK_DIAGNOSTICS: LazyLock<FxHashSet<i32>> = LazyLock::new(|| {
     [
@@ -1049,7 +1084,7 @@ static STYLE_CHECK_DIAGNOSTICS: LazyLock<FxHashSet<i32>> = LazyLock::new(|| {
     .collect()
 });
 
-// Go: ls/lsconv/converters.go:493 diagnosticToLSP
+// Go: ls/lsconv/converters.go:487 diagnosticToLSP
 fn diagnostic_to_lsp(
     ctx: &Context,
     converters: &Converters,
@@ -1157,7 +1192,7 @@ fn diagnostic_to_lsp(
     }
 }
 
-// Go: ls/lsconv/converters.go:577 diagnosticScriptAndRange
+// Go: ls/lsconv/converters.go:571 diagnosticScriptAndRange
 // diagnosticScriptAndRange resolves the text basis and range to report a diagnostic against. For a
 // content-mapped file it maps the diagnostic's virtual range back to the original text so
 // the range lines up with what the editor shows; the original text's line map is already what
@@ -1192,7 +1227,7 @@ fn diagnostic_script_and_range<'a>(
     (ScriptOrOriginal::Original(original), mapped)
 }
 
-// Go: ls/lsconv/converters.go:608 diagnosticSeverity
+// Go: ls/lsconv/converters.go:602 diagnosticSeverity
 // diagnosticSeverity maps a diagnostic category to its LSP severity.
 fn diagnostic_severity(category: crate::diagnostics::Category) -> lsproto::DiagnosticSeverity {
     match category {
@@ -1203,7 +1238,7 @@ fn diagnostic_severity(category: crate::diagnostics::Category) -> lsproto::Diagn
     }
 }
 
-// Go: ls/lsconv/converters.go:621 messageChainToString
+// Go: ls/lsconv/converters.go:615 messageChainToString
 fn message_chain_to_string(diagnostic: &Diagnostic, locale: &locale::Locale) -> String {
     if diagnostic.message_chain().is_empty() {
         return diagnostic.localize(locale);
@@ -1213,7 +1248,7 @@ fn message_chain_to_string(diagnostic: &Diagnostic, locale: &locale::Locale) -> 
     b
 }
 
-// Go: ls/lsconv/converters.go:630 ptrToSliceIfNonEmpty
+// Go: ls/lsconv/converters.go:624 ptrToSliceIfNonEmpty
 fn ptr_to_slice_if_non_empty<T>(s: Vec<T>) -> Option<Vec<T>> {
     if s.is_empty() {
         return None;
@@ -1221,7 +1256,7 @@ fn ptr_to_slice_if_non_empty<T>(s: Vec<T>) -> Option<Vec<T>> {
     Some(s)
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:354 WriteFlattenedASTDiagnosticMessage
+// Go: diagnosticwriter/diagnosticwriter.go:362 WriteFlattenedASTDiagnosticMessage
 // PORT: Go package `diagnosticwriter`. The `String` writer version in
 // program.rs is private, and the execute/tsc version writes to its own
 // `Writer`, so the three Go functions are ported here for a `String`.
@@ -1237,7 +1272,7 @@ fn write_flattened_ast_diagnostic_message(
     write_flattened_diagnostic_message(writer, diagnostic, newline, locale);
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:358 WriteFlattenedDiagnosticMessage
+// Go: diagnosticwriter/diagnosticwriter.go:366 WriteFlattenedDiagnosticMessage
 fn write_flattened_diagnostic_message(
     writer: &mut String,
     diagnostic: &Diagnostic,
@@ -1251,7 +1286,7 @@ fn write_flattened_diagnostic_message(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:366 flattenDiagnosticMessageChain
+// Go: diagnosticwriter/diagnosticwriter.go:374 flattenDiagnosticMessageChain
 fn flatten_diagnostic_message_chain(
     writer: &mut String,
     chain: &Diagnostic,
@@ -1279,7 +1314,54 @@ mod tests {
     use crate::spanmap::{Kind, Segment};
     use std::sync::Arc;
 
-    // Go: ls/lsconv/converters_test.go:121 TestConvertersSourceFileProjectionExpansion
+    // Go: ls/lsconv/converters_test.go:97 TestNonFileDocumentURIRoundTripsThroughNormalizedFileName (ts#64544)
+    // PORT: only the FileNameToDocumentURI half. The DocumentUri.FileName
+    // half is lsproto (server lane); the encoded names below are the ones Go
+    // N' gives for these URIs (converters_test.go:100-116, :46-50).
+    #[test]
+    fn test_file_name_to_document_uri_decodes_dynamic_names() {
+        let cases = [
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~2e2e~/~ts-uri~/~ts-uri-escape~636166c3a95c66696c65~.ts",
+                "custom:folder/../~ts-uri~/caf\u{e9}\\file.ts",
+            ),
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/~ts-uri-escape~7e74732d7572692d6573636170657e6469722e6a73~/~ts-uri-escape~66696c65003f783d31~.ts",
+                "custom:~ts-uri-escape~dir.js/file.ts?x=1",
+            ),
+            (
+                "^/~ts-uri~/untitled/ts-nul-authority/Untitled-1",
+                "untitled:Untitled-1",
+            ),
+            (
+                "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~556e7469746c65642d310023667261676d656e74~",
+                "untitled:Untitled-1#fragment",
+            ),
+            (
+                "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~633a~/Users/jrieken/Code/abc.txt",
+                "untitled:c:/Users/jrieken/Code/abc.txt",
+            ),
+            (
+                "^/~ts-uri~/untitled/wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts",
+                "untitled://wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts",
+            ),
+            // Go: converters_test.go:191 literalDynamicFileName (not encoded: no decoding)
+            (
+                "^/custom/ts-nul-authority/~ts-uri-escape~666f6f~.ts",
+                "custom:~ts-uri-escape~666f6f~.ts",
+            ),
+            // Go: converters_test.go:200 invalidUTF8FileName
+            (
+                "^/~ts-uri~/custom/ts-nul-authority/~ts-uri-escape~ff~",
+                "custom:~ts-uri-escape~ff~",
+            ),
+        ];
+        for (file_name, uri) in cases {
+            assert_eq!(file_name_to_document_uri(file_name).0, uri, "{file_name}");
+        }
+    }
+
+    // Go: ls/lsconv/converters_test.go:241 TestConvertersSourceFileProjectionExpansion
     // PORT: Go links the two `*ast.SourceFile` values by pointer; here the
     // parsed files are `Rc`, as `set_content_mapper_info` takes them.
     #[test]

@@ -130,9 +130,11 @@ impl FormattingContext {
     // Go: format/context.go:102 TokensAreOnSameLine
     pub fn tokens_are_on_same_line(&mut self) -> bool {
         if self.tokens_are_on_same_line == Tristate::Unknown {
+            // ts#64597: from the current token's start to the next token's
+            // start (N used the next token's end).
             self.tokens_are_on_same_line = self.range_is_on_one_line(TextRange::new(
                 self.current_token_span.loc.pos(),
-                self.next_token_span.loc.end(),
+                self.next_token_span.loc.pos(),
             ));
         }
         self.tokens_are_on_same_line == Tristate::True

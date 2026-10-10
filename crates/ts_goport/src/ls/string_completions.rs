@@ -949,7 +949,9 @@ impl LanguageService {
         }
 
         let script_path = tspath::Path(source_file_info(file).path.clone());
-        let script_directory = script_path.get_directory_path();
+        // ts#64159: the directory of the file name, not of the path key
+        // (Go N' string_completions.go:676).
+        let script_directory = tspath::get_directory_path(source_file_file_name(file));
         let options = program.options();
         let extension_options = self.get_extension_options(
             options,
@@ -965,7 +967,7 @@ impl LanguageService {
         {
             self.get_completion_entries_for_relative_modules(
                 &literal_value,
-                script_directory.as_str(),
+                &script_directory,
                 program,
                 &script_path,
                 &extension_options,
@@ -973,7 +975,7 @@ impl LanguageService {
         } else {
             self.get_completion_entries_for_non_relative_modules(
                 &literal_value,
-                script_directory.as_str(),
+                &script_directory,
                 mode,
                 program,
                 checker,
@@ -1012,7 +1014,9 @@ impl LanguageService {
         if let Some(paths) = paths
             && !paths.is_empty()
         {
-            let absolute = compiler_options.get_paths_base_path(&program.get_current_directory());
+            // ts#64159 (R1): the program's base directory (Go N'
+            // string_completions.go:722).
+            let absolute = compiler_options.get_paths_base_path(&program.base_directory());
             self.add_completion_entries_from_paths(
                 &mut result,
                 program,
@@ -1254,7 +1258,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:875 getFragmentDirectory
+// Go: ls/string_completions.go:879 getFragmentDirectory
 fn get_fragment_directory(fragment: &str) -> String {
     if !contains_slash(fragment) {
         return String::new();
@@ -1265,7 +1269,7 @@ fn get_fragment_directory(fragment: &str) -> String {
     tspath::get_directory_path(fragment)
 }
 
-// Go: ls/string_completions.go:885 getPatternFromFirstMatchingCondition
+// Go: ls/string_completions.go:889 getPatternFromFirstMatchingCondition
 fn get_pattern_from_first_matching_condition(
     target: &packagejson::ExportsOrImports,
     conditions: &[String],
@@ -1290,7 +1294,7 @@ fn get_pattern_from_first_matching_condition(
     String::new()
 }
 
-// Go: ls/string_completions.go:904 getAmbientModuleCompletions
+// Go: ls/string_completions.go:908 getAmbientModuleCompletions
 fn get_ambient_module_completions(
     fragment: &str,
     fragment_directory: &str,
@@ -1320,7 +1324,7 @@ fn get_ambient_module_completions(
     non_relative_module_names
 }
 
-// Go: ls/string_completions.go:923 getAmbientModuleName
+// Go: ls/string_completions.go:927 getAmbientModuleName
 // PORT: reading the symbol takes the symbol arena (as for Go `ast`
 // functions that take a symbol).
 fn get_ambient_module_name(symbols: &SymbolArena, symbol: SymbolId) -> String {
@@ -1332,7 +1336,7 @@ fn get_ambient_module_name(symbols: &SymbolArena, symbol: SymbolId) -> String {
 }
 
 impl LanguageService {
-    // Go: ls/string_completions.go:931 getCompletionEntriesFromTypings
+    // Go: ls/string_completions.go:935 getCompletionEntriesFromTypings
     fn get_completion_entries_from_typings(
         &self,
         program: &compiler::NewProgram,
@@ -1344,7 +1348,9 @@ impl LanguageService {
         let options = program.options();
         let mut seen: FxHashMap<String, bool> = FxHashMap::default();
 
-        let (type_roots, _) = options.get_effective_type_roots(&program.get_current_directory());
+        // ts#64159 (R1): the program's base directory (Go N'
+        // string_completions.go:945).
+        let (type_roots, _) = options.get_effective_type_roots(&program.base_directory());
 
         for root in &type_roots {
             self.get_completion_entries_from_typings_directories(
@@ -1378,7 +1384,7 @@ impl LanguageService {
         );
     }
 
-    // Go: ls/string_completions.go:955 getCompletionEntriesFromTypingsDirectories
+    // Go: ls/string_completions.go:959 getCompletionEntriesFromTypingsDirectories
     fn get_completion_entries_from_typings_directories(
         &self,
         directory: &str,
@@ -1434,7 +1440,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:1000 tryRemoveDirectoryPrefix
+// Go: ls/string_completions.go:1004 tryRemoveDirectoryPrefix
 // tsgo#4900: `TrimFilePathPrefix` cuts the prefix by runes, not by its byte
 // length.
 fn try_remove_directory_prefix(
@@ -1451,7 +1457,7 @@ fn try_remove_directory_prefix(
 }
 
 impl LanguageService {
-    // Go: ls/string_completions.go:1011 enumerateNodeModulesVisibleToScript
+    // Go: ls/string_completions.go:1015 enumerateNodeModulesVisibleToScript
     fn enumerate_node_modules_visible_to_script(&self, script_path: &str) -> Vec<String> {
         let mut result = Vec::new();
         let global_cache_location = self.program.get_global_typings_cache_location();
@@ -1482,7 +1488,7 @@ impl LanguageService {
         result
     }
 
-    // Go: ls/string_completions.go:1032 getExtensionOptions
+    // Go: ls/string_completions.go:1036 getExtensionOptions
     // PORT: Go `checker *checker.Checker` can be nil: `Option<&mut Checker>`.
     fn get_extension_options(
         &self,
@@ -1511,7 +1517,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:1050 getSupportedExtensionsForModuleResolution
+// Go: ls/string_completions.go:1054 getSupportedExtensionsForModuleResolution
 fn get_supported_extensions_for_module_resolution(
     options: &CompilerOptions,
     extra_extensions: &[String],
@@ -1546,21 +1552,21 @@ fn get_supported_extensions_for_module_resolution(
     extensions
 }
 
-// Go: ls/string_completions.go:1074 moduleResolutionUsesNodeModules
+// Go: ls/string_completions.go:1078 moduleResolutionUsesNodeModules
 fn module_resolution_uses_node_modules(module_resolution: ModuleResolutionKind) -> bool {
     module_resolution >= ModuleResolutionKind::NODE16
         && module_resolution <= ModuleResolutionKind::NODE_NEXT
         || module_resolution == ModuleResolutionKind::BUNDLER
 }
 
-// Go: ls/string_completions.go:1080 isPathRelativeToScript
+// Go: ls/string_completions.go:1084 isPathRelativeToScript
 // Returns true if the path is explicitly relative (i.e. relative to . or ..)
 fn is_path_relative_to_script(path: &str) -> bool {
     path.starts_with("./") || path.starts_with("../")
 }
 
 impl LanguageService {
-    // Go: ls/string_completions.go:1084 getCompletionEntriesForRelativeModules
+    // Go: ls/string_completions.go:1088 getCompletionEntriesForRelativeModules
     fn get_completion_entries_for_relative_modules(
         &self,
         literal_value: &str,
@@ -1570,11 +1576,8 @@ impl LanguageService {
         extension_options: &ExtensionOptions,
     ) -> Vec<ModuleCompletionNameAndKind> {
         let options = program.options();
-        if let Some(root_dirs) = &options.root_dirs
-            && !root_dirs.is_empty()
-        {
+        if options.root_dirs.as_ref().is_some_and(|r| !r.is_empty()) {
             self.get_completion_entries_for_directory_fragment_with_root_dirs(
-                root_dirs,
                 literal_value,
                 script_directory,
                 program,
@@ -1597,10 +1600,16 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/string_completions.go:1115 getCompletionEntriesForDirectoryFragmentWithRootDirs
+    // Go: ls/string_completions.go:1118 getCompletionEntriesForDirectoryFragmentWithRootDirs
+    // ts#64159: the root directories are the rooted option values
+    // (`CompilerOptions.GetEffectiveRootDirs`, core/compileroptions.go:193),
+    // not names joined to `options.Project` or the current directory.
+    // PORT: Go N' types make every rootDirs entry rooted; the API and
+    // inferred project options are rooted against the base directory
+    // (`RawCompilerOptions.Finalize`). An entry that is not rooted here is
+    // rooted against the program's base directory in the same way.
     fn get_completion_entries_for_directory_fragment_with_root_dirs(
         &self,
-        root_dirs: &[String],
         fragment: &str,
         script_directory: &str,
         program: &compiler::NewProgram,
@@ -1608,17 +1617,19 @@ impl LanguageService {
         extension_options: &ExtensionOptions,
     ) -> Vec<ModuleCompletionNameAndKind> {
         let options = program.options();
-        let base_path = if !options.project.is_empty() {
-            options.project.clone()
-        } else {
-            program.get_current_directory()
-        };
-        let ignore_case = !program.use_case_sensitive_file_names();
+        let base_directory = program.base_directory();
+        let root_dirs: Vec<String> = options
+            .root_dirs
+            .iter()
+            .flatten()
+            .map(|root_directory| {
+                tspath::get_normalized_absolute_path(root_directory, &base_directory)
+            })
+            .collect();
         let base_directories = get_base_directories_from_root_dirs(
-            root_dirs,
-            &base_path,
+            &root_dirs,
             script_directory,
-            ignore_case,
+            program.use_case_sensitive_file_names(),
         );
 
         let mut all_completions = Vec::new();
@@ -1644,66 +1655,54 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:1155 getBaseDirectoriesFromRootDirs
+// Go: ls/string_completions.go:1154 getBaseDirectoriesFromRootDirs
 // getBaseDirectoriesFromRootDirs takes a script path and returns paths for all potential folders
 // that could be merged with its containing folder via the "rootDirs" compiler option.
+// ts#64159: the root directories are rooted and normalized; the script
+// directory's path within a root directory is found by rune count
+// (`CaseSensitivity.RelativePathWithinDirectory`, rooted_path.go:567).
 fn get_base_directories_from_root_dirs(
     root_dirs: &[String],
-    base_path: &str,
     script_directory: &str,
-    ignore_case: bool,
+    use_case_sensitive_file_names: bool,
 ) -> Vec<String> {
-    // Make all paths absolute/normalized if they are not already
-    let normalized_root_dirs: Vec<String> = root_dirs
-        .iter()
-        .map(|root_directory| {
-            let normalized_path = if tspath::is_rooted_disk_path(root_directory) {
-                root_directory.clone()
-            } else {
-                tspath::combine_paths(base_path, &[root_directory])
-            };
-            tspath::ensure_trailing_directory_separator(&tspath::normalize_path(&normalized_path))
-        })
-        .collect();
-
     // Determine the path to the directory containing the script relative to the root directory it is contained within
     let mut relative_directory = String::new();
-    let compare_paths_options = tspath::ComparePathsOptions {
-        use_case_sensitive_file_names: !ignore_case,
-        current_directory: base_path.to_string(),
-    };
-    for root_directory in &normalized_root_dirs {
-        if tspath::contains_path(root_directory, script_directory, &compare_paths_options) {
-            if root_directory.len() > script_directory.len() {
-                relative_directory = String::new();
-            } else {
-                // PORT: Go `scriptDirectory[len(rootDirectory):]` cuts bytes; see the file header.
-                relative_directory =
-                    String::from_utf8_lossy(&script_directory.as_bytes()[root_directory.len()..])
-                        .into_owned();
-            }
+    for root_directory in root_dirs {
+        if let Some(relative) = tspath::relative_path_within_directory(
+            root_directory,
+            script_directory,
+            use_case_sensitive_file_names,
+        ) {
+            relative_directory = relative.into_owned();
             break;
         }
     }
 
     // Now find a path for each potential directory that is to be merged with the one containing the script
     let mut directories = Vec::new();
-    for root_directory in &normalized_root_dirs {
-        directories.push(
-            tspath::remove_trailing_directory_separator(&tspath::combine_paths(
-                root_directory,
-                &[&relative_directory],
-            ))
-            .to_string(),
-        );
+    for root_directory in root_dirs {
+        if relative_directory.is_empty() {
+            directories.push(root_directory.clone());
+        } else {
+            // Go: rootDirectory.ResolveRelativeDirectory(relativeDirectory)
+            directories.push(
+                if tspath::has_trailing_directory_separator(root_directory) {
+                    format!("{root_directory}{relative_directory}")
+                } else {
+                    format!("{root_directory}/{relative_directory}")
+                },
+            );
+        }
     }
-    directories.push(tspath::remove_trailing_directory_separator(script_directory).to_string());
+    directories.push(script_directory.to_string());
 
-    deduplicate_strings(directories)
+    deduplicate_directory_names(directories)
 }
 
-// Go: ls/string_completions.go:1195 deduplicateStrings
-fn deduplicate_strings(slice: Vec<String>) -> Vec<String> {
+// Go: ls/string_completions.go:1178 deduplicateDirectoryNames
+// (ts#64159 renames deduplicateStrings, at 673a5f17d713 :1195)
+fn deduplicate_directory_names(slice: Vec<String>) -> Vec<String> {
     if slice.len() <= 1 {
         return slice;
     }
@@ -1718,7 +1717,7 @@ fn deduplicate_strings(slice: Vec<String>) -> Vec<String> {
     result
 }
 
-// Go: ls/string_completions.go:1210 deduplicateModuleCompletions
+// Go: ls/string_completions.go:1193 deduplicateModuleCompletions
 fn deduplicate_module_completions(
     completions: Vec<ModuleCompletionNameAndKind>,
 ) -> Vec<ModuleCompletionNameAndKind> {
@@ -1747,14 +1746,14 @@ fn deduplicate_module_completions(
     result
 }
 
-// Go: ls/string_completions.go:1231 moduleCompletionKind
+// Go: ls/string_completions.go:1214 moduleCompletionKind
 go_enum!(ModuleCompletionKind, i32 {
     DIRECTORY = 0; // moduleCompletionKindDirectory
     FILE = 1; // moduleCompletionKindFile
     EXTERNAL_MODULE_NAME = 2; // moduleCompletionKindExternalModuleName
 });
 
-// Go: ls/string_completions.go:1239 moduleCompletionNameAndKind
+// Go: ls/string_completions.go:1222 moduleCompletionNameAndKind
 #[derive(Clone, Debug, Default)]
 struct ModuleCompletionNameAndKind {
     name: String,
@@ -1762,7 +1761,7 @@ struct ModuleCompletionNameAndKind {
     extension: String,
 }
 
-// Go: ls/string_completions.go:1245 moduleCompletionNameAndKindSet
+// Go: ls/string_completions.go:1228 moduleCompletionNameAndKindSet
 // PORT: Go map; `IndexMap` in insertion order (see the file header).
 #[derive(Clone, Debug, Default)]
 struct ModuleCompletionNameAndKindSet {
@@ -1770,7 +1769,7 @@ struct ModuleCompletionNameAndKindSet {
 }
 
 impl ModuleCompletionNameAndKindSet {
-    // Go: ls/string_completions.go:1249 add
+    // Go: ls/string_completions.go:1232 add
     fn add(&mut self, entry: ModuleCompletionNameAndKind) {
         let existing = self.names.get(&entry.name);
         if existing.is_none_or(|existing| existing.kind < entry.kind) {
@@ -1779,7 +1778,7 @@ impl ModuleCompletionNameAndKindSet {
     }
 }
 
-// Go: ls/string_completions.go:1256 extensionOptions
+// Go: ls/string_completions.go:1239 extensionOptions
 #[derive(Clone, Debug)]
 struct ExtensionOptions {
     extensions_to_search: Vec<String>,
@@ -1789,14 +1788,14 @@ struct ExtensionOptions {
     resolution_mode: ResolutionMode,
 }
 
-// Go: ls/string_completions.go:1264 referenceKind
+// Go: ls/string_completions.go:1247 referenceKind
 go_enum!(ReferenceKind, i32 {
     FILE_NAME = 0; // referenceKindFileName
     MODULE_SPECIFIER = 1; // referenceKindModuleSpecifier
 });
 
 impl LanguageService {
-    // Go: ls/string_completions.go:1272 getCompletionEntriesForDirectoryFragment
+    // Go: ls/string_completions.go:1255 getCompletionEntriesForDirectoryFragment
     // Given a path ending at a directory, gets the completions for the path.
     // PORT: Go returns `result`, the pointer it was given. Callers read the set
     // they passed in, so this returns nothing.
@@ -1824,7 +1823,9 @@ impl LanguageService {
 
         fragment = tspath::ensure_trailing_directory_separator(&fragment);
 
-        let base_directory = tspath::resolve_path(script_directory, &[&fragment]);
+        // ts#64159: `scriptDirectory.ResolveDirectory(fragment)` (Go N'
+        // string_completions.go:1278): normalized, with no trailing separator.
+        let base_directory = tspath::get_normalized_absolute_path(&fragment, script_directory);
         if !module_specifier_is_relative {
             // Check for a version redirect.
             let package_json_directory =
@@ -1843,15 +1844,24 @@ impl LanguageService {
                     if let Some(paths) = paths
                         && !paths.is_empty()
                     {
-                        // PORT: Go `baseDirectory[len(...):]` cuts bytes; see the file header.
-                        let path_in_package = String::from_utf8_lossy(
-                            &base_directory.as_bytes()
-                                [tspath::ensure_trailing_directory_separator(
-                                    &package_json_directory,
-                                )
-                                .len()..],
-                        )
-                        .into_owned();
+                        // ts#64159: `baseDirectory.RelativeTo(packageJsonDirectory)`
+                        // (Go N' string_completions.go:1290), case-sensitive.
+                        let Some(path_in_package) = tspath::relative_path_within_directory(
+                            &package_json_directory,
+                            &base_directory,
+                            true, /*useCaseSensitiveFileNames*/
+                        ) else {
+                            crate::core::go_panic(
+                                "package json directory must be an ancestor of the completion directory"
+                                    .to_string(),
+                            );
+                        };
+                        let mut path_in_package = path_in_package.into_owned();
+                        if !path_in_package.is_empty() {
+                            path_in_package =
+                                tspath::ensure_trailing_directory_separator(&path_in_package);
+                        }
+                        // Go: addCompletionEntriesFromRelativePathPatterns (:1359)
                         if self.add_completion_entries_from_paths(
                             result,
                             program,
@@ -1922,7 +1932,7 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/string_completions.go:1373 addCompletionEntriesFromPaths
+    // Go: ls/string_completions.go:1370 addCompletionEntriesFromPaths
     // Returns true if `fragment` was a match for any `paths`
     // (which should indicate whether any other path completions should be offered).
     fn add_completion_entries_from_paths(
@@ -1963,7 +1973,7 @@ impl LanguageService {
         )
     }
 
-    // Go: ls/string_completions.go:1413 addCompletionEntriesFromPathsOrExportsOrImports
+    // Go: ls/string_completions.go:1410 addCompletionEntriesFromPathsOrExportsOrImports
     // Returns true if `fragment` was a match for any `paths`
     // (which should indicate whether any other path completions should be offered).
     // PORT: Go `keys iter.Seq[string]` is collected into a `Vec` by the caller;
@@ -2058,7 +2068,7 @@ impl LanguageService {
         matched_path.is_some()
     }
 
-    // Go: ls/string_completions.go:1500 getCompletionsForPathMapping
+    // Go: ls/string_completions.go:1497 getCompletionsForPathMapping
     fn get_completions_for_path_mapping(
         &self,
         path: &str,
@@ -2195,7 +2205,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:1598 getFileExtension
+// Go: ls/string_completions.go:1595 getFileExtension
 fn get_file_extension(file_name: &str) -> String {
     let mut extension = tspath::try_get_extension_from_path(file_name).to_string();
     if extension.is_empty() {
@@ -2209,7 +2219,7 @@ fn get_file_extension(file_name: &str) -> String {
 }
 
 impl LanguageService {
-    // Go: ls/string_completions.go:1611 getModulesForPathsPattern
+    // Go: ls/string_completions.go:1608 getModulesForPathsPattern
     // The input fragment is relative to the path pattern's prefix:
     // e.g. if path = "bar/_*/baz", and fragment = "bar/_dir", then fragment is "dir".
     // The names are relative to the path pattern's prefix and fragment directory :
@@ -2272,10 +2282,13 @@ impl LanguageService {
             normalized_prefix_directory.clone()
         };
         // Need to normalize after combining: If we combinePaths("a", "../b"), we want "b" and not "a/../b".
-        let base_directory = tspath::normalize_path(&tspath::combine_paths(
-            package_directory,
-            &[&expanded_prefix_directory],
-        ));
+        // ts#64159: `packageDirectory.ResolveDirectory(expandedPrefixDirectory)`
+        // (Go N' string_completions.go:1667), with no trailing separator.
+        let base_directory = if expanded_prefix_directory.is_empty() {
+            package_directory.to_string()
+        } else {
+            tspath::get_normalized_absolute_path(&expanded_prefix_directory, package_directory)
+        };
 
         let mut possible_input_base_directory_for_out_dir = String::new();
         let mut possible_input_base_directory_for_declaration_dir = String::new();
@@ -2456,12 +2469,12 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:1822 containsSlash
+// Go: ls/string_completions.go:1825 containsSlash
 fn contains_slash(fragment: &str) -> bool {
     fragment.contains(tspath::DIRECTORY_SEPARATOR as char)
 }
 
-// Go: ls/string_completions.go:1826 withoutStartAndEnd
+// Go: ls/string_completions.go:1829 withoutStartAndEnd
 fn without_start_and_end(s: &str, start: &str, end: &str) -> Option<String> {
     if s.starts_with(start) && s.ends_with(end) && s.len() >= start.len() + end.len() {
         return Some(s[start.len()..s.len() - end.len()].to_string());
@@ -2469,13 +2482,16 @@ fn without_start_and_end(s: &str, start: &str, end: &str) -> Option<String> {
     None
 }
 
-// Go: ls/string_completions.go:1834 removeLeadingDirectorySeparator
+// Go: ls/string_completions.go:1837 removeLeadingDirectorySeparator
 fn remove_leading_directory_separator(path: &str) -> &str {
     path.strip_prefix(tspath::DIRECTORY_SEPARATOR as char)
         .unwrap_or(path)
 }
 
-// Go: ls/string_completions.go:1838 getPossibleOriginalInputPathWithoutChangingExt
+// Go: ls/string_completions.go:1841 getPossibleOriginalInputPathWithoutChangingExt
+// ts#64159: `filePath` itself when the output directory is on another root
+// (`CaseSensitivity.RelativePathFromPath`, R4); otherwise the relative path
+// resolved against the common source directory.
 fn get_possible_original_input_path_without_changing_ext(
     file_path: &str,
     ignore_case: bool,
@@ -2483,22 +2499,22 @@ fn get_possible_original_input_path_without_changing_ext(
     get_common_source_directory: &dyn Fn() -> String,
 ) -> String {
     if !output_dir.is_empty() {
-        return tspath::resolve_path(
-            &get_common_source_directory(),
-            &[&tspath::get_relative_path_from_directory(
-                output_dir,
-                file_path,
-                &tspath::ComparePathsOptions {
-                    use_case_sensitive_file_names: !ignore_case,
-                    ..Default::default()
-                },
-            )],
-        );
+        let Some(relative_path) =
+            tspath::relative_path_from_directory(output_dir, file_path, !ignore_case)
+        else {
+            return file_path.to_string();
+        };
+        let common_source_directory = get_common_source_directory();
+        // Go: RootedDirectoryPath.ResolveRelativeDirectory (rooted_path.go:780)
+        if relative_path.is_empty() {
+            return common_source_directory;
+        }
+        return tspath::get_normalized_absolute_path(&relative_path, &common_source_directory);
     }
     file_path.to_string()
 }
 
-// Go: ls/string_completions.go:1855 getFilenameWithExtensionOption
+// Go: ls/string_completions.go:1857 getFilenameWithExtensionOption
 fn get_filename_with_extension_option(
     name: &str,
     program: &compiler::NewProgram,
@@ -2596,7 +2612,7 @@ fn get_filename_with_extension_option(
     )
 }
 
-// Go: ls/string_completions.go:1911 walkUpParentheses
+// Go: ls/string_completions.go:1913 walkUpParentheses
 fn walk_up_parentheses(node: Node) -> Node {
     match node.kind() {
         SyntaxKind::ParenthesizedType => walk_up_parenthesized_types(node),
@@ -2605,7 +2621,7 @@ fn walk_up_parentheses(node: Node) -> Node {
     }
 }
 
-// Go: ls/string_completions.go:1922 getStringLiteralTypes
+// Go: ls/string_completions.go:1924 getStringLiteralTypes
 // PORT: Go `uniques *collections.Set[string]` can be nil: `Option<&mut ..>`;
 // nil makes a fresh set as in Go.
 fn get_string_literal_types(
@@ -2644,7 +2660,7 @@ fn get_string_literal_types(
     Vec::new()
 }
 
-// Go: ls/string_completions.go:1943 getAlreadyUsedTypesInStringLiteralUnion
+// Go: ls/string_completions.go:1945 getAlreadyUsedTypesInStringLiteralUnion
 fn get_already_used_types_in_string_literal_union(union: Node, current: Node) -> Vec<String> {
     let types_list = union.types();
     if types_list.is_nil() {
@@ -2662,13 +2678,13 @@ fn get_already_used_types_in_string_literal_union(union: Node, current: Node) ->
     values
 }
 
-// Go: ls/string_completions.go:1958 hasIndexSignature
+// Go: ls/string_completions.go:1960 hasIndexSignature
 fn has_index_signature(t: TypeId, type_checker: &mut Checker) -> bool {
     type_checker.get_string_index_type(t).is_some()
         || type_checker.get_number_index_type(t).is_some()
 }
 
-// Go: ls/string_completions.go:1966 isRequireCallArgument
+// Go: ls/string_completions.go:1968 isRequireCallArgument
 // Matches
 //
 //	require(""
@@ -2681,7 +2697,7 @@ fn is_require_call_argument(node: Node) -> bool {
         && node.parent().expression().text() == "require"
 }
 
-// Go: ls/string_completions.go:1971 kindModifiersFromExtension
+// Go: ls/string_completions.go:1973 kindModifiersFromExtension
 fn kind_modifiers_from_extension(extension: &str) -> lsutil::ScriptElementKindModifier {
     match extension {
         tspath::EXTENSION_DTS => lsutil::ScriptElementKindModifier::DTS,
@@ -2704,7 +2720,7 @@ fn kind_modifiers_from_extension(extension: &str) -> lsutil::ScriptElementKindMo
     }
 }
 
-// Go: ls/string_completions.go:2004 getStringLiteralCompletionsFromSignature
+// Go: ls/string_completions.go:2006 getStringLiteralCompletionsFromSignature
 fn get_string_literal_completions_from_signature(
     call: Node,
     arg: Node,
@@ -2760,7 +2776,7 @@ fn get_string_literal_completions_from_signature(
 }
 
 impl LanguageService {
-    // Go: ls/string_completions.go:2046 getStringLiteralCompletionDetails
+    // Go: ls/string_completions.go:2048 getStringLiteralCompletionDetails
     // PORT: Go mutates `*item` and returns it; the item moves in and out.
     pub fn get_string_literal_completion_details(
         &self,
@@ -2793,7 +2809,7 @@ impl LanguageService {
         )
     }
 
-    // Go: ls/string_completions.go:2072 stringLiteralCompletionDetails
+    // Go: ls/string_completions.go:2074 stringLiteralCompletionDetails
     fn string_literal_completion_details(
         &self,
         item: lsproto::CompletionItem,
@@ -2835,7 +2851,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/string_completions.go:2105 isInReferenceComment
+// Go: ls/string_completions.go:2107 isInReferenceComment
 fn is_in_reference_comment(file: Node, position: i32) -> bool {
     let comment_range = is_in_comment(
         file,
@@ -2850,12 +2866,12 @@ fn is_in_reference_comment(file: Node, position: i32) -> bool {
     has_triple_slash_prefix(comment_text)
 }
 
-// Go: ls/string_completions.go:2114 hasTripleSlashPrefix
+// Go: ls/string_completions.go:2116 hasTripleSlashPrefix
 fn has_triple_slash_prefix(comment_text: &str) -> bool {
     comment_text.starts_with("///") && comment_text[3..].trim().starts_with('<')
 }
 
-// Go: ls/string_completions.go:2134 parseTripleSlashDirectiveFragment
+// Go: ls/string_completions.go:2136 parseTripleSlashDirectiveFragment
 // Matches a triple slash reference directive with an incomplete string literal for its path.
 // Used to determine if the caret is currently within the string literal and capture the literal
 // fragment for completions.
@@ -2929,7 +2945,7 @@ fn parse_triple_slash_directive_fragment(text: &str) -> (&str, &'static str, &st
 }
 
 impl LanguageService {
-    // Go: ls/string_completions.go:2188 getTripleSlashReferenceCompletions
+    // Go: ls/string_completions.go:2190 getTripleSlashReferenceCompletions
     fn get_triple_slash_reference_completions(
         &self,
         file: Node,
@@ -2980,7 +2996,9 @@ impl LanguageService {
             return None;
         }
 
-        let script_path = tspath::get_directory_path(&source_file_info(file).path);
+        // ts#64159: the directory of the file name, not of the path key (Go
+        // N' string_completions.go:2222).
+        let script_path = tspath::get_directory_path(source_file_file_name(file));
 
         // PORT: Go `var names` is nil unless `kind` matches; `kind` is always
         // "path" or "types" here.
@@ -3041,7 +3059,7 @@ mod tests {
     use super::*;
     use std::fmt::Write;
 
-    // Go: ls/string_completions_test.go:17 TestTryRemoveDirectoryPrefixCaseFoldingShrinksPrefix
+    // Go: ls/string_completions_test.go:18 TestTryRemoveDirectoryPrefixCaseFoldingShrinksPrefix
     // Each Kelvin sign '\u212A' below case-folds to the single-byte 'k', so the raw
     // prefix is longer in bytes (15) than path (12), even though path's canonical
     // form is case-insensitively prefixed by prefix's canonical form.

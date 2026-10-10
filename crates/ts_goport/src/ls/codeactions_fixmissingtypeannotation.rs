@@ -155,6 +155,11 @@ fn get_all_isolated_declarations_code_actions(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
 ) -> Result<Option<CombinedCodeActions>, GoError> {
+    // ts#64543: the diagnostics are read before the checker is acquired,
+    // because `getAllDiagnostics` acquires a checker itself and acquisitions
+    // are not reentrant.
+    let all_diags = get_all_diagnostics(ctx, fix_context.program, fix_context.source_file);
+
     let (checker, _done) =
         ls_program::get_type_checker_for_file(fix_context.program, ctx, fix_context.source_file);
     // Go: defer done() (`_done` releases at the end of the function)
@@ -165,11 +170,6 @@ fn get_all_isolated_declarations_code_actions(
         fix_context.ls.format_options(),
         Rc::clone(&fix_context.ls.converters),
     );
-
-    // PORT: Go builds the fixer before `getAllDiagnostics`. The fixer holds
-    // the checker borrow and `getAllDiagnostics` leases the same checker, so
-    // the diagnostics are read first. Building the fixer has no side effect.
-    let all_diags = get_all_diagnostics(ctx, fix_context.program, fix_context.source_file);
 
     let mut checker_ref = checker.borrow_mut();
     let mut fixer = IsolatedDeclarationsFixer {
@@ -216,7 +216,7 @@ fn get_all_isolated_declarations_code_actions(
     }))
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:168 tryCodeAction
+// Go: ls/codeactions_fixmissingtypeannotation.go:169 tryCodeAction
 fn try_code_action(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
@@ -287,7 +287,7 @@ fn try_code_action(
     })
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:216 isolatedDeclarationsFixer
+// Go: ls/codeactions_fixmissingtypeannotation.go:217 isolatedDeclarationsFixer
 // isolatedDeclarationsFixer encapsulates the state for fixing isolated declarations errors.
 struct IsolatedDeclarationsFixer<'a> {
     source_file: Node,
@@ -303,7 +303,7 @@ struct IsolatedDeclarationsFixer<'a> {
 }
 
 impl<'a> IsolatedDeclarationsFixer<'a> {
-    // Go: ls/codeactions_fixmissingtypeannotation.go:229 addTypeAnnotation
+    // Go: ls/codeactions_fixmissingtypeannotation.go:230 addTypeAnnotation
     fn add_type_annotation(&mut self, span: TextRange) -> String {
         let node_with_diag = astnav::get_token_at_position(self.source_file, span.pos());
 
@@ -322,7 +322,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         String::new()
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:247 createNamespaceForExpandoProperties
+    // Go: ls/codeactions_fixmissingtypeannotation.go:248 createNamespaceForExpandoProperties
     fn create_namespace_for_expando_properties(&mut self, expando_func: Node) -> String {
         let func_decl = expando_func;
         if func_decl.name().is_nil() {
@@ -406,7 +406,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
     }
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:309 needsParenthesizedExpressionForAssertion
+// Go: ls/codeactions_fixmissingtypeannotation.go:310 needsParenthesizedExpressionForAssertion
 // needsParenthesizedExpressionForAssertion checks if an expression needs parentheses for an assertion.
 fn needs_parenthesized_expression_for_assertion(node: Node) -> bool {
     !is_entity_name_expression(node)
@@ -415,7 +415,7 @@ fn needs_parenthesized_expression_for_assertion(node: Node) -> bool {
         && !is_array_literal_expression(node)
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:314 createAsExpression
+// Go: ls/codeactions_fixmissingtypeannotation.go:315 createAsExpression
 // createAsExpression creates an `expr as Type` expression, parenthesizing if needed.
 fn create_as_expression(factory: &NodeFactory, node: Node, type_node: Node) -> Node {
     let mut node = node;
@@ -426,7 +426,7 @@ fn create_as_expression(factory: &NodeFactory, node: Node, type_node: Node) -> N
 }
 
 impl<'a> IsolatedDeclarationsFixer<'a> {
-    // Go: ls/codeactions_fixmissingtypeannotation.go:321 addInlineAssertion
+    // Go: ls/codeactions_fixmissingtypeannotation.go:322 addInlineAssertion
     fn add_inline_assertion(&mut self, span: TextRange) -> String {
         let node_with_diag = astnav::get_token_at_position(self.source_file, span.pos());
 
@@ -541,7 +541,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:405 extractAsVariable
+    // Go: ls/codeactions_fixmissingtypeannotation.go:406 extractAsVariable
     fn extract_as_variable(&mut self, span: TextRange) -> String {
         let node_with_diag = astnav::get_token_at_position(self.source_file, span.pos());
         let target_node = find_best_fitting_node(node_with_diag, span);
@@ -659,7 +659,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
     }
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:480 isExpandoPropertyDeclarationForFix
+// Go: ls/codeactions_fixmissingtypeannotation.go:481 isExpandoPropertyDeclarationForFix
 // findExpandoFunction finds the function declaration that has expando properties assigned to it.
 // isExpandoPropertyDeclarationForFix matches TS's isExpandoPropertyDeclaration which includes
 // PropertyAccessExpression, ElementAccessExpression, and BinaryExpression. The shared
@@ -671,7 +671,7 @@ fn is_expando_property_declaration_for_fix(node: Node) -> bool {
             || is_binary_expression(node))
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:484 findExpandoFunction
+// Go: ls/codeactions_fixmissingtypeannotation.go:485 findExpandoFunction
 fn find_expando_function(ch: &mut Checker, node: Node) -> Node {
     let expando_declaration = find_ancestor_or_quit(node, |n: Node| -> FindAncestorResult {
         if is_statement(n) {
@@ -745,7 +745,7 @@ fn find_expando_function(ch: &mut Checker, node: Node) -> Node {
 }
 
 impl<'a> IsolatedDeclarationsFixer<'a> {
-    // Go: ls/codeactions_fixmissingtypeannotation.go:550 fixIsolatedDeclarationError
+    // Go: ls/codeactions_fixmissingtypeannotation.go:551 fixIsolatedDeclarationError
     fn fix_isolated_declaration_error(&mut self, node: Node) -> String {
         // Avoid creating duplicate fixes for the same node
         if self.fixed_nodes.contains(&node) {
@@ -771,7 +771,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         }
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:574 addTypeToSignatureDeclaration
+    // Go: ls/codeactions_fixmissingtypeannotation.go:575 addTypeToSignatureDeclaration
     fn add_type_to_signature_declaration(&mut self, func_node: Node) -> String {
         if func_node.type_().is_some() {
             return String::new();
@@ -790,7 +790,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:586 transformExportAssignment
+    // Go: ls/codeactions_fixmissingtypeannotation.go:587 transformExportAssignment
     fn transform_export_assignment(&mut self, default_export: Node) -> String {
         let export_assignment = default_export;
         if export_assignment.is_export_equals() {
@@ -845,7 +845,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:615 transformExtendsClauseWithExpression
+    // Go: ls/codeactions_fixmissingtypeannotation.go:616 transformExtendsClauseWithExpression
     fn transform_extends_clause_with_expression(&mut self, class_decl: Node) -> String {
         let cd = class_decl;
         let mut extends_clause = Node::NIL;
@@ -925,7 +925,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:664 transformDestructuringPatterns
+    // Go: ls/codeactions_fixmissingtypeannotation.go:665 transformDestructuringPatterns
     fn transform_destructuring_patterns(&mut self, binding_pattern: Node) -> String {
         let enclosing_variable_declaration = binding_pattern.parent();
         if !is_variable_declaration(enclosing_variable_declaration) {
@@ -1028,7 +1028,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:730 extractBindingElements
+    // Go: ls/codeactions_fixmissingtypeannotation.go:731 extractBindingElements
     fn extract_binding_elements(
         &mut self,
         binding_pattern: Node,
@@ -1146,7 +1146,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         }
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:800 emitBindingElementVariable
+    // Go: ls/codeactions_fixmissingtypeannotation.go:801 emitBindingElementVariable
     // emitBindingElementVariable creates a variable declaration for a single binding element,
     // handling default initializers by creating a ternary `temp === undefined ? default : temp`.
     // PORT: Go also takes `factory`; this reads the tracker's factory (see
@@ -1225,7 +1225,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         new_nodes.push(var_stmt);
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:847 getExportModifier
+    // Go: ls/codeactions_fixmissingtypeannotation.go:848 getExportModifier
     fn get_export_modifier(&self, enclosing_var_stmt: Node) -> ModifierList {
         if has_syntactic_modifier(enclosing_var_stmt, ModifierFlags::EXPORT) {
             let factory = self.change_tracker.node_factory();
@@ -1235,7 +1235,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         ModifierList::NIL
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:855 inferType
+    // Go: ls/codeactions_fixmissingtypeannotation.go:856 inferType
     fn infer_type(&mut self, node: Node, variable_type: TypeId) -> Node {
         self.mutated_target = false;
 
@@ -1327,7 +1327,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         self.type_to_minimized_reference_type(t, enclosing_decl, flags)
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:925 getExtraFlags
+    // Go: ls/codeactions_fixmissingtypeannotation.go:926 getExtraFlags
     fn get_extra_flags(&self, node: Node, t: TypeId) -> NodeBuilderFlags {
         if (is_variable_declaration(node)
             || (is_property_declaration(node)
@@ -1343,14 +1343,14 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         NodeBuilderFlags::NONE
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:935 createTypeOfFromEntityNameExpression
+    // Go: ls/codeactions_fixmissingtypeannotation.go:936 createTypeOfFromEntityNameExpression
     // createTypeOfFromEntityNameExpression creates a `typeof X` type query node.
     fn create_type_of_from_entity_name_expression(&self, node: Node) -> Node {
         let factory = self.change_tracker.node_factory();
         factory.new_type_query_node(factory.deep_clone_node(node), NodeList::NIL)
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:943 typeFromArraySpreadElements
+    // Go: ls/codeactions_fixmissingtypeannotation.go:944 typeFromArraySpreadElements
     // typeFromArraySpreadElements decomposes an array literal with spread elements into
     // separate variables, returning a tuple type of typeof references.
     // PORT: the Go closures capture the tracker's factory. They capture a
@@ -1387,7 +1387,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:978 typeFromObjectSpreadAssignment
+    // Go: ls/codeactions_fixmissingtypeannotation.go:979 typeFromObjectSpreadAssignment
     // typeFromObjectSpreadAssignment decomposes an object literal with spread assignments into
     // separate variables, returning an intersection type of typeof references.
     // PORT: see typeFromArraySpreadElements about the factory.
@@ -1420,7 +1420,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         )
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1009 typeFromSpreads
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1010 typeFromSpreads
     // typeFromSpreads is the generic spread decomposition function, ported from TS's typeFromSpreads.
     // It splits a literal with spread elements into separate const variables and returns a composed type.
     // PORT: Go reads `factory` here only to pass it on; the helpers read the
@@ -1498,7 +1498,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         final_type(intersection_types.as_slice())
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1054 makeSpreadVariable
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1055 makeSpreadVariable
     // makeSpreadVariable creates a const variable for a spread expression and adds it to the decomposition.
     // PORT: Go also takes `factory`; this reads the tracker's factory.
     fn make_spread_variable(
@@ -1553,7 +1553,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         new_spreads.push(create_spread(temp_name));
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1090 finalizesVariablePart
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1091 finalizesVariablePart
     // finalizesVariablePart finalizes accumulated non-spread properties into a variable.
     // PORT: Go also takes `factory`; `makeSpreadVariable` reads the tracker's factory.
     fn finalizes_variable_part(
@@ -1583,7 +1583,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
     }
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1108 isConstAssertion
+// Go: ls/codeactions_fixmissingtypeannotation.go:1109 isConstAssertion
 // isConstAssertion checks if a node is an `as const` or `<const>` assertion.
 fn is_const_assertion(node: Node) -> bool {
     if is_assertion_expression(node) {
@@ -1594,7 +1594,7 @@ fn is_const_assertion(node: Node) -> bool {
 }
 
 impl<'a> IsolatedDeclarationsFixer<'a> {
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1119 relativeType
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1120 relativeType
     // relativeType creates a typeof expression for a node, used in TypePrintMode.Relative.
     // Instead of spelling out the full type, returns `typeof X` for identifiers.
     // For object/array literals with spreads, decomposes into separate variables.
@@ -1648,7 +1648,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
         Node::NIL
     }
 
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1172 typeToMinimizedReferenceType
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1173 typeToMinimizedReferenceType
     // typeToMinimizedReferenceType converts a type to a type node, then trims trailing
     // type arguments that match their defaults. Ported from TS's
     // services/codefixes/helpers.ts typeToMinimizedReferenceType.
@@ -1718,7 +1718,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
     }
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1209 endOfRequiredTypeParameters
+// Go: ls/codeactions_fixmissingtypeannotation.go:1210 endOfRequiredTypeParameters
 // endOfRequiredTypeParameters finds the number of type arguments that are
 // actually required (i.e., differ from their defaults). Ported from TS's
 // services/codefixes/helpers.ts endOfRequiredTypeParameters.
@@ -1777,7 +1777,7 @@ fn end_of_required_type_parameters(ch: &mut Checker, t: TypeId) -> i32 {
     type_args.len() as i32
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1246 typeParamHasDefault
+// Go: ls/codeactions_fixmissingtypeannotation.go:1247 typeParamHasDefault
 // typeParamHasDefault checks if a type parameter has a default type declaration.
 // PORT: `ch` is added to read the type and symbol arenas.
 fn type_param_has_default(ch: &Checker, tp: TypeId) -> bool {
@@ -1794,7 +1794,7 @@ fn type_param_has_default(ch: &Checker, tp: TypeId) -> bool {
 }
 
 impl<'a> IsolatedDeclarationsFixer<'a> {
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1259 addTypeToVariableLike
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1260 addTypeToVariableLike
     fn add_type_to_variable_like(&mut self, decl: Node) -> String {
         let type_node = self.infer_type(decl, TypeId::NIL);
         if type_node.is_nil() {
@@ -1826,7 +1826,7 @@ impl<'a> IsolatedDeclarationsFixer<'a> {
     }
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1282 typeToStringForDiag
+// Go: ls/codeactions_fixmissingtypeannotation.go:1283 typeToStringForDiag
 // typeToStringForDiag converts a type node to a string for use in diagnostic descriptions.
 // It reuses the change tracker's EmitContext so that generated identifier names are resolved
 // consistently with the actual code edits, and passes the source file so that the printer's
@@ -1858,7 +1858,7 @@ fn type_to_string_for_diag(type_node: Node, source_file: Node, ct: &change::Trac
     result
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1305 findAncestorWithMissingType
+// Go: ls/codeactions_fixmissingtypeannotation.go:1306 findAncestorWithMissingType
 // findAncestorWithMissingType walks up the ancestor chain to find a node that
 // can have a type annotation and is missing one.
 fn find_ancestor_with_missing_type(node: Node) -> Node {
@@ -1877,7 +1877,7 @@ fn find_ancestor_with_missing_type(node: Node) -> Node {
     })
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1318 findBestFittingNode
+// Go: ls/codeactions_fixmissingtypeannotation.go:1319 findBestFittingNode
 // findBestFittingNode walks up from the token to find the node that best fits the diagnostic span.
 fn find_best_fitting_node(node: Node, span: TextRange) -> Node {
     if node.is_nil() {
@@ -1905,7 +1905,7 @@ fn find_best_fitting_node(node: Node, span: TextRange) -> Node {
     node
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1340 isNamedDeclarationKind
+// Go: ls/codeactions_fixmissingtypeannotation.go:1341 isNamedDeclarationKind
 // isNamedDeclarationKind matches TS's isDeclarationKind, which is narrower than Go's IsDeclaration.
 // Go's IsDeclaration returns true for any node with DeclarationData (including CallExpression),
 // while TS's isDeclaration only returns true for specific named declaration kinds.
@@ -1951,7 +1951,7 @@ fn is_named_declaration_kind(node: Node) -> bool {
     )
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1360 isValueSignatureDeclaration
+// Go: ls/codeactions_fixmissingtypeannotation.go:1361 isValueSignatureDeclaration
 // isValueSignatureDeclaration checks if a node is a function-like declaration that produces a value.
 fn is_value_signature_declaration(node: Node) -> bool {
     is_function_expression(node)
@@ -1962,7 +1962,7 @@ fn is_value_signature_declaration(node: Node) -> bool {
         || is_constructor_declaration(node)
 }
 
-// Go: ls/codeactions_fixmissingtypeannotation.go:1368 getIdentifierNameForNode
+// Go: ls/codeactions_fixmissingtypeannotation.go:1369 getIdentifierNameForNode
 // getIdentifierNameForNode derives a meaningful variable name from a node expression.
 // For property access expressions like `obj.foo`, returns "foo". Otherwise returns "newLocal".
 // Ported from TS's getIdentifierForNode in services/refactors/helpers.ts.
@@ -1980,7 +1980,7 @@ fn get_identifier_name_for_node(node: Node) -> String {
 }
 
 impl<'a> IsolatedDeclarationsFixer<'a> {
-    // Go: ls/codeactions_fixmissingtypeannotation.go:1380 addSymbolToExistingImport
+    // Go: ls/codeactions_fixmissingtypeannotation.go:1381 addSymbolToExistingImport
     // addSymbolToExistingImport finds the existing import declaration for the symbol's module
     // and adds the symbol name to the named imports.
     fn add_symbol_to_existing_import(&mut self, sym: SymbolId) {

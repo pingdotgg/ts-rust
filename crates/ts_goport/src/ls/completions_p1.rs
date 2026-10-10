@@ -483,7 +483,7 @@ impl SymbolOriginInfoData {
 }
 
 impl SymbolOriginInfo {
-    // Go: ls/completions.go:242 (*symbolOriginInfo).symbolName
+    // Go: ls/completions.go:315 (*symbolOriginInfo).symbolName
     pub fn symbol_name(&self) -> String {
         match &self.data {
             SymbolOriginInfoData::ComputedPropertyName(data) => data.symbol_name.clone(),
@@ -494,7 +494,7 @@ impl SymbolOriginInfo {
         }
     }
 
-    // Go: ls/completions.go:257 (*symbolOriginInfo).asObjectLiteralMethod
+    // Go: ls/completions.go:330 (*symbolOriginInfo).asObjectLiteralMethod
     // PORT: a failed Go type assertion panics; the text follows the Go runtime.
     pub fn as_object_literal_method(&self) -> &SymbolOriginInfoObjectLiteralMethod {
         match &self.data {
@@ -507,7 +507,7 @@ impl SymbolOriginInfo {
     }
 }
 
-// Go: ls/completions.go:325 symbolOriginInfoObjectLiteralMethod
+// Go: ls/completions.go:324 symbolOriginInfoObjectLiteralMethod
 #[derive(Clone, Debug, Default)]
 pub struct SymbolOriginInfoObjectLiteralMethod {
     pub insert_text: String,
@@ -515,19 +515,19 @@ pub struct SymbolOriginInfoObjectLiteralMethod {
     pub is_snippet: bool,
 }
 
-// Go: ls/completions.go:335 symbolOriginInfoTypeOnlyAlias
+// Go: ls/completions.go:334 symbolOriginInfoTypeOnlyAlias
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SymbolOriginInfoTypeOnlyAlias {
     pub declaration: Node,
 }
 
-// Go: ls/completions.go:339 symbolOriginInfoComputedPropertyName
+// Go: ls/completions.go:338 symbolOriginInfoComputedPropertyName
 #[derive(Clone, Debug, Default)]
 pub struct SymbolOriginInfoComputedPropertyName {
     pub symbol_name: String,
 }
 
-// Go: ls/completions.go:352 completionSource
+// Go: ls/completions.go:351 completionSource
 // Special values for `CompletionInfo['source']` used to disambiguate
 // completion items with the same `name`. (Each completion item must
 // have a unique name/source combination, because those two fields
@@ -554,16 +554,16 @@ pub const COMPLETION_SOURCE_SWITCH_CASES: CompletionSource = "SwitchCases/";
 pub const COMPLETION_SOURCE_OBJECT_LITERAL_MEMBER_WITH_COMMA: CompletionSource =
     "ObjectLiteralMemberWithComma/";
 
-// Go: ls/completions.go:371 uniqueNamesMap
+// Go: ls/completions.go:370 uniqueNamesMap
 // Value is set to false for global variables or completions from external module exports,
 // true otherwise.
 pub type UniqueNamesMap = FxHashMap<String, bool>;
 
-// Go: ls/completions.go:374 literalValue
+// Go: ls/completions.go:373 literalValue
 // PORT: Go `literalValue any` (string | jsnum.Number | PseudoBigInt) is
 // `LiteralValue` from checker/types.rs; Go nil is `None`.
 
-// Go: ls/completions.go:376 globalsSearch
+// Go: ls/completions.go:375 globalsSearch
 go_enum!(GlobalsSearch, i32 {
     CONTINUE = 0;
     SUCCESS = 1;
@@ -571,7 +571,7 @@ go_enum!(GlobalsSearch, i32 {
 });
 
 impl CompletionList {
-    // Go: ls/completions.go:310 (*CompletionList).toLSP
+    // Go: ls/completions.go:383 (*CompletionList).toLSP
     // PORT: a nil receiver is `None` (the lsproto `resolve` rule). Go shares
     // the item pointers; the items are cloned.
     pub fn to_lsp(l: Option<&CompletionList>) -> Option<lsproto::CompletionList> {
@@ -594,7 +594,7 @@ impl CompletionList {
 }
 
 impl LanguageService {
-    // Go: ls/completions.go:402 getCompletionsAtPosition
+    // Go: ls/completions.go:401 getCompletionsAtPosition
     pub fn get_completions_at_position(
         &self,
         ctx: &Context,
@@ -749,7 +749,7 @@ impl LanguageService {
         }
     }
 
-    // Go: ls/completions.go:528 getCompletionData
+    // Go: ls/completions.go:527 getCompletionData
     pub fn get_completion_data(
         &self,
         ctx: &Context,
@@ -1329,7 +1329,7 @@ struct GetCompletionDataState<'a> {
 }
 
 impl GetCompletionDataState<'_> {
-    // Go: ls/completions.go:796 getCompletionData.addSymbolOriginInfo
+    // Go: ls/completions.go:795 getCompletionData.addSymbolOriginInfo
     fn add_symbol_origin_info(
         &mut self,
         symbol: SymbolId,
@@ -1359,7 +1359,7 @@ impl GetCompletionDataState<'_> {
         }
     }
 
-    // Go: ls/completions.go:805 getCompletionData.addSymbolSortInfo
+    // Go: ls/completions.go:804 getCompletionData.addSymbolSortInfo
     fn add_symbol_sort_info(&mut self, symbol: SymbolId) {
         let symbol_id = get_symbol_id(&self.type_checker.symbols, symbol);
         if is_static_property(&self.type_checker.symbols, symbol) {
@@ -1368,7 +1368,7 @@ impl GetCompletionDataState<'_> {
         }
     }
 
-    // Go: ls/completions.go:812 getCompletionData.addPropertySymbol
+    // Go: ls/completions.go:811 getCompletionData.addPropertySymbol
     fn add_property_symbol(
         &mut self,
         symbol: SymbolId,
@@ -1459,7 +1459,7 @@ impl GetCompletionDataState<'_> {
         }
     }
 
-    // Go: ls/completions.go:862 getCompletionData.addTypeProperties
+    // Go: ls/completions.go:861 getCompletionData.addTypeProperties
     fn add_type_properties(&mut self, t: TypeId, insert_await: bool, insert_question_dot: bool) {
         if self.type_checker.get_string_index_type(t).is_some() {
             self.is_new_identifier_location = true;
@@ -1536,7 +1536,7 @@ impl GetCompletionDataState<'_> {
         }
     }
 
-    // Go: ls/completions.go:912 getCompletionData.getTypeScriptMemberSymbols
+    // Go: ls/completions.go:911 getCompletionData.getTypeScriptMemberSymbols
     fn get_type_script_member_symbols(&mut self) {
         // Right of dot member completion list
         self.completion_kind = CompletionKind::PROPERTY_ACCESS;
@@ -1701,7 +1701,7 @@ impl GetCompletionDataState<'_> {
         }
     }
 
-    // Go: ls/completions.go:1026 getCompletionData.tryGetObjectTypeLiteralInTypeArgumentCompletionSymbols
+    // Go: ls/completions.go:1025 getCompletionData.tryGetObjectTypeLiteralInTypeArgumentCompletionSymbols
     // Aggregates relevant symbols for completion in object literals in type argument positions.
     fn try_get_object_type_literal_in_type_argument_completion_symbols(
         &mut self,
@@ -1754,7 +1754,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1071 getCompletionData.tryGetObjectLikeCompletionSymbols
+    // Go: ls/completions.go:1070 getCompletionData.tryGetObjectLikeCompletionSymbols
     // Aggregates relevant symbols for completion in object literals and object binding patterns.
     // Relevant symbols are stored in the captured 'symbols' variable.
     fn try_get_object_like_completion_symbols(&mut self) -> Result<GlobalsSearch, GoError> {
@@ -1975,7 +1975,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1202 getCompletionData.shouldOfferImportCompletions
+    // Go: ls/completions.go:1201 getCompletionData.shouldOfferImportCompletions
     fn should_offer_import_completions(&self) -> bool {
         if tspath::is_dynamic_file_name(source_file_file_name(self.file)) {
             return false;
@@ -1996,7 +1996,7 @@ impl GetCompletionDataState<'_> {
         true
     }
 
-    // Go: ls/completions.go:1219 getCompletionData.collectAutoImports
+    // Go: ls/completions.go:1218 getCompletionData.collectAutoImports
     // Mutates `symbols`, `symbolToOriginInfoMap`, and `symbolToSortTextMap`
     // PORT: `View.GetCompletions` takes the request checker (w3 decision).
     fn collect_auto_imports(&mut self) -> Result<(), GoError> {
@@ -2046,7 +2046,7 @@ impl GetCompletionDataState<'_> {
         Ok(())
     }
 
-    // Go: ls/completions.go:1257 getCompletionData.tryGetImportCompletionSymbols
+    // Go: ls/completions.go:1256 getCompletionData.tryGetImportCompletionSymbols
     fn try_get_import_completion_symbols(&mut self) -> Result<GlobalsSearch, GoError> {
         if self.import_statement_completion.is_none() {
             return Ok(GlobalsSearch::CONTINUE);
@@ -2056,7 +2056,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1279 getCompletionData.tryGetImportOrExportClauseCompletionSymbols
+    // Go: ls/completions.go:1278 getCompletionData.tryGetImportOrExportClauseCompletionSymbols
     // Aggregates relevant symbols for completion in import clauses and export clauses
     // whose declarations have a module specifier; for instance, symbols will be aggregated for
     //
@@ -2158,7 +2158,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1349 getCompletionData.tryGetImportAttributesCompletionSymbols
+    // Go: ls/completions.go:1348 getCompletionData.tryGetImportAttributesCompletionSymbols
     // import { x } from "foo" with { | }
     fn try_get_import_attributes_completion_symbols(&mut self) -> Result<GlobalsSearch, GoError> {
         let context_token = self.context_token;
@@ -2199,7 +2199,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1388 getCompletionData.tryGetLocalNamedExportCompletionSymbols
+    // Go: ls/completions.go:1387 getCompletionData.tryGetLocalNamedExportCompletionSymbols
     // Adds local declarations for completions in named exports:
     //   export { | };
     // Does not check for the absence of a module specifier (`export {} from "./other"`)
@@ -2253,7 +2253,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1422 getCompletionData.tryGetConstructorCompletion
+    // Go: ls/completions.go:1421 getCompletionData.tryGetConstructorCompletion
     fn try_get_constructor_completion(&mut self) -> Result<GlobalsSearch, GoError> {
         if try_get_constructor_like_completion_container(self.context_token).is_nil() {
             return Ok(GlobalsSearch::CONTINUE);
@@ -2268,7 +2268,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1438 getCompletionData.tryGetClassLikeCompletionSymbols
+    // Go: ls/completions.go:1437 getCompletionData.tryGetClassLikeCompletionSymbols
     // Aggregates relevant symbols for completion in class declaration
     // Relevant symbols are stored in the captured 'symbols' variable.
     fn try_get_class_like_completion_symbols(&mut self) -> Result<GlobalsSearch, GoError> {
@@ -2395,7 +2395,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1529 getCompletionData.tryGetJsxCompletionSymbols
+    // Go: ls/completions.go:1528 getCompletionData.tryGetJsxCompletionSymbols
     fn try_get_jsx_completion_symbols(&mut self) -> Result<GlobalsSearch, GoError> {
         let jsx_container = try_get_containing_jsx_element(self.context_token, self.file);
         if jsx_container.is_nil() {
@@ -2456,7 +2456,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1568 getCompletionData.getGlobalCompletions
+    // Go: ls/completions.go:1567 getCompletionData.getGlobalCompletions
     fn get_global_completions(&mut self) -> Result<GlobalsSearch, GoError> {
         if try_get_function_like_body_completion_container(self.context_token).is_some() {
             self.keyword_filters = KeywordCompletionFilters::FUNCTION_LIKE_BODY_KEYWORDS;
@@ -2626,7 +2626,7 @@ impl GetCompletionDataState<'_> {
         Ok(GlobalsSearch::SUCCESS)
     }
 
-    // Go: ls/completions.go:1679 getCompletionData.tryGetGlobalSymbols
+    // Go: ls/completions.go:1678 getCompletionData.tryGetGlobalSymbols
     // PORT: Go loops over a slice of the ten closures below; the index match
     // keeps their order.
     fn try_get_global_symbols(&mut self) -> Result<bool, GoError> {

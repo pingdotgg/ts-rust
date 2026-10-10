@@ -2,7 +2,7 @@ use crate::ls::prelude::*;
 
 use crate::spanmap::{Feature, Fidelity};
 
-// Go: ls/hover.go:20 symbolFormatFlags
+// Go: ls/hover.go:23 symbolFormatFlags
 pub const SYMBOL_FORMAT_FLAGS: SymbolFormatFlags =
     SymbolFormatFlags::WRITE_TYPE_PARAMETERS_OR_ARGUMENTS
         .union(SymbolFormatFlags::USE_ONLY_EXTERNAL_ALIASING)
@@ -284,14 +284,14 @@ impl LanguageService {
     }
 }
 
-// Go: ls/hover.go:204 documentationLocationMapper
+// Go: ls/hover.go:200 documentationLocationMapper
 /// `l.documentationLocationMapper(feature)` or `noMappedLocation`.
 // PORT: Go passes the func value; here a reference to the closure.
 pub type DocumentationLocationMapper<'a> =
     &'a dyn Fn(Node, TextRange) -> (lsproto::Location, Fidelity);
 
 impl<P: ProgramView> LanguageService<P> {
-    // Go: ls/hover.go:206 documentationLocationMapper
+    // Go: ls/hover.go:200 documentationLocationMapper
     pub fn documentation_location_mapper(
         &self,
         feature: Feature,
@@ -706,10 +706,20 @@ struct QuickInfoWriter<'c> {
     alias_level: i32,
     first_declaration: Node,
     symbol_was_expanded: bool,
+    // Go: displayEmitContext (ts#64649, hover.go:441), made on first use.
+    display_emit_context: Option<Rc<EmitContext>>,
 }
 
 impl QuickInfoWriter<'_> {
-    // Go: ls/hover.go:444 writeTypeClassified (closure)
+    // Go: ls/hover.go:442 getEmitContext (closure, ts#64649)
+    // One emit context for the whole quick info.
+    fn get_emit_context(&mut self) -> Rc<EmitContext> {
+        self.display_emit_context
+            .get_or_insert_with(new_emit_context)
+            .clone()
+    }
+
+    // Go: ls/hover.go:451 writeTypeClassified (closure)
     // writeTypeClassified writes a type to dpw with proper classification (punctuation, symbols, keywords).
     // Falls back to flat text when vsCapability is false or when TypeToTypeNode fails.
     fn write_type_classified(&mut self, t: TypeId, enclosing: Node, flags: TypeFormatFlags) {
@@ -721,7 +731,7 @@ impl QuickInfoWriter<'_> {
             self.dpw.borrow_mut().write(&text);
             return;
         }
-        let emit_context = new_emit_context();
+        let emit_context = self.get_emit_context();
         // PORT: Go shares one idToSymbol map between the node builder and the
         // printer. The Rust builder owns the map; it is moved into the printer
         // after the node is built.
@@ -762,7 +772,7 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_from(&temp_dpw.borrow());
     }
 
-    // Go: ls/hover.go:467 writeSignatureClassified (closure)
+    // Go: ls/hover.go:475 writeSignatureClassified (closure)
     // writeSignatureClassified writes a signature to dpw with proper classification.
     fn write_signature_classified(
         &mut self,
@@ -791,7 +801,7 @@ impl QuickInfoWriter<'_> {
         } else {
             SyntaxKind::CallSignature
         };
-        let emit_context = new_emit_context();
+        let emit_context = self.get_emit_context();
         // PORT: shared idToSymbol map, see write_type_classified.
         let nb = Rc::new(RefCell::new(new_node_builder_ex(
             self.c,
@@ -831,7 +841,7 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_from(&temp_dpw.borrow());
     }
 
-    // Go: ls/hover.go:505 writeSymbolClassified (closure)
+    // Go: ls/hover.go:514 writeSymbolClassified (closure)
     // writeSymbolClassified writes a symbol name to dpw with proper classification based on symbol flags.
     fn write_symbol_classified(
         &mut self,
@@ -854,7 +864,7 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_symbol(&text, symbol);
     }
 
-    // Go: ls/hover.go:515 writeModuleImportAttributes (closure)
+    // Go: ls/hover.go:523 writeModuleImportAttributes (closure)
     fn write_module_import_attributes(&mut self, symbol: SymbolId) {
         let declaration = self
             .c
@@ -870,7 +880,7 @@ impl QuickInfoWriter<'_> {
             return;
         }
         let attributes = declaration.attributes();
-        let emit_context = new_emit_context();
+        let emit_context = self.get_emit_context();
         emit_context.set_emit_flags(attributes, EmitFlags::SINGLE_LINE);
         let mut p = new_printer(
             PrinterOptions {
@@ -891,14 +901,14 @@ impl QuickInfoWriter<'_> {
         self.dpw.borrow_mut().write_from(&temp_dpw.borrow());
     }
 
-    // Go: ls/hover.go:545 setDeclaration (closure)
+    // Go: ls/hover.go:554 setDeclaration (closure)
     fn set_declaration(&mut self, declaration: Node) {
         if self.first_declaration.is_nil() {
             self.first_declaration = declaration;
         }
     }
 
-    // Go: ls/hover.go:550 writeNewLine (closure)
+    // Go: ls/hover.go:559 writeNewLine (closure)
     fn write_new_line(&mut self) {
         if !self.dpw.borrow().string().is_empty() {
             self.dpw.borrow_mut().write("\n");
@@ -910,7 +920,7 @@ impl QuickInfoWriter<'_> {
         }
     }
 
-    // Go: ls/hover.go:560 writeSignatures (closure)
+    // Go: ls/hover.go:569 writeSignatures (closure)
     fn write_signatures(
         &mut self,
         signatures: &[SignatureId],
@@ -952,7 +962,7 @@ impl QuickInfoWriter<'_> {
         }
     }
 
-    // Go: ls/hover.go:581 writeTypeParams (closure)
+    // Go: ls/hover.go:590 writeTypeParams (closure)
     fn write_type_params(&mut self, params: &[TypeId]) {
         if !params.is_empty() {
             self.dpw.borrow_mut().write_punctuation("<");
@@ -982,7 +992,7 @@ impl QuickInfoWriter<'_> {
         }
     }
 
-    // Go: ls/hover.go:604 canExpandSymbol (closure)
+    // Go: ls/hover.go:613 canExpandSymbol (closure)
     fn can_expand_symbol(&mut self, symbol: SymbolId) -> bool {
         // PORT: Go returns false for a nil vc here. vc is never nil at this
         // point (a nil vc is replaced at the start), so the check is dropped.
@@ -1012,7 +1022,7 @@ impl QuickInfoWriter<'_> {
         false
     }
 
-    // Go: ls/hover.go:631 tryExpandSymbol (closure)
+    // Go: ls/hover.go:640 tryExpandSymbol (closure)
     // tryExpandSymbol checks if a symbol can be expanded at the current verbosity level.
     fn try_expand_symbol(&mut self, symbol: SymbolId, meaning: SymbolFlags) -> bool {
         if self.symbol_was_expanded {
@@ -1042,7 +1052,7 @@ impl QuickInfoWriter<'_> {
         false
     }
 
-    // Go: ls/hover.go:652 writeSymbol (closure)
+    // Go: ls/hover.go:661 writeSymbol (closure)
     fn write_symbol(&mut self, symbol: SymbolId) {
         // Recursively write all meanings of alias
         if self.c.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
@@ -1593,6 +1603,7 @@ pub fn get_quick_info_and_declaration_at_location(
         alias_level: 0,
         first_declaration: Node::NIL,
         symbol_was_expanded: false,
+        display_emit_context: None,
     };
 
     if node.kind() == SyntaxKind::ThisKeyword && is_in_expression_context(node)
@@ -1625,7 +1636,7 @@ pub fn get_quick_info_and_declaration_at_location(
     }
 }
 
-// Go: ls/hover.go:951 typeParameterToString
+// Go: ls/hover.go:960 typeParameterToString
 // typeParameterToString renders a type parameter declaration (e.g., "T extends FooType").
 pub fn type_parameter_to_string(
     c: &mut Checker,
@@ -1636,7 +1647,7 @@ pub fn type_parameter_to_string(
     c.type_parameter_to_string_ex(t, enclosing_declaration, vc)
 }
 
-// Go: ls/hover.go:955 getNodeForQuickInfo
+// Go: ls/hover.go:964 getNodeForQuickInfo
 pub fn get_node_for_quick_info(node: Node) -> Node {
     if node.parent().is_nil() {
         return node;
@@ -1656,7 +1667,7 @@ pub fn get_node_for_quick_info(node: Node) -> Node {
     node
 }
 
-// Go: ls/hover.go:974 getSymbolAtLocationForQuickInfo
+// Go: ls/hover.go:983 getSymbolAtLocationForQuickInfo
 pub fn get_symbol_at_location_for_quick_info(c: &mut Checker, node: Node) -> SymbolId {
     let object_element = get_containing_object_literal_element(node);
     if object_element.is_some() {
@@ -1676,7 +1687,7 @@ pub fn get_symbol_at_location_for_quick_info(c: &mut Checker, node: Node) -> Sym
     c.get_symbol_at_location_exported(node)
 }
 
-// Go: ls/hover.go:985 getSignaturesAtLocation
+// Go: ls/hover.go:994 getSignaturesAtLocation
 pub fn get_signatures_at_location(
     c: &mut Checker,
     symbol: SymbolId,
@@ -1698,7 +1709,7 @@ pub fn get_signatures_at_location(
     signatures
 }
 
-// Go: ls/hover.go:996 getCallOrNewExpression
+// Go: ls/hover.go:1005 getCallOrNewExpression
 pub fn get_call_or_new_expression(node: Node) -> Node {
     if is_source_file(node) {
         return Node::NIL;
@@ -1715,7 +1726,7 @@ pub fn get_call_or_new_expression(node: Node) -> Node {
     Node::NIL
 }
 
-// Go: ls/hover.go:1009 containsTypedefTag
+// Go: ls/hover.go:1018 containsTypedefTag
 pub fn contains_typedef_tag(jsdoc: Node) -> bool {
     if jsdoc.kind() == SyntaxKind::JsDoc {
         let tags = jsdoc.tags();
@@ -1732,7 +1743,7 @@ pub fn contains_typedef_tag(jsdoc: Node) -> bool {
     false
 }
 
-// Go: ls/hover.go:1022 writeCode
+// Go: ls/hover.go:1031 writeCode
 pub fn write_code(b: &mut String, lang: &str, code: &str) {
     if code.is_empty() {
         return;
@@ -1754,7 +1765,7 @@ pub fn write_code(b: &mut String, lang: &str, code: &str) {
     b.push('\n');
 }
 
-// Go: ls/hover.go:1043 writeComments
+// Go: ls/hover.go:1052 writeComments
 pub fn write_comments(
     get_mapped_location: DocumentationLocationMapper<'_>,
     b: &mut String,
@@ -1792,7 +1803,7 @@ pub fn write_comments(
     }
 }
 
-// Go: ls/hover.go:1056 writeJSDocLink
+// Go: ls/hover.go:1065 writeJSDocLink
 pub fn write_js_doc_link(
     get_mapped_location: DocumentationLocationMapper<'_>,
     b: &mut String,
@@ -1835,7 +1846,7 @@ pub fn write_js_doc_link(
     write_name_link(get_mapped_location, b, c, name, text, quote, is_markdown);
 }
 
-// Go: ls/hover.go:1088 writeNameLink
+// Go: ls/hover.go:1097 writeNameLink
 pub fn write_name_link(
     get_mapped_location: DocumentationLocationMapper<'_>,
     b: &mut String,
@@ -1884,14 +1895,14 @@ pub fn write_name_link(
     );
 }
 
-// Go: ls/hover.go:1111 trimCommentPrefix
+// Go: ls/hover.go:1120 trimCommentPrefix
 pub fn trim_comment_prefix(text: &str) -> &str {
     let text = text.trim_start_matches(' ');
     let text = text.strip_prefix('|').unwrap_or(text);
     text.trim_start_matches(' ')
 }
 
-// Go: ls/hover.go:1115 writeMarkdownLink
+// Go: ls/hover.go:1124 writeMarkdownLink
 pub fn write_markdown_link(b: &mut String, text: &str, uri: &str, quote: bool) {
     b.push('[');
     write_quoted_string(b, text, quote);
@@ -1900,7 +1911,7 @@ pub fn write_markdown_link(b: &mut String, text: &str, uri: &str, quote: bool) {
     b.push(')');
 }
 
-// Go: ls/hover.go:1123 writeOptionalEntityName
+// Go: ls/hover.go:1132 writeOptionalEntityName
 pub fn write_optional_entity_name(b: &mut String, name: Node) {
     if name.is_some() {
         b.push(' ');
@@ -1908,7 +1919,7 @@ pub fn write_optional_entity_name(b: &mut String, name: Node) {
     }
 }
 
-// Go: ls/hover.go:1130 writeQuotedString
+// Go: ls/hover.go:1139 writeQuotedString
 pub fn write_quoted_string(b: &mut String, str: &str, quote: bool) {
     if quote && !str.contains('`') {
         b.push('`');
@@ -1919,14 +1930,14 @@ pub fn write_quoted_string(b: &mut String, str: &str, quote: bool) {
     }
 }
 
-// Go: ls/hover.go:1140 getEntityNameString
+// Go: ls/hover.go:1149 getEntityNameString
 pub fn get_entity_name_string(name: Node) -> String {
     let mut b = String::new();
     write_entity_name_parts(&mut b, name);
     b
 }
 
-// Go: ls/hover.go:1146 writeEntityNameParts
+// Go: ls/hover.go:1155 writeEntityNameParts
 pub fn write_entity_name_parts(b: &mut String, node: Node) {
     match node.kind() {
         SyntaxKind::Identifier => {

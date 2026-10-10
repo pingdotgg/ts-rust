@@ -21,14 +21,14 @@ use crate::frontend::tspath;
 use crate::gostd::Context;
 use std::rc::Weak;
 
-// Go: ls/importTracker.go:15 ImpExpKind
+// Go: ls/importTracker.go:16 ImpExpKind
 go_enum!(ImpExpKind, i32 {
     UNKNOWN = 0;
     IMPORT = 1;
     EXPORT = 2;
 });
 
-// Go: ls/importTracker.go:23 ImportExportSymbol
+// Go: ls/importTracker.go:24 ImportExportSymbol
 #[derive(Clone, Copy, Debug)]
 pub struct ImportExportSymbol {
     pub kind: ImpExpKind,
@@ -36,7 +36,7 @@ pub struct ImportExportSymbol {
     pub export_info: Option<ExportInfo>,
 }
 
-// Go: ls/importTracker.go:29 ExportKind
+// Go: ls/importTracker.go:30 ExportKind
 go_enum!(ExportKind, i32 {
     NAMED = 0;
     DEFAULT = 1;
@@ -45,21 +45,21 @@ go_enum!(ExportKind, i32 {
     MODULE = 4;
 });
 
-// Go: ls/importTracker.go:39 ExportInfo
+// Go: ls/importTracker.go:40 ExportInfo
 #[derive(Clone, Copy, Debug)]
 pub struct ExportInfo {
     pub exporting_module_symbol: SymbolId,
     pub export_kind: ExportKind,
 }
 
-// Go: ls/importTracker.go:44 LocationAndSymbol
+// Go: ls/importTracker.go:45 LocationAndSymbol
 #[derive(Clone, Copy, Debug)]
 pub struct LocationAndSymbol {
     pub import_location: Node,
     pub import_symbol: SymbolId,
 }
 
-// Go: ls/importTracker.go:49 ImportsResult
+// Go: ls/importTracker.go:50 ImportsResult
 // PORT: Go `indirectUsers []*ast.SourceFile` holds file roots.
 #[derive(Clone, Debug, Default)]
 pub struct ImportsResult {
@@ -68,21 +68,21 @@ pub struct ImportsResult {
     pub indirect_users: Vec<Node>,
 }
 
-// Go: ls/importTracker.go:55 ImportTracker
+// Go: ls/importTracker.go:56 ImportTracker
 // PORT: the checker is the first argument (Go captures it). Go returns
 // `*ImportsResult`; the result is returned by value. `'a` is the lifetime of
 // the source file list and set that the tracker borrows.
 pub type ImportTracker<'a> =
     Rc<dyn Fn(&mut Checker, SymbolId, &ExportInfo, bool) -> ImportsResult + 'a>;
 
-// Go: ls/importTracker.go:57 ModuleReferenceKind
+// Go: ls/importTracker.go:58 ModuleReferenceKind
 go_enum!(ModuleReferenceKind, i32 {
     IMPORT = 0;
     REFERENCE = 1;
     IMPLICIT = 2;
 });
 
-// Go: ls/importTracker.go:66 ModuleReference
+// Go: ls/importTracker.go:67 ModuleReference
 // ModuleReference represents a reference to a module, either via import, <reference>, or implicit reference
 // PORT: Go `ref *ast.FileReference` is a copy of the reference, None for nil.
 #[derive(Clone, Debug)]
@@ -93,7 +93,7 @@ pub struct ModuleReference {
     pub ref_: Option<FileReference>, // for reference kind
 }
 
-// Go: ls/importTracker.go:74 createImportTracker
+// Go: ls/importTracker.go:75 createImportTracker
 // Creates the imports map and returns an ImportTracker that uses it. Call this lazily to avoid calling `getDirectImportsMap` unnecessarily.
 // PORT: the returned closure borrows `sourceFiles` and `sourceFilesSet`
 // (Go captures the caller's slice and set, which do not change during a
@@ -137,7 +137,7 @@ pub fn create_import_tracker<'a, P: ProgramView>(
     )
 }
 
-// Go: ls/importTracker.go:84 getDirectImportsMap
+// Go: ls/importTracker.go:85 getDirectImportsMap
 // Returns a map from a module symbol to all import statements that directly reference the module
 pub fn get_direct_imports_map<P: ProgramView>(
     ctx: &Context,
@@ -239,7 +239,7 @@ fn get_direct_imports_map_cached<P: ProgramView>(
     map
 }
 
-// Go: ls/importTracker.go:100 forEachImport
+// Go: ls/importTracker.go:101 forEachImport
 // Calls `action` for each import, re-export, or require() in a file
 // PORT: Go `sourceFile.Path()` is the installed program's path of the file
 // (`source_file_info(file).path`).
@@ -292,7 +292,7 @@ pub fn for_each_import<P: ProgramView>(
     }
 }
 
-// Go: ls/importTracker.go:134 forEachPossibleImportOrExportStatement
+// Go: ls/importTracker.go:135 forEachPossibleImportOrExportStatement
 pub fn for_each_possible_import_or_export_statement(
     source_file_like: Node,
     action: &mut dyn FnMut(Node) -> bool, /*statement*/
@@ -308,7 +308,7 @@ pub fn for_each_possible_import_or_export_statement(
     false
 }
 
-// Go: ls/importTracker.go:143 getSourceFileLikeForImportDeclaration
+// Go: ls/importTracker.go:144 getSourceFileLikeForImportDeclaration
 pub fn get_source_file_like_for_import_declaration(node: Node) -> Node {
     if is_call_expression(node) || is_js_doc_import_tag(node) {
         return get_source_file_of_node(node);
@@ -321,12 +321,12 @@ pub fn get_source_file_like_for_import_declaration(node: Node) -> Node {
     parent.parent()
 }
 
-// Go: ls/importTracker.go:155 isAmbientModuleDeclaration
+// Go: ls/importTracker.go:156 isAmbientModuleDeclaration
 pub fn is_ambient_module_declaration(node: Node) -> bool {
     is_module_declaration(node) && is_string_literal(node.name())
 }
 
-// Go: ls/importTracker.go:159 getStatementsOfSourceFileLike
+// Go: ls/importTracker.go:160 getStatementsOfSourceFileLike
 pub fn get_statements_of_source_file_like(node: Node) -> NodeSlice {
     if is_source_file(node) {
         return node.statements();
@@ -338,7 +338,7 @@ pub fn get_statements_of_source_file_like(node: Node) -> NodeSlice {
     NodeSlice::NIL
 }
 
-// Go: ls/importTracker.go:169 getImportersForExport
+// Go: ls/importTracker.go:170 getImportersForExport
 // PORT: the Go closures share `directImports`, `indirectUserDeclarations`
 // and the two seen trackers. They are the methods of `ImportersForExport`,
 // in Go order.
@@ -391,7 +391,7 @@ struct ImportersForExport<'a, F: FnMut(Node) -> bool> {
 }
 
 impl<F: FnMut(Node) -> bool> ImportersForExport<'_, F> {
-    // Go: ls/importTracker.go:182 getDirectImports (closure)
+    // Go: ls/importTracker.go:183 getDirectImports (closure)
     // PORT: returns a copy of the list, because callers add to the state
     // while they walk it (Go shares the slice).
     fn get_direct_imports(&self, module_symbol: SymbolId) -> Vec<Node> {
@@ -438,7 +438,7 @@ impl<F: FnMut(Node) -> bool> ImportersForExport<'_, F> {
         }
     }
 
-    // Go: ls/importTracker.go:223 handleImportCall (closure)
+    // Go: ls/importTracker.go:224 handleImportCall (closure)
     fn handle_import_call(&mut self, import_call: Node) {
         let mut top = find_ancestor(import_call, is_ambient_module_declaration);
         if top.is_nil() {
@@ -450,7 +450,7 @@ impl<F: FnMut(Node) -> bool> ImportersForExport<'_, F> {
         );
     }
 
-    // Go: ls/importTracker.go:231 handleNamespaceImport (closure)
+    // Go: ls/importTracker.go:232 handleNamespaceImport (closure)
     fn handle_namespace_import(
         &mut self,
         import_declaration: Node,
@@ -575,7 +575,7 @@ impl<F: FnMut(Node) -> bool> ImportersForExport<'_, F> {
         }
     }
 
-    // Go: ls/importTracker.go:305 getIndirectUsers (closure)
+    // Go: ls/importTracker.go:306 getIndirectUsers (closure)
     fn get_indirect_users(&mut self) -> Vec<Node> {
         if self.is_available_through_global {
             // It has `export as namespace`, so anything could potentially use it.
@@ -604,7 +604,7 @@ impl<F: FnMut(Node) -> bool> ImportersForExport<'_, F> {
     }
 }
 
-// Go: ls/importTracker.go:213 isExported (closure in getImportersForExport)
+// Go: ls/importTracker.go:214 isExported (closure in getImportersForExport)
 // PORT: the closure reads no shared state, so it is a free function. The
 // name carries the enclosing function to keep it apart from other
 // `is_exported` names.
@@ -618,13 +618,13 @@ fn importers_is_exported(mut node: Node, stop_at_ambient_module: bool) -> bool {
     false
 }
 
-// Go: ls/importTracker.go:324 getContainingModuleSymbol
+// Go: ls/importTracker.go:325 getContainingModuleSymbol
 pub fn get_containing_module_symbol(importer: Node, checker: &mut Checker) -> SymbolId {
     checker
         .get_merged_symbol_exported(get_source_file_like_for_import_declaration(importer).symbol())
 }
 
-// Go: ls/importTracker.go:329 findNamespaceReExports
+// Go: ls/importTracker.go:330 findNamespaceReExports
 // Returns 'true' is the namespace 'name' is re-exported from this module, and 'false' if it is only used locally
 pub fn find_namespace_re_exports(
     source_file_like: Node,
@@ -647,7 +647,7 @@ pub fn find_namespace_re_exports(
     })
 }
 
-// Go: ls/importTracker.go:343 getSearchesFromDirectImports
+// Go: ls/importTracker.go:344 getSearchesFromDirectImports
 // PORT: the Go closures share `importSearches` and `singleReferences`. They
 // are the methods of `SearchesFromDirectImports`, in Go order.
 pub fn get_searches_from_direct_imports(
@@ -682,7 +682,7 @@ struct SearchesFromDirectImports<'a> {
 }
 
 impl SearchesFromDirectImports<'_> {
-    // Go: ls/importTracker.go:353 addSearch (closure)
+    // Go: ls/importTracker.go:354 addSearch (closure)
     fn add_search(&mut self, location: Node, symbol: SymbolId) {
         self.import_searches.push(LocationAndSymbol {
             import_location: location,
@@ -690,14 +690,14 @@ impl SearchesFromDirectImports<'_> {
         });
     }
 
-    // Go: ls/importTracker.go:357 isNameMatch (closure)
+    // Go: ls/importTracker.go:358 isNameMatch (closure)
     fn is_name_match(&self, name: &str) -> bool {
         // Use name of "default" even in `export =` case because we may have allowSyntheticDefaultImports
         name == self.checker.sym(self.export_symbol).name.as_str()
             || self.export_kind != ExportKind::NAMED && name == INTERNAL_SYMBOL_NAME_DEFAULT
     }
 
-    // Go: ls/importTracker.go:365 handleNamespaceImportLike (closure)
+    // Go: ls/importTracker.go:366 handleNamespaceImportLike (closure)
     // `import x = require("./x")` or `import * as x from "./x"`.
     // An `export =` may be imported by this syntax, so it may be a direct import.
     // If it's not a direct import, it will be in `indirectUsers`, so we don't have to do anything here.
@@ -711,7 +711,7 @@ impl SearchesFromDirectImports<'_> {
         }
     }
 
-    // Go: ls/importTracker.go:372 searchForNamedImport (closure)
+    // Go: ls/importTracker.go:373 searchForNamedImport (closure)
     fn search_for_named_import(&mut self, named_bindings: Node) {
         if named_bindings.is_nil() {
             return;
@@ -752,7 +752,7 @@ impl SearchesFromDirectImports<'_> {
         }
     }
 
-    // Go: ls/importTracker.go:403 handleImport (closure)
+    // Go: ls/importTracker.go:404 handleImport (closure)
     fn handle_import(&mut self, decl: Node) {
         if is_import_equals_declaration(decl) {
             if is_external_module_import_equals(decl) {
@@ -825,7 +825,7 @@ impl SearchesFromDirectImports<'_> {
     }
 }
 
-// Go: ls/importTracker.go:462 getImportOrExportSymbol
+// Go: ls/importTracker.go:463 getImportOrExportSymbol
 // PORT: the Go closures `exportInfo`, `getExport` (with its nested
 // closures) and `getImport` are nested functions that take the captured
 // values as parameters.
@@ -835,7 +835,7 @@ pub fn get_import_or_export_symbol(
     checker: &mut Checker,
     coming_from_export: bool,
 ) -> Option<ImportExportSymbol> {
-    // Go: ls/importTracker.go:463 exportInfo (closure)
+    // Go: ls/importTracker.go:464 exportInfo (closure)
     fn export_info(
         checker: &mut Checker,
         symbol: SymbolId,
@@ -851,7 +851,7 @@ pub fn get_import_or_export_symbol(
         None
     }
 
-    // Go: ls/importTracker.go:475 getExportAssignmentExport (closure in getExport)
+    // Go: ls/importTracker.go:476 getExportAssignmentExport (closure in getExport)
     fn get_export_assignment_export(
         checker: &mut Checker,
         symbol: SymbolId,
@@ -877,7 +877,7 @@ pub fn get_import_or_export_symbol(
         })
     }
 
-    // Go: ls/importTracker.go:492 getExportKindForDeclaration (closure in getExport)
+    // Go: ls/importTracker.go:493 getExportKindForDeclaration (closure in getExport)
     // Not meant for use with export specifiers or export assignment.
     fn get_export_kind_for_declaration(node: Node) -> ExportKind {
         if has_syntactic_modifier(node, ModifierFlags::DEFAULT) {
@@ -886,7 +886,7 @@ pub fn get_import_or_export_symbol(
         ExportKind::NAMED
     }
 
-    // Go: ls/importTracker.go:499 getSpecialPropertyExport (closure in getExport)
+    // Go: ls/importTracker.go:500 getSpecialPropertyExport (closure in getExport)
     fn get_special_property_export(
         checker: &mut Checker,
         symbol: SymbolId,
@@ -908,7 +908,7 @@ pub fn get_import_or_export_symbol(
         export_info(checker, sym, kind)
     }
 
-    // Go: ls/importTracker.go:474 getExport (closure)
+    // Go: ls/importTracker.go:475 getExport (closure)
     fn get_export(
         node: Node,
         symbol: SymbolId,
@@ -988,7 +988,7 @@ pub fn get_import_or_export_symbol(
         None
     }
 
-    // Go: ls/importTracker.go:564 getImport (closure)
+    // Go: ls/importTracker.go:565 getImport (closure)
     fn get_import(
         node: Node,
         symbol: SymbolId,
@@ -1043,7 +1043,7 @@ pub fn get_import_or_export_symbol(
     result
 }
 
-// Go: ls/importTracker.go:611 getExportInfo
+// Go: ls/importTracker.go:612 getExportInfo
 pub fn get_export_info(
     export_symbol: SymbolId,
     export_kind: ExportKind,
@@ -1064,7 +1064,7 @@ pub fn get_export_info(
     None
 }
 
-// Go: ls/importTracker.go:628 getExportNode
+// Go: ls/importTracker.go:629 getExportNode
 // If a reference is a class expression, the exported node would be its parent.
 // If a reference is a variable declaration, the exported node would be the variable statement.
 pub fn get_export_node(parent: Node, node: Node) -> Node {
@@ -1086,7 +1086,7 @@ pub fn get_export_node(parent: Node, node: Node) -> Node {
     parent
 }
 
-// Go: ls/importTracker.go:645 isNodeImport
+// Go: ls/importTracker.go:646 isNodeImport
 pub fn is_node_import(node: Node) -> bool {
     let parent = node.parent();
     match parent.kind() {
@@ -1111,14 +1111,14 @@ pub fn is_node_import(node: Node) -> bool {
     }
 }
 
-// Go: ls/importTracker.go:662 isExternalModuleImportEquals
+// Go: ls/importTracker.go:663 isExternalModuleImportEquals
 pub fn is_external_module_import_equals(node: Node) -> bool {
     let module_reference = node.module_reference();
     is_external_module_reference(module_reference)
         && module_reference.expression().kind() == SyntaxKind::StringLiteral
 }
 
-// Go: ls/importTracker.go:668 skipExportSpecifierSymbol
+// Go: ls/importTracker.go:669 skipExportSpecifierSymbol
 // If at an export specifier, go to the symbol it refers to. */
 pub fn skip_export_specifier_symbol(symbol: SymbolId, checker: &mut Checker) -> SymbolId {
     // For `export { foo } from './bar", there's nothing to skip, because it does not create a new alias. But `export { foo } does.
@@ -1152,7 +1152,7 @@ pub fn skip_export_specifier_symbol(symbol: SymbolId, checker: &mut Checker) -> 
     symbol
 }
 
-// Go: ls/importTracker.go:684 getExportEqualsLocalSymbol
+// Go: ls/importTracker.go:685 getExportEqualsLocalSymbol
 pub fn get_export_equals_local_symbol(
     imported_symbol: SymbolId,
     checker: &mut Checker,
@@ -1176,7 +1176,7 @@ pub fn get_export_equals_local_symbol(
     SymbolId::NIL
 }
 
-// Go: ls/importTracker.go:701 symbolNameNoDefault
+// Go: ls/importTracker.go:702 symbolNameNoDefault
 pub fn symbol_name_no_default(symbols: &SymbolArena, symbol: SymbolId) -> String {
     let s = symbols.sym(symbol);
     if s.name.as_str() != INTERNAL_SYMBOL_NAME_DEFAULT {
@@ -1191,7 +1191,7 @@ pub fn symbol_name_no_default(symbols: &SymbolArena, symbol: SymbolId) -> String
     String::new()
 }
 
-// Go: ls/importTracker.go:716 findModuleReferences
+// Go: ls/importTracker.go:717 findModuleReferences
 // findModuleReferences finds all references to a module symbol across the given source files.
 // This includes import statements, <reference> directives, and implicit references (e.g., JSX runtime imports).
 // PORT: the `<reference path>` and `<reference types>` checks read the

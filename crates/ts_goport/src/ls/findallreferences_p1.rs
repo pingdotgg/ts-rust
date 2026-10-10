@@ -763,7 +763,9 @@ impl LanguageService {
         let program = self.get_program();
         let (checker, _done) = ls_program::get_type_checker(program, ctx);
         let checker = &mut *checker.borrow_mut();
-        let emit_resolver = checker.get_emit_resolver();
+        // ts#64649: a new emit resolver for a new emit context (Go N'
+        // findallreferences.go:512); `GetEmitResolver` is gone.
+        let emit_resolver = checker.new_emit_resolver(new_emit_context());
         let symbol = entry
             .borrow()
             .definition
@@ -1984,7 +1986,7 @@ impl<P: ProgramView> LanguageService<P> {
                 let reference = Rc::clone(&result[ref_index]);
                 let mut sorted_refs = reference.borrow().references.clone();
                 sorted_refs.extend(entry.borrow().references.iter().cloned());
-                // Go: ls/findallreferences.go:1179 slices.SortStableFunc(sortedRefs, ...)
+                // Go: ls/findallreferences.go:1182 slices.SortStableFunc(sortedRefs, ...)
                 crate::gostd::slices::sort_stable_func(&mut sorted_refs, |entry1, entry2| {
                     let entry1_file = get_source_file_index_of_entry(program, entry1);
                     let entry2_file = get_source_file_index_of_entry(program, entry2);
@@ -2124,8 +2126,7 @@ impl<P: ProgramView> LanguageService<P> {
     // Go: ls/findallreferences.go:1269 getReferencedSymbolsForNode
     // PORT: Go holds the checker for the whole function. Here the checker is
     // borrowed around each use, and `getReferencedSymbolsForModule` gets it
-    // as its last argument (findallreferences_p2.rs) instead of asking the
-    // program again.
+    // as its first argument (ts#64543).
     pub fn get_referenced_symbols_for_node(
         &self,
         ctx: &Context,
@@ -2166,7 +2167,7 @@ impl<P: ProgramView> LanguageService<P> {
                 .get_merged_symbol_exported(resolved_ref.file.symbol());
             if module_symbol.is_some() {
                 return self.get_referenced_symbols_for_module(
-                    ctx,
+                    &mut checker.borrow_mut(),
                     program,
                     module_symbol, /*excludeImportTypeOfExportEquals*/
                     false,
@@ -2251,7 +2252,7 @@ impl<P: ProgramView> LanguageService<P> {
                 return Vec::new();
             }
             return self.get_referenced_symbols_for_module(
-                ctx,
+                &mut checker.borrow_mut(),
                 program,
                 symbol_parent,
                 false, /*excludeImportTypeOfExportEquals*/

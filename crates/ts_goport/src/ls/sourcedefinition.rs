@@ -10,7 +10,7 @@ use crate::ls::prelude::*;
 use crate::spanmap::Feature;
 
 impl LanguageService {
-    // Go: ls/sourcedefinition.go:25 ProvideSourceDefinition
+    // Go: ls/sourcedefinition.go:24 ProvideSourceDefinition
     pub fn provide_source_definition(
         &self,
         ctx: &Context,
@@ -45,7 +45,7 @@ impl LanguageService {
         ))
     }
 
-    // Go: ls/sourcedefinition.go:45 provideSourceDefinitionAtPosition
+    // Go: ls/sourcedefinition.go:44 provideSourceDefinitionAtPosition
     // PORT: Go `core.TextPos` is `i32`.
     pub fn provide_source_definition_at_position(
         &self,
@@ -84,9 +84,22 @@ impl LanguageService {
 
         let (origin_selection_range, _) = self.create_lsp_range_from_node(node, file);
 
+        // ts#63915: a source phase import gives the plain definition.
+        let containing_module_specifier = find_containing_module_specifier(node);
+        if containing_module_specifier.is_some()
+            && is_source_phase_import(containing_module_specifier.parent())
+        {
+            return Ok(self.provide_definition_at_position(
+                ctx,
+                program,
+                file,
+                text_pos,
+                client_supports_link,
+            ));
+        }
+
         // If the cursor is directly on a module specifier string, resolve to the
         // implementation file's entry point.
-        let containing_module_specifier = find_containing_module_specifier(node);
         if node == containing_module_specifier {
             // PORT: Go passes the file as an `ast.HasFileName`.
             let specifier_mode = program.get_mode_for_usage_location(
@@ -203,7 +216,7 @@ impl LanguageService {
     }
 }
 
-// Go: ls/sourcedefinition.go:132 sourceDefResolver
+// Go: ls/sourcedefinition.go:135 sourceDefResolver
 // sourceDefResolver resolves source definitions by mapping .d.ts declarations
 // to their implementation files (.js/.ts). It uses the NoDts module resolver
 // and file parsing for resolution, but never acquires the type checker or
@@ -223,7 +236,7 @@ pub struct SourceDefResolver<'a> {
 }
 
 impl LanguageService {
-    // Go: ls/sourcedefinition.go:142 newSourceDefResolver
+    // Go: ls/sourcedefinition.go:158 newSourceDefResolver
     pub fn new_source_def_resolver<'a>(
         &'a self,
         program: &'a compiler::NewProgram,
@@ -232,12 +245,18 @@ impl LanguageService {
         let options = program.options();
         let mut no_dts_options = options.clone();
         no_dts_options.no_dts_resolution = Tristate::True;
-        // PORT: Go passes the program's `CompilerHost` where a
-        // `module.ResolutionHost` is expected; `CompilerResolutionHost` is
-        // that view of the host (as the file loader uses it).
-        let resolution_host: Rc<dyn module::ResolutionHost> = Rc::new(
-            compiler::CompilerResolutionHost::new(program.host().clone()),
-        );
+        // ts#64159: the resolution host is the program's file system with the
+        // program's base directory (Go N' `sourceDefResolutionHost`,
+        // sourcedefinition.go:145, :172; R1).
+        // PORT: `CompilerResolutionHost` with that current directory is Go's
+        // `sourceDefResolutionHost`.
+        let host = program.host().clone();
+        let resolution_host: Rc<dyn module::ResolutionHost> =
+            Rc::new(compiler::CompilerResolutionHost {
+                fs: host.fs(),
+                host,
+                current_directory: program.base_directory(),
+            });
         SourceDefResolver {
             ls: self,
             fs: program.host().fs(),
@@ -263,7 +282,7 @@ impl LanguageService {
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:167 resolveFromCheckerInfo
+    // Go: ls/sourcedefinition.go:183 resolveFromCheckerInfo
     // resolveFromCheckerInfo maps type-checker declarations to source
     // implementations. It uses only the NoDts module resolver and file parsing;
     // the type checker and original request file are not needed.
@@ -311,7 +330,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:203 getSourceDefCheckerInfo
+// Go: ls/sourcedefinition.go:219 getSourceDefCheckerInfo
 // getSourceDefCheckerInfo acquires the type checker for the given file and
 // returns the definition declarations for node along with the module specifier
 // of the import that brought the symbol into scope (empty if not applicable).
@@ -386,7 +405,7 @@ pub fn get_source_def_checker_info(
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:259 resolveTripleSlashReference
+    // Go: ls/sourcedefinition.go:275 resolveTripleSlashReference
     // resolveTripleSlashReference handles /// <reference path/types="..."/> directives.
     // For path references to .js files, it returns the entry declarations directly.
     // For path references to .d.ts files or type references, it uses the NoDts
@@ -433,7 +452,7 @@ impl SourceDefResolver<'_> {
         )
     }
 
-    // Go: ls/sourcedefinition.go:289 searchImplementationFile
+    // Go: ls/sourcedefinition.go:305 searchImplementationFile
     // searchImplementationFile searches an implementation file for declarations
     // matching the given names. Returns nil when no declarations matched; callers
     // fall through to the checker path or to the standard definition provider.
@@ -472,7 +491,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:317 isDefaultImportName
+// Go: ls/sourcedefinition.go:333 isDefaultImportName
 pub fn is_default_import_name(node: Node) -> bool {
     if node.is_nil()
         || node.parent().is_nil()
@@ -485,7 +504,7 @@ pub fn is_default_import_name(node: Node) -> bool {
     is_default_import(node.parent().parent())
 }
 
-// Go: ls/sourcedefinition.go:324 getSourceDefinitionEntryNode
+// Go: ls/sourcedefinition.go:340 getSourceDefinitionEntryNode
 pub fn get_source_definition_entry_node(source_file: Node) -> Node {
     let statements = source_file.statements();
     if !statements.is_empty() {
@@ -494,13 +513,13 @@ pub fn get_source_definition_entry_node(source_file: Node) -> Node {
     source_file
 }
 
-// Go: ls/sourcedefinition.go:331 getSourceDefinitionEntryDeclarations
+// Go: ls/sourcedefinition.go:347 getSourceDefinitionEntryDeclarations
 pub fn get_source_definition_entry_declarations(source_file: Node) -> Vec<Node> {
     vec![get_source_definition_entry_node(source_file)]
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:335 mapDeclarationToSource
+    // Go: ls/sourcedefinition.go:351 mapDeclarationToSource
     pub fn map_declaration_to_source(
         &mut self,
         original_node: Node,
@@ -536,7 +555,7 @@ impl SourceDefResolver<'_> {
         self.search_implementation_file(original_node, &implementation_file, &names)
     }
 
-    // Go: ls/sourcedefinition.go:366 findImplementationFileFromDtsFileName
+    // Go: ls/sourcedefinition.go:382 findImplementationFileFromDtsFileName
     pub fn find_implementation_file_from_dts_file_name(
         &self,
         dts_file_name: &str,
@@ -550,30 +569,22 @@ impl SourceDefResolver<'_> {
             }
         }
 
-        let Some(parts) = modulespecifiers::get_node_module_path_parts(dts_file_name) else {
+        // ts#64159: Go N' bails out when the file is not in node_modules
+        // (sourcedefinition.go:394), on `parts.HasNestedNodeModules` (:398)
+        // and on `parts.IsDirectNodeModulesFile` (:401).
+        let Some(NodeModulesPackageFile {
+            package_name: package_name_path_part,
+            package_relative_path: path_to_file_in_package,
+        }) = node_modules_package_file(dts_file_name)
+        else {
             return String::new();
         };
-
-        // Ensure the file only contains one /node_modules/ segment. If there's more
-        // than one, the package name extraction may be incorrect, so bail out.
-        // PORT: Go `strings.LastIndex` returns -1 when absent.
-        let last_node_modules_index = dts_file_name
-            .rfind("/node_modules/")
-            .map_or(-1, |i| i as isize);
-        if last_node_modules_index != parts.top_level_node_modules_index {
-            return String::new();
-        }
-
-        let package_name_path_part = &dts_file_name
-            [(parts.top_level_package_name_index + 1) as usize..parts.package_root_index as usize];
         let package_name = module::get_package_name_from_types_package_name(
             &module::unmangle_scoped_package_name(package_name_path_part),
         );
         if package_name.is_empty() {
             return String::new();
         }
-
-        let path_to_file_in_package = &dts_file_name[(parts.package_root_index + 1) as usize..];
 
         // Try resolving as a package subpath first (e.g. "pkg/dist/utils"), then
         // fall back to the bare package name (e.g. "pkg"). This covers both main
@@ -593,7 +604,7 @@ impl SourceDefResolver<'_> {
         self.resolve_implementation(&package_name, preferred_mode)
     }
 
-    // Go: ls/sourcedefinition.go:409 resolveImplementation
+    // Go: ls/sourcedefinition.go:423 resolveImplementation
     pub fn resolve_implementation(
         &self,
         module_name: &str,
@@ -602,7 +613,7 @@ impl SourceDefResolver<'_> {
         self.resolve_implementation_from(module_name, &self.resolve_from, preferred_mode)
     }
 
-    // Go: ls/sourcedefinition.go:416 resolveImplementationFrom
+    // Go: ls/sourcedefinition.go:430 resolveImplementationFrom
     pub fn resolve_implementation_from(
         &self,
         module_name: &str,
@@ -632,7 +643,7 @@ impl SourceDefResolver<'_> {
         String::new()
     }
 
-    // Go: ls/sourcedefinition.go:438 getOrParseSourceFile
+    // Go: ls/sourcedefinition.go:452 getOrParseSourceFile
     // PORT: the parsed file is published with no program
     // (`program::publish_parsed_files`), then bound into the binder lineage
     // (`program::bind_file_outside_program`), which is Go `BindSourceFile`.
@@ -678,7 +689,7 @@ impl SourceDefResolver<'_> {
         source_file
     }
 
-    // Go: ls/sourcedefinition.go:465 inferImpliedNodeFormat
+    // Go: ls/sourcedefinition.go:479 inferImpliedNodeFormat
     // inferImpliedNodeFormat determines the module format for a source file that may not be
     // in the program, using the file extension and nearest package.json "type" field.
     pub fn infer_implied_node_format(&self, file_name: &str) -> ResolutionMode {
@@ -703,7 +714,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:475 findContainingModuleSpecifier
+// Go: ls/sourcedefinition.go:489 findContainingModuleSpecifier
 pub fn find_containing_module_specifier(node: Node) -> Node {
     let mut current = node;
     while current.is_some() {
@@ -724,7 +735,7 @@ pub fn find_containing_module_specifier(node: Node) -> Node {
 }
 
 impl SourceDefResolver<'_> {
-    // Go: ls/sourcedefinition.go:486 findDeclarationsInFile
+    // Go: ls/sourcedefinition.go:500 findDeclarationsInFile
     // PORT: Go `seen *collections.Set[string]` is `&mut FxHashSet<String>`.
     pub fn find_declarations_in_file(
         &mut self,
@@ -764,7 +775,7 @@ impl SourceDefResolver<'_> {
         declarations
     }
 
-    // Go: ls/sourcedefinition.go:521 getForwardedImplementationFiles
+    // Go: ls/sourcedefinition.go:535 getForwardedImplementationFiles
     pub fn get_forwarded_implementation_files(&self, source_file: Node) -> Vec<String> {
         let preferred_mode = self.infer_implied_node_format(source_file_file_name(source_file));
 
@@ -784,7 +795,7 @@ impl SourceDefResolver<'_> {
     }
 }
 
-// Go: ls/sourcedefinition.go:534 getCandidateSourceDeclarationNames
+// Go: ls/sourcedefinition.go:548 getCandidateSourceDeclarationNames
 pub fn get_candidate_source_declaration_names(
     original_node: Node,
     declaration: Node,
@@ -836,7 +847,7 @@ pub fn get_candidate_source_declaration_names(
     names
 }
 
-// Go: ls/sourcedefinition.go:572 findDeclarationNodesByName
+// Go: ls/sourcedefinition.go:586 findDeclarationNodesByName
 pub fn find_declaration_nodes_by_name(source_file: Node, names: &[String]) -> Vec<Node> {
     let names: Vec<String> = deduplicate(
         names
@@ -923,7 +934,7 @@ pub fn find_declaration_nodes_by_name(source_file: Node, names: &[String]) -> Ve
     unique_declaration_nodes(&declarations)
 }
 
-// Go: ls/sourcedefinition.go:634 getContainerDepth
+// Go: ls/sourcedefinition.go:648 getContainerDepth
 // getContainerDepth counts the number of container nodes above a declaration,
 // matching the behavior of getDepth in getTopMostDeclarationNamesInFile.
 pub fn get_container_depth(node: Node) -> i32 {
@@ -936,7 +947,7 @@ pub fn get_container_depth(node: Node) -> i32 {
     depth
 }
 
-// Go: ls/sourcedefinition.go:644 filterPreferredSourceDeclarations
+// Go: ls/sourcedefinition.go:658 filterPreferredSourceDeclarations
 pub fn filter_preferred_source_declarations(
     original_node: Node,
     declarations: Vec<Node>,
@@ -959,7 +970,7 @@ pub fn filter_preferred_source_declarations(
     declarations
 }
 
-// Go: ls/sourcedefinition.go:657 getPropertyLikeSourceDeclarations
+// Go: ls/sourcedefinition.go:671 getPropertyLikeSourceDeclarations
 pub fn get_property_like_source_declarations(
     original_node: Node,
     declarations: &[Node],
@@ -990,14 +1001,14 @@ pub fn get_property_like_source_declarations(
         .collect()
 }
 
-// Go: ls/sourcedefinition.go:679 hasConcreteSourceDeclarations
+// Go: ls/sourcedefinition.go:693 hasConcreteSourceDeclarations
 pub fn has_concrete_source_declarations(declarations: &[Node]) -> bool {
     declarations
         .iter()
         .any(|&node| is_concrete_source_declaration(node))
 }
 
-// Go: ls/sourcedefinition.go:683 isConcreteSourceDeclaration
+// Go: ls/sourcedefinition.go:697 isConcreteSourceDeclaration
 pub fn is_concrete_source_declaration(node: Node) -> bool {
     if !is_declaration(node) || node.kind() == SyntaxKind::ExportAssignment {
         return false;
@@ -1021,7 +1032,7 @@ pub fn is_concrete_source_declaration(node: Node) -> bool {
     )
 }
 
-// Go: ls/sourcedefinition.go:706 uniqueDeclarationNodes
+// Go: ls/sourcedefinition.go:720 uniqueDeclarationNodes
 pub fn unique_declaration_nodes(nodes: &[Node]) -> Vec<Node> {
     #[derive(PartialEq, Eq, Hash)]
     struct DeclarationKey {
@@ -1047,7 +1058,7 @@ pub fn unique_declaration_nodes(nodes: &[Node]) -> Vec<Node> {
     result
 }
 
-// Go: ls/sourcedefinition.go:727 findClosestDeclarationNode
+// Go: ls/sourcedefinition.go:741 findClosestDeclarationNode
 pub fn find_closest_declaration_node(source_file: Node, pos: i32) -> Node {
     let node = astnav::get_touching_property_name(source_file, pos);
     let mut current = node;
@@ -1058,4 +1069,119 @@ pub fn find_closest_declaration_node(source_file: Node, pos: i32) -> Node {
         current = current.parent();
     }
     get_source_definition_entry_node(source_file)
+}
+
+// Go N' `NodeModulePathParts` (modulespecifiers/util.go:264): the fields that
+// findImplementationFileFromDtsFileName reads (sourcedefinition.go:405, :414).
+struct NodeModulesPackageFile<'a> {
+    package_name: &'a str,
+    package_relative_path: &'a str,
+}
+
+// Go N' `GetNodeModulePathParts` (modulespecifiers/util.go:283) as
+// findImplementationFileFromDtsFileName uses it (sourcedefinition.go:393-403):
+// the package of a file in the top-level node_modules. None where Go bails out:
+// - the path has no node_modules (no parts, :394);
+// - `IsDirectNodeModulesFile` (util.go:333-339, :401): the file has no package
+//   root, because it is directly in node_modules or in a scope directory
+//   (`node_modules/a.d.ts`, `node_modules/@a.d.ts`, `node_modules/@s/a.d.ts`);
+// - `HasNestedNodeModules` (util.go:315-318, :398): a `/node_modules/` segment
+//   after the package root. The root comes after the scope of a scoped package
+//   (util.go:305-314), so a package named `node_modules` is not nested.
+// PORT: the port keeps the index form of `NodeModulePathParts` (Go N). Its
+// `package_root_index` is the root of the last package, and it stays 0 when
+// the path ends in a scope (`node_modules/@a.d.ts`), where Go N' starts the
+// index at -1 (util.go:287). So this finds the first root from
+// `top_level_package_name_index`, as the Go parse states do.
+fn node_modules_package_file(file_name: &str) -> Option<NodeModulesPackageFile<'_>> {
+    let parts = modulespecifiers::get_node_module_path_parts(file_name)?;
+    let name_start = (parts.top_level_package_name_index + 1) as usize;
+    let next_slash = |from: usize| file_name[from..].find('/').map(|i| from + i);
+    let mut root = next_slash(name_start);
+    if file_name.as_bytes().get(name_start) == Some(&b'@') {
+        root = root.and_then(|scope_end| next_slash(scope_end + 1));
+    }
+    // Go checks HasNestedNodeModules first; both checks give no file, and a
+    // path with no root has no nested node_modules.
+    let root = root?;
+    if file_name[root..].contains("/node_modules/") {
+        return None;
+    }
+    Some(NodeModulesPackageFile {
+        package_name: &file_name[name_start..root],
+        package_relative_path: &file_name[root + 1..],
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::node_modules_package_file;
+
+    fn package_file(file_name: &str) -> Option<(&str, &str)> {
+        node_modules_package_file(file_name)
+            .map(|file| (file.package_name, file.package_relative_path))
+    }
+
+    // Go: modulespecifiers/specifiers_test.go:16 TestGetNodeModulePathParts (ts#64159),
+    // the `packageName`, `packageRelativePath` and `hasNestedNodeModules` values, and
+    // the ls skeptic's sourcedef2 and sourcedef-nested probe paths.
+    #[test]
+    fn test_has_nested_node_modules() {
+        assert_eq!(
+            package_file("/workspace/node_modules/pkg/lib/index.d.ts"),
+            Some(("pkg", "lib/index.d.ts"))
+        );
+        assert_eq!(
+            package_file("/node_modules/@scope/pkg/index.d.ts"),
+            Some(("@scope/pkg", "index.d.ts"))
+        );
+        assert_eq!(
+            package_file("c:/node_modules/pkg/index.d.ts"),
+            Some(("pkg", "index.d.ts"))
+        );
+        assert_eq!(
+            package_file("/workspace/node_modules/pkg/node_modules/@scope/dep/index.d.ts"),
+            None
+        );
+        assert_eq!(
+            package_file("/p/node_modules/@s/a/node_modules/b/index.d.ts"),
+            None
+        );
+        // A package named `node_modules` (unscoped and scoped) is not nested.
+        assert_eq!(
+            package_file("/p/node_modules/node_modules/x/types/index.d.ts"),
+            Some(("node_modules", "x/types/index.d.ts"))
+        );
+        assert_eq!(
+            package_file("/p/node_modules/@sc/node_modules/t/s.d.ts"),
+            Some(("@sc/node_modules", "t/s.d.ts"))
+        );
+        assert_eq!(
+            package_file("/p/node_modules/node_modules/node_modules/x/a.d.ts"),
+            None
+        );
+        assert_eq!(
+            package_file("/p/node_modules/@types/tp/sub.d.ts"),
+            Some(("@types/tp", "sub.d.ts"))
+        );
+    }
+
+    // Go: modulespecifiers/specifiers_test.go:16 TestGetNodeModulePathParts (ts#64159),
+    // the nil and `isDirectNodeModulesFile` cases, and the ls round 2 skeptic's
+    // sourcedef-direct probe paths: a file named `@x.d.ts` directly in node_modules has
+    // no package root (Go N' starts `packageRootIndex` at -1, util.go:287).
+    #[test]
+    fn test_direct_node_modules_file() {
+        assert_eq!(package_file("/workspace/src/index.ts"), None);
+        assert_eq!(package_file("/workspace/node_modules/pkg"), None);
+        assert_eq!(package_file("/workspace/node_modules/@scope"), None);
+        assert_eq!(package_file("/workspace/node_modules/@scope/a.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/plain.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@foo.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@at.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@bar.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@scope/direct.d.ts"), None);
+        assert_eq!(package_file("/node_modules/@foo.d.ts"), None);
+        assert_eq!(package_file("c:/node_modules/@foo.d.ts"), None);
+    }
 }

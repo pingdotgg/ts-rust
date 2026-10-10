@@ -7,7 +7,7 @@ use crate::ls::prelude::*;
 use crate::frontend::core_textchange::{TextChange, apply_bulk_edits};
 
 impl LanguageService {
-    // Go: completions.go:5489 ResolveCompletionItem
+    // Go: completions.go:5488 ResolveCompletionItem
     // PORT: Go takes `*lsproto.CompletionItem` and returns it after changing
     // it; Rust takes and returns the item by value. `data` is Go's nil-able
     // `*lsproto.CompletionItemData`.
@@ -897,6 +897,8 @@ pub fn get_js_doc_parameter_completions(
         }
     }
     let mut param_index = -1;
+    // ts#64649: one emit context for all the annotations, made on first use.
+    let mut emit_context: Option<Rc<EmitContext>> = None;
     // Go: core.MapNonNil(fun.Parameters(), func(param) *CompletionItem { ... })
     let mut result: Vec<CompletionItem> = Vec::new();
     for param in fun.parameters().iter() {
@@ -910,6 +912,7 @@ pub fn get_js_doc_parameter_completions(
             let mut tabstop_counter = 1;
             let param_name = param.name().text();
             let mut display_text = get_js_doc_param_annotation(
+                &mut emit_context,
                 param_name,
                 param.initializer(),
                 param.dot_dot_dot_token(),
@@ -924,6 +927,7 @@ pub fn get_js_doc_parameter_completions(
             let mut snippet_text = String::new();
             if is_snippet {
                 snippet_text = get_js_doc_param_annotation(
+                    &mut emit_context,
                     param_name,
                     param.initializer(),
                     param.dot_dot_dot_token(),
@@ -963,6 +967,7 @@ pub fn get_js_doc_parameter_completions(
             // Destructuring parameter; do it positionally
             let param_path = format!("param{param_index}");
             let display_text_result = generate_js_doc_param_tags_for_destructuring(
+                &mut emit_context,
                 &param_path,
                 param.name(),
                 param.initializer(),
@@ -976,6 +981,7 @@ pub fn get_js_doc_parameter_completions(
             let mut snippet_text = String::new();
             if is_snippet {
                 let snippet_text_result = generate_js_doc_param_tags_for_destructuring(
+                    &mut emit_context,
                     &param_path,
                     param.name(),
                     param.initializer(),
@@ -1022,11 +1028,12 @@ pub fn get_js_doc_parameter_completions(
     result
 }
 
-// Go: completions.go:6269 getJSDocParamAnnotation
+// Go: completions.go:6274 getJSDocParamAnnotation
 // PORT: Go `tabstopCounter *int` is never nil at a call site, so it is
 // `&mut i32`; the Go `debug.Assert(tabstopCounter != nil)` always holds.
 #[allow(clippy::too_many_arguments)]
 pub fn get_js_doc_param_annotation(
+    emit_context: &mut Option<Rc<EmitContext>>,
     param_name: &str,
     initializer: Node,
     dot_dot_dot_token: Node,
@@ -1075,7 +1082,9 @@ pub fn get_js_doc_param_annotation(
                         None, /*idToSymbol*/
                     );
                     if type_node.is_some() {
-                        let emit_context = new_emit_context();
+                        // ts#64649: the caller's emit context, made on first use.
+                        let emit_context =
+                            emit_context.get_or_insert_with(new_emit_context).clone();
                         // !!! snippet p
                         let mut p = new_printer(
                             PrinterOptions {
@@ -1123,7 +1132,7 @@ pub fn get_js_doc_param_annotation(
     }
 }
 
-// Go: completions.go:6352 getJSDocParamNameWithInitializer
+// Go: completions.go:6360 getJSDocParamNameWithInitializer
 // PORT: Go `strings.TrimSpace` and Rust `str::trim` both trim Unicode
 // White_Space.
 pub fn get_js_doc_param_name_with_initializer(param_name: &str, initializer: Node) -> String {
@@ -1134,9 +1143,10 @@ pub fn get_js_doc_param_name_with_initializer(param_name: &str, initializer: Nod
     format!("[{param_name}={initializer_text}]")
 }
 
-// Go: completions.go:6360 generateJSDocParamTagsForDestructuring
+// Go: completions.go:6368 generateJSDocParamTagsForDestructuring
 #[allow(clippy::too_many_arguments)]
 pub fn generate_js_doc_param_tags_for_destructuring(
+    emit_context: &mut Option<Rc<EmitContext>>,
     path: &str,
     pattern: Node,
     initializer: Node,
@@ -1150,6 +1160,7 @@ pub fn generate_js_doc_param_tags_for_destructuring(
     let mut tabstop_counter = 1;
     if !is_js {
         return vec![get_js_doc_param_annotation(
+            emit_context,
             path,
             initializer,
             dot_dot_dot_token,
@@ -1163,6 +1174,7 @@ pub fn generate_js_doc_param_tags_for_destructuring(
         )];
     }
     js_doc_param_pattern_worker(
+        emit_context,
         path,
         pattern,
         initializer,
@@ -1176,9 +1188,10 @@ pub fn generate_js_doc_param_tags_for_destructuring(
     )
 }
 
-// Go: completions.go:6400 jsDocParamPatternWorker
+// Go: completions.go:6411 jsDocParamPatternWorker
 #[allow(clippy::too_many_arguments)]
 pub fn js_doc_param_pattern_worker(
+    emit_context: &mut Option<Rc<EmitContext>>,
     path: &str,
     pattern: Node,
     initializer: Node,
@@ -1193,6 +1206,7 @@ pub fn js_doc_param_pattern_worker(
     if is_object_binding_pattern(pattern) && dot_dot_dot_token.is_nil() {
         let mut child_counter = *counter;
         let root_param = get_js_doc_param_annotation(
+            emit_context,
             path,
             initializer,
             dot_dot_dot_token,
@@ -1207,6 +1221,7 @@ pub fn js_doc_param_pattern_worker(
         let mut child_tags: Vec<String> = Vec::new();
         for element in pattern.elements().iter() {
             let element_tags = js_doc_param_element_worker(
+                emit_context,
                 path,
                 element,
                 initializer,
@@ -1232,6 +1247,7 @@ pub fn js_doc_param_pattern_worker(
         }
     }
     vec![get_js_doc_param_annotation(
+        emit_context,
         path,
         initializer,
         dot_dot_dot_token,
@@ -1245,11 +1261,12 @@ pub fn js_doc_param_pattern_worker(
     )]
 }
 
-// Go: completions.go:6469 jsDocParamElementWorker
+// Go: completions.go:6484 jsDocParamElementWorker
 // Assumes binding element is inside object binding pattern.
 // We can't deeply annotate an array binding pattern.
 #[allow(clippy::too_many_arguments)]
 pub fn js_doc_param_element_worker(
+    emit_context: &mut Option<Rc<EmitContext>>,
     path: &str,
     element: Node,
     _initializer: Node,
@@ -1273,6 +1290,7 @@ pub fn js_doc_param_element_worker(
         }
         let param_name = format!("{path}.{property_name}");
         return vec![get_js_doc_param_annotation(
+            emit_context,
             &param_name,
             element.initializer(),
             element.dot_dot_dot_token(),
@@ -1291,6 +1309,7 @@ pub fn js_doc_param_element_worker(
             return Vec::new();
         }
         return js_doc_param_pattern_worker(
+            emit_context,
             &format!("{path}.{property_name}"),
             element.name(),
             element.initializer(),
@@ -1306,7 +1325,7 @@ pub fn js_doc_param_element_worker(
     Vec::new()
 }
 
-// Go: completions.go:6527 getJSDocParameterNameCompletions
+// Go: completions.go:6545 getJSDocParameterNameCompletions
 pub fn get_js_doc_parameter_name_completions(tag: Node) -> Vec<CompletionItem> {
     if !is_identifier(tag.name()) {
         return Vec::new();
@@ -1355,7 +1374,7 @@ pub fn get_js_doc_parameter_name_completions(tag: Node) -> Vec<CompletionItem> {
 }
 
 impl LanguageService {
-    // Go: completions.go:6568 getExhaustiveCaseSnippets
+    // Go: completions.go:6586 getExhaustiveCaseSnippets
     #[allow(clippy::too_many_arguments)]
     pub fn get_exhaustive_case_snippets(
         &self,
@@ -1589,7 +1608,7 @@ impl LanguageService {
     }
 }
 
-// Go: completions.go:6706 typeNodeToExpression
+// Go: completions.go:6724 typeNodeToExpression
 pub fn type_node_to_expression(
     type_node: Node,
     target: ScriptTarget,
@@ -1656,7 +1675,7 @@ pub fn type_node_to_expression(
     }
 }
 
-// Go: completions.go:6768 entityNameToExpression
+// Go: completions.go:6786 entityNameToExpression
 pub fn entity_name_to_expression(
     entity_name: Node,
     target: ScriptTarget,
@@ -1674,7 +1693,7 @@ pub fn entity_name_to_expression(
     )
 }
 
-// Go: completions.go:6785 snippetPrinter
+// Go: completions.go:6803 snippetPrinter
 // PORT: Go keeps `baseWriter` and the writer that embeds it as two pointers
 // to one `ChangeTrackerWriter`. In Rust the snippet writer owns it, so Go
 // `p.baseWriter` is `p.writer.borrow().change_tracker_writer`. The printer
@@ -1705,7 +1724,7 @@ impl SnippetPrinter {
         unescaped
     }
 
-    // Go: completions.go:6802 printUnescapedNode
+    // Go: completions.go:6820 printUnescapedNode
     pub fn print_unescaped_node(&mut self, node: Node) -> String {
         {
             let mut writer = self.writer.borrow_mut();
@@ -1722,7 +1741,7 @@ impl SnippetPrinter {
         self.writer.borrow().string()
     }
 
-    // Go: completions.go:6809 printAndFormatNode
+    // Go: completions.go:6827 printAndFormatNode
     pub fn print_and_format_node(
         &mut self,
         ctx: &Context,
@@ -1733,7 +1752,7 @@ impl SnippetPrinter {
         self.print_and_format_node_with_settings(ctx, node, source_file, &format_options)
     }
 
-    // Go: completions.go:6813 printAndFormatNodeWithSettings
+    // Go: completions.go:6831 printAndFormatNodeWithSettings
     pub fn print_and_format_node_with_settings(
         &mut self,
         ctx: &Context,
@@ -1783,7 +1802,7 @@ impl SnippetPrinter {
     }
 }
 
-// Go: completions.go:6836 createSnippetPrinter
+// Go: completions.go:6854 createSnippetPrinter
 // PORT: a nil Go `emitContext` is `None`.
 pub fn create_snippet_printer(
     options: PrinterOptions,
@@ -1810,7 +1829,7 @@ pub fn create_snippet_printer(
     }
 }
 
-// Go: completions.go:6855 snippetEmitTextWriter
+// Go: completions.go:6873 snippetEmitTextWriter
 // Override base writer methods to perform snippet escaping.
 // PORT: Go embeds `*printer.ChangeTrackerWriter`; here it is the owned field
 // `change_tracker_writer`. The `EmitTextWriter` impl below forwards every
@@ -1821,7 +1840,7 @@ pub struct SnippetEmitTextWriter {
 }
 
 impl SnippetEmitTextWriter {
-    // Go: completions.go:6888 escapingWrite
+    // Go: completions.go:6906 escapingWrite
     // The formatter/scanner will have issues with snippet-escaped text,
     // so instead of writing the escaped text directly to the writer,
     // generate a set of changes that can be applied to the unescaped text
@@ -1843,7 +1862,7 @@ impl SnippetEmitTextWriter {
 }
 
 impl EmitTextWriter for SnippetEmitTextWriter {
-    // Go: completions.go:6860 Write
+    // Go: completions.go:6878 Write
     fn write(&mut self, s: &str) {
         self.escaping_write(s, |w| w.write(s));
     }
@@ -1852,7 +1871,7 @@ impl EmitTextWriter for SnippetEmitTextWriter {
         self.change_tracker_writer.write_trailing_semicolon(text);
     }
 
-    // Go: completions.go:6864 WriteComment
+    // Go: completions.go:6882 WriteComment
     fn write_comment(&mut self, text: &str) {
         self.escaping_write(text, |w| w.write_comment(text));
     }
@@ -1873,22 +1892,22 @@ impl EmitTextWriter for SnippetEmitTextWriter {
         self.change_tracker_writer.write_space(text);
     }
 
-    // Go: completions.go:6868 WriteStringLiteral
+    // Go: completions.go:6886 WriteStringLiteral
     fn write_string_literal(&mut self, text: &str) {
         self.escaping_write(text, |w| w.write_string_literal(text));
     }
 
-    // Go: completions.go:6872 WriteParameter
+    // Go: completions.go:6890 WriteParameter
     fn write_parameter(&mut self, text: &str) {
         self.escaping_write(text, |w| w.write_parameter(text));
     }
 
-    // Go: completions.go:6876 WriteProperty
+    // Go: completions.go:6894 WriteProperty
     fn write_property(&mut self, text: &str) {
         self.escaping_write(text, |w| w.write_property(text));
     }
 
-    // Go: completions.go:6880 WriteSymbol
+    // Go: completions.go:6898 WriteSymbol
     fn write_symbol(&mut self, text: &str, symbol: SymbolId) {
         self.escaping_write(text, |w| w.write_symbol(text, symbol));
     }

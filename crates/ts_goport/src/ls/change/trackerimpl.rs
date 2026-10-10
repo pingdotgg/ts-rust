@@ -8,7 +8,7 @@ use crate::frontend::scanner::scanner_p1::{rune_to_char, utf8_decode_rune_in_str
 use crate::frontend::scanner::{get_leading_comment_ranges, get_trailing_comment_ranges};
 use crate::spanmap::{Feature, SpanMap};
 
-// Go: ls/change/trackerimpl.go:91 dedupeIdenticalEdits
+// Go: ls/change/trackerimpl.go:92 dedupeIdenticalEdits
 /// dedupeIdenticalEdits drops exact duplicates from a sorted slice of edits. When a mapper copies one span
 /// of the original into more than one projection, an edit computed against each projection describes the
 /// same change to the same original range; emitting it once per projection would apply it repeatedly.
@@ -17,7 +17,7 @@ fn dedupe_identical_edits(edits: &mut Vec<lsproto::TextEdit>) {
     edits.dedup_by(|edit, last| edit.range == last.range && edit.new_text == last.new_text);
 }
 
-// Go: ls/change/trackerimpl.go:102 textEditsConflict
+// Go: ls/change/trackerimpl.go:103 textEditsConflict
 fn text_edits_conflict(
     a: &lsproto::TextEdit,
     b: &lsproto::TextEdit,
@@ -33,7 +33,7 @@ fn text_edits_conflict(
         && a.new_text != b.new_text
 }
 
-// Go: ls/change/trackerimpl.go:222 leadingIndentation
+// Go: ls/change/trackerimpl.go:223 leadingIndentation
 // PORT: Go slices the string by bytes; this takes and returns bytes.
 fn leading_indentation(text: &[u8]) -> &[u8] {
     let mut end = 0;
@@ -44,7 +44,7 @@ fn leading_indentation(text: &[u8]) -> &[u8] {
 }
 
 impl Tracker {
-    // Go: ls/change/trackerimpl.go:22 getTextChangesFromChanges
+    // Go: ls/change/trackerimpl.go:23 getTextChangesFromChanges
     // PORT: Go ranges over the MultiMap's Go map (random order), then over
     // the result map (random order). The IndexMaps walk files in insertion
     // order. The change map is taken out for the loop (`to_lsp_edit_range`
@@ -138,7 +138,7 @@ impl Tracker {
         changes
     }
 
-    // Go: ls/change/trackerimpl.go:113 computeNewText
+    // Go: ls/change/trackerimpl.go:114 computeNewText
     // PORT: Go takes `change *trackerEdit` and only reads it.
     fn compute_new_text(
         &mut self,
@@ -237,7 +237,7 @@ impl Tracker {
         self.reindent_inserted_lines(source_file, change, result)
     }
 
-    // Go: ls/change/trackerimpl.go:185 reindentInsertedLines
+    // Go: ls/change/trackerimpl.go:186 reindentInsertedLines
     /// reindentInsertedLines fixes the indentation of a line an insertion introduces into the document the
     /// edit is applied to. The inserted text forms its own line when it ends in a newline, and that line has to
     /// pick up the indentation of the line it is being spliced into. Where the indentation goes depends on
@@ -306,7 +306,7 @@ impl Tracker {
         text + &*String::from_utf8_lossy(before_point)
     }
 
-    // Go: ls/change/trackerimpl.go:230 getFormattedTextOfNode
+    // Go: ls/change/trackerimpl.go:231 getFormattedTextOfNode
     /** Note: this may mutate `nodeIn`. */
     // PORT: Go passes `options NodeOptions` by value; it is only read, so it
     // is passed by reference.
@@ -360,7 +360,7 @@ impl Tracker {
     }
 }
 
-// Go: ls/change/trackerimpl.go:252 GetFormatCodeSettingsForWriting
+// Go: ls/change/trackerimpl.go:253 GetFormatCodeSettingsForWriting
 pub fn get_format_code_settings_for_writing(
     options: lsutil::FormatCodeSettings,
     source_file: Node,
@@ -379,7 +379,7 @@ pub fn get_format_code_settings_for_writing(
 }
 
 impl Tracker {
-    // Go: ls/change/trackerimpl.go:262 getNonformattedText
+    // Go: ls/change/trackerimpl.go:263 getNonformattedText
     fn get_nonformatted_text(&self, node: Node, source_file: Node) -> (String, Node) {
         let (text, node_out) = print_and_position_node(
             self.node_factory(),
@@ -401,7 +401,7 @@ impl Tracker {
         (text, source_file_like)
     }
 
-    // Go: ls/change/trackerimpl.go:275 GetAdjustedRange
+    // Go: ls/change/trackerimpl.go:276 GetAdjustedRange
     // method on the changeTracker because use of converters
     /// GetAdjustedRange computes the adjusted range for a node in a source file, accounting for trivia.
     pub fn get_adjusted_range(
@@ -418,7 +418,7 @@ impl Tracker {
         )
     }
 
-    // Go: ls/change/trackerimpl.go:283 getAdjustedStartPosition
+    // Go: ls/change/trackerimpl.go:284 getAdjustedStartPosition
     // method on the changeTracker because use of converters
     pub fn get_adjusted_start_position(
         &self,
@@ -512,7 +512,7 @@ impl Tracker {
         line_starts[compute_line_of_position(line_starts, adjusted_start_position) as usize]
     }
 
-    // Go: ls/change/trackerimpl.go:348 getEndPositionOfMultilineTrailingComment
+    // Go: ls/change/trackerimpl.go:349 getEndPositionOfMultilineTrailingComment
     // method on the changeTracker because of converters
     // Return the end position of a multiline comment of it is on another line; otherwise returns `undefined`;
     fn get_end_position_of_multiline_trailing_comment(
@@ -557,7 +557,7 @@ impl Tracker {
         0
     }
 
-    // Go: ls/change/trackerimpl.go:374 getAdjustedEndPosition
+    // Go: ls/change/trackerimpl.go:375 getAdjustedEndPosition
     // method on the changeTracker because of converters
     pub fn get_adjusted_end_position(
         &self,
@@ -615,7 +615,7 @@ impl Tracker {
 
 // ============= utilities =============
 
-// Go: ls/change/trackerimpl.go:404 hasCommentsBeforeLineBreak
+// Go: ls/change/trackerimpl.go:405 hasCommentsBeforeLineBreak
 pub fn has_comments_before_line_break(text: &str, start: i32) -> bool {
     // PORT: Go `[]rune(text[start:])` decodes runes from byte `start`
     // (invalid bytes become U+FFFD). Go `text[start:]` panics past the end.
@@ -637,7 +637,7 @@ pub fn has_comments_before_line_break(text: &str, start: i32) -> bool {
     false
 }
 
-// Go: ls/change/trackerimpl.go:413 needSemicolonBetween
+// Go: ls/change/trackerimpl.go:414 needSemicolonBetween
 pub fn need_semicolon_between(a: Node, b: Node) -> bool {
     (is_property_signature_declaration(a) || is_property_declaration(a))
         && is_class_or_type_element(b)
@@ -646,7 +646,7 @@ pub fn need_semicolon_between(a: Node, b: Node) -> bool {
 }
 
 impl Tracker {
-    // Go: ls/change/trackerimpl.go:421 getInsertionPositionAtSourceFileTop
+    // Go: ls/change/trackerimpl.go:422 getInsertionPositionAtSourceFileTop
     pub fn get_insertion_position_at_source_file_top(&self, source_file: Node) -> i32 {
         let mut last_prologue = Node::NIL;
         for node in source_file.statements() {

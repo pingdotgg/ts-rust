@@ -6,8 +6,8 @@ use crate::ls::prelude::*;
 // - Go `GetTypeCheckerForFile` + `defer done()` is
 //   `ls_program::get_type_checker_for_file` with the `Release` guard kept to
 //   the end of the function. The checker is borrowed only around the code
-//   that uses it, because `getAllDiagnostics` and the import adder can lease
-//   the same checker (a second `borrow_mut` would panic).
+//   that uses it. Since ts#64543 `getAllDiagnostics` runs before the
+//   acquisition, because acquisitions are not reentrant.
 // - Go `autoimport.ImportAdder` (nil allowed) is
 //   `Option<Box<dyn autoimport::ImportAdder>>` (w3 shape); helpers borrow it
 //   as `Option<&mut dyn autoimport::ImportAdder>`.
@@ -113,6 +113,11 @@ fn get_all_code_actions_to_fix_class_incorrectly_implements_interface(
     context: &Context,
     fix_context: &CodeFixContext<'_>,
 ) -> Result<Option<CombinedCodeActions>, GoError> {
+    // ts#64543: the diagnostics are read before the checker is acquired,
+    // because `getAllDiagnostics` acquires a checker itself and acquisitions
+    // are not reentrant.
+    let all_diags = get_all_diagnostics(context, fix_context.program, fix_context.source_file);
+
     let (type_checker, _done) = ls_program::get_type_checker_for_file(
         fix_context.program,
         context,
@@ -130,7 +135,7 @@ fn get_all_code_actions_to_fix_class_incorrectly_implements_interface(
 
     let mut seen_class_declarations: FxHashSet<Node> = FxHashSet::default();
 
-    for diag in get_all_diagnostics(context, fix_context.program, fix_context.source_file) {
+    for diag in all_diags {
         if is_fixable_diagnostic(
             &diag,
             &FIX_CLASS_INCORRECTLY_IMPLEMENTS_INTERFACE_ERROR_CODES,
@@ -178,7 +183,7 @@ fn get_all_code_actions_to_fix_class_incorrectly_implements_interface(
     }))
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:107 addChanges
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:109 addChanges
 // PORT: the fixer borrows `change_tracker` and `type_checker` for its whole
 // life, so the Go uses of `changeTracker` and `typeChecker` next to it go
 // through the fixer's fields.
@@ -277,7 +282,7 @@ fn add_changes(
     }
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:136 getChanges
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:138 getChanges
 fn get_changes(
     change_tracker: &mut change::Tracker,
     import_adder: Option<&mut (dyn autoimport::ImportAdder + 'static)>,
@@ -299,7 +304,7 @@ fn get_changes(
     file_changes
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:148 insertInterfaceMemberNode
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:150 insertInterfaceMemberNode
 fn insert_interface_member_node(
     change_tracker: &mut change::Tracker,
     source_file: Node,
@@ -314,7 +319,7 @@ fn insert_interface_member_node(
     }
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:156 getClass
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:158 getClass
 fn get_class(source_file: Node, span: TextRange) -> Node {
     let token = astnav::get_token_at_position(source_file, span.pos());
     if token.is_nil() {
@@ -323,7 +328,7 @@ fn get_class(source_file: Node, span: TextRange) -> Node {
     get_containing_class(token)
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:164 getConstructor
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:166 getConstructor
 fn get_constructor(class_declaration: Node) -> Node {
     if class_declaration.is_nil() || class_declaration.member_list().is_nil() {
         return Node::NIL;
@@ -336,7 +341,7 @@ fn get_constructor(class_declaration: Node) -> Node {
     Node::NIL
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:176 getMissingMembers
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:178 getMissingMembers
 fn get_missing_members(
     type_checker: &mut Checker,
     class_declaration: Node,
@@ -375,7 +380,7 @@ fn get_missing_members(
     missing_members
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:207 getInheritedMembers
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:209 getInheritedMembers
 // PORT: Go returns a new `ast.SymbolTable` that only `getMissingMembers`
 // reads by name. A local `FxHashMap<String, SymbolId>` stands for it, so no
 // table is added to the checker's symbol arena.
@@ -406,7 +411,7 @@ fn get_inherited_members(
     inherited_members
 }
 
-// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:231 createImportAdder
+// Go: ls/codeactions_fixclassincorrectlyimplementsinterface.go:233 createImportAdder
 // PORT: Go also takes `typeChecker` and passes it to `NewImportAdder`. The
 // pinned w3 `new_import_adder` has no checker parameter, so this drops it.
 fn create_import_adder(

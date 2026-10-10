@@ -1914,9 +1914,11 @@ pub fn get_reference_at_position(
         let verified_file_name = resolution.resolved_file_name.clone();
         let mut file_name = resolution.resolved_file_name.clone();
         if file_name.is_empty() {
-            file_name = tspath::resolve_path(
+            // ts#64159: `sourceFile.FileName().Directory().ResolveFile(node.Text())`
+            // (Go N' utilities.go:1349): normalized, no trailing separator.
+            file_name = tspath::get_normalized_absolute_path(
+                node.text(),
                 &tspath::get_directory_path(source_file_file_name(source_file)),
-                &[node.text()],
             );
         }
         return Some(RefInfo {

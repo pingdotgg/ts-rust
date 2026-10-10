@@ -4,12 +4,11 @@ use crate::ls::prelude::*;
 //
 // PORT (whole file):
 // - Go `program.GetTypeChecker(ctx)` is `ls_program::get_type_checker`.
-//   Go leases the checker again in nested calls; the pool returns the
-//   checker the request already holds. A second `RefCell` borrow would
-//   panic, so a nested helper takes the caller's `ch: &mut Checker` (as the
-//   w3 autoimport `View` methods do), and a lease that Go only hands to
-//   `NewImportAdder` is held without a borrow (pinned decision: the adder
-//   does not store the checker).
+//   Since ts#64543 Go acquires the checker once and passes it to the nested
+//   helpers (acquisitions are not reentrant). A helper takes the caller's
+//   `ch: &mut Checker` (as the w3 autoimport `View` methods do); the caller
+//   borrows the lease around each call (pinned decision: the adder does not
+//   store the checker).
 // - Go `*autoimport.View` is `Rc<autoimport::View>`; Go `*autoimport.Fix` is
 //   `Rc<autoimport::Fix>`.
 // - Go `[]*fixInfo` is `Vec<FixInfo>`; the values are never changed after
@@ -18,7 +17,7 @@ use crate::ls::prelude::*;
 use crate::frontend::core_ls_ext::compare_booleans;
 use std::sync::LazyLock;
 
-// Go: ls/codeactions_importfixes.go:20 importFixErrorCodes
+// Go: ls/codeactions_importfixes.go:19 importFixErrorCodes
 // PORT: `diagnostics.X.Code()` is `int32`; `Message::code` is `u32`.
 static IMPORT_FIX_ERROR_CODES: LazyLock<Vec<i32>> = LazyLock::new(|| {
     vec![
@@ -46,10 +45,10 @@ static IMPORT_FIX_ERROR_CODES: LazyLock<Vec<i32>> = LazyLock::new(|| {
     ]
 });
 
-// Go: ls/codeactions_importfixes.go:45 importFixID
+// Go: ls/codeactions_importfixes.go:44 importFixID
 const IMPORT_FIX_ID: &str = "fixMissingImport";
 
-// Go: ls/codeactions_importfixes.go:49 ImportFixProvider
+// Go: ls/codeactions_importfixes.go:48 ImportFixProvider
 // ImportFixProvider is the CodeFixProvider for import-related fixes
 pub static IMPORT_FIX_PROVIDER: LazyLock<CodeFixProvider> = LazyLock::new(|| CodeFixProvider {
     error_codes: IMPORT_FIX_ERROR_CODES.clone(),
@@ -58,7 +57,7 @@ pub static IMPORT_FIX_PROVIDER: LazyLock<CodeFixProvider> = LazyLock::new(|| Cod
     get_all_code_actions: Some(get_all_import_code_actions),
 });
 
-// Go: ls/codeactions_importfixes.go:56 fixInfo
+// Go: ls/codeactions_importfixes.go:55 fixInfo
 #[derive(Clone)]
 struct FixInfo {
     fix: Rc<autoimport::Fix>,
@@ -67,13 +66,18 @@ struct FixInfo {
     is_jsx_namespace_fix: bool,
 }
 
-// Go: ls/codeactions_importfixes.go:63 getImportCodeActions
+// Go: ls/codeactions_importfixes.go:62 getImportCodeActions
 fn get_import_code_actions(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
 ) -> Result<Vec<CodeAction>, GoError> {
+    // ts#64543: the checker is acquired here and passed to `getFixInfos`.
+    // Go: defer done(). `_done` releases the checker at the end of the
+    // function; the borrow ends after `getFixInfos`.
+    let (ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
+
     let info = get_fix_infos(
-        ctx,
+        &mut ch.borrow_mut(),
         fix_context,
         fix_context.error_code,
         fix_context.span.pos(),
@@ -109,7 +113,7 @@ fn get_import_code_actions(
     Ok(actions)
 }
 
-// Go: ls/codeactions_importfixes.go:95 getAllImportCodeActions
+// Go: ls/codeactions_importfixes.go:97 getAllImportCodeActions
 fn get_all_import_code_actions(
     ctx: &Context,
     fix_context: &CodeFixContext<'_>,
@@ -134,9 +138,9 @@ fn get_all_import_code_actions(
 
     // PORT: Go passes `ch` to the views and to `NewImportAdder`, which the
     // pinned Rust view and adder do not take. The lease is held to the end
-    // of the function (Go `defer done()`) but not borrowed, because
-    // `getFixInfos` below leases and borrows the same checker.
-    let (_ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
+    // of the function (Go `defer done()`); it is borrowed around each
+    // `addImportFromDiagnostic` call (ts#64543 passes it there).
+    let (ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
 
     let mut view = fix_context
         .ls
@@ -161,7 +165,7 @@ fn get_all_import_code_actions(
     );
 
     for diag in &import_diags {
-        add_import_from_diagnostic(ctx, &mut *import_adder, diag, fix_context)?;
+        add_import_from_diagnostic(&mut ch.borrow_mut(), &mut *import_adder, diag, fix_context)?;
     }
 
     if !import_adder.has_fixes() {
@@ -178,10 +182,10 @@ fn get_all_import_code_actions(
     }))
 }
 
-// Go: ls/codeactions_importfixes.go:152 addImportFromDiagnostic
+// Go: ls/codeactions_importfixes.go:154 addImportFromDiagnostic
 // addImportFromDiagnostic finds the best import fix for a diagnostic and adds it to the adder.
 fn add_import_from_diagnostic(
-    ctx: &Context,
+    ch: &mut Checker,
     import_adder: &mut dyn autoimport::ImportAdder,
     diag: &Diagnostic,
     fix_context: &CodeFixContext<'_>,
@@ -196,16 +200,16 @@ fn add_import_from_diagnostic(
         params: None,
     };
 
-    let infos = get_fix_infos(ctx, &diag_fix_context, diag.code(), diag.pos())?;
+    let infos = get_fix_infos(ch, &diag_fix_context, diag.code(), diag.pos())?;
     if !infos.is_empty() {
         import_adder.add_import_fix(infos[0].fix.clone());
     }
     Ok(())
 }
 
-// Go: ls/codeactions_importfixes.go:171 getFixInfos
+// Go: ls/codeactions_importfixes.go:173 getFixInfos
 fn get_fix_infos(
-    ctx: &Context,
+    ch: &mut Checker,
     fix_context: &CodeFixContext<'_>,
     error_code: i32,
     pos: i32,
@@ -223,10 +227,6 @@ fn get_fix_infos(
     {
         return Ok(Vec::new());
     }
-
-    // Go: defer done(). `_done` releases the checker when it drops at the end of scope.
-    let (ch, _done) = ls_program::get_type_checker(fix_context.program, ctx);
-    let ch = &mut *ch.borrow_mut();
 
     let view: Option<Rc<autoimport::View>>;
     let mut info: Vec<FixInfo> = Vec::new();
@@ -304,7 +304,7 @@ fn get_fix_infos(
     Ok(sort_fix_info(info, fix_context, &view))
 }
 
-// Go: ls/codeactions_importfixes.go:244 getFixesInfoForUMDImport
+// Go: ls/codeactions_importfixes.go:243 getFixesInfoForUMDImport
 fn get_fixes_info_for_umd_import(
     token: Node,
     view: &autoimport::View,
@@ -338,7 +338,7 @@ fn get_fixes_info_for_umd_import(
     result
 }
 
-// Go: ls/codeactions_importfixes.go:268 getUmdSymbol
+// Go: ls/codeactions_importfixes.go:267 getUmdSymbol
 fn get_umd_symbol(token: Node, ch: &mut Checker) -> SymbolId {
     // try the identifier to see if it is the umd symbol
     let mut umd_symbol = SymbolId::NIL;
@@ -373,7 +373,7 @@ fn get_umd_symbol(token: Node, ch: &mut Checker) -> SymbolId {
     SymbolId::NIL
 }
 
-// Go: ls/codeactions_importfixes.go:297 isUMDExportSymbol
+// Go: ls/codeactions_importfixes.go:296 isUMDExportSymbol
 // PORT: Go reads the symbol through its pointer; here through the arena.
 fn is_umd_export_symbol(symbols: &SymbolArena, symbol: SymbolId) -> bool {
     symbol.is_some()
@@ -382,7 +382,7 @@ fn is_umd_export_symbol(symbols: &SymbolArena, symbol: SymbolId) -> bool {
         && is_namespace_export_declaration(symbols.sym(symbol).declarations[0])
 }
 
-// Go: ls/codeactions_importfixes.go:303 getFixesInfoForNonUMDImport
+// Go: ls/codeactions_importfixes.go:302 getFixesInfoForNonUMDImport
 fn get_fixes_info_for_non_umd_import(
     fix_context: &CodeFixContext<'_>,
     symbol_token: Node,
@@ -450,7 +450,7 @@ fn get_fixes_info_for_non_umd_import(
     all_info
 }
 
-// Go: ls/codeactions_importfixes.go:354 getTypeOnlyPromotionFix
+// Go: ls/codeactions_importfixes.go:353 getTypeOnlyPromotionFix
 fn get_type_only_promotion_fix(
     source_file: Node,
     symbol_token: Node,
@@ -486,13 +486,13 @@ fn get_type_only_promotion_fix(
     }))
 }
 
-// Go: ls/codeactions_importfixes.go:375 symbolNameInfo
+// Go: ls/codeactions_importfixes.go:374 symbolNameInfo
 struct SymbolNameInfo {
     name: String,
     is_type_only: bool, // whether the symbol currently resolves to a type-only import
 }
 
-// Go: ls/codeactions_importfixes.go:380 getSymbolNamesToImport
+// Go: ls/codeactions_importfixes.go:379 getSymbolNamesToImport
 fn get_symbol_names_to_import(
     source_file: Node,
     ch: &mut Checker,
@@ -564,7 +564,7 @@ fn get_symbol_names_to_import(
     }]
 }
 
-// Go: ls/codeactions_importfixes.go:411 needsJsxNamespaceFix
+// Go: ls/codeactions_importfixes.go:410 needsJsxNamespaceFix
 fn needs_jsx_namespace_fix(jsx_namespace: &str, symbol_token: Node, ch: &mut Checker) -> bool {
     if is_intrinsic_jsx_name(symbol_token.text()) {
         return true;
@@ -592,12 +592,12 @@ fn needs_jsx_namespace_fix(jsx_namespace: &str, symbol_token: Node, ch: &mut Che
     false
 }
 
-// Go: ls/codeactions_importfixes.go:425 jsxModeNeedsExplicitImport
+// Go: ls/codeactions_importfixes.go:424 jsxModeNeedsExplicitImport
 fn jsx_mode_needs_explicit_import(jsx: JsxEmit) -> bool {
     jsx == JsxEmit::REACT || jsx == JsxEmit::REACT_NATIVE
 }
 
-// Go: ls/codeactions_importfixes.go:429 sortFixInfo
+// Go: ls/codeactions_importfixes.go:428 sortFixInfo
 fn sort_fix_info(
     fixes: Vec<FixInfo>,
     fix_context: &CodeFixContext<'_>,
