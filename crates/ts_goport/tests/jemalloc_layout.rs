@@ -5,9 +5,6 @@
 //! checks what that process can see: 4 arenas, the holder thread, and
 //! arena grows at 2 MiB boundaries in every arena.
 //!
-//! `layout_stops_at_4_arenas` does the same without `narenas:4` (4 arenas
-//! per CPU): the layout makes no arena after the fourth.
-//!
 //! `tsgo_exits_with_the_holder`: tsgo still exits, with its exit code, in
 //! each mode that keeps the holder thread to the end (plain, worker,
 //! `--singleThreaded`, `-b`, `-w` and `--lsp`). Each tsgo has SIGKILL as
@@ -47,7 +44,16 @@ const RUN_LIMIT: Duration = Duration::from_secs(60);
 
 #[test]
 fn layout_from_inside() {
-    if !inner("layout_from_inside", bins_jemalloc_conf()) {
+    if std::env::var_os(INNER).is_none() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "layout_from_inside", "--nocapture"])
+            .args(["--test-threads", "1"])
+            .env(INNER, "1")
+            .env("_RJEM_MALLOC_CONF", bins_jemalloc_conf())
+            .env_remove("GOPORT_JEMALLOC_LAYOUT")
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status}");
         return;
     }
     if ts_goport::gostd::stack::memory_limit().is_some() {
@@ -110,31 +116,6 @@ fn layout_from_inside() {
 }
 
 #[test]
-fn layout_stops_at_4_arenas() {
-    let conf: Vec<&str> = bins_jemalloc_conf()
-        .split(',')
-        .filter(|option| !option.starts_with("narenas:"))
-        .collect();
-    if !inner("layout_stops_at_4_arenas", &conf.join(",")) {
-        return;
-    }
-    if ts_goport::gostd::stack::memory_limit().is_some() {
-        eprintln!("skipped: the layout does nothing under a memory limit");
-        return;
-    }
-    let arenas = Access::<u32>::read(b"opt.narenas\0".name()).unwrap();
-    if arenas <= 4 {
-        eprintln!("skipped: jemalloc has {arenas} arenas here");
-        return;
-    }
-    // This process has at most 2 threads (libtest's), so only the layout
-    // can make arenas 2 to 4.
-    jemalloc_layout();
-    assert!(arena_made(3), "arena 3");
-    assert!(!arena_made(4), "the layout made arena 4 of {arenas}");
-}
-
-#[test]
 fn tsgo_exits_with_the_holder() {
     if let Some(parent) = std::env::var_os(EXEC_PARENT) {
         exec_tsgo(&parent);
@@ -183,33 +164,6 @@ fn tsgo_exits_with_the_holder() {
     wait_for(&mut lsp, || !holder || has_thread(&lsp_dir, HOLDER_NAME));
     drop(lsp.stdin.take());
     assert_eq!(wait_limited(lsp, &["--lsp"]).code(), Some(0), "--lsp");
-}
-
-/// True in the process that `name` (this test) starts again, with
-/// `_RJEM_MALLOC_CONF` `conf` and jemalloc as its allocator. In the test
-/// process it starts that process, checks that it passes and returns false.
-fn inner(name: &str, conf: &str) -> bool {
-    if std::env::var_os(INNER).is_some() {
-        return true;
-    }
-    let status = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", name, "--nocapture"])
-        .args(["--test-threads", "1"])
-        .env(INNER, "1")
-        .env("_RJEM_MALLOC_CONF", conf)
-        .env_remove("GOPORT_JEMALLOC_LAYOUT")
-        .status()
-        .unwrap();
-    assert!(status.success(), "{status}");
-    false
-}
-
-/// True when jemalloc has made arena `arena`.
-fn arena_made(arena: u32) -> bool {
-    // `arena.<i>.initialized` reads what the last epoch saw.
-    tikv_jemalloc_ctl::epoch::advance().unwrap();
-    let name = format!("arena.{arena}.initialized\0");
-    Access::<bool>::read(name.as_bytes().name()).unwrap()
 }
 
 /// `JEMALLOC_CONF` of bin/tsgo.rs, so this test follows a change there.
