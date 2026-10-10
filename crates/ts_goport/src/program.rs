@@ -4309,22 +4309,38 @@ pub fn get_declaration_diagnostics(source_file: Node) -> Vec<Diagnostic> {
     } else {
         source_files()
     };
-    if worker_index().is_some() {
-        let result = files
-            .into_iter()
-            .flat_map(get_declaration_diagnostics_for_file)
-            .collect();
-        return sort_and_deduplicate_diagnostics(result);
+    // Go `collectDiagnosticsFromFiles` (program.go:702 at N') queues one job
+    // per file. With --singleThreaded its `core.singleThreadedWorkGroup` runs
+    // them last-queued-first (core/workgroup.go:67, pop :78), so the files
+    // are checked for declaration diagnostics in reverse file order. The
+    // order decides which file's declaration emit first resolves a shared
+    // type, and so the checker's Symbols count. The results stay in file
+    // order.
+    let last_queued_first = single_threaded();
+    let mut queued = files;
+    if last_queued_first {
+        queued.reverse();
     }
-    let receivers = files
-        .into_iter()
-        .map(|file| {
-            send_thread_job(checker_index_for_file(file), move || {
-                get_declaration_diagnostics_for_file(file)
+    let mut results: Vec<Vec<Diagnostic>> = if worker_index().is_some() {
+        queued
+            .into_iter()
+            .map(get_declaration_diagnostics_for_file)
+            .collect()
+    } else {
+        let receivers = queued
+            .into_iter()
+            .map(|file| {
+                send_thread_job(checker_index_for_file(file), move || {
+                    get_declaration_diagnostics_for_file(file)
+                })
             })
-        })
-        .collect();
-    sort_and_deduplicate_diagnostics(wait_jobs(receivers).into_iter().flatten().collect())
+            .collect();
+        wait_jobs(receivers)
+    };
+    if last_queued_first {
+        results.reverse();
+    }
+    sort_and_deduplicate_diagnostics(results.into_iter().flatten().collect())
 }
 
 /// `get_declaration_diagnostics` for one file without the wait: the job runs
