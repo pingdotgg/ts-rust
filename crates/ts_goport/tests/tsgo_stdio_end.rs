@@ -130,6 +130,10 @@ const REPANICKED_CANCELED: &str = "panic: context canceled [recovered, repanicke
 /// How long a tsgo that waits for a client message must stay alive.
 const ALIVE: Duration = Duration::from_millis(300);
 
+/// How long a test waits before a signal that must come while tsgo's
+/// reader waits in its read (`Tsgo::settle`).
+const SETTLE: Duration = Duration::from_millis(150);
+
 /// A signal while a request waits for a client callback (readFile of
 /// tsconfig.json): the request answers at once with the callback's error,
 /// and tsgo ends right after the next client message, a reply or a ping.
@@ -302,6 +306,7 @@ fn api_async_signal_then_end_of_stdin_while_a_request_reads() {
     tsgo.wait_callback("getAccessibleEntries");
     tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
     let mut writer = open_fifo_writer(&config);
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_alive(what);
     tsgo.close_stdin();
@@ -421,6 +426,7 @@ fn api_async_signal_during_a_request_reads_one_more_message() {
             config.display()
         ));
         let mut writer = open_fifo_writer(&config);
+        tsgo.settle(&what);
         tsgo.signal(Signal::INT);
         writer
             .write_all(br#"{"compilerOptions":{"strict":true},"include":["src"]}"#)
@@ -526,6 +532,7 @@ fn api_sync_signal_while_a_callback_waits() {
     let params = format!(r#"{{"openProjects":["{}"]}}"#, dir.path("tsconfig.json"));
     tsgo.send(&msgpack_request("createSnapshot", &params));
     tsgo.wait_stdout("readFile");
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_alive(what);
     let start = Instant::now();
@@ -600,6 +607,7 @@ fn api_async_held_request_writes_later_callbacks_after_a_signal() {
     for end in ["eof", "bad", "ping"] {
         let what = format!("--api --async, cleanBuild held by a FIFO request, SIGINT, {end}");
         let (mut tsgo, dir, _call, mut writer) = held_clean_build("held", &what);
+        tsgo.settle(&what);
         tsgo.signal(Signal::INT);
         tsgo.expect_alive(&what);
         end_read_loop(&mut tsgo, end);
@@ -638,6 +646,7 @@ fn api_async_held_build_write_errors_after_a_signal() {
         tsgo.wait_callback("writeFile");
         tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
         let mut writer = open_fifo_writer(&config);
+        tsgo.settle(&what);
         tsgo.signal(signal);
         tsgo.expect_alive(&what);
         end_read_loop(&mut tsgo, end);
@@ -759,6 +768,7 @@ fn api_async_read_error_after_a_signal_keeps_context_canceled() {
     tsgo.wait_callback("getAccessibleEntries");
     tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
     let mut writer = open_fifo_writer(&config);
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_alive(what);
     end_read_loop(&mut tsgo, "bad");
@@ -1084,7 +1094,22 @@ impl Tsgo {
 
     /// Checks that tsgo still runs `ALIVE` from now.
     fn expect_alive(&mut self, what: &str) {
-        if let Some((status, _)) = self.wait_exit(ALIVE) {
+        self.expect_alive_for(ALIVE, what);
+    }
+
+    /// Waits `SETTLE` before a signal, and checks that tsgo still runs.
+    /// On a loaded host tsgo may not yet wait in its read of the next
+    /// client message (the `--api --async` reader after the last message,
+    /// a `--api` callback after its request). A signal before that read
+    /// ends the run at a context check, and tsgo reads no message after
+    /// the signal. Go races in the same way (`ipc/conn_async.go:83`,
+    /// `ipc/conn_sync.go:185`).
+    fn settle(&mut self, what: &str) {
+        self.expect_alive_for(SETTLE, what);
+    }
+
+    fn expect_alive_for(&mut self, limit: Duration, what: &str) {
+        if let Some((status, _)) = self.wait_exit(limit) {
             panic!(
                 "{what}: tsgo ended ({status:?}) before the next message; stderr {:?}",
                 self.stderr()
