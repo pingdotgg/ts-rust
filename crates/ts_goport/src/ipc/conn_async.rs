@@ -1860,8 +1860,10 @@ pub(crate) mod tests {
     /// handler notes the error and whether its own context and the contexts
     /// that `inner` kept are done (it waits up to 1 s for each), makes a
     /// second call and returns that call's error. `inner` keeps its
-    /// context. `wait` notes whether its context is done within 1 s. Other
-    /// requests answer `true`.
+    /// context. `wait` notes whether its context is done within 1 s. `late`
+    /// makes a call, waits until the read loop ended, makes a second call,
+    /// notes both errors and returns the second. Other requests answer
+    /// `true`.
     struct CallbackHandler {
         conn: std::cell::OnceCell<std::rc::Weak<AsyncConn>>,
         call_ctx: Context,
@@ -1881,7 +1883,7 @@ pub(crate) mod tests {
                     .is_some_and(|done| done.wait_timeout(Duration::from_secs(1)))
             };
             match method {
-                "outer" => {}
+                "outer" | "late" => {}
                 "inner" => {
                     self.inner.borrow_mut().push(ctx.clone());
                     return Ok(None);
@@ -1895,6 +1897,22 @@ pub(crate) mod tests {
             }
             let conn = self.conn.get().and_then(std::rc::Weak::upgrade);
             let conn = conn.expect("the connection is set");
+            if method == "late" {
+                let first = conn.call(&self.call_ctx, "callback", None).err();
+                let reader = conn
+                    .reader
+                    .borrow()
+                    .clone()
+                    .expect("run reads on its thread");
+                let end = Instant::now() + Duration::from_secs(5);
+                while !lock(&reader.inbox.state).ended && Instant::now() < end {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let second = conn.call(&self.call_ctx, "callback", None).err();
+                let texts = [&first, &second].map(|err| err.as_ref().map(GoError::error));
+                self.notes.send(format!("late | {texts:?}")).expect("notes");
+                return second.map_or(Ok(None), Err);
+            }
             let Err(err) = conn.call(&self.call_ctx, "callback", None) else {
                 return Ok(None);
             };
@@ -2094,6 +2112,42 @@ pub(crate) mod tests {
             .map(|msg| msg.is_response())
             .collect();
         assert_eq!(responses, [false, true]);
+    }
+
+    // PORT: no Go test; Go `Call` (ipc/conn_async.go:289-303). A call that
+    // waits at a signal returns `context canceled`, also when a request that
+    // it dispatched (nested, as the port runs them) ends the read loop with
+    // a later call: Go's `Call` returned at the signal, before its channel
+    // closed. The apisig3 repair answered `ipc: connection closed` here.
+    #[test]
+    fn test_async_conn_reader_cancel_beats_a_later_close() {
+        let (ctx, cancel) = context::with_cancel(&context::background());
+        let (client, notes, run_done, runner) = run_on_reader(&ctx);
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":1,"method":"outer"}"#);
+        let call = read_framed(&client);
+        assert!(call.contains(r#""id":"api1""#), "{call}");
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":2,"method":"late"}"#);
+        let call = read_framed(&client);
+        assert!(call.contains(r#""id":"api2""#), "{call}");
+        cancel();
+        // The 1 message read after the cancel ends the read loop.
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#);
+        let late = notes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("late ran");
+        assert_eq!(
+            late,
+            r#"late | [Some("context canceled"), Some("ipc: connection closed\ncontext canceled")]"#
+        );
+        let outer = notes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("outer ran");
+        assert!(outer.starts_with("context canceled |"), "{outer}");
+        let result = run_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("run returned");
+        assert_eq!(result, Err("context canceled".to_string()));
+        runner.join().expect("run thread");
     }
 
     // PORT: no Go test; Go `Run` (ipc/conn_async.go:73, :89-90). EOF while
