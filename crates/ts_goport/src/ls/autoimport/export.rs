@@ -6,15 +6,83 @@ use crate::flags_macros::go_enum;
 use crate::frontend::tspath;
 use crate::ls::lsutil;
 
-// Go: ls/autoimport/export.go:17 ModuleID
-// ModuleID uniquely identifies a module across multiple declarations.
-// If the export is from an ambient module declaration, this is the module name.
-// If the export is from a module augmentation, this is the Path() of the resolved module file.
-// Otherwise this is the Path() of the exporting source file.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModuleID(pub String);
+// Go: ls/autoimport/export.go:13 moduleIDKind (ts#64159)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum ModuleIDKind {
+    #[default]
+    Invalid, // moduleIDKindInvalid
+    File,    // moduleIDKindFile
+    Ambient, // moduleIDKindAmbient
+}
 
-// Go: ls/autoimport/export.go:19 ExportID
+// Go: ls/autoimport/export.go:22 ModuleID (ts#64159)
+// ModuleID uniquely identifies either a file module or an ambient module.
+// PORT: ts#64159 behavior only: Go `tspath.PathKey` is `tspath::Path` and Go
+// `tspath.ModuleSpecifier` is `String`. Before ts#64159 a ModuleID was a
+// string, and a name was ambient when it was not a relative or rooted name;
+// the kind now says it. A module augmentation of a relative name is a file
+// module (its resolved or unresolved file), an ambient module declaration is
+// ambient whatever its name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ModuleID {
+    path: tspath::Path,
+    specifier: String,
+    kind: ModuleIDKind,
+}
+
+// Go: ls/autoimport/export.go:28 fileModuleID (ts#64159)
+pub fn file_module_id(path: tspath::Path) -> ModuleID {
+    ModuleID {
+        path,
+        kind: ModuleIDKind::File,
+        ..Default::default()
+    }
+}
+
+// Go: ls/autoimport/export.go:32 ambientModuleID (ts#64159)
+pub fn ambient_module_id(specifier: &str) -> ModuleID {
+    ModuleID {
+        specifier: specifier.to_string(),
+        kind: ModuleIDKind::Ambient,
+        ..Default::default()
+    }
+}
+
+impl ModuleID {
+    // Go: ls/autoimport/export.go:36 AsString (ts#64159)
+    pub fn as_string(&self) -> &str {
+        match self.kind {
+            ModuleIDKind::File => &self.path.0,
+            ModuleIDKind::Ambient => &self.specifier,
+            ModuleIDKind::Invalid => "",
+        }
+    }
+
+    // Go: ls/autoimport/export.go:47 IsAmbient (ts#64159)
+    pub fn is_ambient(&self) -> bool {
+        self.kind == ModuleIDKind::Ambient
+    }
+
+    // Go: ls/autoimport/export.go:51 AsPathKey (ts#64159)
+    // PORT: Go `(PathKey, bool)` is `Option`.
+    pub fn as_path_key(&self) -> Option<&tspath::Path> {
+        if self.kind != ModuleIDKind::File {
+            return None;
+        }
+        Some(&self.path)
+    }
+
+    // Go: ls/autoimport/export.go:58 AsModuleSpecifier (ts#64159)
+    // PORT: Go `(ModuleSpecifier, bool)` is `Option`.
+    pub fn as_module_specifier(&self) -> Option<&str> {
+        if self.kind != ModuleIDKind::Ambient {
+            return None;
+        }
+        Some(&self.specifier)
+    }
+}
+
+// Go: ls/autoimport/export.go:65 ExportID
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ExportID {
     pub module_id: ModuleID,
@@ -44,7 +112,7 @@ go_enum!(ExportSyntax, i32 {
     COMMON_JS_EXPORTS_PROPERTY = 9; // ExportSyntaxCommonJSExportsProperty
 });
 
-// Go: ls/autoimport/export.go:48 Export
+// Go: ls/autoimport/export.go:94 Export
 // PORT: Go embeds `ExportID`; it is the nested `export_id` field, and `Deref`
 // promotes its fields (`export.module_id`, `export.export_name`) as Go does.
 // Go `*Export` values are shared (`Rc<Export>`) once they are complete.
@@ -52,6 +120,9 @@ go_enum!(ExportSyntax, i32 {
 pub struct Export {
     pub export_id: ExportID,
     pub module_file_name: String,
+    // ts#64159: the specifier of a relative module augmentation whose module
+    // did not resolve (export.go:97, extract.go:166).
+    pub unresolved_module_specifier: String,
     pub syntax: ExportSyntax,
     pub flags: SymbolFlags,
     pub local_name: String,
@@ -102,10 +173,11 @@ impl Export {
             || self.export_id.export_name == INTERNAL_SYMBOL_NAME_DEFAULT
     }
 
-    // Go: ls/autoimport/export.go:85 AmbientModuleName
+    // Go: ls/autoimport/export.go:132 AmbientModuleName
     pub fn ambient_module_name(&self) -> String {
-        if !tspath::is_external_module_name_relative(&self.export_id.module_id.0) {
-            return self.export_id.module_id.0.clone();
+        // ts#64159: the module ID kind, not the shape of the name.
+        if self.export_id.module_id.is_ambient() {
+            return self.export_id.module_id.as_string().to_string();
         }
         String::new()
     }
@@ -147,7 +219,7 @@ pub fn symbol_to_export(symbol: SymbolId, ch: &mut Checker) -> Option<Rc<Export>
     }
 
     let module_symbol = ch.get_merged_symbol_exported(file.symbol());
-    let module_id = ModuleID(source_file_info(file).path.clone());
+    let module_id = file_module_id(tspath::Path(source_file_info(file).path.clone()));
     let module_file_name = source_file_file_name(file).to_string();
     let skipped = ch.skip_alias_exported(symbol);
     let target = ch.get_merged_symbol_exported(skipped);
@@ -255,5 +327,32 @@ impl ExportSyntax {
 impl std::fmt::Display for ExportSyntax {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.string())
+    }
+}
+
+// Go: ls/autoimport/export_test.go (ts#64159). A lib test: the Go test reads
+// the package's unexported constructors.
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    // Go: export_test.go:10 TestModuleIDVariants
+    #[test]
+    fn module_id_variants() {
+        let zero = ModuleID::default();
+        assert!(zero.as_path_key().is_none());
+        assert_eq!(zero.as_string(), "");
+        assert!(!zero.is_ambient());
+
+        let path = tspath::Path("/project/src/a.ts".to_string());
+        let file = file_module_id(path.clone());
+        assert_eq!(file.as_path_key(), Some(&path));
+        assert_eq!(file.as_string(), path.0);
+        assert!(!file.is_ambient());
+
+        let ambient = ambient_module_id("node:fs");
+        assert!(ambient.as_path_key().is_none());
+        assert_eq!(ambient.as_string(), "node:fs");
+        assert!(ambient.is_ambient());
     }
 }

@@ -5,7 +5,7 @@ use crate::ls::autoimport::prelude::*;
 use crate::modulespecifiers;
 
 impl View {
-    // Go: ls/autoimport/specifiers.go:9 GetModuleSpecifier
+    // Go: ls/autoimport/specifiers.go:8 GetModuleSpecifier
     // PORT: Go passes `v.program` as the `ModuleSpecifierGenerationHost`; the
     // host for the installed program is `modulespecifiers::ProgramHost`
     // (plan D-LS1). Go `*collections.Set` conditions on a resolved entrypoint
@@ -18,24 +18,45 @@ impl View {
     // module augmentation export the two name different files, so the call
     // order decides the specifier that the declaring file's exports get for
     // the rest of the session. `View::get_completions` fixes that order.
+    // PORT: ts#64159 behavior only: Go `tspath.ModuleSpecifier` is `String`.
     pub fn get_module_specifier(
         &self,
         export: &Export,
         user_preferences: &modulespecifiers::UserPreferences,
     ) -> (String, modulespecifiers::ResultKind) {
-        // Ambient module
-        if modulespecifiers::path_is_bare_specifier(&export.module_id.0) {
-            let specifier = export.module_id.0.clone();
+        // ts#64159: specifiers.go:12, a relative module augmentation whose
+        // module did not resolve. Its specifier is relative to the importing
+        // file; on another volume there is none (R4).
+        if !export.unresolved_module_specifier.is_empty() {
+            let mut specifier = export.unresolved_module_specifier.clone();
+            if tspath::path_is_relative(&specifier) {
+                let Some(relative_path) = tspath::relative_path_from_directory(
+                    &tspath::get_directory_path(source_file_file_name(self.importing_file)),
+                    &export.module_file_name,
+                    self.program.use_case_sensitive_file_names(),
+                ) else {
+                    return (String::new(), modulespecifiers::ResultKind::None);
+                };
+                specifier = tspath::ensure_path_is_non_module_name(&relative_path);
+            }
             if modulespecifiers::is_excluded_by_regex(
                 &specifier,
                 &user_preferences.auto_import_specifier_exclude_regexes,
             ) {
                 return (String::new(), modulespecifiers::ResultKind::None);
             }
-            return (
-                export.module_id.0.clone(),
-                modulespecifiers::ResultKind::Ambient,
-            );
+            return (specifier, modulespecifiers::ResultKind::Relative);
+        }
+
+        // ts#64159: specifiers.go:30, an ambient module by its module ID kind.
+        if let Some(specifier) = export.module_id.as_module_specifier() {
+            if modulespecifiers::is_excluded_by_regex(
+                specifier,
+                &user_preferences.auto_import_specifier_exclude_regexes,
+            ) {
+                return (String::new(), modulespecifiers::ResultKind::None);
+            }
+            return (specifier.to_string(), modulespecifiers::ResultKind::Ambient);
         }
 
         if !export.package_name.is_empty() {

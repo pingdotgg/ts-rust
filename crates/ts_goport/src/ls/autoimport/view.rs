@@ -188,7 +188,8 @@ impl View {
             let exports = search_fn(&**bucket);
             results.reserve(exports.len());
             for e in exports {
-                if e.module_id.0 == importing_file_path.0 {
+                // ts#64159: view.go:114, only a file module is the importing file.
+                if e.module_id.as_path_key() == Some(&importing_file_path) {
                     // Don't auto-import from the importing file itself
                     continue;
                 }
@@ -378,6 +379,8 @@ impl View {
                         existing[i] = Rc::new(Export {
                             export_id: e.export_id.clone(),
                             module_file_name: e.module_file_name.clone(),
+                            // ts#64159: view.go:219
+                            unresolved_module_specifier: e.unresolved_module_specifier.clone(),
                             package_name: e.package_name.clone(),
                             is_type_only: e.is_type_only || ex.is_type_only,
                             syntax: e.syntax.min(ex.syntax),
@@ -401,10 +404,12 @@ impl View {
 
         // PORT: see the note above. A relative module augmentation export:
         // project file (no package), module is a file that is not its path.
+        // ts#64159: the module ID kind says it is a file module.
         let is_augmentation = |e: &Export| {
             e.package_name.is_empty()
-                && e.module_id.0 != e.path.0
-                && !modulespecifiers::path_is_bare_specifier(&e.module_id.0)
+                && e.module_id
+                    .as_path_key()
+                    .is_some_and(|module_path| *module_path != e.path)
         };
         let groups: Vec<&Vec<Rc<Export>>> = grouped.values().collect();
         let (late, early): (Vec<usize>, Vec<usize>) =
