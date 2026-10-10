@@ -6,17 +6,15 @@
 //!   execute/watchmanager/watchmanager.go:354), so a signal ends the run at
 //!   once with exit code 0. The port waited on the cycle channel with a
 //!   50 ms timeout and ended up to 50 ms later.
-//! - `--api --async`: Go's read loop (`ipc/conn_async.go:82`) checks the
-//!   context, then waits in the read while a request runs on its own
-//!   goroutine. A signal during that request does not end the run: the run
-//!   ends after the next message or at the end of stdin. The port ran the
-//!   request inline and checked the context after it. The sync API
-//!   (`ipc/conn_sync.go:55`) runs the request inline in Go too, so it ends
-//!   right after the answer.
-//! - `--api --async` while a request waits for a client callback: Go's
-//!   `Call` returns the context error at once, and the read loop ends after
-//!   the next message (the reply, or a new request). The port reads that
-//!   message in `call`, so it must take Go's check there too.
+//! - `--api`: the sync API (`ipc/conn_sync.go:55`) runs a request inline
+//!   and checks the context after it, so a signal during a request ends
+//!   the run right after the answer.
+//!
+//! `--api --async` is not here. Go's read loop (`ipc/conn_async.go:83`)
+//! waits in the read while a request runs on its own goroutine, so a signal
+//! during that request ends the run after the next message. The port ends
+//! right after the answer: PORTING.md, "Not ported (plan level)", "The end
+//! on SIGINT or SIGTERM in `--api --async`".
 //!
 //! `--lsp` is not here. Go's `Run` (lsp/server.go:859) does not wait for
 //! the work that Go runs on goroutines (the async part of a request, an API
@@ -81,98 +79,26 @@ fn watch_ends_soon_after_sigint_or_sigterm() {
     );
 }
 
+/// The sync API only: `--api --async` is not here (file header).
 #[test]
 fn api_signal_during_a_request() {
-    // (protocol flag, whether the run ends right after the answer)
-    for (flags, ends_after_answer) in [(&["--async"][..], false), (&[][..], true)] {
-        let dir = TempDir::new("api");
-        dir.write("src/a.ts", "export const a: number = 1;\n");
-        let config = dir.fifo("tsconfig.json");
-        let cwd = dir.0.to_str().unwrap();
-        let mut args = vec!["--api", "--cwd", cwd];
-        args.extend_from_slice(flags);
-        let mut tsgo = Tsgo::start(&args, &dir.0);
-        let params = format!(r#"{{"openProjects":["{}"]}}"#, config.display());
-        let answered = if flags.is_empty() {
-            tsgo.send(&msgpack_request("createSnapshot", &params));
-            // The msgpack answer names its method.
-            "createSnapshot"
-        } else {
-            tsgo.send(&frame(&format!(
-                r#"{{"jsonrpc":"2.0","id":1,"method":"createSnapshot","params":{params}}}"#
-            )));
-            r#""id":1"#
-        };
-        // The request now waits in the read of the FIFO.
-        let mut writer = open_fifo_writer(&config);
-        tsgo.signal(Signal::INT);
-        writer
-            .write_all(br#"{"compilerOptions":{"strict":true},"include":["src"]}"#)
-            .unwrap();
-        drop(writer);
-        tsgo.wait_stdout(answered);
-        let (since, what) = if ends_after_answer {
-            (Instant::now(), "the sync API after the answer")
-        } else {
-            assert!(
-                tsgo.wait_exit(Duration::from_millis(500)).is_none(),
-                "the async API ended after the answer; Go waits in the read"
-            );
-            // Go reads the next message, starts its handler and then
-            // checks the context, so it answers and ends.
-            let next = Instant::now();
-            tsgo.send(&frame(r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#));
-            tsgo.wait_stdout(r#"{"jsonrpc":"2.0","id":2,"result":"pong"}"#);
-            (next, "the async API after the next message")
-        };
-        tsgo.expect_end(since, what, 0, "");
-    }
-}
-
-#[test]
-fn api_async_signal_while_a_callback_waits() {
-    // (what the client sends after the signal, the text it waits for)
-    let next = [
-        // The reply to the callback.
-        (
-            r#"{"jsonrpc":"2.0","id":"api1","result":null}"#,
-            r#""id":1"#,
-        ),
-        // A new request before the reply.
-        (
-            r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
-            r#"{"jsonrpc":"2.0","id":2,"result":"pong"}"#,
-        ),
-    ];
-    for (message, answered) in next {
-        let dir = TempDir::new("callback");
-        dir.write(
-            "tsconfig.json",
-            r#"{"compilerOptions":{"strict":true},"include":["src"]}"#,
-        );
-        dir.write("src/a.ts", "export const a: number = 1;\n");
-        let cwd = dir.0.to_str().unwrap();
-        let args = ["--api", "--async", "--callbacks", "readFile", "--cwd", cwd];
-        let mut tsgo = Tsgo::start(&args, &dir.0);
-        let config = dir.0.join("tsconfig.json");
-        tsgo.send(&frame(&format!(
-            r#"{{"jsonrpc":"2.0","id":1,"method":"createSnapshot","params":{{"openProjects":["{}"]}}}}"#,
-            config.display()
-        )));
-        tsgo.wait_stdout(r#""id":"api1","method":"readFile""#);
-        tsgo.signal(Signal::INT);
-        assert!(
-            tsgo.wait_exit(Duration::from_millis(500)).is_none(),
-            "{message}: tsgo ended before the next message; Go waits in the read"
-        );
-        let since = Instant::now();
-        tsgo.send(&frame(message));
-        tsgo.wait_stdout(answered);
-        // Request 1 gets the error of the callback. Go answers it at once,
-        // the port after the next message (its read in `call` waits).
-        tsgo.wait_stdout("panic: context canceled");
-        tsgo.expect_end(since, message, 0, "");
-    }
+    let dir = TempDir::new("api");
+    dir.write("src/a.ts", "export const a: number = 1;\n");
+    let config = dir.fifo("tsconfig.json");
+    let cwd = dir.0.to_str().unwrap();
+    let mut tsgo = Tsgo::start(&["--api", "--cwd", cwd], &dir.0);
+    let params = format!(r#"{{"openProjects":["{}"]}}"#, config.display());
+    tsgo.send(&msgpack_request("createSnapshot", &params));
+    // The request now waits in the read of the FIFO.
+    let mut writer = open_fifo_writer(&config);
+    tsgo.signal(Signal::INT);
+    writer
+        .write_all(br#"{"compilerOptions":{"strict":true},"include":["src"]}"#)
+        .unwrap();
+    drop(writer);
+    // The msgpack answer names its method.
+    tsgo.wait_stdout("createSnapshot");
+    tsgo.expect_end(Instant::now(), "the sync API after the answer", 0, "");
 }
 
 /// A tsgo child with piped stdio. Its stdout and stderr are read on
@@ -314,12 +240,6 @@ impl Drop for Tsgo {
             }
         }
     }
-}
-
-/// A message with LSP base-protocol framing (Content-Length), as the
-/// JSON-RPC API uses.
-fn frame(body: &str) -> Vec<u8> {
-    format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
 }
 
 /// A request of the msgpack API: `[1, method, params]` with both as bin.

@@ -15,11 +15,7 @@
 //! PORT: the reads in `Call` are Go's `Run` reads. When one fails, the read
 //! loop ends there, as Go's `Run` would: `closePendingCalls` sets
 //! `terminal` (tsgo#4712), the call returns it, and a later `run` returns
-//! what Go's `Run` returned. After each of these reads, `call` also takes
-//! the ctx check of Go's next turn (`dispatch_and_check`), and when the
-//! `ctx` of `run` is done, the read loop ends there in the same way. So a
-//! SIGINT while a callback waits ends the run after the reply, as in Go.
-//! A panic in one of these reads is a panic in
+//! what Go's `Run` returned. A panic in one of these reads is a panic in
 //! Go's `Run`, which the handler that made the call does not recover: the
 //! deferred function of `Run` closes the pending calls, the call returns
 //! `terminal`, and the panic leaves `run` once that handler returns (Go's
@@ -76,10 +72,8 @@ pub struct AsyncConn {
     // PORT: the payload of a panic in a read in `call`, where Go's `Run`
     // panicked. `run` resumes the panic.
     read_panic: RefCell<Option<Box<dyn Any + Send>>>,
-    // PORT: the `ctx` of `run`, set once `run` reads. A `call` then runs in
-    // a handler of `run`, and its reads check this `ctx` as Go's `Run` does
-    // after each read.
-    run_ctx: RefCell<Option<Context>>,
+    // PORT: true once `run` reads. A `call` then runs in a handler of `run`.
+    running: Cell<bool>,
 }
 
 // Go: ipc/conn_async.go:41 NewAsyncConn
@@ -109,7 +103,7 @@ pub fn new_async_conn_with_protocol(
         request_errors: RefCell::new(None),
         read_loop_end: RefCell::new(None),
         read_panic: RefCell::new(None),
-        run_ctx: RefCell::new(None),
+        running: Cell::new(false),
     })
 }
 
@@ -159,25 +153,15 @@ impl AsyncConn {
 
     /// The loop of Go `Run`, without its deferred function. Requests and
     /// notifications get `handler_ctx` (Go `handlerCtx`).
-    ///
-    /// PORT: Go checks `ctx` at the top of each turn, and a request or
-    /// notification runs on its own goroutine, so the next check comes
-    /// right after it starts: a SIGINT or SIGTERM while it runs finds the
-    /// loop waiting in the read, and the run ends only after the next
-    /// message or the end of the input. Here the handler runs inline, so
-    /// the check for the next turn is taken before it (`checked`). A
-    /// response is handled inside Go's loop, so its check comes after it
-    /// (`dispatch_and_check`). The reads in `call` take the same check.
     fn run_loop(&self, ctx: &Context, handler_ctx: &Context) -> Result<(), GoError> {
-        *self.run_ctx.borrow_mut() = Some(ctx.clone());
-        let mut checked = ctx.err();
+        self.running.set(true);
         loop {
             // PORT: a read in `call` panicked. Go's `Run` panicked at that
             // read, before it checked `ctx` again.
             if let Some(payload) = self.read_panic.take() {
                 resume_unwind(payload);
             }
-            if let Some(err) = checked.take() {
+            if let Some(err) = ctx.err() {
                 return Err(err);
             }
 
@@ -192,26 +176,7 @@ impl AsyncConn {
                 Err(err) => return read_loop_result(err),
             };
 
-            checked = self.dispatch_and_check(ctx, handler_ctx, msg);
-        }
-    }
-
-    /// Dispatches `msg` with `handler_ctx` and gives the check of `ctx` that
-    /// Go's `Run` takes at the top of its next turn: after the dispatch for a
-    /// response, before it for a request or notification (see `run_loop`).
-    fn dispatch_and_check(
-        &self,
-        ctx: &Context,
-        handler_ctx: &Context,
-        msg: Message,
-    ) -> Option<GoError> {
-        if msg.is_response() {
             self.dispatch(handler_ctx, msg);
-            ctx.err()
-        } else {
-            let checked = ctx.err();
-            self.dispatch(handler_ctx, msg);
-            checked
         }
     }
 
@@ -486,13 +451,6 @@ impl AsyncConn {
                 return Ok(resp.result);
             }
 
-            // PORT: the ctx check after a read below ended Go's `Run`, and
-            // its deferred `closePendingCalls` closed this call's channel.
-            if self.read_loop_end.borrow().is_some() {
-                let terminal = self.terminal.borrow().clone();
-                return Err(terminal.expect("closePendingCalls sets terminal"));
-            }
-
             // PORT: a panic in this read is a panic in Go's `Run` (file
             // header), so it does not unwind through the handler that made
             // the call.
@@ -512,7 +470,7 @@ impl AsyncConn {
                     // Go: the deferred function of `Run` closes the pending
                     // calls while the panic unwinds; its `err` is nil.
                     self.close_pending_calls(None);
-                    if self.run_ctx.borrow().is_none() {
+                    if !self.running.get() {
                         // No `run` can resume the panic, so it leaves here.
                         // In Go the panic ends the process. The read loop
                         // ends as on the run path: a later `run` reads no
@@ -525,17 +483,7 @@ impl AsyncConn {
                     return Err(terminal.expect("closePendingCalls sets terminal"));
                 }
             };
-            // Go: `Run` checks its `ctx` after this read (file header). When
-            // it is done, `Run` returns `ctx.Err()` there and reads no more;
-            // its deferred function runs `closePendingCalls(err)`. A request
-            // that the read got still runs first, as `run_loop` runs it.
-            let run_ctx = self.run_ctx.borrow().clone();
-            let run_ctx = run_ctx.unwrap_or_else(context::background);
-            if let Some(err) = self.dispatch_and_check(&run_ctx, ctx, msg) {
-                self.close_pending_calls(Some(&err));
-                *self.read_loop_end.borrow_mut() = Some(Err(err));
-                continue;
-            }
+            self.dispatch(ctx, msg);
             // Go: a closed response channel (`closePendingCalls` after a
             // request error) makes the call return `terminal`.
             if !self.pending.borrow().contains_key(&id) && response_chan.borrow().is_none() {
