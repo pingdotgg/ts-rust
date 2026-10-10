@@ -1089,9 +1089,8 @@ struct NodeModulesPackageFile<'a> {
 //   after the package root. The root comes after the scope of a scoped package
 //   (util.go:305-314), so a package named `node_modules` is not nested.
 // PORT: the port keeps the index form of `NodeModulePathParts` (Go N). Its
-// `package_root_index` is the root of the last package, and it stays 0 when
-// the path ends in a scope (`node_modules/@a.d.ts`), where Go N' starts the
-// index at -1 (util.go:287). So this finds the first root from
+// `package_root_index` is the root of the last package (-1 when there is
+// none, util.go:287). So this finds the first root from
 // `top_level_package_name_index`, as the Go parse states do.
 fn node_modules_package_file(file_name: &str) -> Option<NodeModulesPackageFile<'_>> {
     let parts = modulespecifiers::get_node_module_path_parts(file_name)?;

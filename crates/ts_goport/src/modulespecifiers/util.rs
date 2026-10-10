@@ -351,6 +351,9 @@ pub(crate) fn replace_first_star(s: &str, replacement: &str) -> String {
 }
 
 // Go: modulespecifiers/util.go:264 NodeModulePathParts
+// PORT: the port keeps the index form of Go N. `package_root_index` is -1
+// when the file has no package root (Go N' `IsDirectNodeModulesFile`,
+// util.go:333).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NodeModulePathParts {
     pub top_level_node_modules_index: isize,
@@ -377,7 +380,9 @@ pub fn get_node_module_path_parts(full_path: &str) -> Option<NodeModulePathParts
 
     let mut top_level_node_modules_index: isize = 0;
     let mut top_level_package_name_index: isize = 0;
-    let mut package_root_index: isize = 0;
+    // ts#64159 (util.go:287): -1 until a package root is found, so a path
+    // that ends in a scope (`node_modules/@a.d.ts`) has no package root.
+    let mut package_root_index: isize = -1;
 
     let mut part_start: isize = 0;
     let mut part_end: isize = 0;
@@ -514,6 +519,45 @@ mod tests {
             ("child/..foo.ts", false),
         ] {
             assert_eq!(is_path_relative_to_parent(path), expected, "{path}");
+        }
+    }
+
+    // Go: modulespecifiers/specifiers_test.go:16 TestGetNodeModulePathParts (ts#64159),
+    // the nil, package root and `isDirectNodeModulesFile` cases, and the ls
+    // skeptic's specifier-direct-pkg probe paths. A path that ends in a scope
+    // kept package root 0, and willRenameFiles then panicked in
+    // tryDirectoryWithPackageJson.
+    #[test]
+    fn get_node_module_path_parts_package_root() {
+        assert_eq!(get_node_module_path_parts("/workspace/src/index.ts"), None);
+        for (path, root) in [
+            (
+                "/workspace/node_modules/pkg/lib/index.d.ts",
+                "/workspace/node_modules/pkg",
+            ),
+            (
+                "/node_modules/@scope/pkg/index.d.ts",
+                "/node_modules/@scope/pkg",
+            ),
+            ("c:/node_modules/pkg/index.d.ts", "c:/node_modules/pkg"),
+            (
+                "/workspace/node_modules/pkg/node_modules/@scope/dep/index.d.ts",
+                "/workspace/node_modules/pkg/node_modules/@scope/dep",
+            ),
+        ] {
+            let parts = get_node_module_path_parts(path).unwrap();
+            assert_eq!(&path[..parts.package_root_index as usize], root, "{path}");
+        }
+        for path in [
+            "/workspace/node_modules/pkg",
+            "/workspace/node_modules/@scope",
+            "/p/node_modules/plain.d.ts",
+            "/p/node_modules/@foo.d.ts",
+            "/p/node_modules/@scope/direct.d.ts",
+            "c:/node_modules/@foo.d.ts",
+        ] {
+            let parts = get_node_module_path_parts(path).unwrap();
+            assert_eq!(parts.package_root_index, -1, "{path}");
         }
     }
 }
