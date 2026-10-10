@@ -5,7 +5,8 @@
 # usage: testbox.sh help                      this text
 #        testbox.sh warmup                    start a testbox; saves its ID to target/testbox-id
 #        testbox.sh run <command...>          sync this worktree, then run the command with the testbox env
-#                                             (e.g. run scripts/run-cargo-capped.sh build --release -p ts_goport --bins)
+#                                             (e.g. run scripts/run-cargo-capped.sh build --release -p ts_goport --bins).
+#                                             Arguments keep their boundaries; use run bash -c '...' for pipes and &&
 #        testbox.sh get <remote> [local]      copy a file or dir back (remote path relative to the repo root)
 #        testbox.sh status | stop | list      the saved testbox's status, stop it, list active testboxes
 # TESTBOX_ID overrides the saved ID. TESTBOX_IDLE: idle minutes before the testbox stops (default 15).
@@ -38,11 +39,17 @@ case "$cmd" in
     ;;
   run)
     (($#)) || { echo "usage: testbox.sh run <command...>" >&2; exit 2; }
-    blacksmith testbox run --id "$(saved_id)" ". ~/testbox.env && $*"
+    printf -v remote_cmd '%q ' "$@"
+    blacksmith testbox run --id "$(saved_id)" ". ~/testbox.env && $remote_cmd"
     ;;
   get) blacksmith testbox download --id "$(saved_id)" "$@" ;;
   status) blacksmith testbox status --id "$(saved_id)" "$@" ;;
-  stop) blacksmith testbox stop --id "$(saved_id)" && rm -f "$id_file" ;;
+  stop)
+    id="$(saved_id)"
+    blacksmith testbox stop --id "$id"
+    # Keep the saved ID when TESTBOX_ID stopped another testbox.
+    [[ "$(cat "$id_file" 2>/dev/null || true)" != "$id" ]] || rm -f "$id_file"
+    ;;
   list) blacksmith testbox list "$@" ;;
   *) echo "unknown command: $cmd (testbox.sh help)" >&2; exit 2 ;;
 esac

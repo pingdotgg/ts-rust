@@ -80,6 +80,9 @@ jobs:
       - run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal -c rustfmt,clippy
           rustup toolchain install "$NIGHTLY_TOOLCHAIN" --profile minimal
+          # Remote commands run without this job's RUSTUP_TOOLCHAIN. 1.93.0 is the default, as on zbook;
+          # run-cargo-capped.sh picks the nightly for edit-loop builds.
+          rustup default "$RUSTUP_TOOLCHAIN"
       # testbox.sh sources this file before each command: commands run over SSH, without this job's env.
       # TS_CARGO_CGROUP_ACTIVE=1 skips the systemd user scope of run-cargo-capped.sh (no user session here).
       - name: Write the testbox env
