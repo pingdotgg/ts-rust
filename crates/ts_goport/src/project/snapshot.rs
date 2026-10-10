@@ -574,9 +574,11 @@ pub struct APICreateProgramRequest {
 
 // Go: project/snapshot.go:327 ModuleResolverFactory (ts#64299)
 pub trait ModuleResolverFactory {
-    // Go: NewResolver(options module.ResolverOptions) (module.Resolver, func())
+    // Go: NewResolver(ctx context.Context, options module.ResolverOptions) (module.Resolver, func())
+    // (ts#64519 adds ctx, snapshot.go:328 at fed0bf24149f)
     fn new_resolver(
         &self,
+        ctx: &Context,
         options: crate::frontend::module::ResolverOptions,
     ) -> (Rc<dyn crate::frontend::module::Resolver>, Box<dyn FnOnce()>);
 }

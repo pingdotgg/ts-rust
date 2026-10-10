@@ -2858,7 +2858,7 @@ impl Session {
                     .map(DiagnosticResponse::to_diagnostic)
                     .collect();
                 // ts#64299
-                request.module_resolver_factory = self.module_resolver_factory(ctx, options)?;
+                request.module_resolver_factory = self.module_resolver_factory(options)?;
                 request.module_resolver_id = options.module_resolver.0;
             }
             api_request.create_programs.push(request);
@@ -2921,7 +2921,7 @@ impl Session {
                     .collect();
                 // ts#64299
                 request.api_create_program_request.module_resolver_factory =
-                    self.module_resolver_factory(ctx, options)?;
+                    self.module_resolver_factory(options)?;
                 request.api_create_program_request.module_resolver_id = options.module_resolver.0;
             }
             api_request.reconfigure_programs.push(request);

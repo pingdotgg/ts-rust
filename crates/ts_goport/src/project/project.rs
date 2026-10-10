@@ -772,9 +772,19 @@ impl Project {
             Rc<dyn Fn(module::ResolverOptions) -> Rc<dyn module::Resolver>>,
         > = self.module_resolver_factory.clone().map(|factory| {
             let cleanup_module_resolver = cleanup_module_resolver.clone();
+            // Go: p.host.builder.ctx (ts#64519, project.go:529 at fed0bf24149f)
+            // PORT: read once here; the builder does not change while this
+            // function runs, and the closure runs only inside it.
+            let ctx = host
+                .builder
+                .borrow()
+                .as_ref()
+                .unwrap_or_else(|| crate::core::go_nil_dereference())
+                .ctx
+                .clone();
             let create: Rc<dyn Fn(module::ResolverOptions) -> Rc<dyn module::Resolver>> =
                 Rc::new(move |options: module::ResolverOptions| {
-                    let (resolver, cleanup) = factory.new_resolver(options);
+                    let (resolver, cleanup) = factory.new_resolver(&ctx, options);
                     *cleanup_module_resolver.borrow_mut() = Some(cleanup);
                     resolver
                 });

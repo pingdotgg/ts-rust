@@ -38,7 +38,6 @@ pub struct ModuleResolverFactoryImpl {
     registration: Rc<ModuleResolverRegistration>,
     contexts: Rc<ProgramResolutionContexts>,
     conn: Option<Rc<dyn ipc::Conn>>,
-    ctx: Context,
     current_directory: String,
 }
 
@@ -70,8 +69,11 @@ pub struct CallbackModuleResolver {
 
 // Go: api/module_resolution.go moduleResolverFactory.NewResolver
 impl project::ModuleResolverFactory for ModuleResolverFactoryImpl {
+    // ts#64519: the resolver uses the caller's ctx, not the factory's
+    // (module_resolution.go:46 at fed0bf24149f).
     fn new_resolver(
         &self,
+        ctx: &Context,
         mut options: module::ResolverOptions,
     ) -> (Rc<dyn module::Resolver>, Box<dyn FnOnce()>) {
         options.compiler_options = Some(self.registration.compiler_options.clone());
@@ -90,7 +92,7 @@ impl project::ModuleResolverFactory for ModuleResolverFactoryImpl {
         let mut resolver: Rc<dyn module::Resolver> = Rc::new(CallbackModuleResolver {
             registration: self.registration.clone(),
             conn: self.conn.clone(),
-            ctx: self.ctx.clone(),
+            ctx: ctx.clone(),
             current_directory: self.current_directory.clone(),
             snapshot: SnapshotID(0),
             program_resolution_context_id: context_id,
@@ -450,9 +452,9 @@ pub fn module_resolution_trace_to_strings(trace: &[module::DiagAndArgs]) -> Vec<
 
 impl Session {
     // Go: api/module_resolution.go Session.moduleResolverFactory
+    // ts#64519: no ctx argument (module_resolution.go:221 at fed0bf24149f).
     pub fn module_resolver_factory(
         &self,
-        ctx: &Context,
         options: &CreateProgramOptions,
     ) -> Result<Option<Rc<dyn project::ModuleResolverFactory>>, GoError> {
         if options.module_resolver.0 == 0 {
@@ -483,7 +485,6 @@ impl Session {
             registration: data,
             contexts: self.program_resolution_contexts.clone(),
             conn,
-            ctx: ctx.clone(),
             current_directory: self.get_current_directory(),
         })))
     }

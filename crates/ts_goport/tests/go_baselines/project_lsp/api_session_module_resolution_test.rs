@@ -4,7 +4,7 @@
 //! and `child_test!`. A Go `defer ...Close()` is a call at the end of the
 //! test, in the Go defer order.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ts_goport::api::{
@@ -18,7 +18,7 @@ use ts_goport::flags::{ModuleKind, ModuleResolutionKind};
 use ts_goport::frontend::json_ext::{AnyValue, JsonValue};
 use ts_goport::frontend::module;
 use ts_goport::frontend::vfs;
-use ts_goport::gostd::{Context, GoError, errors};
+use ts_goport::gostd::{Context, GoError, context, errors};
 use ts_goport::ipc;
 use ts_goport::options::{CompilerOptions, Tristate};
 
@@ -26,33 +26,32 @@ use super::api_util::{doc, error_contains, nil_error};
 use super::projecttestutil::{self, files};
 use super::util::bg;
 
-// Go: session_module_resolution_test.go:15 failingModuleResolutionConn
-// (at 673a5f17d713: the ts#64519 api part is not ported)
+// Go: session_module_resolution_test.go:16 failingModuleResolutionConn
 struct FailingModuleResolutionConn {
     calls: Cell<usize>,
+    // ts#64519
+    contexts: RefCell<Vec<Context>>,
 }
 
 impl ipc::Conn for FailingModuleResolutionConn {
-    // Go: session_module_resolution_test.go:19 failingModuleResolutionConn.Run
-    // (at 673a5f17d713: the ts#64519 api part is not ported)
+    // Go: session_module_resolution_test.go:21 failingModuleResolutionConn.Run
     fn run(&self, _ctx: &Context) -> Result<(), GoError> {
         Ok(())
     }
 
-    // Go: session_module_resolution_test.go:23 failingModuleResolutionConn.Call
-    // (at 673a5f17d713: the ts#64519 api part is not ported)
+    // Go: session_module_resolution_test.go:25 failingModuleResolutionConn.Call
     fn call(
         &self,
-        _ctx: &Context,
+        ctx: &Context,
         _method: &str,
         _params: Option<Box<dyn AnyValue>>,
     ) -> Result<JsonValue, GoError> {
         self.calls.set(self.calls.get() + 1);
+        self.contexts.borrow_mut().push(ctx.clone());
         Err(errors::new("callback error"))
     }
 
-    // Go: session_module_resolution_test.go:28 failingModuleResolutionConn.Notify
-    // (at 673a5f17d713: the ts#64519 api part is not ported)
+    // Go: session_module_resolution_test.go:31 failingModuleResolutionConn.Notify
     fn notify(
         &self,
         _ctx: &Context,
@@ -444,8 +443,7 @@ child_test! {
     }
 }
 
-// Go: session_module_resolution_test.go:225 TestModuleResolutionCallbackErrorsAreReturned
-// (at 673a5f17d713: the ts#64519 api part is not ported)
+// Go: session_module_resolution_test.go:287 TestModuleResolutionCallbackErrorsAreReturned
 // PORT: the Go test builds the unexported `moduleResolverFactory` with its
 // fields. The port's factory fields are private; the test registers the
 // same registration (id 1) and connection on the session and takes the
@@ -458,6 +456,7 @@ child_test! {
         let session = api::new_lsp_session(project_session.clone(), None);
         let conn = Rc::new(FailingModuleResolutionConn {
             calls: Cell::new(0),
+            contexts: RefCell::new(Vec::new()),
         });
         let registration = Rc::new(ModuleResolverRegistration {
             id: ModuleResolverID(1),
@@ -472,14 +471,13 @@ child_test! {
         *session.conn.borrow_mut() = Some(conn.clone());
         assert_eq!(session.get_current_directory(), "/");
         let factory = nil_error(session.module_resolver_factory(
-            &bg(),
             &CreateProgramOptions {
                 module_resolver: registration.id,
                 ..Default::default()
             },
         ))
         .unwrap();
-        let (provider, cleanup) = factory.new_resolver(module::ResolverOptions {
+        let (provider, cleanup) = factory.new_resolver(&bg(), module::ResolverOptions {
             host: Some(Rc::new(SessionResolutionHost {
                 fs: session.fs(),
                 current_directory: session.get_current_directory(),
@@ -501,14 +499,72 @@ child_test! {
     }
 }
 
-// Go: session_module_resolution_test.go:258 TestModuleResolutionCallbackErrorRejectsLanguageServerUpdate
-// (at 673a5f17d713: the ts#64519 api part is not ported)
+// Go: session_module_resolution_test.go:319 TestModuleResolutionFactoryUsesCurrentContext (ts#64519)
+// PORT: the factory comes from the session as in
+// `module_resolution_callback_errors_are_returned`. Go compares the context
+// values; here their Done channels (each `with_cancel` context has its own).
+// Go `t.Context()` is a second cancel context.
+child_test! {
+    fn module_resolution_factory_uses_current_context() {
+        let (project_session, _) = projecttestutil::setup(files(&[]));
+        let session = api::new_lsp_session(project_session.clone(), None);
+        let conn = Rc::new(FailingModuleResolutionConn {
+            calls: Cell::new(0),
+            contexts: RefCell::new(Vec::new()),
+        });
+        let registration = Rc::new(ModuleResolverRegistration {
+            id: ModuleResolverID(1),
+            compiler_options: Rc::new(CompilerOptions::default()),
+            resolutions: None,
+            resolve_module_name_callback: "resolveModuleName/1".to_string(),
+        });
+        session
+            .module_resolvers
+            .borrow_mut()
+            .insert(registration.id, registration.clone());
+        *session.conn.borrow_mut() = Some(conn.clone());
+        let factory = nil_error(session.module_resolver_factory(&CreateProgramOptions {
+            module_resolver: registration.id,
+            ..Default::default()
+        }))
+        .unwrap();
+        let (old_context, cancel) = context::with_cancel(&bg());
+        let (test_context, cancel_test) = context::with_cancel(&bg());
+        for ctx in [old_context, test_context] {
+            let (resolver, cleanup) = factory.new_resolver(
+                &ctx,
+                module::ResolverOptions {
+                    host: Some(Rc::new(SessionResolutionHost {
+                        fs: session.fs(),
+                        current_directory: session.get_current_directory(),
+                    })),
+                    compiler_options: Some(Rc::new(CompilerOptions::default())),
+                    ..Default::default()
+                },
+            );
+            let (_, _, err) =
+                resolver.resolve_module_name_from_directory("pkg", "/src", ModuleKind::ESM);
+            error_contains(err.map_or(Ok(()), Err), "callback error");
+            let last = conn.contexts.borrow().last().cloned().unwrap();
+            assert!(last.done().unwrap().ptr_eq(&ctx.done().unwrap()));
+            cleanup();
+            cancel();
+        }
+        assert_eq!(session.program_resolution_contexts.contexts.borrow().len(), 0);
+        cancel_test();
+        session.close();
+        project_session.close();
+    }
+}
+
+// Go: session_module_resolution_test.go:348 TestModuleResolutionCallbackErrorRejectsLanguageServerUpdate
 child_test! {
     fn module_resolution_callback_error_rejects_language_server_update() {
         let (project_session, _) = projecttestutil::setup(files(&[("/src/index.ts", r#"import "pkg";"#)]));
         let session = api::new_lsp_session(project_session.clone(), None);
         *session.conn.borrow_mut() = Some(Rc::new(FailingModuleResolutionConn {
             calls: Cell::new(0),
+            contexts: RefCell::new(Vec::new()),
         }));
         let resolver = nil_error(session.handle_create_module_resolver(&CreateModuleResolverParams {
             compiler_options: no_lib_node_next(),
@@ -539,6 +595,8 @@ child_test! {
             ),
             "callback error",
         );
+        // ts#64519
+        assert_eq!(session.program_resolution_contexts.contexts.borrow().len(), 0);
         assert!(Rc::ptr_eq(&project_session.snapshot(), &base_snapshot));
         assert_eq!(
             project_session
