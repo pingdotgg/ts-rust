@@ -959,8 +959,12 @@ impl Checker {
                     self.new_symbol(SymbolFlags::FUNCTION_SCOPED_VARIABLE, node.name().text());
                 let declarations = self.sym(alias).declarations.clone();
                 self.sym_mut(symbol).declarations = declarations;
+                // Go reads the links (and gives the id) before the right side.
+                self.value_symbol_links.get_by_id(&self.symbols, symbol);
                 let resolved_type = self.get_global_abstract_module_source_type();
-                self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .resolved_type = resolved_type;
                 self.alias_symbol_links.get(alias).immediate_target = symbol;
             }
             return self.alias_symbol_links.get(alias).immediate_target;
