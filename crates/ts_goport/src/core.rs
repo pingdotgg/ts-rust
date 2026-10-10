@@ -3848,13 +3848,26 @@ pub enum LinkSlot {
     /// dead file versions, which a new checker never reads. Indexes below
     /// `LINK_FLAT_IDS` use the arena table, as `Arena` does. The others use
     /// one page table per block of indexes that the store reads
-    /// (`LinkStore::far_cell`), so a store pays only for the blocks it uses.
+    /// (`LinkStore::far_page`), so a store pays only for the blocks it uses.
     Lineage(usize),
     /// A node or flow node handle: (file, local index + 1). Each file has
     /// its own page table.
     File(usize, usize),
     /// Any other key (a synthetic node): the hash map.
     Map,
+}
+
+impl LinkSlot {
+    /// The index of a key with slots in its table. Its place in its page is
+    /// `index % LINK_PAGE_SIZE`, also for a lineage key in a block table, as
+    /// `LINK_FLAT_IDS` and the block size are multiples of the page size.
+    #[inline(always)]
+    fn index(self) -> usize {
+        match self {
+            LinkSlot::Arena(index) | LinkSlot::Lineage(index) | LinkSlot::File(_, index) => index,
+            LinkSlot::Map => unreachable!("map keys have no slot"),
+        }
+    }
 }
 
 /// A `LinkStore` key. Arena handles are dense small indexes, and node and
@@ -3904,6 +3917,11 @@ const LINK_FLAT_IDS: usize = 1 << 22;
 /// one page table per block.
 const LINK_BLOCK_SHIFT: usize = 16;
 
+const _: () = assert!(
+    LINK_FLAT_IDS % LINK_PAGE_SIZE == 0 && (1 << LINK_BLOCK_SHIFT) % LINK_PAGE_SIZE == 0,
+    "a block page holds the keys of one flat page (`LinkSlot::index`)"
+);
+
 /// The block (an index into `LinkStore::files`) and the index in its block
 /// of lineage index `index`. An index below `LINK_FLAT_IDS` wraps to a block
 /// past every block table, so a lookup of it finds no page.
@@ -3946,12 +3964,130 @@ impl LinkKey for FlowNodeId {
 /// stays small.
 const LINK_PAGE_SIZE: usize = 1 << 6;
 
-/// The records of `LINK_PAGE_SIZE` keys, `None` for a key with no record.
-type LinkPage<V> = [Option<V>; LINK_PAGE_SIZE];
+/// The records of the `LINK_PAGE_SIZE` keys of one page of a `LinkStore`.
+/// `DenseLinkPage` holds a place for every key, `SparseLinkPage` only the
+/// records that its keys have. `index` is the index of a key of the page in
+/// its table (`LinkSlot`); the page uses `index % LINK_PAGE_SIZE`.
+pub trait LinkPage<V: Default> {
+    /// A page with no record.
+    fn new_page() -> Box<Self>;
+    /// The record of key `index`.
+    fn record(&self, index: usize) -> Option<&V>;
+    /// The record of key `index`, made with `V::default()` if it has none.
+    fn record_or_default(&mut self, index: usize) -> &mut V;
+    /// Adds the record of key `index`, which has none, with `value`.
+    fn insert_record(&mut self, index: usize, value: V) -> &mut V;
+}
+
+/// The records of `LINK_PAGE_SIZE` keys in place, `None` for a key with no
+/// record. A page costs 64 values, used or not, so a value must be 32 bytes
+/// or less (a page of 2 KiB at most).
+pub type DenseLinkPage<V> = [Option<V>; LINK_PAGE_SIZE];
+
+impl<V: Default> LinkPage<V> for DenseLinkPage<V> {
+    fn new_page() -> Box<Self> {
+        const {
+            assert!(
+                size_of::<Option<V>>() <= 32,
+                "a link value over 32 bytes goes in a Box or a SparseLinkStore"
+            );
+        }
+        Box::new(std::array::from_fn(|_| None))
+    }
+
+    #[inline(always)]
+    fn record(&self, index: usize) -> Option<&V> {
+        self[index % LINK_PAGE_SIZE].as_ref()
+    }
+
+    #[inline(always)]
+    fn record_or_default(&mut self, index: usize) -> &mut V {
+        let cell = &mut self[index % LINK_PAGE_SIZE];
+        match cell {
+            Some(value) => value,
+            None => new_link_record(cell),
+        }
+    }
+
+    #[inline(always)]
+    fn insert_record(&mut self, index: usize, value: V) -> &mut V {
+        self[index % LINK_PAGE_SIZE].insert(value)
+    }
+}
+
+/// The records of the keys of a page that have one, in the order they were
+/// made, and the place of each key's record. A page costs 88 bytes and its
+/// records, so it suits a store where few keys of a page have a record
+/// (lspage1: 2% to 30% in most checker stores). A read is one more load
+/// than a `DenseLinkPage` read, and a record of any size stays in place.
+#[derive(Clone, Debug)]
+pub struct SparseLinkPage<V> {
+    records: Vec<V>,
+    /// For each key of the page, 1 + the index of its record in `records`,
+    /// or 0 when it has none.
+    places: [u8; LINK_PAGE_SIZE],
+}
+
+impl<V> SparseLinkPage<V> {
+    /// The capacity of `records` in a new page: 64 bytes, and at least 4
+    /// records. Then it doubles, as a `Vec` does.
+    // PERF: each growth is a `realloc`. Growing one record at a time cost
+    // 0.5% more instructions on zod; from 4 records, about 0.1% more on
+    // effect than from 64 bytes.
+    const FIRST: usize = {
+        let size = if size_of::<V>() == 0 {
+            1
+        } else {
+            size_of::<V>()
+        };
+        if 64 / size > 4 { 64 / size } else { 4 }
+    };
+
+    /// Adds the record of key `index`, which has none.
+    // PERF: out of line, so an inlined `get` stays small.
+    #[inline(never)]
+    fn push(&mut self, index: usize, value: V) -> &mut V {
+        self.records.push(value);
+        let place = self.records.len();
+        self.places[index % LINK_PAGE_SIZE] = place as u8;
+        &mut self.records[place - 1]
+    }
+}
+
+impl<V: Default> LinkPage<V> for SparseLinkPage<V> {
+    fn new_page() -> Box<Self> {
+        // A page is made for a new record, so its records are allocated now.
+        Box::new(Self {
+            records: Vec::with_capacity(Self::FIRST),
+            places: [0; LINK_PAGE_SIZE],
+        })
+    }
+
+    #[inline(always)]
+    fn record(&self, index: usize) -> Option<&V> {
+        // Place 0 (no record) wraps to an index past every record.
+        self.records
+            .get(usize::from(self.places[index % LINK_PAGE_SIZE]).wrapping_sub(1))
+    }
+
+    #[inline(always)]
+    fn record_or_default(&mut self, index: usize) -> &mut V {
+        let at = usize::from(self.places[index % LINK_PAGE_SIZE]).wrapping_sub(1);
+        if at < self.records.len() {
+            return &mut self.records[at];
+        }
+        self.push(index, V::default())
+    }
+
+    #[inline(always)]
+    fn insert_record(&mut self, index: usize, value: V) -> &mut V {
+        self.push(index, value)
+    }
+}
 
 /// A page table: for each page of `LINK_PAGE_SIZE` keys, the page, or `None`
 /// when no key of the page has a record.
-type PageTable<V> = Vec<Option<Box<LinkPage<V>>>>;
+type PageTable<P> = Vec<Option<Box<P>>>;
 
 /// Makes the record of a key that has none.
 // PERF: out of line, so an inlined `get` stays small; not `#[cold]`, because
@@ -3966,25 +4102,35 @@ fn new_link_record<V: Default>(cell: &mut Option<V>) -> &mut V {
 /// tsgo#4329). Other keys use a hash map. `get` reads an existing record
 /// inline and adds a new page out of line.
 ///
-/// A page holds its values in place, so a node key reads 4 dependent loads
-/// (the list of file tables, the table of the file, the page, the value)
-/// and an arena key 3. Each page costs 64 values, used or not, so a value must be 32
-/// bytes or less (a page of 2 KiB at most). Put a larger value, or one that
-/// few keys of a page have, in a `Box` (`LinkStore<Node, Box<V>>`, like Go
-/// `symbolArenaLinkStore`): a page then costs 8 bytes per key, and a read
-/// one more load.
+/// A key finds its page in 3 dependent loads (the list of file tables, the
+/// table of the file, the page) for a node key, 2 for an arena key. The page
+/// kind `P` is set by the store:
+/// - `DenseLinkPage` (the default) holds the values in place, so a read is
+///   one more load. Each page costs 64 values, used or not, so it suits
+///   stores where most keys of a page have a record, of 32 bytes or less.
+///   Put a larger value in a `Box` (`LinkStore<Node, Box<V>>`, like Go
+///   `symbolArenaLinkStore`): a page then costs 8 bytes per key, and a read
+///   one more load.
+/// - `SparseLinkPage` (`SparseLinkStore`) holds only the records that its
+///   keys have, of any size: a read is two more loads.
 #[derive(Clone, Debug)]
-pub struct LinkStore<K: LinkKey, V: Default> {
+pub struct LinkStore<K: LinkKey, V: Default, P: LinkPage<V> = DenseLinkPage<V>> {
     /// Page table of arena keys: one flat table for the whole arena (for
     /// lineage keys, up to `LINK_FLAT_IDS`).
-    arena: PageTable<V>,
+    arena: PageTable<P>,
     /// Page tables of file keys, by file. A store of lineage keys has no
     /// file keys: it keeps the page tables of its blocks here (`far_slot`).
-    files: Vec<PageTable<V>>,
+    files: Vec<PageTable<P>>,
     map: FxHashMap<K, V>,
 }
 
-impl<K: LinkKey, V: Default> Default for LinkStore<K, V> {
+/// A `LinkStore` of `SparseLinkPage`s, for records that few keys of a page
+/// have (lspage1: on VS Code, 7% of the keys of a `type_node_links` page).
+// PORT: Go keeps one page kind (`core.PagedLinkStore`); the page kind does
+// not change which keys have a record.
+pub type SparseLinkStore<K, V> = LinkStore<K, V, SparseLinkPage<V>>;
+
+impl<K: LinkKey, V: Default, P: LinkPage<V>> Default for LinkStore<K, V, P> {
     fn default() -> Self {
         Self {
             arena: Vec::new(),
@@ -3994,75 +4140,70 @@ impl<K: LinkKey, V: Default> Default for LinkStore<K, V> {
     }
 }
 
-impl<K: LinkKey, V: Default> LinkStore<K, V> {
-    /// The record cell of a key with slots, or `None` when its page is
-    /// absent.
+impl<K: LinkKey, V: Default, P: LinkPage<V>> LinkStore<K, V, P> {
+    /// The page of a key with slots, or `None` when it is absent.
     // PERF: a lineage key inside the flat table reads like an arena key.
     #[inline(always)]
-    fn cell(&self, slot: LinkSlot) -> Option<&Option<V>> {
+    fn page(&self, slot: LinkSlot) -> Option<&P> {
         let (table, index) = match slot {
             LinkSlot::Arena(index) => (&self.arena, index),
             LinkSlot::Lineage(index) if index / LINK_PAGE_SIZE < self.arena.len() => {
                 (&self.arena, index)
             }
-            LinkSlot::Lineage(index) => return self.far_cell(index),
+            LinkSlot::Lineage(index) => return self.far_page(index),
             LinkSlot::File(file, index) => (self.files.get(file)?, index),
             LinkSlot::Map => return None,
         };
-        let page = table.get(index / LINK_PAGE_SIZE)?.as_deref()?;
-        Some(&page[index % LINK_PAGE_SIZE])
+        table.get(index / LINK_PAGE_SIZE)?.as_deref()
     }
 
-    /// `cell` of a lineage key past the flat table: its block page, or
+    /// `page` of a lineage key past the flat table: its block page, or
     /// `None` when the page is absent or the key belongs in the flat table.
     #[inline(never)]
-    fn far_cell(&self, index: usize) -> Option<&Option<V>> {
+    fn far_page(&self, index: usize) -> Option<&P> {
         self.far_lookup(index)
     }
 
     #[inline(always)]
-    fn far_lookup(&self, index: usize) -> Option<&Option<V>> {
+    fn far_lookup(&self, index: usize) -> Option<&P> {
         let (block, index) = far_slot(index);
-        let page = self
-            .files
+        self.files
             .get(block)?
             .get(index / LINK_PAGE_SIZE)?
-            .as_deref()?;
-        Some(&page[index % LINK_PAGE_SIZE])
+            .as_deref()
     }
 
-    /// `cell_mut` of a lineage key past the flat table.
-    // PERF: the page lookup runs twice, as in `cell_mut`, and LLVM merges
+    /// `page_mut` of a lineage key past the flat table.
+    // PERF: the page lookup runs twice, as in `page_mut`, and LLVM merges
     // them. `#[cold]` keeps the callers laid out for flat keys, as a CLI
     // build has only those; a long session that passes `LINK_FLAT_IDS` pays
     // the call.
     #[cold]
     #[inline(never)]
-    fn far_cell_mut(&mut self, key: K, index: usize) -> &mut Option<V> {
+    fn far_page_mut(&mut self, key: K, index: usize) -> &mut P {
         if self.far_lookup(index).is_none() {
             return self.add_page(key);
         }
         let (block, index) = far_slot(index);
-        let page = self.files[block][index / LINK_PAGE_SIZE]
+        self.files[block][index / LINK_PAGE_SIZE]
             .as_deref_mut()
-            .expect("link page");
-        &mut page[index % LINK_PAGE_SIZE]
+            .expect("link page")
     }
 
-    /// The record cell of a key with slots. Adds its page if it is absent.
+    /// The page of a key with slots. Adds the page if it is absent.
     // PERF: the page lookup runs twice in the source (a shared lookup, then
     // the mutable one, which the borrow checker needs), but the second one
     // reads the same memory with no store between, so LLVM merges them.
-    // A lineage key past the flat table goes to `far_cell_mut` first, so
-    // `cell` takes only its flat arm here and the merge above still holds.
+    // A lineage key past the flat table goes to `far_page_mut` first, so
+    // `page` takes only its flat arm here and the merge above still holds.
     #[inline(always)]
-    fn cell_mut(&mut self, key: K, slot: LinkSlot) -> &mut Option<V> {
+    fn page_mut(&mut self, key: K, slot: LinkSlot) -> &mut P {
         if let LinkSlot::Lineage(index) = slot
             && index / LINK_PAGE_SIZE >= self.arena.len()
         {
-            return self.far_cell_mut(key, index);
+            return self.far_page_mut(key, index);
         }
-        if self.cell(slot).is_none() {
+        if self.page(slot).is_none() {
             return self.add_page(key);
         }
         let (table, index) = match slot {
@@ -4070,26 +4211,19 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
             LinkSlot::File(file, index) => (&mut self.files[file], index),
             LinkSlot::Map => unreachable!("map keys have no slot"),
         };
-        let page = table[index / LINK_PAGE_SIZE]
+        table[index / LINK_PAGE_SIZE]
             .as_deref_mut()
-            .expect("link page");
-        &mut page[index % LINK_PAGE_SIZE]
+            .expect("link page")
     }
 
-    /// `cell_mut` when the page of the key is absent: adds the page (and the
+    /// `page_mut` when the page of the key is absent: adds the page (and the
     /// file or block table) first. The key, not its 24-byte `LinkSlot`, is
     /// passed, so it goes in a register.
     #[cold]
     #[inline(never)]
-    fn add_page(&mut self, key: K) -> &mut Option<V> {
-        const {
-            assert!(
-                size_of::<Option<V>>() <= 32,
-                "a link value over 32 bytes goes in a Box"
-            );
-        }
+    fn add_page(&mut self, key: K) -> &mut P {
         let (file, index) = match key.link_slot() {
-            LinkSlot::Arena(index) => return Self::page_cell(&mut self.arena, index),
+            LinkSlot::Arena(index) => return Self::table_page(&mut self.arena, index),
             LinkSlot::Lineage(index) if index < LINK_FLAT_IDS => {
                 // The flat table stops at `LINK_FLAT_IDS`; so does its capacity.
                 let pages = index / LINK_PAGE_SIZE + 1;
@@ -4098,7 +4232,7 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
                         (2 * self.arena.capacity()).clamp(pages, LINK_FLAT_IDS / LINK_PAGE_SIZE);
                     self.arena.reserve_exact(capacity - self.arena.len());
                 }
-                return Self::page_cell(&mut self.arena, index);
+                return Self::table_page(&mut self.arena, index);
             }
             LinkSlot::Lineage(index) => far_slot(index),
             LinkSlot::File(file, index) => (file, index),
@@ -4107,17 +4241,16 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
         if file >= self.files.len() {
             self.files.resize_with(file + 1, Vec::new);
         }
-        Self::page_cell(&mut self.files[file], index)
+        Self::table_page(&mut self.files[file], index)
     }
 
-    /// The cell of `index` in `table`, with its page added if it is absent.
-    fn page_cell(table: &mut PageTable<V>, index: usize) -> &mut Option<V> {
+    /// The page of `index` in `table`, added if it is absent.
+    fn table_page(table: &mut PageTable<P>, index: usize) -> &mut P {
         let entry = index / LINK_PAGE_SIZE;
         if entry >= table.len() {
             table.resize_with(entry + 1, || None);
         }
-        let page = table[entry].get_or_insert_with(|| Box::new(std::array::from_fn(|_| None)));
-        &mut page[index % LINK_PAGE_SIZE]
+        table[entry].get_or_insert_with(P::new_page)
     }
 
     /// Go `store.Get(key)`: creates the record on first use.
@@ -4127,11 +4260,7 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
         if matches!(slot, LinkSlot::Map) {
             return self.map_get(key);
         }
-        let cell = self.cell_mut(key, slot);
-        match cell {
-            Some(value) => value,
-            None => new_link_record(cell),
-        }
+        self.page_mut(key, slot).record_or_default(slot.index())
     }
 
     #[cold]
@@ -4143,7 +4272,7 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
     /// Go `store.Get(key)` followed by writes to the new record, for a key
     /// that has no record (a symbol or type made just before): adds the
     /// record with `value` and returns it.
-    // PERF: an inlined caller builds `value` in its page slot, and the
+    // PERF: an inlined caller builds `value` in its dense page slot, and the
     // default record is not written first.
     #[inline(always)]
     pub fn insert_new(&mut self, key: K, value: V) -> &mut V {
@@ -4152,7 +4281,7 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
         if matches!(slot, LinkSlot::Map) {
             return self.map_insert_new(key, value);
         }
-        self.cell_mut(key, slot).insert(value)
+        self.page_mut(key, slot).insert_record(slot.index(), value)
     }
 
     #[cold]
@@ -4167,7 +4296,9 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
     pub fn has(&self, key: K) -> bool {
         match key.link_slot() {
             LinkSlot::Map => self.map.contains_key(&key),
-            slot => self.cell(slot).is_some_and(Option::is_some),
+            slot => self
+                .page(slot)
+                .is_some_and(|page| page.record(slot.index()).is_some()),
         }
     }
 
@@ -4177,7 +4308,7 @@ impl<K: LinkKey, V: Default> LinkStore<K, V> {
     pub fn try_get(&self, key: K) -> Option<&V> {
         match key.link_slot() {
             LinkSlot::Map => self.map.get(&key),
-            slot => self.cell(slot)?.as_ref(),
+            slot => self.page(slot)?.record(slot.index()),
         }
     }
 }
@@ -4290,12 +4421,18 @@ mod link_store_tests {
 
     // Symbol keys from `LINK_FLAT_IDS` on keep their records in pages by
     // block: a store with a few far keys has no page table entries for the
-    // indexes between them, and every key still finds its own record.
+    // indexes between them, and every key still finds its own record. Both
+    // page kinds.
     #[test]
     fn link_store_far_symbol_keys_use_blocks() {
+        far_symbol_keys_use_blocks::<DenseLinkPage<u64>>();
+        far_symbol_keys_use_blocks::<SparseLinkPage<u64>>();
+    }
+
+    fn far_symbol_keys_use_blocks<P: LinkPage<u64>>() {
         let flat = LINK_FLAT_IDS as u32;
         let block = 1u32 << LINK_BLOCK_SHIFT;
-        let mut symbols = LinkStore::<SymbolId, u64>::default();
+        let mut symbols = LinkStore::<SymbolId, u64, P>::default();
         let keys = [
             SymbolId(5),
             SymbolId(flat - 1),
@@ -4328,6 +4465,36 @@ mod link_store_tests {
         assert_eq!(symbols.arena.len(), LINK_FLAT_IDS / LINK_PAGE_SIZE);
         let far_entries: usize = symbols.files.iter().map(Vec::len).sum();
         assert!(far_entries < 3 * (1 << LINK_BLOCK_SHIFT) / LINK_PAGE_SIZE);
+    }
+
+    // A sparse page keeps the record of each key that has one, made by `get`
+    // or `insert_new` in any order, up to every key of the page. The other
+    // keys of the page and of the next pages have none.
+    #[test]
+    fn sparse_link_pages_keep_records_by_key() {
+        let node = |local: u64| Node(2 << 32 | local);
+        let mut nodes = SparseLinkStore::<Node, [u32; 5]>::default();
+        let order: Vec<u64> = (0..64).map(|n| 64 + n * 37 % 64).collect();
+        for (n, &local) in order.iter().enumerate() {
+            assert!(order[n..].iter().all(|&later| !nodes.has(node(later))));
+            if n % 2 == 0 {
+                nodes.get(node(local))[0] = local as u32;
+            } else {
+                nodes.insert_new(node(local), [local as u32; 5]);
+            }
+        }
+        for &local in &order {
+            nodes.get(node(local))[4] += 1;
+            let record = nodes.try_get(node(local)).expect("record");
+            assert_eq!(record[0], local as u32);
+            assert_eq!(
+                record[4],
+                if local % 2 == 0 { 1 } else { local as u32 + 1 },
+                "{local}"
+            );
+        }
+        assert!(!nodes.has(node(63)) && !nodes.has(node(128)));
+        assert!(nodes.try_get(node(200)).is_none());
     }
 }
 
