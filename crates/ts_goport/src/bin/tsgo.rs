@@ -108,12 +108,14 @@ fn main() {
     let budget = ThreadBudget::one_program(1);
     set_malloc_tunables(&budget);
     budget.install();
-    // After the exec in `set_malloc_tunables` and before the work thread.
-    #[cfg(all(feature = "jemalloc", target_os = "linux"))]
-    ts_goport::jemalloc_layout::jemalloc_layout();
     // After the exec in `set_malloc_tunables`: an exec resets the handlers,
     // and a raised limit would read as the original one there.
     let signals = go_runtime_start();
+    // After the exec in `set_malloc_tunables` and before the work thread.
+    // After `go_runtime_start` (it starts no thread), so Go's signal
+    // handlers are set before the layout's 0.3 ms.
+    #[cfg(all(feature = "jemalloc", target_os = "linux"))]
+    ts_goport::jemalloc_layout::jemalloc_layout();
     // Go: `System.SinceStart` counts from the process start. The tunables
     // step above may exec the binary again, so the clock starts after it.
     let start = Instant::now();

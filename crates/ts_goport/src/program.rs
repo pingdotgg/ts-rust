@@ -3513,10 +3513,14 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
 }
 
 /// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id of this thread for a one-checker `--singleThreaded` pool.
+/// symbol id of this thread for a one-checker `--singleThreaded` pool
+/// (`singleThreaded` on the command line or in the project tsconfig).
 /// Watch mode makes the next program before it releases the last one, so
 /// the pool of the last program can still be here: its symbol ids become
-/// this thread's first (`CheckerPool::carry_symbol_ids`).
+/// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
+/// builders the last pool can still be checking: the copy then waits for
+/// its jobs, so such projects check one after the other (PORTING.md,
+/// Threads).
 fn symbol_id_carry_start(count: usize) -> Option<u64> {
     if count != 1 || !single_threaded() {
         return None;
@@ -3597,6 +3601,9 @@ fn start_checkers(count: usize) -> CheckerPool {
 /// each with its own `WorkerIds`, as a worker would make it.
 #[cfg(target_family = "wasm")]
 fn start_checkers(count: usize) -> CheckerPool {
+    // First, as on native: the carry of the last pool becomes this thread's
+    // ids, and each checker starts from them (`id_seed`).
+    let carry_from = symbol_id_carry_start(count);
     let checkers = (0..count)
         .map(|index| {
             let mut ids = WorkerIds(id_seed().into());
@@ -3606,7 +3613,7 @@ fn start_checkers(count: usize) -> CheckerPool {
         .collect();
     CheckerPool {
         checkers,
-        carry_from: symbol_id_carry_start(count),
+        carry_from,
     }
 }
 
