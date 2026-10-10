@@ -2,7 +2,7 @@
 
 use crate::ipc::prelude::*;
 
-use crate::core::go_recover;
+use crate::core::{go_after_recover, go_recover};
 use crate::frontend::json_ext::{AnyValue, JsonValue};
 use crate::gostd::{Context, GoError, errors, strconv};
 use crate::ipc::conn::{Conn, Handler, recovered_value};
@@ -178,23 +178,27 @@ impl SyncConn {
             Ok(())
         });
 
-        let r = match outcome {
+        let payload = match outcome {
             Ok(result) => return result,
-            Err(r) => r,
+            Err(payload) => payload,
         };
         {
-            let r = recovered_value(r.as_ref());
+            let r = recovered_value(payload.as_ref());
             let stack = std::backtrace::Backtrace::force_capture().to_string();
             let err = errors::new(format!("panic: {r}\n{stack}"));
 
-            let write_err = self.protocol.borrow_mut().write_error(
-                id.as_ref(),
-                &jsonrpc::ResponseError {
-                    code: jsonrpc::CODE_INTERNAL_ERROR,
-                    message: err.error(),
-                    data: None,
-                },
-            );
+            // The panic answer runs in Go's deferred recover: a panic in it
+            // prints the recovered panic first.
+            let write_err = go_after_recover(payload.as_ref(), || {
+                self.protocol.borrow_mut().write_error(
+                    id.as_ref(),
+                    &jsonrpc::ResponseError {
+                        code: jsonrpc::CODE_INTERNAL_ERROR,
+                        message: err.error(),
+                        data: None,
+                    },
+                )
+            });
 
             if let Err(write_err) = write_err {
                 return Err(errors::errorf(
@@ -390,6 +394,80 @@ mod tests {
         ) -> Result<(), GoError> {
             Ok(())
         }
+    }
+
+    // PORT: not in Go. A protocol that reads `message` once and panics
+    // with a Go panic in each error answer.
+    struct PanickingErrorAnswers {
+        message: Option<Message>,
+    }
+
+    impl Protocol for PanickingErrorAnswers {
+        fn read_message(&mut self) -> Result<Message, GoError> {
+            self.message.take().ok_or_else(|| errors::EOF.clone())
+        }
+
+        fn write_request(
+            &mut self,
+            _id: Option<&jsonrpc::ID>,
+            _method: &str,
+            _params: Option<Box<dyn AnyValue>>,
+        ) -> Result<(), GoError> {
+            Ok(())
+        }
+
+        fn write_notification(
+            &mut self,
+            _method: &str,
+            _params: Option<Box<dyn AnyValue>>,
+        ) -> Result<(), GoError> {
+            Ok(())
+        }
+
+        fn write_response(
+            &mut self,
+            _id: Option<&jsonrpc::ID>,
+            _result: Option<Box<dyn AnyValue>>,
+        ) -> Result<(), GoError> {
+            Ok(())
+        }
+
+        fn write_error(
+            &mut self,
+            _id: Option<&jsonrpc::ID>,
+            _err: &jsonrpc::ResponseError,
+        ) -> Result<(), GoError> {
+            crate::core::go_panic("write panic".to_string())
+        }
+    }
+
+    // PORT: not in Go. The panic answer runs in the deferred recover of
+    // `handleRequest` (ipc/conn_sync.go:119), so the Go runtime prints the
+    // recovered panic before a panic in it. Go's stderr for `Run` on a
+    // plain goroutine, as tsgo --api runs it (followups41
+    // `go test -overlay`): `panic: handler panic [recovered]`, then
+    // `\tpanic: write panic`.
+    #[test]
+    fn a_panic_in_the_panic_answer_keeps_the_recovered_panic_first() {
+        let protocol = PanickingErrorAnswers {
+            message: Some(message(Some(jsonrpc::new_id_int(1)), "transform")),
+        };
+        let conn = new_sync_conn(
+            Arc::new(NilTransport),
+            Box::new(protocol),
+            Rc::new(PanicHandler),
+        );
+
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            conn.run(&context::background())
+        }))
+        .expect_err("the panic answer panics");
+        let panic = payload
+            .downcast_ref::<crate::core::GoPanic>()
+            .expect("a Go panic");
+        assert_eq!(panic.recovered_before, ["handler panic"]);
+        assert_eq!(panic.value_text(), "write panic");
+        assert!(!panic.repanicked);
     }
 
     // Go: ipc/conn_sync_test.go:55 TestSyncConnRunReturnsResponseWriteFailure
