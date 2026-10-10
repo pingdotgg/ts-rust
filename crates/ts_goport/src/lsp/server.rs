@@ -4443,10 +4443,9 @@ impl Server {
         };
         // ts#64544: the file name must be absolute, and a dynamic one must
         // decode to a URI (server.go:2161). ts#64159: it is rooted and
-        // normalized first (TryRootedFilePathFromAbsolute).
-        // PORT: Go also passes the normalized name to ResolveCompletionItem
-        // (ls lane), which finds the file by it; the port's
-        // `resolve_completion_item` reads `data.file_name`.
+        // normalized first (TryRootedFilePathFromAbsolute), and
+        // ResolveCompletionItem finds the file by the normalized name
+        // (server.go:2178).
         let Some(file_name) = lsproto::try_rooted_path_from_absolute(&data.file_name) else {
             return Err(errors::new(
                 "completion item data fileName must be absolute",
@@ -4470,7 +4469,7 @@ impl Server {
             || Ok(None),
             || {
                 language_service
-                    .resolve_completion_item(ctx, params.clone(), Some(data))
+                    .resolve_completion_item(ctx, params.clone(), Some(data), &file_name)
                     .map(Some)
             },
         )

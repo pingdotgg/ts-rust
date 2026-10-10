@@ -809,3 +809,39 @@ child_test! {
         }
     }
 }
+
+child_test! {
+    // Server skeptic probe srvskp/resolve-more-names (bump D round 2). Go N'
+    // handleCompletionItemResolve passes the rooted, normalized file name to
+    // ResolveCompletionItem (server.go:2178), which finds the file by it
+    // (completions.go:5498), so a `data.fileName` with a trailing separator
+    // or extra segments still resolves. Go answers the item, not "file not
+    // found".
+    fn completion_item_resolve_finds_the_file_by_its_normalized_name() {
+        const A: &str = "export const alpha = 1;\nalp\n";
+        let client = init_completion_client(
+            "/home/projects",
+            &[("/home/projects/tsconfig.json", TSCONFIG), ("/home/projects/a.ts", A)],
+        );
+        let a_uri = lsconv::file_name_to_document_uri("/home/projects/a.ts");
+        open(&client, &a_uri, A);
+        let (msg, resp) =
+            client.send_request(&lsproto::TEXT_DOCUMENT_COMPLETION_INFO, completion_params(&a_uri, 1, 3));
+        assert!(msg.error.is_none(), "{:?}", msg.error);
+        let items = completion_items(resp);
+        let item = find_completion_item(&items, "alpha").expect("alpha");
+
+        for file_name in [
+            "/home/projects/a.ts/",
+            "/home/projects//a.ts",
+            "/home/projects/sub//../a.ts",
+        ] {
+            let mut item = item.clone();
+            item.data.as_mut().expect("item.Data").file_name = file_name.to_string();
+            let (msg, resp) = client.send_request(&lsproto::COMPLETION_ITEM_RESOLVE_INFO, item);
+            assert!(msg.error.is_none(), "{file_name}: {:?}", msg.error);
+            let label = resp.flatten().map(|item| item.label);
+            assert_eq!(label.as_deref(), Some("alpha"), "{file_name}");
+        }
+    }
+}
