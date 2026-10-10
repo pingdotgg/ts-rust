@@ -14,7 +14,7 @@ use ts_goport::scanner_util::{GoUnit, compare_go_strings, go_string_from_bytes, 
 
 use crate::support::vfstest::MapFs;
 
-// Go: differ.go:18 DiffEntry
+// Go: differ.go:19 DiffEntry
 // PORT: a zero `time.Time` is `None`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DiffEntry {
@@ -24,7 +24,7 @@ pub struct DiffEntry {
     pub symlink_target: String,
 }
 
-// Go: differ.go:25 Snapshot
+// Go: differ.go:26 Snapshot
 // PORT: Go `map[string]*DiffEntry` is sorted here. Go always sets
 // `DefaultLibs` (to a copy, possibly empty).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub struct Snapshot {
     pub default_libs: FxHashSet<String>,
 }
 
-// Go: differ.go:30 FSDiffer
+// Go: differ.go:31 FSDiffer
 // PORT: Go `FS iovfs.FsWithSys` is only used for its `*vfstest.MapFS`, which
 // is `fs` here. Go `DefaultLibs func() *collections.SyncSet[string]` reads
 // the harness field each time; the port shares the field, and `None` is a
@@ -66,12 +66,12 @@ impl FsDiffer {
         }
     }
 
-    // Go: differ.go:38 MapFs
+    // Go: differ.go:39 MapFs
     pub fn map_fs(&self) -> &MapFs {
         &self.fs
     }
 
-    // Go: differ.go:42 SerializedDiff
+    // Go: differ.go:43 SerializedDiff
     pub fn serialized_diff(&self) -> Option<&Snapshot> {
         self.serialized_diff.as_ref()
     }
@@ -81,7 +81,7 @@ impl FsDiffer {
         self.serialized_diff = serialized_diff;
     }
 
-    // Go: differ.go:46 BaselineFSwithDiff
+    // Go: differ.go:47 BaselineFSwithDiff
     pub fn baseline_fs_with_diff(&mut self, baseline: &mut String) {
         // todo: baselines the entire fs, possibly doesn't correctly diff all cases of emitted files, since emit isn't fully implemented and doesn't always emit the same way as strada
         let mut snap: BTreeMap<String, DiffEntry> = BTreeMap::new();
@@ -145,7 +145,7 @@ impl FsDiffer {
         lock(&self.written_files).clear();
     }
 
-    // Go: differ.go:111 addFsEntryDiff
+    // Go: differ.go:116 addFsEntryDiff
     fn add_fs_entry_diff(
         &self,
         diffs: &mut BTreeMap<String, String>,
@@ -211,7 +211,7 @@ impl FsDiffer {
         }
     }
 
-    // Go: differ.go:147 ChangedPaths
+    // Go: differ.go:153 ChangedPaths
     // PORT: Go reports deleted files in map order; the port sorts them.
     pub fn changed_paths(&self) -> Vec<FileChange> {
         let Some(old_snap) = &self.serialized_diff else {
@@ -260,10 +260,10 @@ impl FsDiffer {
     }
 }
 
-// Go: differ.go:97 internalSymbolRegex
+// Go: differ.go:102 internalSymbolRegex
 // `\x{FFFD}@[^@]+@[0-9]+`
 
-// Go: differ.go:101 SanitizeInternalSymbolName
+// Go: differ.go:106 SanitizeInternalSymbolName
 // Replaces internal symbol names of shape �@symbolName@123 with �@symbolName@<symbolId>
 // // to avoid baselining differences in symbol ids, which can change between runs.
 // PORT: no regex crate. The match works on Go units (`go_unit_at`), which
@@ -340,7 +340,7 @@ fn match_internal_symbol_name(
     Some((last_at, j))
 }
 
-// Go: differ.go:142 FileChange
+// Go: differ.go:148 FileChange
 // FileChange represents a filesystem change detected between snapshots.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileChange {

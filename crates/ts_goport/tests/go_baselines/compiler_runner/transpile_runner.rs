@@ -51,7 +51,7 @@ fn transpile_vary_by() -> &'static HashSet<String> {
     })
 }
 
-// Go: transpile_runner.go:31 TranspileBaselineRunner
+// Go: transpile_runner.go:27 TranspileBaselineRunner
 // PORT: `is_submodule` is the layout: true at the typescript-go layout,
 // where the cases and baselines are the submodule's.
 pub struct TranspileBaselineRunner {
@@ -60,7 +60,7 @@ pub struct TranspileBaselineRunner {
     base_path: String,
 }
 
-// Go: transpile_runner.go:38 NewTranspileBaselineRunner
+// Go: transpile_runner.go:34 NewTranspileBaselineRunner
 pub fn new_transpile_baseline_runner() -> TranspileBaselineRunner {
     let is_submodule = !baseline::is_merged_layout();
     TranspileBaselineRunner {
@@ -76,7 +76,7 @@ pub fn new_transpile_baseline_runner() -> TranspileBaselineRunner {
 }
 
 impl TranspileBaselineRunner {
-    // Go: transpile_runner.go:44 EnumerateTestFiles
+    // Go: transpile_runner.go:40 EnumerateTestFiles
     pub fn enumerate_test_files(&self) -> &[String] {
         self.test_files.get_or_init(|| {
             enumerate_files(&self.base_path, go_regex::has_transpile_test_suffix, true)
@@ -94,7 +94,7 @@ fn read_transpile_test_file(file_name: &str) -> String {
     content
 }
 
-// Go: transpile_runner.go:62 runTest (the configurations)
+// Go: transpile_runner.go:58 runTest (the configurations)
 fn get_transpile_configurations(content: &str) -> Vec<NamedTestConfiguration> {
     let settings = extract_compiler_settings(content);
     let configurations = get_file_based_test_configurations(&settings, transpile_vary_by());
@@ -130,14 +130,14 @@ fn transpile_configured_name(just_name: &str, configuration_name: &str) -> Strin
     )
 }
 
-// Go: transpile_runner.go:98 formatTranspileConfigurationName
+// Go: transpile_runner.go:94 formatTranspileConfigurationName
 fn format_transpile_configuration_name(name: &str) -> String {
     let name = name.replace("declarationmap=", "declarationMap=");
     let name = name.replace("inlinesourcemap=", "inlineSourceMap=");
     name.replace("sourcemap=", "sourceMap=")
 }
 
-// Go: transpile_runner.go:56 RunTests (the subtest names)
+// Go: transpile_runner.go:52 RunTests (the subtest names)
 // PORT: returns the cases; child.rs runs them. A test file whose
 // configurations cannot be computed is an `Err` with the Go failure.
 fn enumerate_config_cases(runner: &TranspileBaselineRunner) -> (Vec<ConfigCase>, Vec<String>) {
@@ -171,7 +171,7 @@ fn enumerate_config_cases(runner: &TranspileBaselineRunner) -> (Vec<ConfigCase>,
     (cases, errors)
 }
 
-// Go: transpile_runner.go:62 runTest (one configuration: the body of
+// Go: transpile_runner.go:58 runTest (one configuration: the body of
 // `t.Run(configuredName, ...)`)
 // PORT: the child side of one case. Each `runKind` reports through
 // `report` (kinds `js` and `dts`).
@@ -237,7 +237,7 @@ pub fn run_single_config_test(case: &ConfigCase, report: Report<'_>) {
     }
 }
 
-// Go: transpile_runner.go:104 runKind
+// Go: transpile_runner.go:100 runKind
 // PORT: Go reports through `t`; this returns the messages of a failed
 // comparison or check (Go `t.Fatal` and `t.Errorf`). `is_submodule` is the
 // runner's (the layout).
@@ -325,7 +325,7 @@ fn run_kind(
     tsbaseline::finish_checks(compared, checks)
 }
 
-// Go: transpile_runner.go:171 appendTranspileSection
+// Go: transpile_runner.go:167 appendTranspileSection
 fn append_transpile_section(result: &mut String, file_name: &str, content: &str) {
     result.push_str(&format!("//// [{file_name}] ////\r\n"));
     result.push_str(content);
@@ -334,7 +334,7 @@ fn append_transpile_section(result: &mut String, file_name: &str, content: &str)
     }
 }
 
-// Go: transpile_runner.go:179 cleanTranspileBaselines
+// Go: transpile_runner.go:175 cleanTranspileBaselines
 // PORT: Go always writes local baselines to `testdata/baselines/local`;
 // the port writes them only under `baseline::local_root()` (see
 // support/baseline.rs), so this cleans there, and nothing when it is off.
@@ -360,7 +360,7 @@ fn clean_transpile_baselines() {
     }
 }
 
-// Go: transpile_runner.go:187 RunTranspileTests
+// Go: transpile_runner.go:181 RunTranspileTests
 // The merged layout has no submodule and no skip.
 pub fn run_transpile_tests() {
     if !baseline::is_merged_layout()

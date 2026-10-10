@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::baseline::type_symbol::{TestFile, generate_baseline, new_type_writer_walker};
 use ts_goport::baseline::util::{is_default_library_file, remove_test_path_prefixes};
 use ts_goport::contentmapper::Mapper;
@@ -38,29 +39,32 @@ use crate::tsoptions::tsoptionstest::{
 // util.go
 // ---------------------------------------------------------------------------
 
-// Go: util.go:22 libFolder, builtFolder
+// Go: util.go:19 libFolder, builtFolder
 const LIB_FOLDER: &str = "built/local/";
 const BUILT_FOLDER: &str = "/.ts";
 
-// Go: util.go:59 isBuiltFile
+// Go: util.go:56 isBuiltFile
 fn is_built_file(file_path: &str) -> bool {
     file_path.starts_with(LIB_FOLDER)
         || file_path.starts_with(&ensure_trailing_directory_separator(BUILT_FOLDER))
 }
 
-// Go: util.go:63 isTsConfigFile
+// Go: util.go:60 isTsConfigFile
 fn is_ts_config_file(path: &str) -> bool {
     // !!! fix to check for just prefixes/suffixes
     path.contains("tsconfig") && path.contains("json")
 }
 
-// Go: util.go:68 sanitizeTestFilePath
+// Go: util.go:65 sanitizeTestFilePath
 fn sanitize_test_file_path(name: &str) -> String {
     let path = go_regex::replace_test_path_characters(name);
     let path = normalize_slashes(&path);
     let path = go_regex::replace_dot_dot_slash(&path);
-    let path = to_path(&path, "", false /*useCaseSensitiveFileNames*/);
-    path.0.strip_prefix('/').unwrap_or(&path.0).to_string()
+    // ts#64159 (util.go:69): `CaseInsensitive.Canonicalize(NormalizePath(path))`.
+    // N used `ToPath(path, "", false)`, which also resolved a relative name
+    // against "".
+    let path = to_file_name_lower_case(&normalize_path(&path));
+    path.strip_prefix('/').unwrap_or(&path).to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +165,7 @@ fn write_plain(output: &Writer, text: &str, _format_style: &str) {
     write_str(output, text);
 }
 
-// Go: error_baseline.go:261 formatLocation
+// Go: error_baseline.go:276 formatLocation
 fn format_location(file: Node, pos: i32, format_opts: &FormattingOptions) -> String {
     capture_writer(|w| write_location(w, file, pos, Some(format_opts), write_plain))
 }
@@ -186,7 +190,7 @@ fn wrapped_diagnostic_file_name(diagnostic: &Diagnostic) -> Option<&'static str>
         .then(|| ast_diagnostic_file_name(diagnostic.file))
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:57 ASTDiagnostic.File (ts#63936)
+// Go: diagnosticwriter/diagnosticwriter.go:64 ASTDiagnostic.File (ts#63936)
 // The file name of `File()`: the canonical source file's name for a
 // supplemental mapper output, else the file's own name.
 // PORT: the port writes diagnostics without the wrapper, so this is the part
@@ -472,7 +476,7 @@ fn iterate_error_baseline(
 // contentmapper_baseline.go (tsgo#4712)
 // ---------------------------------------------------------------------------
 
-// Go: contentmapper_baseline.go:18 contentMapperFormatOpts
+// Go: contentmapper_baseline.go:19 contentMapperFormatOpts
 fn content_mapper_format_opts() -> FormattingOptions {
     FormattingOptions {
         new_line: "\n".to_string(),
@@ -480,7 +484,7 @@ fn content_mapper_format_opts() -> FormattingOptions {
     }
 }
 
-// Go: contentmapper_baseline.go:26 DoContentMapperBaseline
+// Go: contentmapper_baseline.go:27 DoContentMapperBaseline
 // DoContentMapperBaseline writes a baseline for content-mapped files that shows the original source, the
 // transformed source the compiler actually checks, and the file's diagnostics. Diagnostics are rendered
 // with the standard diagnostic writer, which maps each one to the text it belongs to: mapper-produced
@@ -506,7 +510,7 @@ pub fn do_content_mapper_baseline(
     )
 }
 
-// Go: contentmapper_baseline.go:40 getContentMapperBaseline
+// Go: contentmapper_baseline.go:41 getContentMapperBaseline
 fn get_content_mapper_baseline(program: &CompilationResult, diagnostics: &[Diagnostic]) -> String {
     let files = program.content_mapped_source_files();
     if files.is_empty() {
@@ -563,7 +567,7 @@ fn get_content_mapper_baseline(program: &CompilationResult, diagnostics: &[Diagn
     b
 }
 
-// Go: contentmapper_baseline.go:87 ensureTrailingNewline
+// Go: contentmapper_baseline.go:88 ensureTrailingNewline
 fn ensure_trailing_newline(s: &str) -> String {
     if s.is_empty() || s.ends_with('\n') {
         return s.to_string();
@@ -575,7 +579,7 @@ fn ensure_trailing_newline(s: &str) -> String {
 // js_emit_baseline.go
 // ---------------------------------------------------------------------------
 
-// Go: js_emit_baseline.go:19 DoJSEmitBaseline
+// Go: js_emit_baseline.go:20 DoJSEmitBaseline
 #[allow(clippy::too_many_arguments)]
 pub fn do_js_emit_baseline(
     baseline_path: &str,
@@ -623,10 +627,13 @@ pub fn do_js_emit_baseline(
             js_code.push_str("\r\n");
         }
         if result.diagnostics.is_empty() && file.unit_name.ends_with(EXTENSION_JSON) {
+            // ts#64159 (js_emit_baseline.go:59): the name is rooted against the
+            // result's current directory; the key is its case-sensitive form.
+            let file_name = to_rooted_path(&file.unit_name, &result.current_directory);
             let file_parse_result = parse_source_file(
                 &SourceFileParseOptions {
-                    file_name: file.unit_name.clone(),
-                    path: Path(file.unit_name.clone()),
+                    path: Path(file_name.clone()),
+                    file_name,
                     ..SourceFileParseOptions::default()
                 },
                 &*Box::leak(file.content.clone().into_boxed_str()),
@@ -756,7 +763,7 @@ pub fn do_js_emit_baseline(
     finish_checks(result, checks)
 }
 
-// Go: js_emit_baseline.go:152 fileOutput
+// Go: js_emit_baseline.go:150 fileOutput
 fn file_output(file: &TestFile, settings: &HarnessOptions) -> String {
     let file_name = if settings.full_emit_paths {
         remove_test_path_prefixes(
@@ -769,7 +776,7 @@ fn file_output(file: &TestFile, settings: &HarnessOptions) -> String {
     format!("//// [{file_name}]\r\n{}", file.content)
 }
 
-// Go: js_emit_baseline.go:162 declarationCompilationContext
+// Go: js_emit_baseline.go:160 declarationCompilationContext
 struct DeclarationCompilationContext {
     decl_input_files: Vec<TestFile>,
     decl_other_files: Vec<TestFile>,
@@ -779,7 +786,7 @@ struct DeclarationCompilationContext {
     config: Rc<ParsedCommandLine>,
 }
 
-// Go: js_emit_baseline.go:171 prepareDeclarationCompilationContext
+// Go: js_emit_baseline.go:169 prepareDeclarationCompilationContext
 fn prepare_declaration_compilation_context(
     input_files: &[TestFile],
     other_files: &[TestFile],
@@ -816,19 +823,30 @@ fn prepare_declaration_compilation_context(
     };
 
     let find_result_code_file = |file_name: &str| -> Option<TestFile> {
-        let Some(source_file_name) = result.source_file_name(file_name) else {
+        let Some(mut source_file_name) =
+            result.source_file_name(&to_rooted_path(file_name, &result.current_directory))
+        else {
             panic!("Program has no source file with name '{file_name}'");
         };
         // Is this file going to be emitted separately
-        let source_file_name = if !options.out_dir.is_empty() {
-            let source_file_path =
-                get_normalized_absolute_path(&source_file_name, &result.current_directory);
-            let source_file_path =
-                source_file_path.replacen(&result.common_source_directory(), "", 1);
-            combine_paths(&options.out_dir, &[&source_file_path])
-        } else {
-            source_file_name
-        };
+        // ts#64159 (js_emit_baseline.go:212): the path relative to the
+        // common source directory goes under `OutDir`; across roots (R4) the
+        // file keeps its name. N cut the common source directory text out of
+        // the name (`strings.Replace`).
+        if !options.out_dir.is_empty()
+            && let Some(relative_path) = relative_path_from_directory(
+                &result.common_source_directory(),
+                &source_file_name,
+                result.use_case_sensitive_file_names,
+            )
+        {
+            // Go `options.OutDir.ResolveRelativeFile(relativePath)`.
+            source_file_name = if relative_path.is_empty() {
+                options.out_dir.clone()
+            } else {
+                to_rooted_path(&relative_path, &options.out_dir)
+            };
+        }
 
         let d_ts_file_name = result.change_to_declaration_extension(&source_file_name);
         result.dts.get(&d_ts_file_name).cloned()
@@ -840,7 +858,8 @@ fn prepare_declaration_compilation_context(
                         decl_other_files: &[TestFile]| {
         if is_declaration_file_name(&file.unit_name) || has_json_file_extension(&file.unit_name) {
             dts_files.push(file.clone());
-        } else if let Some(content_mapper) = result.source_file_content_mapper(&file.unit_name)
+        } else if let Some(content_mapper) = result
+            .source_file_content_mapper(&to_rooted_path(&file.unit_name, &result.current_directory))
             && (has_ts_file_extension(&file.unit_name)
                 || (has_js_file_extension(&file.unit_name) && options.get_allow_js())
                 || !content_mapper.is_empty())
@@ -864,6 +883,13 @@ fn prepare_declaration_compilation_context(
 
     // if the .d.ts is non-empty, confirm it compiles correctly as well
     if options.declaration.is_true() && result.diagnostics.is_empty() && !result.dts.is_empty() {
+        // ts#64159 (js_emit_baseline.go:243): a given current directory is
+        // rooted against the harness one.
+        let declaration_current_directory = if current_directory.is_empty() {
+            harness_settings.current_directory.clone()
+        } else {
+            to_rooted_path(current_directory, &harness_settings.current_directory)
+        };
         for file in input_files {
             let mut dts_files = std::mem::take(&mut decl_input_files);
             let current = dts_files.clone();
@@ -881,30 +907,26 @@ fn prepare_declaration_compilation_context(
             decl_other_files,
             harness_settings: harness_settings.clone(),
             options: options.clone(),
-            current_directory: if !current_directory.is_empty() {
-                current_directory.to_string()
-            } else {
-                harness_settings.current_directory.clone()
-            },
+            current_directory: declaration_current_directory,
             config: result.command_line.clone(),
         });
     }
     None
 }
 
-// Go: js_emit_baseline.go:250 declarationCompilationResult
+// Go: js_emit_baseline.go:265 declarationCompilationResult
 struct DeclarationCompilationResult {
     decl_input_files: Vec<TestFile>,
     decl_other_files: Vec<TestFile>,
     decl_result: CompilationResult,
 }
 
-// Go: js_emit_baseline.go:256 compileDeclarationFiles
+// Go: js_emit_baseline.go:271 compileDeclarationFiles
 fn compile_declaration_files(
     context: Option<DeclarationCompilationContext>,
     symlinks: &BTreeMap<String, String>,
 ) -> Option<DeclarationCompilationResult> {
-    let mut context = context?;
+    let context = context?;
     let tsconfig =
         context
             .config
@@ -912,6 +934,10 @@ fn compile_declaration_files(
             .clone()
             .map(|config_file| super::harness::TsConfigPart {
                 config_file: Some(config_file),
+                // Go (js_emit_baseline.go:277) gives this command line no
+                // base directory, so the compilation's base directory is
+                // `context.currentDirectory` (ts#64159).
+                base_directory: String::new(),
                 errors: Vec::new(),
                 content_mappers: context.config.content_mappers().to_vec(),
             });
@@ -919,7 +945,7 @@ fn compile_declaration_files(
         &context.decl_input_files,
         &context.decl_other_files,
         &context.harness_settings,
-        &mut context.options,
+        &context.options,
         &context.current_directory,
         symlinks,
         tsconfig.as_ref(),
@@ -994,7 +1020,7 @@ pub fn do_sourcemap_baseline(
     Ok(())
 }
 
-// Go: sourcemap_baseline.go:68 createSourceMapPreviewLink
+// Go: sourcemap_baseline.go:70 createSourceMapPreviewLink
 fn create_source_map_preview_link(source_map: &TestFile, result: &CompilationResult) -> String {
     let mut sourcemap_json = RawSourceMap::default();
     if let Err(err) = json_unmarshal(
@@ -1025,9 +1051,14 @@ fn create_source_map_preview_link(source_map: &TestFile, result: &CompilationRes
                 .iter()
                 .find(|td| td.unit_name.ends_with(s.as_str()));
             if let Some(source_file) = source_file {
-                // Go: `result.Program.GetSourceFile(sourceFile.UnitName)` (ts#63936)
+                // Go: `result.Program.GetSourceFile(...)` (ts#63936), with the
+                // unit name rooted against the current directory (ts#64159,
+                // sourcemap_baseline.go:99).
                 let _scope = ts_goport::core::enter_program(Some(result.program));
-                let program_source = ts_goport::program::get_source_file(&source_file.unit_name);
+                let program_source = ts_goport::program::get_source_file(&to_rooted_path(
+                    &source_file.unit_name,
+                    &result.current_directory,
+                ));
                 if program_source.is_some() {
                     return Some(TestFile {
                         unit_name: source_file.unit_name.clone(),
@@ -1056,7 +1087,7 @@ fn create_source_map_preview_link(source_map: &TestFile, result: &CompilationRes
     hash
 }
 
-// Go: sourcemap_baseline.go:116 base64EncodeChunk
+// Go: sourcemap_baseline.go:123 base64EncodeChunk
 // PORT: Go `url.QueryUnescape(url.QueryEscape(s))` gives `s` back, so this
 // encodes the Go bytes of `s`.
 fn base64_encode_chunk(s: &str) -> String {
@@ -1253,7 +1284,7 @@ fn types_diff_fixup_old(s: &str) -> String {
     sb
 }
 
-// Go: type_symbol_baseline.go:117 isTypeBaselineNodeReuseLine
+// Go: type_symbol_baseline.go:107 isTypeBaselineNodeReuseLine
 fn is_type_baseline_node_reuse_line(line: &str) -> bool {
     let Some(line) = line.strip_prefix('>') else {
         return false;
@@ -1274,7 +1305,7 @@ fn is_type_baseline_node_reuse_line(line: &str) -> bool {
     line.chars().all(|c| matches!(c, ' ' | '^' | '\r'))
 }
 
-// Go: type_symbol_baseline.go:137 checkBaselines
+// Go: type_symbol_baseline.go:129 checkBaselines
 fn check_baselines(
     baseline_path: &str,
     all_files: &[TestFile],

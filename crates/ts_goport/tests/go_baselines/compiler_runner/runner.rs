@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::baseline::type_symbol::TestFile;
 use ts_goport::frontend::prelude::*;
 use ts_goport::program as tsprogram;
@@ -27,14 +28,14 @@ use super::test_case_parser::{
 use super::tsbaseline;
 use crate::support::baseline::{self, Options};
 
-// Go: compiler_runner.go:33 srcFolder
+// Go: compiler_runner.go:35 srcFolder
 // Posix-style path to sources under test
 pub const SRC_FOLDER: &str = "/.src";
 
 // Go: compiler_runner.go:30 requireStr
 const REQUIRE_STR: &str = "require(";
 
-// Go: compiler_runner.go:35 CompilerTestType
+// Go: compiler_runner.go:37 CompilerTestType
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompilerTestType {
     Conformance,
@@ -42,7 +43,7 @@ pub enum CompilerTestType {
 }
 
 impl CompilerTestType {
-    // Go: compiler_runner.go:42 String
+    // Go: compiler_runner.go:44 String
     pub fn string(self) -> &'static str {
         if self == CompilerTestType::Regression {
             return "compiler";
@@ -51,7 +52,7 @@ impl CompilerTestType {
     }
 }
 
-// Go: compiler_runner.go:49 CompilerBaselineRunner
+// Go: compiler_runner.go:51 CompilerBaselineRunner
 pub struct CompilerBaselineRunner {
     pub is_submodule: bool,
     test_files: OnceLock<Vec<String>>,
@@ -59,7 +60,7 @@ pub struct CompilerBaselineRunner {
     pub test_suit_name: &'static str,
 }
 
-// Go: compiler_runner.go:58 NewCompilerBaselineRunner
+// Go: compiler_runner.go:59 NewCompilerBaselineRunner
 pub fn new_compiler_baseline_runner(
     test_type: CompilerTestType,
     is_submodule: bool,
@@ -79,7 +80,7 @@ pub fn new_compiler_baseline_runner(
 }
 
 impl CompilerBaselineRunner {
-    // Go: compiler_runner.go:73 EnumerateTestFiles
+    // Go: compiler_runner.go:67 EnumerateTestFiles
     pub fn enumerate_test_files(&self) -> &[String] {
         self.test_files.get_or_init(|| {
             enumerate_files(
@@ -92,7 +93,7 @@ impl CompilerBaselineRunner {
     }
 }
 
-// Go: compiler_runner.go:78 skippedTests
+// Go: compiler_runner.go:79 skippedTests
 pub const SKIPPED_TESTS: &[&str] = &[
     // Tests that depended on typescript.d.ts in built.
     "APILibCheck.ts",
@@ -140,37 +141,113 @@ pub const SKIPPED_TESTS: &[&str] = &[
     "requireOfJsonFileWithModuleNodeResolutionEmitNone.ts",
 ];
 
-// Go: compiler_runner.go:153 compilerVaryBy
-// Set of compiler options for which we allow variations to be specified in the test file,
-// for instance `// @strict: true, false`.
+// Go: testrunner/options_generated.go:7 compilerVaryBy (ts#64457)
+// The compiler options for which a test file can give variations, for
+// instance `// @strict: true, false`. Go generates the list
+// (tools/scripts/tsc/generate-options.ts:871): every compiler option that is
+// not command-line only and is a boolean or an enum, lowercased and sorted.
+// N computed a smaller set from the `Affects*` flags (compiler_runner.go:150
+// at 673a5f17d713; removed by ts#64457). No test case of N' gives two values
+// for an option of the difference, so no configuration name changes.
 pub fn compiler_vary_by() -> &'static HashSet<String> {
-    static MAP: OnceLock<HashSet<String>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut vary_by_options: Vec<&str> = OPTIONS_DECLARATIONS
-            .iter()
-            .filter(|option| {
-                !option.is_command_line_only
-                    && (option.kind == CommandLineOptionKind::BOOLEAN
-                        || option.kind == CommandLineOptionKind::ENUM)
-                    && (option.affects_program_structure
-                        || option.affects_emit
-                        || option.affects_module_resolution
-                        || option.affects_bind_diagnostics
-                        || option.affects_semantic_diagnostics
-                        || option.affects_source_file
-                        || option.affects_declaration_path
-                        || option.affects_build_info)
-            })
-            .map(|option| option.name)
-            .collect();
-        // explicit variations that do not match above conditions
-        vary_by_options.push("noEmit");
-        vary_by_options.push("isolatedModules");
-        vary_by_options.into_iter().map(str::to_lowercase).collect()
-    })
+    const COMPILER_VARY_BY: &[&str] = &[
+        "all",
+        "allowarbitraryextensions",
+        "allowimportingtsextensions",
+        "allowjs",
+        "allowsyntheticdefaultimports",
+        "allowumdglobalaccess",
+        "allowunreachablecode",
+        "allowunusedlabels",
+        "alwaysstrict",
+        "assumechangesonlyaffectdirectdependencies",
+        "checkjs",
+        "composite",
+        "declaration",
+        "declarationmap",
+        "deduplicatepackages",
+        "diagnostics",
+        "disablereferencedprojectload",
+        "disablesizelimit",
+        "disablesolutionsearching",
+        "disablesourceofprojectreferenceredirect",
+        "downleveliteration",
+        "emitbom",
+        "emitdeclarationonly",
+        "emitdecoratormetadata",
+        "erasablesyntaxonly",
+        "esmoduleinterop",
+        "exactoptionalpropertytypes",
+        "experimentaldecorators",
+        "explainfiles",
+        "extendeddiagnostics",
+        "forceconsistentcasinginfilenames",
+        "importhelpers",
+        "incremental",
+        "init",
+        "inlinesourcemap",
+        "inlinesources",
+        "isolateddeclarations",
+        "isolatedmodules",
+        "jsx",
+        "libreplacement",
+        "listemittedfiles",
+        "listfiles",
+        "module",
+        "moduledetection",
+        "moduleresolution",
+        "newline",
+        "nocheck",
+        "noemit",
+        "noemithelpers",
+        "noemitonerror",
+        "noerrortruncation",
+        "nofallthroughcasesinswitch",
+        "noimplicitany",
+        "noimplicitoverride",
+        "noimplicitreturns",
+        "noimplicitthis",
+        "nolib",
+        "nopropertyaccessfromindexsignature",
+        "noresolve",
+        "nouncheckedindexedaccess",
+        "nouncheckedsideeffectimports",
+        "nounusedlocals",
+        "nounusedparameters",
+        "preserveconstenums",
+        "preservesymlinks",
+        "preservewatchoutput",
+        "pretty",
+        "quiet",
+        "removecomments",
+        "resolvejsonmodule",
+        "resolvepackagejsonexports",
+        "resolvepackagejsonimports",
+        "rewriterelativeimportextensions",
+        "singlethreaded",
+        "skipdefaultlibcheck",
+        "skiplibcheck",
+        "sourcemap",
+        "stabletypeordering",
+        "strict",
+        "strictbindcallapply",
+        "strictbuiltiniteratorreturn",
+        "strictfunctiontypes",
+        "strictnullchecks",
+        "strictpropertyinitialization",
+        "stripinternal",
+        "target",
+        "traceresolution",
+        "usedefineforclassfields",
+        "useunknownincatchvariables",
+        "verbatimmodulesyntax",
+        "version",
+    ];
+    static SET: OnceLock<HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| COMPILER_VARY_BY.iter().map(ToString::to_string).collect())
 }
 
-// Go: compiler_runner.go:210 compilerFileBasedTest
+// Go: compiler_runner.go:189 compilerFileBasedTest
 pub struct CompilerFileBasedTest {
     pub filename: String,
     pub content: String,
@@ -188,7 +265,7 @@ pub fn read_test_file(filename: &str) -> String {
     content
 }
 
-// Go: compiler_runner.go:216 getCompilerFileBasedTest
+// Go: compiler_runner.go:195 getCompilerFileBasedTest
 pub fn get_compiler_file_based_test(filename: &str) -> CompilerFileBasedTest {
     let content = read_test_file(filename);
     let settings: RawCompilerSettings = extract_compiler_settings(&content);
@@ -200,7 +277,7 @@ pub fn get_compiler_file_based_test(filename: &str) -> CompilerFileBasedTest {
     }
 }
 
-// Go: compiler_runner.go:229 compilerTest
+// Go: compiler_runner.go:209 compilerTest
 pub struct CompilerTest {
     pub test_name: String,
     pub filename: String,
@@ -243,20 +320,22 @@ pub struct CompilerTestInputs {
     pub symlinks: BTreeMap<String, String>,
 }
 
-// Go: compiler_runner.go:248 newCompilerTest (the part before CompileFiles)
+// Go: compiler_runner.go:229 newCompilerTest (the part before CompileFiles)
 pub fn new_compiler_test_inputs(
     test_content: TestCaseContent,
     named_configuration: Option<&NamedTestConfiguration>,
 ) -> CompilerTestInputs {
     let mut harness_config: Option<TestConfiguration> =
         named_configuration.map(|named| named.config.clone());
-    let current_directory = get_normalized_absolute_path(
-        harness_config
-            .as_ref()
-            .and_then(|config| config.get("currentdirectory"))
-            .map_or("", String::as_str),
-        SRC_FOLDER,
-    );
+    // ts#64159 (compiler_runner.go:254): `srcFolder`, or the raw
+    // `@currentDirectory` rooted against it.
+    let current_directory = match harness_config
+        .as_ref()
+        .and_then(|config| config.get("currentdirectory"))
+    {
+        Some(raw) if !raw.is_empty() => to_rooted_path(raw, SRC_FOLDER),
+        _ => SRC_FOLDER.to_string(),
+    };
 
     let units = &test_content.test_unit_data;
     let mut to_be_compiled = Vec::new();
@@ -277,10 +356,7 @@ pub fn new_compiler_test_inputs(
             if ts_config
                 .parsed_config
                 .file_names
-                .contains(&get_normalized_absolute_path(
-                    &unit.name,
-                    &current_directory,
-                ))
+                .contains(&to_rooted_path(&unit.name, &current_directory))
             {
                 to_be_compiled.push(create_harness_test_file(unit, &current_directory));
             } else {
@@ -294,7 +370,7 @@ pub fn new_compiler_test_inputs(
         {
             config.insert(
                 "baseurl".to_string(),
-                get_normalized_absolute_path(&base_url, &current_directory),
+                to_rooted_path(&base_url, &current_directory),
             );
         }
 
@@ -350,7 +426,13 @@ pub fn precompute_compiler_options(inputs: &CompilerTestInputs) -> CompilerOptio
         compiler_options.skip_default_lib_check = Tristate::True;
     }
     compiler_options.no_error_truncation = Tristate::True;
-    let mut harness_options = HarnessOptions::default();
+    // The harness options of `CompileFiles`: a `@currentDirectory` roots
+    // against the current directory (ts#64159).
+    let mut harness_options = HarnessOptions {
+        use_case_sensitive_file_names: true,
+        current_directory: inputs.current_directory.clone(),
+        ..HarnessOptions::default()
+    };
     if let Some(config) = &inputs.harness_config {
         set_options_from_test_config(
             config,
@@ -363,7 +445,7 @@ pub fn precompute_compiler_options(inputs: &CompilerTestInputs) -> CompilerOptio
     compiler_options
 }
 
-// Go: compiler_runner.go:248 newCompilerTest (CompileFiles and the result)
+// Go: compiler_runner.go:229 newCompilerTest (CompileFiles and the result)
 pub fn new_compiler_test(
     test_name: &str,
     filename: &str,
@@ -393,12 +475,15 @@ pub fn new_compiler_test(
     let mut other_files = inputs.other_files;
     let mut changed = false;
     for file in to_be_compiled.iter_mut().chain(other_files.iter_mut()) {
+        // ts#64159 (compiler_runner.go:320): the program lookup roots the
+        // unit name against the current directory.
+        let file_name = to_rooted_path(&file.unit_name, &inputs.current_directory);
         if result
-            .source_file_content_mapper(&file.unit_name)
+            .source_file_content_mapper(&file_name)
             .is_some_and(|content_mapper| !content_mapper.is_empty())
         {
             file.content = result
-                .source_file_text(&file.unit_name)
+                .source_file_text(&file_name)
                 .expect("the program has the file");
             changed = true;
         }
@@ -427,7 +512,7 @@ pub fn new_compiler_test(
 // Go: compiler_runner.go:522 createHarnessTestFile
 fn create_harness_test_file(unit: &TestUnit, current_directory: &str) -> TestFile {
     TestFile {
-        unit_name: get_normalized_absolute_path(&unit.name, current_directory),
+        unit_name: to_rooted_path(&unit.name, current_directory),
         content: unit.content.clone(),
     }
 }
@@ -521,12 +606,9 @@ impl CompilerTest {
                 // be rendered against the correct text; the squiggle renderer here assumes a single coordinate space.
                 let content_mapped = self.content_mapped_file_names();
                 if !content_mapped.is_empty() {
-                    files.retain(|f| {
-                        !content_mapped.contains(&get_normalized_absolute_path(
-                            &f.unit_name,
-                            &self.current_directory,
-                        ))
-                    });
+                    // ts#64159 (compiler_runner.go:350): unit names are rooted
+                    // already, so they are looked up as they are.
+                    files.retain(|f| !content_mapped.contains(&f.unit_name));
                     diagnostics.retain(|d| {
                         tsbaseline::diagnostic_file_name(d)
                             .is_none_or(|name| !content_mapped.contains(&name))
@@ -548,7 +630,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:416 verifyContentMapper
+    // Go: compiler_runner.go:382 verifyContentMapper
     pub fn verify_content_mapper(&self, report: Report<'_>, suite_name: &str, is_submodule: bool) {
         run_subtest(
             report,
@@ -573,7 +655,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:427 contentMappedFileNames
+    // Go: compiler_runner.go:392 contentMappedFileNames
     // contentMappedFileNames returns the set of absolute file names that were produced by a content mapper.
     // PORT: Go returns a nil map when there are none; that is an empty set.
     fn content_mapped_file_names(&self) -> HashSet<String> {
@@ -584,7 +666,7 @@ impl CompilerTest {
             .collect()
     }
 
-    // Go: compiler_runner.go:373 skippedEmitTests
+    // Go: compiler_runner.go:406 skippedEmitTests
     fn skipped_emit_test(&self) -> Option<&'static str> {
         match self.basename.as_str() {
             "filesEmittingIntoSameOutput.ts" => Some(
@@ -609,7 +691,7 @@ impl CompilerTest {
         }
     }
 
-    // Go: compiler_runner.go:384 verifyJavaScriptOutput
+    // Go: compiler_runner.go:417 verifyJavaScriptOutput
     pub fn verify_java_script_output(
         &self,
         report: Report<'_>,
@@ -650,7 +732,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:415 verifySourceMapOutput
+    // Go: compiler_runner.go:445 verifySourceMapOutput
     pub fn verify_source_map_output(
         &self,
         report: Report<'_>,
@@ -683,7 +765,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:436 verifySourceMapRecord
+    // Go: compiler_runner.go:462 verifySourceMapRecord
     pub fn verify_source_map_record(
         &self,
         report: Report<'_>,
@@ -716,7 +798,7 @@ impl CompilerTest {
         );
     }
 
-    // Go: compiler_runner.go:457 verifyTypesAndSymbols
+    // Go: compiler_runner.go:479 verifyTypesAndSymbols
     pub fn verify_types_and_symbols(
         &self,
         report: Report<'_>,
@@ -732,7 +814,11 @@ impl CompilerTest {
             .to_be_compiled
             .iter()
             .chain(&self.other_files)
-            .filter(|f| tsprogram::get_source_file(&f.unit_name).is_some())
+            .filter(|f| {
+                // ts#64159 (compiler_runner.go:488)
+                tsprogram::get_source_file(&to_rooted_path(&f.unit_name, &self.current_directory))
+                    .is_some()
+            })
             .cloned()
             .collect();
 
@@ -763,7 +849,7 @@ impl CompilerTest {
         }
     }
 
-    // Go: compiler_runner.go:494 verifyModuleResolution
+    // Go: compiler_runner.go:507 verifyModuleResolution
     pub fn verify_module_resolution(
         &self,
         report: Report<'_>,
@@ -1014,7 +1100,7 @@ impl ConfigCase {
     }
 }
 
-// Go: compiler_runner.go:190 runTest (the subtest names)
+// Go: compiler_runner.go:153 runTest (the subtest names)
 // PORT: returns the cases; child.rs runs them. A test file whose
 // configurations cannot be computed is an `Err` with the Go failure.
 pub fn enumerate_config_cases(
@@ -1073,7 +1159,7 @@ pub fn enumerate_config_cases(
     (cases, errors)
 }
 
-// Go: compiler_runner.go:195 runSingleConfigTest
+// Go: compiler_runner.go:169 runSingleConfigTest
 // PORT: the child side of one case. Each Go subtest reports through
 // `report`; `compile` is the Go test itself (its `RecoverAndFail` covers
 // `newCompilerTest`), and `config` reports a skipped configuration.

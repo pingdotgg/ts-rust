@@ -475,7 +475,7 @@ impl IoVfs {
         fsys.chtimes(rest, a_time, m_time)
     }
 
-    // Go: iofs.go:201 writeFileEnsuringDir
+    // Go: iofs.go:192 writeFileEnsuringDir
     fn write_file_ensuring_dir(
         &self,
         path: &str,
@@ -490,14 +490,14 @@ impl IoVfs {
         write(self, path, content)
     }
 
-    // Go: iofs.go:220 FSys
+    // Go: iofs.go:211 FSys
     pub fn fsys(&self) -> &Arc<dyn GoFs> {
         &self.fsys
     }
 }
 
 impl Fs for IoVfs {
-    // Go: iofs.go:151 UseCaseSensitiveFileNames
+    // Go: iofs.go:151 UseCaseSensitiveFileNames (at 673a5f17d713; ts#64159 makes it CaseSensitivity, iofs.go:151)
     fn use_case_sensitive_file_names(&self) -> bool {
         self.use_case_sensitive_file_names
     }
@@ -507,28 +507,28 @@ impl Fs for IoVfs {
         self.with_common(|common| common.file_exists(path))
     }
 
-    // Go: iofs.go:172 ReadFile
+    // Go: iofs.go:171 ReadFile
     fn read_file(&self, path: &str) -> (String, bool) {
         self.with_common(|common| common.read_file(path))
     }
 
-    // Go: iofs.go:212 WriteFile
+    // Go: iofs.go:203 WriteFile
     fn write_file(&self, path: &str, content: &str) -> Result<(), FsError> {
         self.write_file_ensuring_dir(path, content, IoVfs::write_file_fn)
     }
 
-    // Go: iofs.go:216 AppendFile
+    // Go: iofs.go:207 AppendFile
     fn append_file(&self, path: &str, content: &str) -> Result<(), FsError> {
         self.write_file_ensuring_dir(path, content, IoVfs::append_file_fn)
     }
 
-    // Go: iofs.go:180 Remove
+    // Go: iofs.go:175 Remove
     fn remove(&self, path: &str) -> Result<(), FsError> {
         let _ = root_length(path); // Assert path is rooted
         self.remove_fn(path)
     }
 
-    // Go: iofs.go:185 Chtimes
+    // Go: iofs.go:179 Chtimes
     fn chtimes(
         &self,
         path: &str,
@@ -555,7 +555,7 @@ impl Fs for IoVfs {
         self.with_common(|common| common.stat(path))
     }
 
-    // Go: iofs.go:190 Realpath
+    // Go: iofs.go:183 Realpath
     fn realpath(&self, path: &str) -> String {
         let (root, rest) = split_path(path);
         // splitPath normalizes the path into parts (e.g. "c:/foo/bar" -> "c:/", "foo/bar")

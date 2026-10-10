@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ts_goport::api::to_rooted_path;
 use ts_goport::execute::watchmanager::{WatchBackend, WatchDirectoryRequest};
 use ts_goport::frontend::tspath;
 use ts_goport::fswatch::{self, Event, EventKind};
@@ -46,14 +47,14 @@ impl MockWatchBackend {
         }
     }
 
-    // Go: mock_watch_backend.go:37 MockWatchBackend.HasWatches
+    // Go: mock_watch_backend.go:39 MockWatchBackend.HasWatches
     /// HasWatches reports whether any watches have been registered.
     pub fn has_watches(&self) -> bool {
         !self.dirs.lock().unwrap().is_empty()
     }
 }
 
-// Go: mock_watch_backend.go:44 MockWatch
+// Go: mock_watch_backend.go:46 MockWatch
 /// MockWatch records a single registered watch.
 ///
 /// PORT: Go `Closed bool` is written by `Close` without the backend lock; it
@@ -67,7 +68,7 @@ pub struct MockWatch {
 }
 
 impl MockWatch {
-    // Go: mock_watch_backend.go:52 MockWatch.Close
+    // Go: mock_watch_backend.go:54 MockWatch.Close
     pub fn close(&self) -> Result<(), GoError> {
         self.closed.store(true, Ordering::SeqCst);
         Ok(())
@@ -92,7 +93,7 @@ impl fswatch::Watch for MockWatchCloser {
 }
 
 impl WatchBackend for MockWatchBackend {
-    // Go: mock_watch_backend.go:57 MockWatchBackend.WatchDirectory
+    // Go: mock_watch_backend.go:57 MockWatchBackend.WatchDirectory (at 673a5f17d713; removed by ts#64159)
     fn watch_directory(
         &self,
         dir: &str,
@@ -112,7 +113,7 @@ impl WatchBackend for MockWatchBackend {
             .expect("WatchDirectories returns one closer per request"))
     }
 
-    // Go: mock_watch_backend.go:70 MockWatchBackend.WatchDirectories
+    // Go: mock_watch_backend.go:59 MockWatchBackend.WatchDirectories
     fn watch_directories(
         &self,
         requests: Vec<WatchDirectoryRequest>,
@@ -145,7 +146,7 @@ impl WatchBackend for MockWatchBackend {
 }
 
 impl MockWatchBackend {
-    // Go: mock_watch_backend.go:95 MockWatchBackend.SendEvents
+    // Go: mock_watch_backend.go:82 MockWatchBackend.SendEvents
     /// SendEvents routes events through the registered watch callbacks
     /// that match each event's path. Directory watches match if the event
     /// path is a child (or recursive descendant) of the watched directory.
@@ -168,13 +169,19 @@ impl MockWatchBackend {
                     if w.is_closed() {
                         continue;
                     }
+                    // ts#64159 (mock_watch_backend.go:98): the event path is
+                    // rooted against the watched directory.
+                    let event = Event {
+                        path: to_rooted_path(&e.path, &w.path),
+                        ..e.clone()
+                    };
                     if let Some(ignore) = &w.ignore {
-                        if ignore(&e.path) {
+                        if ignore(&event.path) {
                             continue;
                         }
                     }
                     if !path_is_under(
-                        &e.path,
+                        &event.path,
                         &w.path,
                         w.recursive,
                         self.use_case_sensitive_file_names,
@@ -182,8 +189,8 @@ impl MockWatchBackend {
                         continue;
                     }
                     match targets.iter_mut().find(|(t, _)| Arc::ptr_eq(t, w)) {
-                        Some((_, t_events)) => t_events.push(e.clone()),
-                        None => targets.push((w.clone(), vec![e.clone()])),
+                        Some((_, t_events)) => t_events.push(event),
+                        None => targets.push((w.clone(), vec![event])),
                     }
                 }
             }
@@ -195,7 +202,7 @@ impl MockWatchBackend {
         }
     }
 
-    // Go: mock_watch_backend.go:134 MockWatchBackend.SendOverflow
+    // Go: mock_watch_backend.go:122 MockWatchBackend.SendOverflow
     /// SendOverflow simulates a kernel event-queue overflow by invoking every
     /// active watch callback with fswatch.ErrOverflow. The watch manager treats
     /// this as a signal that events were dropped and a full rebuild is required.
@@ -215,7 +222,7 @@ impl MockWatchBackend {
         }
     }
 
-    // Go: mock_watch_backend.go:134 MockWatchBackend.SendChangedPaths
+    // Go: mock_watch_backend.go:141 MockWatchBackend.SendChangedPaths
     /// SendChangedPaths converts a list of file changes into fswatch
     /// events with appropriate event kinds and routes them through
     /// registered watches via SendEvents. For new/modified files, it also
@@ -256,41 +263,36 @@ impl MockWatchBackend {
     }
 }
 
-// Go: mock_watch_backend.go:184 pathIsUnder
+// Go: mock_watch_backend.go:172 pathIsUnder
 /// pathIsUnder reports whether eventPath is inside dir. If recursive is
 /// false, only direct children match.
+///
+/// ts#64159: the paths compare as path keys (`PathKey.ContainsPath`), so a
+/// watch of a root ("/", "c:/") sees its children. N compared text and
+/// wanted a "/" after the directory.
 fn path_is_under(
     event_path: &str,
     dir: &str,
     recursive: bool,
     use_case_sensitive_file_names: bool,
 ) -> bool {
-    let (event_path, dir) = if use_case_sensitive_file_names {
-        (event_path.to_string(), dir.to_string())
-    } else {
-        (
-            tspath::get_canonical_file_name(event_path, false),
-            tspath::get_canonical_file_name(dir, false),
-        )
-    };
-    let Some(rest) = event_path.strip_prefix(dir.as_str()) else {
+    let dir_key = tspath::to_path(dir, "", use_case_sensitive_file_names);
+    let event_key = tspath::to_path(event_path, "", use_case_sensitive_file_names);
+    if dir_key == event_key || !dir_key.contains_path(&event_key) {
         return false;
-    };
-    if rest.is_empty() {
-        return false; // exact match = the dir itself, not a child
     }
-    if !rest.starts_with('/') {
-        return false; // e.g. dir="/foo", path="/foobar"
+    if recursive {
+        return true;
     }
-    if !recursive {
-        // Direct child only: no further '/' after the separator.
-        return !rest[1..].contains('/');
-    }
-    true
+    tspath::to_path(
+        &tspath::get_directory_path(event_path),
+        "",
+        use_case_sensitive_file_names,
+    ) == dir_key
 }
 
 impl MockWatchBackend {
-    // Go: mock_watch_backend.go:186 MockWatchBackend.WatchState
+    // Go: mock_watch_backend.go:187 MockWatchBackend.WatchState
     /// WatchState returns a deterministic, human-readable summary of all
     /// active watches. This is intended to be included in test baselines
     /// so that watch registration correctness is verified via snapshot diffs.

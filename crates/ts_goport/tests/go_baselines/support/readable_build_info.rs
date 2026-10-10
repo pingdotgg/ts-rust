@@ -81,7 +81,7 @@ impl<'e> ObjectWriter<'e> {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:14 readableBuildInfo
+// Go: tsctests/readablebuildinfo.go:15 readableBuildInfo
 struct ReadableBuildInfo<'a> {
     build_info: &'a BuildInfo,
     version: String,
@@ -176,7 +176,7 @@ impl MarshalerTo for ReadableBuildInfo<'_> {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:42 readableBuildInfoRoot
+// Go: tsctests/readablebuildinfo.go:45 readableBuildInfoRoot
 struct ReadableBuildInfoRoot<'a> {
     files: Vec<String>,
     original: &'a BuildInfoRoot,
@@ -193,7 +193,7 @@ impl MarshalerTo for ReadableBuildInfoRoot<'_> {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:47 readableBuildInfoFileInfo
+// Go: tsctests/readablebuildinfo.go:50 readableBuildInfoFileInfo
 struct ReadableBuildInfoFileInfo<'a> {
     file_name: String,
     version: String,
@@ -282,7 +282,7 @@ impl MarshalerTo for ReadableBuildInfoRepopulateInfo {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:73 readableBuildInfoDiagnosticsOfFile
+// Go: tsctests/readablebuildinfo.go:84 readableBuildInfoDiagnosticsOfFile
 struct ReadableBuildInfoDiagnosticsOfFile {
     file: String,
     diagnostics: Option<Vec<ReadableBuildInfoDiagnostic>>,
@@ -304,7 +304,7 @@ impl MarshalerTo for ReadableBuildInfoDiagnosticsOfFile {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:108 readableBuildInfoSemanticDiagnostic
+// Go: tsctests/readablebuildinfo.go:119 readableBuildInfoSemanticDiagnostic
 struct ReadableBuildInfoSemanticDiagnostic {
     file: String, // File is not in changedSet and still doesnt have cached diagnostics
     diagnostics: Option<ReadableBuildInfoDiagnosticsOfFile>, // Diagnostics for file
@@ -327,7 +327,7 @@ impl MarshalerTo for ReadableBuildInfoSemanticDiagnostic {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:138 readableBuildInfoFilePendingEmit
+// Go: tsctests/readablebuildinfo.go:149 readableBuildInfoFilePendingEmit
 struct ReadableBuildInfoFilePendingEmit<'a> {
     file: String,
     emit_kind: String,
@@ -348,7 +348,7 @@ impl MarshalerTo for ReadableBuildInfoFilePendingEmit<'_> {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:178 readableBuildInfoEmitSignature
+// Go: tsctests/readablebuildinfo.go:189 readableBuildInfoEmitSignature
 struct ReadableBuildInfoEmitSignature<'a> {
     file: String,
     signature: String,
@@ -370,7 +370,7 @@ impl MarshalerTo for ReadableBuildInfoEmitSignature<'_> {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:186 readableBuildInfoResolvedRoot
+// Go: tsctests/readablebuildinfo.go:197 readableBuildInfoResolvedRoot
 struct ReadableBuildInfoResolvedRoot {
     resolved: String,
     root: String,
@@ -388,7 +388,7 @@ impl MarshalerTo for ReadableBuildInfoResolvedRoot {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:207 toReadableBuildInfo
+// Go: tsctests/readablebuildinfo.go:218 toReadableBuildInfo
 /// The readable build info text: Go `json.MarshalIndent(readable, "", "  ")`.
 /// `build_info_text` is the (sanitized) build info file text; only its Go
 /// byte length is used.
@@ -431,19 +431,19 @@ pub fn to_readable_build_info(build_info: &BuildInfo, build_info_text: &str) -> 
 }
 
 impl ReadableBuildInfo<'_> {
-    // Go: tsctests/readablebuildinfo.go:236 toFilePath
+    // Go: tsctests/readablebuildinfo.go:253 toFilePath
     // PORT: Go indexes `FileNames` and panics on an id out of range;
     // `BuildInfo::file_name` gives "" there, so it is not used.
     fn to_file_path(&self, file_id: BuildInfoFileId) -> String {
         self.build_info.file_names.as_ref().expect("fileNames")[(file_id.0 - 1) as usize].clone()
     }
 
-    // Go: tsctests/readablebuildinfo.go:240 toFilePathSet
+    // Go: tsctests/readablebuildinfo.go:257 toFilePathSet
     fn to_file_path_set(&self, file_id_list_id: BuildInfoFileIdListId) -> Vec<String> {
         self.file_ids_list.as_ref().expect("fileIdsList")[(file_id_list_id.0 - 1) as usize].clone()
     }
 
-    // Go: tsctests/readablebuildinfo.go:257 toReadableBuildInfoDiagnostic
+    // Go: tsctests/readablebuildinfo.go:261 toReadableBuildInfoDiagnostic
     // PORT: Go `core.Map` returns nil for a nil slice; the caller passes the
     // `Option`.
     fn to_readable_build_info_diagnostic(
@@ -486,7 +486,7 @@ impl ReadableBuildInfo<'_> {
             .collect()
     }
 
-    // Go: tsctests/readablebuildinfo.go:268 toReadableBuildInfoDiagnosticsOfFile
+    // Go: tsctests/readablebuildinfo.go:298 toReadableBuildInfoDiagnosticsOfFile
     fn to_readable_build_info_diagnostics_of_file(
         &self,
         diagnostics: &BuildInfoDiagnosticsOfFile,
@@ -497,7 +497,7 @@ impl ReadableBuildInfo<'_> {
         }
     }
 
-    // Go: tsctests/readablebuildinfo.go:275 setFileInfos
+    // Go: tsctests/readablebuildinfo.go:305 setFileInfos
     fn set_file_infos(&mut self) {
         let build_info = self.build_info;
         self.file_infos = build_info.file_infos.as_ref().map(|file_infos| {
@@ -524,7 +524,7 @@ impl ReadableBuildInfo<'_> {
         });
     }
 
-    // Go: tsctests/readablebuildinfo.go:293 setRoot
+    // Go: tsctests/readablebuildinfo.go:323 setRoot
     fn set_root(&mut self) {
         let build_info = self.build_info;
         self.root = build_info.root.as_ref().map(|roots| {
@@ -546,7 +546,7 @@ impl ReadableBuildInfo<'_> {
         });
     }
 
-    // Go: tsctests/readablebuildinfo.go:313 setFileIdsList
+    // Go: tsctests/readablebuildinfo.go:343 setFileIdsList
     fn set_file_ids_list(&mut self) {
         let build_info = self.build_info;
         self.file_ids_list = build_info.file_ids_list.as_ref().map(|lists| {
@@ -557,7 +557,7 @@ impl ReadableBuildInfo<'_> {
         });
     }
 
-    // Go: tsctests/readablebuildinfo.go:319 setReferencedMap
+    // Go: tsctests/readablebuildinfo.go:349 setReferencedMap
     // PORT: Go `OrderedMap.Set` keeps the first position of a key and
     // replaces its value, as `IndexMap::insert` does.
     fn set_referenced_map(&mut self) {
@@ -574,7 +574,7 @@ impl ReadableBuildInfo<'_> {
         }
     }
 
-    // Go: tsctests/readablebuildinfo.go:328 setChangeFileSet
+    // Go: tsctests/readablebuildinfo.go:358 setChangeFileSet
     fn set_change_file_set(&mut self) {
         let build_info = self.build_info;
         self.change_file_set = build_info
@@ -583,7 +583,7 @@ impl ReadableBuildInfo<'_> {
             .map(|ids| ids.iter().map(|&id| self.to_file_path(id)).collect());
     }
 
-    // Go: tsctests/readablebuildinfo.go:332 setSemanticDiagnostics
+    // Go: tsctests/readablebuildinfo.go:362 setSemanticDiagnostics
     fn set_semantic_diagnostics(&mut self) {
         let build_info = self.build_info;
         self.semantic_diagnostics_per_file =
@@ -615,7 +615,7 @@ impl ReadableBuildInfo<'_> {
                 });
     }
 
-    // Go: tsctests/readablebuildinfo.go:345 setEmitDiagnostics
+    // Go: tsctests/readablebuildinfo.go:375 setEmitDiagnostics
     fn set_emit_diagnostics(&mut self) {
         let build_info = self.build_info;
         self.emit_diagnostics_per_file =
@@ -630,7 +630,7 @@ impl ReadableBuildInfo<'_> {
             });
     }
 
-    // Go: tsctests/readablebuildinfo.go:349 setAffectedFilesPendingEmit
+    // Go: tsctests/readablebuildinfo.go:379 setAffectedFilesPendingEmit
     fn set_affected_files_pending_emit(&mut self) {
         let build_info = self.build_info;
         let Some(list) = &build_info.affected_files_pending_emit else {
@@ -655,7 +655,7 @@ impl ReadableBuildInfo<'_> {
         );
     }
 
-    // Go: tsctests/readablebuildinfo.go:404 setEmitSignatures
+    // Go: tsctests/readablebuildinfo.go:434 setEmitSignatures
     fn set_emit_signatures(&mut self) {
         let build_info = self.build_info;
         self.emit_signatures = build_info.emit_signatures.as_ref().map(|list| {
@@ -671,7 +671,7 @@ impl ReadableBuildInfo<'_> {
         });
     }
 
-    // Go: tsctests/readablebuildinfo.go:416 setResolvedRoot
+    // Go: tsctests/readablebuildinfo.go:446 setResolvedRoot
     fn set_resolved_root(&mut self) {
         let build_info = self.build_info;
         self.resolved_root = build_info.resolved_root.as_ref().map(|list| {
@@ -685,7 +685,7 @@ impl ReadableBuildInfo<'_> {
     }
 }
 
-// Go: tsctests/readablebuildinfo.go:282 toReadableBuildInfoRepopulateInfo
+// Go: tsctests/readablebuildinfo.go:286 toReadableBuildInfoRepopulateInfo
 // PORT: a free function after the `readableBuildInfo` methods (Go puts it
 // between them).
 fn to_readable_build_info_repopulate_info(
@@ -700,7 +700,7 @@ fn to_readable_build_info_repopulate_info(
     })
 }
 
-// Go: tsctests/readablebuildinfo.go:364 toReadableFileEmitKind
+// Go: tsctests/readablebuildinfo.go:394 toReadableFileEmitKind
 fn to_readable_file_emit_kind(file_emit_kind: FileEmitKind) -> String {
     let mut builder = String::new();
     let mut add_flags = |flags: &str| {

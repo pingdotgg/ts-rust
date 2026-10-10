@@ -1038,12 +1038,12 @@ impl GoFs for MapFs {
         MapFs::open(self, name, want)
     }
 
-    // Go: vfstest.go:54 _ iovfs.RealpathFS = (*MapFS)(nil)
+    // Go: vfstest.go:55 _ iovfs.RealpathFS = (*MapFS)(nil)
     fn as_realpath_fs(&self) -> Option<&dyn RealpathFs> {
         Some(self)
     }
 
-    // Go: vfstest.go:54 _ iovfs.WritableFS = (*MapFS)(nil)
+    // Go: vfstest.go:55 _ iovfs.WritableFS = (*MapFS)(nil)
     fn as_writable_fs(&self) -> Option<&dyn WritableFs> {
         Some(self)
     }

@@ -12,7 +12,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use crate::baseline::util::{
     is_default_library_file, remove_line_delimiters, remove_test_path_prefixes,
 };
-use crate::frontend::tspath::path::get_base_file_name;
+use crate::frontend::tspath::path::{get_base_file_name, get_normalized_absolute_path};
 use crate::prelude::*;
 
 /// Go `baseline.NoContent`.
@@ -195,6 +195,19 @@ fn payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
+/// Go `tspath.ToRootedFilePath(filename, walker.program.Program().BaseDirectory())`
+/// (ts#64159, type_symbol_baseline.go:293): the name of `getTypes` and
+/// `getSymbols` is rooted against the program's base directory.
+// PORT: Go `ToRootedFilePath` is `get_normalized_absolute_path` here; the
+// names that callers give are absolute or relative, never empty. A process
+// without a frontend program looks the name up as given.
+fn program_file_name(filename: &str) -> String {
+    match crate::program::go_frontend_program() {
+        Some(program) => get_normalized_absolute_path(filename, &program.base_directory()),
+        None => filename.to_string(),
+    }
+}
+
 impl TypeWriterWalker {
     // Go: type_symbol_baseline.go:278 getTypeCheckerForCurrentFile
     // PORT: Go returns the checker and a release func. The Rust pool lends
@@ -209,14 +222,14 @@ impl TypeWriterWalker {
 
     // Go: type_symbol_baseline.go:292 getTypes
     pub fn get_types(&mut self, filename: &str) -> Vec<TypeWriterResult> {
-        let source_file = get_source_file(filename);
+        let source_file = get_source_file(&program_file_name(filename));
         self.current_source_file = source_file;
         self.visit_node(source_file, false /*isSymbolWalk*/)
     }
 
     // Go: type_symbol_baseline.go:298 getSymbols
     pub fn get_symbols(&mut self, filename: &str) -> Vec<TypeWriterResult> {
-        let source_file = get_source_file(filename);
+        let source_file = get_source_file(&program_file_name(filename));
         self.current_source_file = source_file;
         self.visit_node(source_file, true /*isSymbolWalk*/)
     }
@@ -309,8 +322,10 @@ impl TypeWriterWalker {
         let had_error_baseline = self.had_error_baseline;
 
         self.with_type_checker_for_current_file(move |file_checker| {
-            let (ctx, put_ctx) = get_emit_context();
-            let result = write_type_or_symbol_with_checker(
+            // ts#64649 (type_symbol_baseline.go:353): a new emit context per
+            // call, not a pooled one that is reset before each node builder.
+            let ctx = new_emit_context();
+            write_type_or_symbol_with_checker(
                 file_checker,
                 &ctx,
                 current_source_file,
@@ -319,10 +334,7 @@ impl TypeWriterWalker {
                 is_symbol_walk,
                 line,
                 source_text,
-            );
-            // Go: `defer putCtx()`.
-            put_ctx();
-            result
+            )
         })
     }
 }
@@ -385,7 +397,6 @@ fn write_type_or_symbol_with_checker(
                 .intrinsic_name()
                 .to_string();
         } else {
-            ctx.reset();
             let builder = Rc::new(RefCell::new(new_node_builder(file_checker, Rc::clone(ctx))));
             let type_format_flags = TypeFormatFlags::NO_TRUNCATION
                 | TypeFormatFlags::ALLOW_UNIQUE_ES_SYMBOL_TYPE
@@ -525,7 +536,7 @@ pub fn for_each_ast_node(node: Node) -> Vec<Node> {
     result
 }
 
-// Go: type_symbol_baseline.go:459 isImportStatementName
+// Go: type_symbol_baseline.go:457 isImportStatementName
 pub fn is_import_statement_name(node: Node) -> bool {
     let parent = node.parent();
     if is_import_specifier(parent) && (node == parent.name() || node == parent.property_name()) {
@@ -540,7 +551,7 @@ pub fn is_import_statement_name(node: Node) -> bool {
     false
 }
 
-// Go: type_symbol_baseline.go:472 isExportStatementName
+// Go: type_symbol_baseline.go:470 isExportStatementName
 pub fn is_export_statement_name(node: Node) -> bool {
     let parent = node.parent();
     if is_export_assignment(parent) && node == parent.expression() {
@@ -552,7 +563,7 @@ pub fn is_export_statement_name(node: Node) -> bool {
     false
 }
 
-// Go: type_symbol_baseline.go:482 isIntrinsicJsxTag
+// Go: type_symbol_baseline.go:480 isIntrinsicJsxTag
 pub fn is_intrinsic_jsx_tag(node: Node, source_file: Node) -> bool {
     let parent = node.parent();
     if !(is_jsx_opening_element(parent)
