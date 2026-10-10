@@ -105,6 +105,7 @@ jobs:
             target: aarch64-pc-windows-msvc
             runner: windows-11-arm
             exe: .exe
+            linker: rust-lld
     runs-on: ${{ matrix.runner }}
     # The 4 vCPU GitHub-hosted runners (darwin-x64, win32-arm64) build slower.
     timeout-minutes: 180
@@ -123,6 +124,20 @@ jobs:
       - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }} --component llvm-tools
       - if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -yq musl-tools
+      # win32-arm64 links with rust-lld (lld-link), all three builds. On arm64, link.exe aligns each
+      # section contribution to 4 bytes, also the 1-byte start markers of the LLVM profile sections
+      # (IMAGE_SCN_ALIGN_1BYTES). The instrumented tsc then wrote 3 zero bytes before the names, and
+      # llvm-profdata rejected each profile ("symbol name is empty"). lld-link keeps the 1-byte
+      # alignment, as link.exe does on x64.
+      - name: Linker
+        if: matrix.linker == 'rust-lld'
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          lld="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin/rust-lld.exe"
+          [[ -x $lld ]] || { echo "::error::no $lld"; exit 1; }
+          target=${{ matrix.target }}
+          target=${target^^}
+          echo "CARGO_TARGET_${target//-/_}_LINKER=$(cygpath -m "$lld")" | tee -a "$GITHUB_ENV"
       - uses: actions/setup-node@v5
         with:
           node-version: 24
