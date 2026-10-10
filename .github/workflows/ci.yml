@@ -131,8 +131,9 @@ jobs:
         run: cargo test --release --locked --workspace --no-fail-fast
       # go_baselines has `test = false`, so --workspace skips it. TestLocal (about 12,700 compiler
       # cases) runs in 4 shards in goport-tests.sh, in the revision pipeline; the rest of the default
-      # go_baselines set runs here.
+      # go_baselines set runs here, also after a failed unit test.
       - name: Go baselines
+        if: ${{ !cancelled() }}
         run: |
           skip=(--skip compiler_runner::test_local)
           # Open on macOS: the 10 tests of project_lsp/resolveahead_test.rs (resolveahead1, merged
@@ -157,7 +158,7 @@ jobs:
         env:
           SUBDIR: ${{ steps.pin.outputs.subdir }}
         run: |
-          (cd "go-pin${SUBDIR:+/$SUBDIR}" && CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
+          (cd "go-pin${SUBDIR:+/$SUBDIR}" && GOWORK=off CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
           cargo build --release --locked -p ts_goport --bin tsgo
           scripts/goport/win-go-compare.sh target/release/tsgo.exe "$RUNNER_TEMP/go/tsc.exe" "$RUNNER_TEMP/win-go"
       # Intel Macs: the release ships an x86_64-apple-darwin tsc (release.yml builds it on an Intel

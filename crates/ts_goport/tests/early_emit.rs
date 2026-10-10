@@ -763,7 +763,8 @@ fn tsgo_build(config: &Path, out: &Path, early: bool) -> Run {
     }
 }
 
-/// Reads every file under `dir` into `files`, by path relative to `root`.
+/// Reads every file under `dir` into `files`, by path relative to `root`
+/// with `/` separators (on Windows too).
 fn read_files(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
     for entry in fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
     {
@@ -774,8 +775,10 @@ fn read_files(root: &Path, dir: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
             let name = path
                 .strip_prefix(root)
                 .expect("a path under the out dir")
-                .to_string_lossy()
-                .into_owned();
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             let bytes =
                 fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
             files.insert(name, bytes);
