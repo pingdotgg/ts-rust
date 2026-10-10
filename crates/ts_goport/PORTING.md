@@ -697,6 +697,17 @@ The batch that adds it is not accepted until Theo approves.
     node-redis step 2: Go reads `commands/index.d.ts` old and
     `AGGREGATE.d.ts` and `CREATE.d.ts` new in 6 of 6 runs; the port reads
     all old (k2redis1). A Go clock for G1 alone does not fix this.
+  - G7, beside-sources build order: when up-to-date projects write their
+    outputs beside their sources, the port's build order rule
+    (state note tscb-order-decision-ext-2026-10-01) changes which d.ts
+    version a reader without a reference sees: in probe P3 Go reads all old
+    in 6 of 6 runs and the port all new (k2sched/go-model-check.md). The
+    rule changes output, not only speed.
+  - G8, status checks on one thread: with `--builders 2` a slow status
+    check on the loop thread delays the writer, so the reader reads old
+    output where Go reads new in 6 of 6 runs (probe q1b2,
+    k2sched/design-a-check.md). Go runs each status check on the builder
+    that takes the task.
 
 `program.rs` defines `SourceFileInfo`, `load`, `bind_all`, the Go
 `Program` methods as free functions with Go snake names (`get_resolved_module(file, name, mode)` ->
