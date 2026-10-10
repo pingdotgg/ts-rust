@@ -8,13 +8,27 @@
 //!   50 ms timeout and ended up to 50 ms later.
 //! - `--api`: the sync API (`ipc/conn_sync.go:55`) runs a request inline
 //!   and checks the context after it, so a signal during a request ends
-//!   the run right after the answer.
+//!   the run right after the answer. A call to the client that waits does
+//!   not wake at the signal (`conn_sync.go:185-189`).
+//! - `--api --async`: Go's `Run` (`ipc/conn_async.go:68-113`) reads every
+//!   message on its own goroutine (the read is `:87`) and checks the
+//!   context before each read (`:83`). After a signal:
+//!   - Phase A, until `Run` reads the next client message: a `Call` that
+//!     waits returns `context canceled` at once, and a new `Call` writes
+//!     its request and returns it too (`:281-291`). So a request answers
+//!     at the signal, and a panic of a callback on a worker goroutine ends
+//!     the process with exit code 2 at the signal.
+//!   - `Run` reads exactly 1 more message, dispatches it and returns.
+//!   - Phase B: the deferred `closePendingCalls` sets `terminal`
+//!     (`ipc: connection closed` joined with `context canceled`), and a
+//!     `Call` returns it and writes nothing (`:262-267`). This is a Go
+//!     race that the deferred function wins in practice, also for the
+//!     request read after the signal.
+//!   - The end code is 0 (`api/server.go:134-139`).
 //!
-//! `--api --async` is not here. Go's read loop (`ipc/conn_async.go:83`)
-//! waits in the read while a request runs on its own goroutine, so a signal
-//! during that request ends the run after the next message. The port ends
-//! right after the answer: PORTING.md, "Not ported (plan level)", "The end
-//! on SIGINT or SIGTERM in `--api --async`".
+//!   A panic answer is compared up to its stack (Go's goroutine stack and
+//!   the port's backtrace differ). `TSGO_STDIO_END_BIN` runs the tests on
+//!   another tsgo, such as Go's.
 //!
 //! `--lsp` is not here. Go's `Run` (lsp/server.go:859) does not wait for
 //! the work that Go runs on goroutines (the async part of a request, an API
@@ -79,7 +93,7 @@ fn watch_ends_soon_after_sigint_or_sigterm() {
     );
 }
 
-/// The sync API only: `--api --async` is not here (file header).
+/// The sync API. The `--api --async` tests come after it.
 #[test]
 fn api_signal_during_a_request() {
     let dir = TempDir::new("api");
@@ -101,11 +115,441 @@ fn api_signal_during_a_request() {
     tsgo.expect_end(Instant::now(), "the sync API after the answer", 0, "");
 }
 
+/// The first lines of the answers in `--api --async` after a signal: a
+/// callback error in Phase A and in Phase B (file header).
+const PANIC_CANCELED: &str = r#""message":"panic: context canceled\n"#;
+const PANIC_CLOSED: &str = r#""message":"panic: ipc: connection closed\ncontext canceled\n"#;
+/// A worker goroutine's panic in Phase A, the first line of stderr.
+const REPANICKED_CANCELED: &str = "panic: context canceled [recovered, repanicked]\n";
+
+/// How long a tsgo that waits for a client message must stay alive.
+const ALIVE: Duration = Duration::from_millis(300);
+
+/// A signal while a request waits for a client callback (readFile of
+/// tsconfig.json): the request answers at once with the callback's error,
+/// and tsgo ends right after the next client message, a reply or a ping.
+#[test]
+fn api_async_signal_while_a_callback_waits() {
+    for next in ["reply", "ping"] {
+        let what = format!("--api --async, readFile waits, SIGINT, then the {next}");
+        let dir = project("cbwait");
+        let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
+        tsgo.send_json(&create_snapshot(1, &dir.0));
+        let call = tsgo.wait_callback("readFile");
+        tsgo.signal(Signal::INT);
+        tsgo.expect_answer(1, PANIC_CANCELED, &what);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        if next == "reply" {
+            tsgo.reply(&call);
+        } else {
+            tsgo.send_json(r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#);
+        }
+        tsgo.expect_end(start, &what, 0, "");
+        if next == "ping" {
+            tsgo.expect_answer(2, r#""result":"pong""#, &what);
+        }
+    }
+}
+
+/// Each callback kind that a request handler makes: the signal while the
+/// first callback waits answers the request at once.
+#[test]
+fn api_async_signal_answers_each_callback_kind() {
+    let kinds = [
+        ("readFile", Signal::TERM, PANIC_CANCELED),
+        ("fileExists", Signal::INT, PANIC_CANCELED),
+        ("getAccessibleEntries", Signal::INT, PANIC_CANCELED),
+        ("realpath", Signal::INT, PANIC_CANCELED),
+        (
+            "resolveModuleName",
+            Signal::INT,
+            r#""message":"resolveModuleName callback failed: context canceled""#,
+        ),
+    ];
+    for (kind, signal, answer) in kinds {
+        let what = format!("--api --async, {kind} waits, {signal:?}");
+        let dir = project("cbkind");
+        let (mut tsgo, id, method) = if kind == "resolveModuleName" {
+            let mut tsgo = api_async(&dir, &[]);
+            let resolver = tsgo.module_resolver();
+            tsgo.send_json(&resolve_module_name(6, resolver, &dir.0));
+            (tsgo, 6, "resolveMod")
+        } else {
+            let mut tsgo = api_async(&dir, &["--callbacks", kind]);
+            tsgo.send_json(&create_snapshot(1, &dir.0));
+            (tsgo, 1, kind)
+        };
+        let call = tsgo.wait_callback(method);
+        tsgo.signal(signal);
+        tsgo.expect_answer(id, answer, &what);
+        tsgo.expect_alive(&what);
+        tsgo.reply(&call);
+        tsgo.expect_end(Instant::now(), &what, 0, "");
+    }
+}
+
+/// A handler goes on after the signal: its later callbacks write their
+/// requests and fail with `context canceled`, and it answers at once.
+#[test]
+fn api_async_callbacks_after_a_signal_write_their_requests() {
+    // cleanBuild deletes the files one by one (removeFile).
+    let what = "--api --async, cleanBuild, removeFile waits, SIGINT";
+    let dir = project("cbremove");
+    let mut tsgo = api_async(&dir, &["--callbacks", "removeFile"]);
+    let orchestrator = tsgo.build_orchestrator(&dir.0);
+    tsgo.send_json(&build(3, "build", orchestrator));
+    tsgo.expect_answer(3, r#""result""#, what);
+    tsgo.send_json(&build(4, "cleanBuild", orchestrator));
+    let call = tsgo.wait_callback("removeFile");
+    tsgo.signal(Signal::INT);
+    tsgo.expect_answer(4, r#""result""#, what);
+    assert!(
+        tsgo.callbacks("removeFile") >= 2,
+        "{what}: {:?}",
+        tsgo.messages()
+    );
+    tsgo.expect_alive(what);
+    tsgo.reply(&call);
+    tsgo.expect_end(Instant::now(), what, 0, "");
+
+    // build emits both files (writeFile). PORT: the port can write a
+    // file's request twice after a write error, so only the files count.
+    let what = "--api --async, build, writeFile waits, SIGINT";
+    let dir = project("cbwrite");
+    let mut tsgo = api_async(&dir, &["--callbacks", "writeFile"]);
+    let orchestrator = tsgo.build_orchestrator(&dir.0);
+    tsgo.send_json(&build(3, "build", orchestrator));
+    let call = tsgo.wait_callback("writeFile");
+    tsgo.signal(Signal::INT);
+    let answer = tsgo.expect_answer(3, r#""result""#, what);
+    for file in ["a.js", "b.js"] {
+        let text = format!("{file}': context canceled.");
+        assert!(answer.contains(&text), "{what}: no {text:?} in {answer}");
+        let request = format!(
+            r#""method":"writeFile","params":{{"path":"{}"#,
+            dir.path(&format!("out/src/{file}"))
+        );
+        assert!(
+            tsgo.messages().iter().any(|m| m.contains(&request)),
+            "{what}: no writeFile of {file}: {:?}",
+            tsgo.messages()
+        );
+    }
+    tsgo.expect_alive(what);
+    tsgo.reply(&call);
+    tsgo.expect_end(Instant::now(), what, 0, "");
+}
+
+/// A callback that a worker goroutine makes (directoryExists, or readFile
+/// of a source file) panics at the signal, and the process ends with
+/// exit code 2 at once.
+#[test]
+fn api_async_worker_callback_ends_the_process_at_the_signal() {
+    for kind in ["directoryExists", "readFile"] {
+        let what = format!("--api --async, a worker's {kind} waits, SIGINT");
+        let dir = project("cbworker");
+        let mut tsgo = api_async(&dir, &["--callbacks", kind]);
+        tsgo.send_json(&create_snapshot(1, &dir.0));
+        let call = tsgo.wait_callback(kind);
+        if kind == "readFile" {
+            // The first readFile (tsconfig.json) is the handler's own.
+            tsgo.reply(&call);
+            tsgo.wait_callback_number(kind, 2);
+        }
+        let start = Instant::now();
+        tsgo.signal(Signal::INT);
+        tsgo.expect_end_with_stderr(start, &what, 2, REPANICKED_CANCELED);
+    }
+}
+
+/// A signal while a callback waits, then the end of stdin: the request
+/// answered at the signal, and the run ends with exit code 0.
+#[test]
+fn api_async_signal_then_end_of_stdin() {
+    let what = "--api --async, readFile waits, SIGINT, then EOF";
+    let dir = project("cbeof");
+    let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
+    tsgo.send_json(&create_snapshot(1, &dir.0));
+    tsgo.wait_callback("readFile");
+    tsgo.signal(Signal::INT);
+    tsgo.expect_answer(1, PANIC_CANCELED, what);
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    tsgo.close_stdin();
+    tsgo.expect_end(start, what, 0, "");
+}
+
+/// A signal while tsgo waits for a message, then a request that makes
+/// callbacks: the request is the 1 message read after the signal, and it
+/// runs in Phase B, so its callbacks write nothing and fail with
+/// `ipc: connection closed` and `context canceled`.
+#[test]
+fn api_async_request_after_an_idle_signal_makes_no_callback() {
+    let closed = r"ipc: connection closed\ncontext canceled";
+    let cases: [(&str, &str); 5] = [
+        ("readFile", "createSnapshot"),
+        ("writeFile", "build"),
+        ("removeFile", "cleanBuild"),
+        ("resolveMod", "resolveModuleName"),
+        ("directoryExists", "createSnapshot"),
+    ];
+    for (method, request) in cases {
+        let what = format!("--api --async, SIGINT while idle, then {request} ({method})");
+        let dir = project("idle");
+        let callbacks = match method {
+            "resolveMod" => &[][..],
+            _ => &["--callbacks", method][..],
+        };
+        let mut tsgo = api_async(&dir, callbacks);
+        let next = match request {
+            "createSnapshot" => create_snapshot(4, &dir.0),
+            "resolveModuleName" => resolve_module_name(4, tsgo.module_resolver(), &dir.0),
+            _ => {
+                let orchestrator = tsgo.build_orchestrator(&dir.0);
+                if request == "cleanBuild" {
+                    tsgo.send_json(&build(3, "build", orchestrator));
+                    tsgo.expect_answer(3, r#""result""#, &what);
+                }
+                build(4, request, orchestrator)
+            }
+        };
+        tsgo.send_json(r#"{"jsonrpc":"2.0","id":0,"method":"ping"}"#);
+        tsgo.expect_answer(0, r#""result":"pong""#, &what);
+        tsgo.signal(Signal::INT);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        tsgo.send_json(&next);
+        if method == "directoryExists" {
+            let stderr =
+                "panic: ipc: connection closed\n\tcontext canceled [recovered, repanicked]\n";
+            tsgo.expect_end_with_stderr(start, &what, 2, stderr);
+        } else {
+            tsgo.expect_end(start, &what, 0, "");
+            let answer = match method {
+                "readFile" => PANIC_CLOSED.to_string(),
+                "writeFile" => format!(r"a.js': {closed}."),
+                "removeFile" => r#""result""#.to_string(),
+                _ => format!(r#""message":"resolveModuleName callback failed: {closed}""#),
+            };
+            tsgo.expect_answer(4, &answer, &what);
+        }
+        assert_eq!(tsgo.callbacks(method), 0, "{what}: {:?}", tsgo.messages());
+    }
+}
+
+/// A signal while a callback waits, then a second createSnapshot: the
+/// first request answers at the signal, and the second runs in Phase B.
+#[test]
+fn api_async_request_read_after_the_signal_makes_no_callback() {
+    let what = "--api --async, readFile waits, SIGINT, then createSnapshot";
+    let dir = project("cbnext");
+    let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
+    tsgo.send_json(&create_snapshot(1, &dir.0));
+    tsgo.wait_callback("readFile");
+    tsgo.signal(Signal::INT);
+    tsgo.expect_answer(1, PANIC_CANCELED, what);
+    let start = Instant::now();
+    tsgo.send_json(&create_snapshot(3, &dir.0));
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(3, PANIC_CLOSED, what);
+    assert_eq!(
+        tsgo.callbacks("readFile"),
+        1,
+        "{what}: {:?}",
+        tsgo.messages()
+    );
+}
+
+/// A signal during a request that makes no callback (it reads a FIFO):
+/// the request answers, tsgo reads 1 more message and ends. A ping gets
+/// its pong; a build runs in Phase B and writes no file.
+#[test]
+fn api_async_signal_during_a_request_reads_one_more_message() {
+    for next in ["ping", "build"] {
+        let what = format!("--api --async, SIGINT during a request, then {next}");
+        let dir = project("fifo");
+        let mut tsgo = api_async(&dir, &["--callbacks", "writeFile"]);
+        let orchestrator = tsgo.build_orchestrator(&dir.0);
+        dir.write("fifo/src/x.ts", "export const x = 1;\n");
+        let config = dir.fifo("fifo/tsconfig.json");
+        tsgo.send_json(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"createSnapshot","params":{{"openProjects":["{}"]}}}}"#,
+            config.display()
+        ));
+        let mut writer = open_fifo_writer(&config);
+        tsgo.signal(Signal::INT);
+        writer
+            .write_all(br#"{"compilerOptions":{"strict":true},"include":["src"]}"#)
+            .unwrap();
+        drop(writer);
+        tsgo.expect_answer(2, r#""result""#, &what);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        if next == "ping" {
+            tsgo.send_json(r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#);
+            tsgo.expect_end(start, &what, 0, "");
+            tsgo.expect_answer(3, r#""result":"pong""#, &what);
+        } else {
+            tsgo.send_json(&build(3, "build", orchestrator));
+            tsgo.expect_end(start, &what, 0, "");
+            let answer = r"a.js': ipc: connection closed\ncontext canceled.";
+            tsgo.expect_answer(3, answer, &what);
+            assert_eq!(
+                tsgo.callbacks("writeFile"),
+                0,
+                "{what}: {:?}",
+                tsgo.messages()
+            );
+        }
+    }
+}
+
+/// After a signal, tsgo reads exactly 1 more message: of two pings in one
+/// write, only the first gets its pong.
+#[test]
+fn api_async_reads_one_message_after_a_signal() {
+    let what = "--api --async, SIGINT while idle, then two pings";
+    let dir = project("twopings");
+    let mut tsgo = api_async(&dir, &[]);
+    tsgo.send_json(r#"{"jsonrpc":"2.0","id":0,"method":"ping"}"#);
+    tsgo.expect_answer(0, r#""result":"pong""#, what);
+    tsgo.signal(Signal::INT);
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    let mut both = frame(r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#);
+    both.extend(frame(r#"{"jsonrpc":"2.0","id":8,"method":"ping"}"#));
+    tsgo.send(&both);
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(7, r#""result":"pong""#, what);
+    assert!(tsgo.answer(8).is_none(), "{what}: {:?}", tsgo.messages());
+}
+
+/// Two createSnapshot requests that both wait for a callback, the second
+/// sent while the first waits or with it in one write: the signal answers
+/// both at once.
+#[test]
+fn api_async_signal_answers_every_waiting_request() {
+    for pipelined in [false, true] {
+        let what = format!("--api --async, two createSnapshot (pipelined {pipelined}), SIGINT");
+        let dir = project("twosnap");
+        let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
+        if pipelined {
+            let mut both = frame(&create_snapshot(1, &dir.0));
+            both.extend(frame(&create_snapshot(3, &dir.0)));
+            tsgo.send(&both);
+        } else {
+            tsgo.send_json(&create_snapshot(1, &dir.0));
+            tsgo.wait_callback("readFile");
+            tsgo.send_json(&create_snapshot(3, &dir.0));
+        }
+        let second = tsgo.wait_callback_number("readFile", 2);
+        tsgo.signal(Signal::INT);
+        tsgo.expect_answer(1, PANIC_CANCELED, &what);
+        tsgo.expect_answer(3, PANIC_CANCELED, &what);
+        tsgo.expect_alive(&what);
+        tsgo.reply(&second);
+        tsgo.expect_end(Instant::now(), &what, 0, "");
+    }
+}
+
+/// A second signal while tsgo waits for the next message does nothing.
+#[test]
+fn api_async_second_signal_does_nothing() {
+    let what = "--api --async, readFile waits, SIGINT, SIGTERM, then a ping";
+    let dir = project("twosig");
+    let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
+    tsgo.send_json(&create_snapshot(1, &dir.0));
+    tsgo.wait_callback("readFile");
+    tsgo.signal(Signal::INT);
+    tsgo.expect_answer(1, PANIC_CANCELED, what);
+    tsgo.signal(Signal::TERM);
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    tsgo.send_json(r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#);
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(2, r#""result":"pong""#, what);
+}
+
+/// The sync API does not wake a waiting callback at a signal: the reply
+/// is its result, and the next callback (readFile of a source file, on a
+/// worker goroutine) fails with `context canceled` and ends the process.
+#[test]
+fn api_sync_signal_while_a_callback_waits() {
+    let what = "--api, readFile waits, SIGINT, then the reply";
+    let dir = project("synccb");
+    let cwd = dir.0.to_str().unwrap();
+    let mut tsgo = Tsgo::start(&["--api", "--callbacks", "readFile", "--cwd", cwd], &dir.0);
+    let params = format!(r#"{{"openProjects":["{}"]}}"#, dir.path("tsconfig.json"));
+    tsgo.send(&msgpack_request("createSnapshot", &params));
+    tsgo.wait_stdout("readFile");
+    tsgo.signal(Signal::INT);
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    // [CallResponse, "readFile", null]
+    tsgo.send(b"\x93\x02\xc4\x08readFile\xc4\x04null");
+    tsgo.expect_end_with_stderr(start, what, 2, REPANICKED_CANCELED);
+}
+
+/// A two-file project (src/a.ts imports src/b.ts) that emits to out/.
+fn project(prefix: &str) -> TempDir {
+    let dir = TempDir::new(prefix);
+    dir.write(
+        "tsconfig.json",
+        r#"{"compilerOptions":{"strict":true,"outDir":"out"},"include":["src"]}"#,
+    );
+    dir.write(
+        "src/a.ts",
+        "import { b } from \"./b\";\nexport const a: number = b;\n",
+    );
+    dir.write("src/b.ts", "export const b: number = 1;\n");
+    dir
+}
+
+/// Starts `tsgo --api --async` in `dir` with `args`.
+fn api_async(dir: &TempDir, args: &[&str]) -> Tsgo {
+    let cwd = dir.0.to_str().unwrap();
+    let mut all = vec!["--api", "--async", "--cwd", cwd];
+    all.extend_from_slice(args);
+    Tsgo::start(&all, &dir.0)
+}
+
+fn create_snapshot(id: u32, dir: &Path) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"createSnapshot","params":{{"openProjects":["{}/tsconfig.json"]}}}}"#,
+        dir.display()
+    )
+}
+
+/// A build request (`build` or `cleanBuild`) of a build orchestrator.
+fn build(id: u32, method: &str, orchestrator: u32) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}","params":{{"buildOrchestratorID":{orchestrator}}}}}"#
+    )
+}
+
+/// resolveModuleName of `./b` from src/, with the module resolver
+/// `resolver`; it calls the client back with `resolveMod`.
+fn resolve_module_name(id: u32, resolver: u32, dir: &Path) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"resolveModuleName","params":{{"resolver":{resolver},"moduleName":"./b","containingDirectory":"{}/src"}}}}"#,
+        dir.display()
+    )
+}
+
+/// One JSON-RPC message with its `Content-Length` header.
+fn frame(body: &str) -> Vec<u8> {
+    let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+    out.extend_from_slice(body.as_bytes());
+    out
+}
+
 /// A tsgo child with piped stdio. Its stdout and stderr are read on
 /// threads into buffers. Drop kills a tsgo that still runs.
 struct Tsgo {
     child: Child,
-    stdin: ChildStdin,
+    /// None after `close_stdin`.
+    stdin: Option<ChildStdin>,
     stdout: Arc<Mutex<Vec<u8>>>,
     stderr: Arc<Mutex<Vec<u8>>>,
     status: Option<ExitStatus>,
@@ -116,7 +560,9 @@ struct Tsgo {
 
 impl Tsgo {
     fn start(args: &[&str], dir: &Path) -> Tsgo {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_tsgo"))
+        let bin = std::env::var_os("TSGO_STDIO_END_BIN")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_tsgo").into());
+        let mut child = Command::new(bin)
             .args(args)
             .current_dir(dir)
             .stdin(Stdio::piped())
@@ -152,7 +598,7 @@ impl Tsgo {
         }
         Tsgo {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
             stderr,
             status: None,
@@ -163,21 +609,182 @@ impl Tsgo {
     /// Checks that tsgo exits within `AT_ONCE` of `since` with `code` and
     /// `stderr`. `what` names the run in a failure.
     fn expect_end(&mut self, since: Instant, what: &str, code: i32, stderr: &str) {
+        self.expect_exit(since, what, code);
+        assert_eq!(self.stderr(), stderr, "{what}");
+    }
+
+    /// `expect_end` for a Go panic: stderr starts with `first` (the
+    /// stacks differ).
+    fn expect_end_with_stderr(&mut self, since: Instant, what: &str, code: i32, first: &str) {
+        self.expect_exit(since, what, code);
+        let stderr = self.stderr();
+        assert!(stderr.starts_with(first), "{what}: stderr {stderr:?}");
+    }
+
+    fn expect_exit(&mut self, since: Instant, what: &str, code: i32) {
         let (status, exited) = self
             .wait_exit(LIMIT)
-            .unwrap_or_else(|| panic!("{what}: tsgo did not end"));
+            .unwrap_or_else(|| panic!("{what}: tsgo did not end; stdout {:?}", self.messages()));
         assert!(
             exited - since < AT_ONCE,
             "{what}: tsgo took {:?} to end",
             exited - since
         );
-        assert_eq!(status.code(), Some(code), "{what}: {status:?}");
-        assert_eq!(self.stderr(), stderr, "{what}");
+        assert_eq!(
+            status.code(),
+            Some(code),
+            "{what}: {status:?}, stderr {:?}",
+            self.stderr()
+        );
+    }
+
+    /// Checks that tsgo still runs `ALIVE` from now.
+    fn expect_alive(&mut self, what: &str) {
+        if let Some((status, _)) = self.wait_exit(ALIVE) {
+            panic!(
+                "{what}: tsgo ended ({status:?}) before the next message; stderr {:?}",
+                self.stderr()
+            );
+        }
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.stdin.write_all(bytes).unwrap();
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().expect("stdin is open");
+        stdin.write_all(bytes).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    fn close_stdin(&mut self) {
+        self.stdin = None;
+    }
+
+    /// Sends one JSON-RPC message (`--api --async`).
+    fn send_json(&mut self, body: &str) {
+        self.send(&frame(body));
+    }
+
+    /// The JSON-RPC messages on stdout so far.
+    fn messages(&self) -> Vec<String> {
+        let out = self.stdout.lock().unwrap().clone();
+        let mut messages = Vec::new();
+        let mut rest = &out[..];
+        while let Some(end) = rest.windows(4).position(|w| w == b"\r\n\r\n") {
+            let header = String::from_utf8_lossy(&rest[..end]);
+            let length: usize = header
+                .trim()
+                .strip_prefix("Content-Length: ")
+                .and_then(|length| length.parse().ok())
+                .unwrap_or_else(|| panic!("no Content-Length in {header:?}"));
+            let body = &rest[end + 4..];
+            if body.len() < length {
+                break;
+            }
+            messages.push(String::from_utf8_lossy(&body[..length]).into_owned());
+            rest = &body[length..];
+        }
+        messages
+    }
+
+    /// Waits up to `limit` for a message that `pick` accepts.
+    fn wait_message(&self, limit: Duration, pick: impl Fn(&str) -> bool) -> Option<String> {
+        let end = Instant::now() + limit;
+        loop {
+            if let Some(found) = self.messages().into_iter().find(|m| pick(m)) {
+                return Some(found);
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// The answer to request `id`, if it came.
+    fn answer(&self, id: u32) -> Option<String> {
+        let prefix = format!(r#"{{"jsonrpc":"2.0","id":{id},"#);
+        self.messages().into_iter().find(|m| m.starts_with(&prefix))
+    }
+
+    /// Waits `AT_ONCE` for the answer to request `id` and checks that it
+    /// holds `text`.
+    fn expect_answer(&self, id: u32, text: &str, what: &str) -> String {
+        let prefix = format!(r#"{{"jsonrpc":"2.0","id":{id},"#);
+        let answer = self
+            .wait_message(AT_ONCE, |m| m.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("{what}: no answer to {id}: {:?}", self.messages()));
+        assert!(
+            answer.contains(text),
+            "{what}: answer {id} has no {text:?}: {answer}"
+        );
+        answer
+    }
+
+    /// The callback requests of `method` so far.
+    fn callbacks(&self, method: &str) -> usize {
+        let text = format!(r#"","method":"{method}""#);
+        self.messages().iter().filter(|m| m.contains(&text)).count()
+    }
+
+    /// Waits for the first callback request of `method` and returns its id.
+    fn wait_callback(&self, method: &str) -> String {
+        self.wait_callback_number(method, 1)
+    }
+
+    /// Waits for callback request `n` (from 1) of `method` and returns its
+    /// id.
+    fn wait_callback_number(&self, method: &str, n: usize) -> String {
+        let text = format!(r#"","method":"{method}""#);
+        let end = Instant::now() + LIMIT;
+        loop {
+            let calls: Vec<String> = self
+                .messages()
+                .into_iter()
+                .filter(|m| m.contains(&text))
+                .collect();
+            if let Some(call) = calls.get(n - 1) {
+                let id = call
+                    .strip_prefix(r#"{"jsonrpc":"2.0","id":""#)
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap_or_else(|| panic!("no callback id in {call}"));
+                return id.to_string();
+            }
+            assert!(
+                Instant::now() < end,
+                "no callback {n} of {method}: {:?}; stderr {:?}",
+                self.messages(),
+                self.stderr()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Answers the callback request `id` with null (the real file system).
+    fn reply(&mut self, id: &str) {
+        self.send_json(&format!(r#"{{"jsonrpc":"2.0","id":"{id}","result":null}}"#));
+    }
+
+    /// Makes build orchestrator 1 for the project in `dir`.
+    fn build_orchestrator(&mut self, dir: &Path) -> u32 {
+        self.send_json(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"createBuildOrchestrator","params":{{"rootNames":["{0}/tsconfig.json"],"cwd":"{0}"}}}}"#,
+            dir.display()
+        ));
+        self.expect_answer(
+            1,
+            r#""result":{"buildOrchestratorID":1}"#,
+            "createBuildOrchestrator",
+        );
+        1
+    }
+
+    /// Makes module resolver 1, which calls the client back with
+    /// `resolveMod`.
+    fn module_resolver(&mut self) -> u32 {
+        self.send_json(
+            r#"{"jsonrpc":"2.0","id":5,"method":"createModuleResolver","params":{"compilerOptions":{},"resolveModuleNameCallback":"resolveMod"}}"#,
+        );
+        self.expect_answer(5, r#""result":1"#, "createModuleResolver");
+        1
     }
 
     fn signal(&self, signal: Signal) {
@@ -280,6 +887,10 @@ impl TempDir {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         TempDir(path)
+    }
+
+    fn path(&self, rel: &str) -> String {
+        self.0.join(rel).display().to_string()
     }
 
     fn write(&self, rel: &str, text: &str) {

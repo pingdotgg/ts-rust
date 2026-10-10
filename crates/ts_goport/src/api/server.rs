@@ -236,7 +236,9 @@ impl StdioServer {
         let conn: Rc<dyn Conn>;
         if self.options.async_ {
             let protocol = new_jsonrpc_protocol(rwc.clone());
-            let async_conn = new_async_conn_with_protocol(rwc, Box::new(protocol), handler);
+            let async_conn = new_async_conn_with_protocol(rwc.clone(), Box::new(protocol), handler);
+            // PORT: Go's `Run` reads on its own goroutine (`read_on_thread`).
+            async_conn.read_on_thread(Box::new(new_jsonrpc_protocol(rwc)));
             async_conn.set_collect_timing(self.options.collect_timing);
             conn = async_conn;
         } else {

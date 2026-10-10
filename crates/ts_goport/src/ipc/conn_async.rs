@@ -4,27 +4,40 @@
 //! PORT: Go handles each incoming request in its own goroutine, and `Call`
 //! waits on a response channel that the `Run` goroutine fills. The API
 //! session and project state live on the dispatch thread, so here `Run`
-//! handles each request and notification inline, and `Call` reads messages
-//! itself until its response arrives. Responses delivered this way keep
-//! their IDs. A request or notification that `Call` reads while it waits is
-//! handled inline at once, as the sync connection does: a client callback
-//! may make a nested API request and wait for its answer before it answers
-//! the call (ts#64299), which Go's goroutines allow. So the responses can
-//! come in a different order than in Go.
+//! handles each request and notification inline. A request or notification
+//! that arrives while a `Call` waits is handled inline at once, as the sync
+//! connection does: a client callback may make a nested API request and
+//! wait for its answer before it answers the call (ts#64299), which Go's
+//! goroutines allow. So the responses can come in a different order than
+//! in Go.
 //!
-//! PORT: the reads in `Call` are Go's `Run` reads. When one fails, the read
-//! loop ends there, as Go's `Run` would: `closePendingCalls` sets
-//! `terminal` (tsgo#4712), the call returns it, and a later `run` returns
-//! what Go's `Run` returned. A panic in one of these reads is a panic in
-//! Go's `Run`, which the handler that made the call does not recover: the
-//! deferred function of `Run` closes the pending calls, the call returns
-//! `terminal`, and the panic leaves `run` once that handler returns (Go's
-//! deferred function waits for the handlers).
+//! PORT: the reads have two forms.
+//! - With `read_on_thread` (`--api --async`), `run` reads on a thread of
+//!   its own, as Go's `Run` goroutine reads: it checks `ctx` before each
+//!   read (Go :83), so it reads exactly 1 message after `ctx` is done. The
+//!   dispatch thread takes the messages from an inbox. A `Call` waits on
+//!   the inbox and on `ctx`, as Go's `select` does, so it returns
+//!   `ctx.Err()` at once when `ctx` is done (a signal), and a later `Call`
+//!   writes its request and returns `ctx.Err()`. When the thread ends (Go's
+//!   `Run` returns), the dispatch thread runs the first part of Go's
+//!   deferred function before it handles anything more: `closePendingCalls`
+//!   sets `terminal`, and a later `Call` returns it and writes nothing.
+//! - Without it, `run` and `call` read on the dispatch thread, and `Call`
+//!   reads messages itself until its response arrives. A blocked read does
+//!   not wake when `ctx` is done. When a read in `call` fails, the read
+//!   loop ends there, as Go's `Run` would: `closePendingCalls` sets
+//!   `terminal` (tsgo#4712), the call returns it, and a later `run` returns
+//!   what Go's `Run` returned. A panic in one of these reads is a panic in
+//!   Go's `Run`, which the handler that made the call does not recover: the
+//!   deferred function of `Run` closes the pending calls, the call returns
+//!   `terminal`, and the panic leaves `run` once that handler returns (Go's
+//!   deferred function waits for the handlers).
 
 use crate::ipc::prelude::*;
 
-use crate::core::go_recover;
+use crate::core::{GoThread, go_recover};
 use crate::frontend::json_ext::{AnyValue, JsonValue};
+use crate::gostd::context::Done;
 use crate::gostd::{Context, GoError, context, errors};
 use crate::ipc::conn::{Conn, ERR_CONN_CLOSED, Handler, recovered_value};
 use crate::ipc::protocol::{Message, Protocol};
@@ -33,8 +46,9 @@ use crate::ipc::transport::ReadWriteCloser;
 use crate::jsonrpc;
 use std::any::Any;
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 /// Go `chan *Message` with capacity 1 for one pending server-to-client call.
@@ -74,6 +88,11 @@ pub struct AsyncConn {
     read_panic: RefCell<Option<Box<dyn Any + Send>>>,
     // PORT: true once `run` reads. A `call` then runs in a handler of `run`.
     running: Cell<bool>,
+    // PORT: the protocol that `run` gives to its reader thread
+    // (`read_on_thread`).
+    read_protocol: RefCell<Option<Box<dyn Protocol + Send>>>,
+    // PORT: set while `run` reads on its thread, and after.
+    reader: RefCell<Option<Rc<RunReader>>>,
 }
 
 // Go: ipc/conn_async.go:41 NewAsyncConn
@@ -104,6 +123,8 @@ pub fn new_async_conn_with_protocol(
         read_loop_end: RefCell::new(None),
         read_panic: RefCell::new(None),
         running: Cell::new(false),
+        read_protocol: RefCell::new(None),
+        reader: RefCell::new(None),
     })
 }
 
@@ -122,6 +143,19 @@ impl AsyncConn {
         }
     }
 
+    /// PORT: not in Go. Makes `run` read on a thread of its own through
+    /// `protocol`, as Go's `Run` goroutine reads (file header). `protocol`
+    /// reads the connection's transport; only its `read_message` is used,
+    /// and the connection's protocol then only writes. Call it before `run`:
+    /// a `call` made before `run` reads through the connection's protocol.
+    /// wasm has no threads, so there the reads stay on the dispatch thread.
+    pub fn read_on_thread(&self, protocol: Box<dyn Protocol + Send>) {
+        if cfg!(target_family = "wasm") {
+            return;
+        }
+        *self.read_protocol.borrow_mut() = Some(protocol);
+    }
+
     // Go: ipc/conn_async.go:68 Run
     // Run starts processing messages on the connection.
     // It blocks until the context is cancelled or an error occurs.
@@ -137,10 +171,21 @@ impl AsyncConn {
         // after the guard, because a panic discards Go's result too.
         let mut deferred = RunDefer {
             conn: self,
-            cancel_handlers,
+            cancel_handlers: cancel_handlers.clone(),
             err: None,
         };
-        let mut result = self.run_loop(ctx, &handler_ctx);
+        let read_protocol = self.read_protocol.borrow_mut().take();
+        let mut result = match read_protocol {
+            Some(protocol) => {
+                let reader = Rc::new(RunReader {
+                    inbox: start_reader(ctx, cancel_handlers, protocol),
+                    handler_ctx,
+                });
+                *self.reader.borrow_mut() = Some(reader.clone());
+                self.run_loop_on_reader(&reader)
+            }
+            None => self.run_loop(ctx, &handler_ctx),
+        };
         deferred.err = result.as_ref().err().cloned();
         drop(deferred);
         let request_err = self.request_errors.borrow_mut().take();
@@ -180,6 +225,67 @@ impl AsyncConn {
         }
     }
 
+    /// The loop of Go `Run` when `run` reads on its thread: the dispatch
+    /// of each message that the thread read, in order. It ends when the
+    /// thread ended and no message is left, and returns what Go's `Run`
+    /// returned (or resumes the panic of its read).
+    fn run_loop_on_reader(&self, reader: &RunReader) -> Result<(), GoError> {
+        loop {
+            let Some(msg) = reader.inbox.wait(None) else {
+                self.end_read_loop(reader);
+                break;
+            };
+            self.dispatch_read(reader, msg);
+        }
+        if let Some(payload) = self.read_panic.take() {
+            resume_unwind(payload);
+        }
+        self.read_loop_end
+            .borrow()
+            .clone()
+            .expect("the reader thread ended")
+    }
+
+    /// Dispatches a message that the reader thread read. Go's `Run` checks
+    /// `ctx` after the dispatch of a response (:95-96) and right after the
+    /// start of the goroutine of a request or notification (:97-110), so
+    /// when the thread ended after this message, Go's deferred function
+    /// sets `terminal` after `handleResponse`, and before the handler makes
+    /// a call (Go race 1, which the deferred function wins in practice).
+    fn dispatch_read(&self, reader: &RunReader, msg: Message) {
+        if msg.is_response() {
+            self.dispatch(&reader.handler_ctx, msg);
+            self.end_read_loop(reader);
+        } else {
+            self.end_read_loop(reader);
+            self.dispatch(&reader.handler_ctx, msg);
+        }
+    }
+
+    /// PORT: when the reader thread ended (Go's `Run` returned), runs
+    /// Go's deferred `closePendingCalls` with the result of the loop on the
+    /// dispatch thread, once (the thread runs `cancelHandlers`). The
+    /// dispatch thread calls this before it dispatches more messages and
+    /// before each `call` and `notify`, so the calls after the end of the
+    /// loop return `terminal`.
+    fn end_read_loop(&self, reader: &RunReader) {
+        let Some(end) = lock(&reader.inbox.state).end.take() else {
+            return;
+        };
+        match end {
+            ReadEnd::Returned(result) => {
+                self.close_pending_calls(result.as_ref().err());
+                *self.read_loop_end.borrow_mut() = Some(result);
+            }
+            ReadEnd::Panicked(payload) => {
+                // Go runs the deferred function while the panic unwinds;
+                // its `err` is nil.
+                self.close_pending_calls(None);
+                *self.read_panic.borrow_mut() = Some(payload);
+            }
+        }
+    }
+
     /// The message branches of the Go `Run` loop. A request and a
     /// notification run inline (Go `c.handlers.Go(...)`, ts#64163), also
     /// when `call` read them.
@@ -202,8 +308,8 @@ impl AsyncConn {
     // Go: ipc/conn_async.go:116 closePendingCalls
     // closePendingCalls records that the read loop has exited and unblocks requests waiting for a response.
     // PORT: Go closes each pending response channel, and the `Call` that
-    // waits on it returns `terminal`. Here the only call that can wait is the
-    // one whose read ended the loop, and it returns `terminal` itself.
+    // waits on it returns `terminal`. Here a call whose entry is gone
+    // without a response returns `terminal` when it looks again.
     fn close_pending_calls(&self, run_err: Option<&GoError>) {
         self.record_terminal_error_locked(run_err);
         self.close_pending_calls_locked();
@@ -405,6 +511,10 @@ impl AsyncConn {
 
         // Register response channel BEFORE sending request to avoid race
         let response_chan: ResponseChan = Rc::new(RefCell::new(None));
+        let reader = self.reader.borrow().clone();
+        if let Some(reader) = &reader {
+            self.end_read_loop(reader);
+        }
         let terminal = self.terminal.borrow().clone();
         if let Some(err) = terminal {
             return Err(err);
@@ -429,6 +539,10 @@ impl AsyncConn {
             return Err(err);
         }
 
+        if let Some(reader) = &reader {
+            return self.wait_on_reader(ctx, &id, &response_chan, reader);
+        }
+
         // PORT: Go selects on `ctx.Done()` and the response channel while the
         // Run goroutine reads. Here the loop reads messages until the
         // response is in the channel; `ctx` is checked before each read (a
@@ -442,13 +556,7 @@ impl AsyncConn {
 
             let resp = response_chan.borrow_mut().take();
             if let Some(resp) = resp {
-                if let Some(error) = &resp.error {
-                    return Err(errors::new(format!(
-                        "ipc: remote error [{}]: {}",
-                        error.code, error.message
-                    )));
-                }
-                return Ok(resp.result);
+                return response_result(resp);
             }
 
             // PORT: a panic in this read is a panic in Go's `Run` (file
@@ -493,6 +601,40 @@ impl AsyncConn {
         }
     }
 
+    /// The `select` of Go `Call` (:289-303) when `run` reads on its thread:
+    /// the call waits until its response comes, its channel closes or
+    /// `ctx` is done, and dispatches the messages that come meanwhile (file
+    /// header). The order of the checks is the case that wakes Go's
+    /// `select`: a response or a close (the dispatch thread runs them
+    /// before it looks at `ctx` again), then `ctx`. A call made when `ctx`
+    /// is already done returns `ctx.Err()` right after its write.
+    fn wait_on_reader(
+        &self,
+        ctx: &Context,
+        id: &jsonrpc::ID,
+        response_chan: &ResponseChan,
+        reader: &RunReader,
+    ) -> Result<JsonValue, GoError> {
+        let _waker = reader.inbox.wake_on_done(ctx);
+        loop {
+            let resp = response_chan.borrow_mut().take();
+            if let Some(resp) = resp {
+                return response_result(resp);
+            }
+            if !self.pending.borrow().contains_key(id) {
+                let terminal = self.terminal.borrow().clone();
+                return Err(terminal.expect("closePendingCalls sets terminal"));
+            }
+            if let Some(err) = ctx.err() {
+                return Err(err);
+            }
+            match reader.inbox.wait(Some(ctx)) {
+                Some(msg) => self.dispatch_read(reader, msg),
+                None => self.end_read_loop(reader),
+            }
+        }
+    }
+
     // Go: ipc/conn_async.go:307 Notify
     // Notify sends a notification to the client (no response expected).
     pub fn notify(
@@ -502,6 +644,10 @@ impl AsyncConn {
         params: Option<Box<dyn AnyValue>>,
     ) -> Result<(), GoError> {
         let _ = ctx;
+        let reader = self.reader.borrow().clone();
+        if let Some(reader) = &reader {
+            self.end_read_loop(reader);
+        }
         let terminal = self.terminal.borrow().clone();
         if let Some(err) = terminal {
             return Err(err);
@@ -536,6 +682,161 @@ fn read_loop_result(err: GoError) -> Result<(), GoError> {
         return Ok(());
     }
     Err(err)
+}
+
+/// What Go `Call` returns for the response it received (:299-302).
+fn response_result(resp: Message) -> Result<JsonValue, GoError> {
+    if let Some(error) = &resp.error {
+        return Err(errors::new(format!(
+            "ipc: remote error [{}]: {}",
+            error.code, error.message
+        )));
+    }
+    Ok(resp.result)
+}
+
+/// PORT: what `run` keeps while its reader thread reads
+/// (`read_on_thread`).
+struct RunReader {
+    inbox: Arc<Inbox>,
+    /// Go `handlerCtx`. A request that a `call` dispatches gets it too.
+    handler_ctx: Context,
+}
+
+/// PORT: the messages that the reader thread read, and how its loop ended.
+#[derive(Default)]
+struct Inbox {
+    state: Mutex<InboxState>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct InboxState {
+    messages: VecDeque<Message>,
+    /// True once the thread ended (Go's `Run` returned).
+    ended: bool,
+    /// How the loop ended, until `end_read_loop` takes it.
+    end: Option<ReadEnd>,
+}
+
+/// How Go's `Run` loop ended: it returned this value, or its read panicked.
+enum ReadEnd {
+    Returned(Result<(), GoError>),
+    Panicked(Box<dyn Any + Send>),
+}
+
+impl Inbox {
+    /// The next message, waiting as needed. With `call_ctx` (a `call`) it
+    /// returns `None` once `call_ctx` is done or the thread ended, also
+    /// when messages are left: they are for `run` (Go's `Run` already
+    /// started their goroutines). Without it (`run`) it returns `None`
+    /// once the thread ended and no message is left.
+    fn wait(&self, call_ctx: Option<&Context>) -> Option<Message> {
+        let mut state = lock(&self.state);
+        loop {
+            if let Some(ctx) = call_ctx
+                && (state.ended || ctx.err().is_some())
+            {
+                return None;
+            }
+            if let Some(msg) = state.messages.pop_front() {
+                return Some(msg);
+            }
+            if state.ended {
+                return None;
+            }
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// Wakes `wait` when `ctx` is done, until the result drops.
+    fn wake_on_done(self: &Arc<Self>, ctx: &Context) -> DoneWaker {
+        let Some(done) = ctx.done() else {
+            return DoneWaker(None);
+        };
+        let inbox = self.clone();
+        let id = done.register_waker(move || {
+            let _state = lock(&inbox.state);
+            inbox.ready.notify_all();
+        });
+        DoneWaker(id.map(|id| (done, id)))
+    }
+
+    fn push(&self, msg: Option<Message>, end: Option<ReadEnd>) {
+        let mut state = lock(&self.state);
+        state.messages.extend(msg);
+        if end.is_some() {
+            state.ended = true;
+            state.end = end;
+        }
+        self.ready.notify_all();
+    }
+}
+
+/// A waker of `Inbox::wake_on_done`; drop removes it.
+struct DoneWaker(Option<(Done, u64)>);
+
+impl Drop for DoneWaker {
+    fn drop(&mut self) {
+        if let Some((done, id)) = &self.0 {
+            done.unregister_waker(*id);
+        }
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Starts the reader thread: the loop of Go `Run` (:82-112) up to the
+/// dispatch, which the dispatch thread does (`run_loop_on_reader`). The
+/// check of `ctx` before each read is Go's :83, so after `ctx` is done the
+/// thread reads 1 more message at most.
+fn start_reader(
+    ctx: &Context,
+    cancel_handlers: context::CancelFunc,
+    mut protocol: Box<dyn Protocol + Send>,
+) -> Arc<Inbox> {
+    let inbox = Arc::new(Inbox::default());
+    let thread_inbox = inbox.clone();
+    let ctx = ctx.clone();
+    // The Go stack size, as the LSP reader threads have.
+    GoThread::new()
+        .name("ipc-reader".to_string())
+        .stack_size(crate::gostd::stack::max_stack_size())
+        .spawn(move || {
+            let (last, end) = loop {
+                // Go: ipc/conn_async.go:83
+                if let Some(err) = ctx.err() {
+                    break (None, ReadEnd::Returned(Err(err)));
+                }
+                // Go: ipc/conn_async.go:87. A panic here is a panic in Go's
+                // `Run`: the dispatch thread resumes it (`run_loop_on_reader`).
+                let msg = match catch_unwind(AssertUnwindSafe(|| protocol.read_message())) {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(err)) => break (None, ReadEnd::Returned(read_loop_result(err))),
+                    Err(payload) => break (None, ReadEnd::Panicked(payload)),
+                };
+                // Go dispatches the message, then checks `ctx` (:83). The
+                // check is here, so the dispatch thread finds the end of the
+                // loop with the message read after a signal
+                // (`dispatch_read`).
+                if let Some(err) = ctx.err() {
+                    break (Some(msg), ReadEnd::Returned(Err(err)));
+                }
+                thread_inbox.push(Some(msg), None);
+            };
+            thread_inbox.push(last, Some(end));
+            // Go: the deferred `cancelHandlers` (:73), at once, also while a
+            // handler runs. Go runs `closePendingCalls` first; here the
+            // dispatch thread runs it when it finds the end (`end_read_loop`),
+            // and a call that this cancel wakes finds the end first.
+            cancel_handlers();
+        });
+    inbox
 }
 
 /// The deferred function of Go `Call`: close and delete the call's pending
@@ -1501,5 +1802,220 @@ pub(crate) mod tests {
             matches!(run, Ok(Ok(()))),
             "a later run read again or failed"
         );
+    }
+
+    /// Calls the client back with `call_ctx`, as the API's callback FS
+    /// calls with the run context. `outer` makes a call. When it fails, the
+    /// handler notes the error and whether its own context and the contexts
+    /// that `inner` kept are done (it waits up to 1 s for each), makes a
+    /// second call and returns that call's error. `inner` keeps its
+    /// context. `wait` notes whether its context is done within 1 s. Other
+    /// requests answer `true`.
+    struct CallbackHandler {
+        conn: std::cell::OnceCell<std::rc::Weak<AsyncConn>>,
+        call_ctx: Context,
+        inner: RefCell<Vec<Context>>,
+        notes: Sender<String>,
+    }
+
+    impl Handler for CallbackHandler {
+        fn handle_request(
+            &self,
+            ctx: &Context,
+            method: &str,
+            _params: JsonValue,
+        ) -> Result<Option<Box<dyn AnyValue>>, GoError> {
+            let done = |ctx: &Context| {
+                ctx.done()
+                    .is_some_and(|done| done.wait_timeout(Duration::from_secs(1)))
+            };
+            match method {
+                "outer" => {}
+                "inner" => {
+                    self.inner.borrow_mut().push(ctx.clone());
+                    return Ok(None);
+                }
+                "wait" => {
+                    let note = format!("wait | done {}", done(ctx));
+                    self.notes.send(note).expect("notes");
+                    return Ok(None);
+                }
+                _ => return Ok(Some(Box::new(true))),
+            }
+            let conn = self.conn.get().and_then(std::rc::Weak::upgrade);
+            let conn = conn.expect("the connection is set");
+            let Err(err) = conn.call(&self.call_ctx, "callback", None) else {
+                return Ok(None);
+            };
+            let inner: Vec<bool> = self.inner.borrow().iter().map(done).collect();
+            let note = format!("{} | done {} | inner {inner:?}", err.error(), done(ctx));
+            self.notes.send(note).expect("notes");
+            conn.call(&self.call_ctx, "callback", None).map(|_| None)
+        }
+
+        fn handle_notification(
+            &self,
+            _ctx: &Context,
+            _method: &str,
+            _params: JsonValue,
+        ) -> Result<(), GoError> {
+            Ok(())
+        }
+    }
+
+    /// Runs a connection that reads on its thread (`read_on_thread`) over
+    /// one end of a socket pair, with `CallbackHandler`, on a thread of its
+    /// own. Returns the other end, the handler's notes and the result of
+    /// `run`, which the thread sends when `run` returns.
+    fn run_on_reader(
+        ctx: &Context,
+    ) -> (
+        UnixStream,
+        Receiver<String>,
+        Receiver<Result<(), String>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let (notes, notes_rx) = mpsc::channel();
+        let (run_done, run_done_rx) = mpsc::sync_channel(1);
+        let ctx = ctx.clone();
+        let runner = std::thread::spawn(move || {
+            let server: Arc<dyn ReadWriteCloser> = Arc::new(PipeEnd::new(server));
+            let handler = Rc::new(CallbackHandler {
+                conn: std::cell::OnceCell::new(),
+                call_ctx: ctx.clone(),
+                inner: RefCell::new(Vec::new()),
+                notes,
+            });
+            let conn = new_async_conn(server.clone(), handler.clone());
+            let _ = handler.conn.set(Rc::downgrade(&conn));
+            conn.read_on_thread(Box::new(new_jsonrpc_protocol(server)));
+            let result = conn.run(&ctx).map_err(|err| err.error());
+            run_done.send(result).expect("runDone");
+        });
+        (client, notes_rx, run_done_rx, runner)
+    }
+
+    // PORT: no Go test; Go `Run` and `Call` (ipc/conn_async.go:83-87,
+    // :262-303). After the context is cancelled, a call that waits returns
+    // `context canceled` at once, and a new call writes its request and
+    // returns it too (Phase A). `run` reads 1 more message, and Go's
+    // deferred function sets `terminal` before that request makes its
+    // calls, so they return it and write nothing (Phase B). The message
+    // after it is not read.
+    #[test]
+    fn test_async_conn_reader_cancel_phases() {
+        let (ctx, cancel) = context::with_cancel(&context::background());
+        let (client, notes, run_done, runner) = run_on_reader(&ctx);
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":1,"method":"outer"}"#);
+        let call = read_framed(&client);
+        assert!(
+            call.contains(r#""id":"api1","method":"callback""#),
+            "{call}"
+        );
+
+        cancel();
+        let call = read_framed(&client);
+        assert!(
+            call.contains(r#""id":"api2","method":"callback""#),
+            "{call}"
+        );
+        let answer = read_framed(&client);
+        assert!(
+            answer.contains(r#""id":1,"#) && answer.contains(r#""message":"context canceled""#),
+            "{answer}"
+        );
+        let note = notes.recv().expect("note");
+        assert!(note.starts_with("context canceled |"), "{note}");
+        assert!(
+            run_done.recv_timeout(Duration::from_millis(100)).is_err(),
+            "run returned before the next message"
+        );
+
+        let two = r#"{"jsonrpc":"2.0","id":2,"method":"outer"}"#;
+        let three = r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#;
+        let both = format!(
+            "Content-Length: {}\r\n\r\n{two}Content-Length: {}\r\n\r\n{three}",
+            two.len(),
+            three.len()
+        );
+        (&client).write_all(both.as_bytes()).expect("write");
+        let result = run_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("run returned");
+        assert_eq!(result, Err("context canceled".to_string()));
+        runner.join().expect("run thread");
+        let note = notes.recv().expect("note");
+        assert!(
+            note.starts_with("ipc: connection closed\ncontext canceled |"),
+            "{note}"
+        );
+        let answer = read_framed(&client);
+        assert!(
+            answer.contains(r#""id":2,"#)
+                && answer.contains(r#""message":"ipc: connection closed\ncontext canceled""#),
+            "{answer}"
+        );
+        let mut rest = Vec::new();
+        (&client).read_to_end(&mut rest).expect("read");
+        assert_eq!(String::from_utf8_lossy(&rest), "");
+    }
+
+    // PORT: no Go test; Go `Run` (ipc/conn_async.go:71-74, :89-90). EOF
+    // while a call waits ends the read loop: the call returns
+    // `ipc: connection closed`, and the deferred function has cancelled
+    // `handlerCtx`, which every request gets, also one that came while the
+    // call waited.
+    #[test]
+    fn test_async_conn_reader_eof_cancels_handlers() {
+        let ctx = context::background();
+        let (client, notes, run_done, runner) = run_on_reader(&ctx);
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":1,"method":"outer"}"#);
+        let call = read_framed(&client);
+        assert!(call.contains(r#""id":"api1""#), "{call}");
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":2,"method":"inner"}"#);
+        let answer = read_framed(&client);
+        assert!(answer.contains(r#""id":2,"result":null"#), "{answer}");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown");
+
+        let note = notes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the call returned");
+        assert_eq!(note, "ipc: connection closed | done true | inner [true]");
+        let result = run_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("run returned");
+        assert_eq!(result, Ok(()));
+        runner.join().expect("run thread");
+        let answer = read_framed(&client);
+        assert!(
+            answer.contains(r#""id":1,"#)
+                && answer.contains(r#""message":"ipc: connection closed""#),
+            "{answer}"
+        );
+    }
+
+    // PORT: no Go test; Go `Run` (ipc/conn_async.go:73, :89-90). EOF while
+    // a handler runs with no call cancels its context at once, so a long
+    // request can stop early.
+    #[test]
+    fn test_async_conn_reader_eof_cancels_a_running_handler() {
+        let ctx = context::background();
+        let (client, notes, run_done, runner) = run_on_reader(&ctx);
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":1,"method":"wait"}"#);
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown");
+        let note = notes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the handler ran");
+        assert_eq!(note, "wait | done true");
+        let result = run_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("run returned");
+        assert_eq!(result, Ok(()));
+        runner.join().expect("run thread");
     }
 }

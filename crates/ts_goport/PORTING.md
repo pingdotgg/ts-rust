@@ -1573,35 +1573,45 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   - `--api --async` and the API sessions run requests one at a time
     (`ipc/conn_async.rs`). A pipelined request sees the result of the one
     before it. Go runs them at the same time.
-  - The async connection reads its next message only after the running
+  - The API sessions read their next message only after the running
     request. So the end of the input during a request does not cancel the
     request's context: Go's read loop sees the end at once and returns
     (`ipc/conn_async.go:89-91`), and its deferred `cancelHandlers` (`:73`)
     cancels it, so a long check answers early with what it has. The port
-    answers in full and then ends, with Go's exit code.
-  - The end on SIGINT or SIGTERM in `--api --async` is an open Go
-    difference (state note `r187-repair-withdraw-2026-10-09`, lane
-    apisig4). Go's read loop checks the context at the top of each turn
-    (`ipc/conn_async.go:83`) and then waits in the read while a request
-    runs on its own goroutine (`:98`). The port runs the request inline
-    and checks the context after it (`run_loop`). The cases:
-    - A signal during a request: Go answers it, then ends after the next
-      message (it answers that message too) or at the end of the input.
-      The port ends right after the answer and reads no more.
-    - Pipelined requests: a signal during request 1 while request 2 is
-      already sent. Go answers both (2 first) and then waits for the next
-      message. The port answers request 1 and ends: request 2 gets no
-      answer.
-    - A signal while a request waits for a client callback: Go's `Call`
-      returns the context error at once (`:290`), so request 1 is answered
-      at the signal. The port's `call` waits in its read, so it answers
-      request 1 after the next message. Both end after that message.
-  - apisig2 (R187) moved the run's check before an inline request to
-    match the first case. The run then read until the end of the input in
-    the callback case. Its repair apisig3 closed the pending calls at the
-    signal, so the callbacks that a handler makes after the signal
-    (writeFile, removeFile) lost their requests. Both are withdrawn, and
-    `ipc/conn_async.rs` is R186's code.
+    answers in full and then ends, with Go's exit code. `--api --async`
+    reads on a thread of its own (`read_on_thread`) and cancels it as Go.
+  - SIGINT and SIGTERM in `--api --async` end the run as in Go (lane
+    apisig4, tests in `tests/tsgo_stdio_end.rs`). The read thread checks
+    the context before each read (`ipc/conn_async.go:83`), and a `call`
+    waits on the inbox and the context, as Go's `select` (`:289-303`).
+    Equal to Go:
+    - Phase A, until the next client message: a callback that waits
+      returns `context canceled` at once, and a later one writes its
+      request and returns it too. So a request answers at the signal
+      (readFile, fileExists, getAccessibleEntries, realpath,
+      resolveModuleName, writeFile, removeFile), and a callback that
+      panics on a worker goroutine (directoryExists, readFile of a source
+      file) ends the process with exit code 2 at the signal.
+    - Exactly 1 message is read after the signal, also after a request
+      that makes no callback.
+    - Phase B: that message runs after Go's deferred `closePendingCalls`
+      (a Go race that the deferred function wins in practice), so its
+      callbacks write nothing and fail with `ipc: connection closed` and
+      `context canceled`. The run ends with exit code 0.
+    - The end of the input after the signal; a second signal does
+      nothing.
+  - Still different in `--api --async` after a signal (the requests run
+    one at a time):
+    - Requests read before the signal run one after another, so a later
+      one answers later (Go answers request 2 of a pipelined pair first),
+      and one that has not started when the read loop ends runs in Phase
+      B (Go started it in Phase A).
+    - A worker makes one callback at a time, so fewer directoryExists or
+      writeFile requests are out at the signal (Go: 2 or more). The
+      answers are the same.
+    - On wasm, which has no threads, the reads stay on the dispatch
+      thread: a waiting callback wakes only at the next message, and
+      there is no Phase B.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of
