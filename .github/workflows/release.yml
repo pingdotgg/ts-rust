@@ -400,7 +400,9 @@ jobs:
           dist="$RUNNER_TEMP/dist"
           [[ $RUNNER_OS != Windows ]] || dist=$(cygpath -m "$dist")
           # Node of the runner's own arch: getExePath.js picks the package of process.arch.
-          node -p 'process.platform + "-" + process.arch' | tee /dev/stderr | grep -qx "${{ matrix.platform }}"
+          node_platform=$(node -p 'process.platform + "-" + process.arch')
+          echo "node $node_platform"
+          [[ $node_platform == "${{ matrix.platform }}" ]]
           mkdir proj && cd proj
           echo '{"name":"smoke","private":true}' > package.json
           # The other platform's package is not on npm yet: --offline skips that optional dependency.
