@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "status": "active",
   "decision": "REVIEW",
-  "updated": "2026-10-10T01:42:43.130330+00:00",
-  "reason": "Batch recovery-continuation-go-checker-port-69 accepted at R186. Batch recovery-continuation-go-checker-port-70 opened at R187.",
+  "updated": "2026-10-10T06:20:16.248221+00:00",
+  "reason": "R188 bound in batch recovery-continuation-go-checker-port-70.",
   "goalAuthorization": {
     "date": "2026-09-07T23:13:28.547569+00:00",
     "instruction": "Continue working toward the active thread goal. Keep iterating on the ts-rust port until it is Able to properly type-check Tanstack Core and Hono.",
@@ -941,26 +941,26 @@
     "ordinaryQuery": null,
     "localCheck": null,
     "acceptance": null,
-    "recoveryRevision": 187,
-    "hypothesis": "goport-int58 makes -w and -b -w end at once on SIGINT or SIGTERM and keeps --api --async reading after a signal as Go does (apisig2), fixes the R185 reviewer items (followups39), and measures main's PRs #29 (Windows tests) and #31 (redundant clones removed, clippy redundant_clone lint), with no -p output change and no lost protected test, gate item, oracle request or np-suite test against R186.",
-    "sourceFingerprint": "9336df053cce8a4b8bee97fca37b231d674b28533e77d7afda4a1f20ce07315f",
-    "beforeEditingSourceFingerprint": "65b4d6ec5512dfa31eba45c84605493519e4528c05131e25da9846fca3436899",
+    "recoveryRevision": 188,
+    "hypothesis": "goport-int58 515506f6f repairs the R187 STOP by withdrawing the --api --async part of apisig2 (ipc/conn_async.rs back to R186 byte for byte) and keeps the -w and -b -w signal fix, followups39 and main's PRs #29 and #31, with no -p output change and no lost protected test, gate item, oracle request or np-suite test against R186.",
+    "sourceFingerprint": "26eba8514424375e64c2604fd091b47d950f0873078ce728a32198a23f237ab4",
+    "beforeEditingSourceFingerprint": "9336df053cce8a4b8bee97fca37b231d674b28533e77d7afda4a1f20ce07315f",
     "sourceBindingStatus": "SOURCE_BOUND",
-    "commit": "82447e9d7",
+    "commit": "5af58f350",
     "completedRuns": [],
     "compilerAccepted": false,
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
       "agent": "ac57ca3238f291a74",
-      "verdict": "PASS"
+      "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
       "agent": "a4fb2916cb6fdd199",
-      "verdict": "STOP"
+      "verdict": "PENDING"
     },
-    "nextPermittedAction": "Run the R187 pipeline (candidate.sh side)."
+    "nextPermittedAction": "Run the R188 pipeline (candidate.sh side)."
   },
   "parallelModelPreference": {
     "model": "GPT-6 Astra",
