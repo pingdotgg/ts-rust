@@ -1173,6 +1173,10 @@ pub struct Checker {
     pub(crate) merge_version: u64,
     /// PERF: not in Go. See `is_type_subset_of_union`.
     pub(crate) union_subset_answers: FxHashMap<(TypeId, TypeId), bool>,
+    /// nevfast1: `GOPORT_FAST_NEVER_ORDER=1` (`fast_never_order_from_env`).
+    /// Not in Go. Set once at creation; on, `some_property_reduces_to_never`
+    /// tests the names in the port's faster order.
+    pub(crate) fast_never_order: bool,
 
     // Arenas (PORTING.md "Checker data"). Index 0 of each is a dummy entry
     // so handle value 0 stays nil.
@@ -1668,6 +1672,7 @@ impl Checker {
             flow_skip: Default::default(),
             merge_version: 0,
             union_subset_answers: FxHashMap::default(),
+            fast_never_order: crate::checker::checker_p24::fast_never_order_from_env(),
             symbols,
             types: ChunkedArena::with_nil(Type::default()),
             object_type_instantiations: vec![InstantiationMap::default()],
