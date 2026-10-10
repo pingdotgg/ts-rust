@@ -22,7 +22,9 @@
 //!   `Run` returns), it cancels `handlerCtx` (Go's deferred
 //!   `cancelHandlers`), and the dispatch thread runs Go's deferred
 //!   `closePendingCalls` before the next `Call` or `Notify`: `terminal` is
-//!   set, and the call returns it and writes nothing.
+//!   set, and the call returns it and writes nothing. The responses read
+//!   before the end go to their calls first, as Go's `Run` gave each one
+//!   when it read it.
 //!
 //!   The Go clock: Go's `terminal` check (:263) depends only on when a
 //!   goroutine makes its call, before or after `Run` returned. Here a
@@ -278,10 +280,28 @@ impl AsyncConn {
     /// the thread ended. This holds also for the calls of a request read
     /// with the end, which Go starts before its deferred function runs: Go
     /// races them, and the deferred function wins in practice (race 1).
+    ///
+    /// Go's `Run` gave each response to its call when it read it
+    /// (`handleResponse`, :96), before it returned. So the responses that
+    /// the thread read before the end and that no wait took yet go to their
+    /// calls first: a call that a nested request held keeps its reply. The
+    /// message read after a signal stays: Go's call returned `ctx.Err()` at
+    /// the signal, before that read.
     fn end_read_loop(&self, reader: &RunReader) {
-        let Some((end, ended_at)) = lock(&reader.inbox.state).end.take() else {
-            return;
+        let (end, ended_at, responses) = {
+            let mut state = lock(&reader.inbox.state);
+            let Some((end, ended_at)) = state.end.take() else {
+                return;
+            };
+            let (responses, rest): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut state.messages)
+                .into_iter()
+                .partition(|(msg, _)| msg.is_response());
+            state.messages = rest;
+            (end, ended_at, responses)
         };
+        for (msg, read_at) in responses {
+            self.handle_response(msg, Some(read_at));
+        }
         match end {
             ReadEnd::Returned(result) => {
                 // The Go clock: this end sets `terminal` at `ended_at`,
@@ -2101,8 +2121,8 @@ pub(crate) mod tests {
     /// first. `hcall` makes a call with its own context (the handler
     /// context, as the API's module resolver) and notes the result. `lags`
     /// makes 2 calls and notes its frame's lag after each. `hold` waits
-    /// `HOLD` and does not look at its context. Other requests answer
-    /// `true`.
+    /// `HOLD` and does not look at its context; `holdcall` then makes a
+    /// call and notes its result. Other requests answer `true`.
     struct CallbackHandler {
         conn: std::cell::OnceCell<std::rc::Weak<AsyncConn>>,
         call_ctx: Context,
@@ -2133,6 +2153,14 @@ pub(crate) mod tests {
                 "outer" | "late" => {}
                 "hold" => {
                     std::thread::sleep(HOLD);
+                    return Ok(None);
+                }
+                "holdcall" => {
+                    std::thread::sleep(HOLD);
+                    let result = text(conn().call(&self.call_ctx, "callback", None));
+                    self.notes
+                        .send(format!("holdcall | {result}"))
+                        .expect("notes");
                     return Ok(None);
                 }
                 "calls" | "slowcalls" => {
@@ -2455,14 +2483,15 @@ pub(crate) mod tests {
     const HOLD: Duration = Duration::from_millis(300);
 
     /// Starts a request of `method` (id 1) that calls the client back, then
-    /// a `hold` request (id 2) that runs nested in that call's wait, and
-    /// returns 50 ms into the hold.
-    fn hold_a_call(client: &UnixStream, method: &str) {
+    /// a request of `hold` (id 2: `hold` or `holdcall`) that runs nested in
+    /// that call's wait, and returns 50 ms into the hold.
+    fn hold_a_call(client: &UnixStream, method: &str, hold: &str) {
         let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#);
         write_framed(client, &body);
         let call = read_framed(client);
         assert!(call.contains(r#""id":"api1""#), "{call}");
-        write_framed(client, r#"{"jsonrpc":"2.0","id":2,"method":"hold"}"#);
+        let body = format!(r#"{{"jsonrpc":"2.0","id":2,"method":"{hold}"}}"#);
+        write_framed(client, &body);
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -2484,7 +2513,7 @@ pub(crate) mod tests {
     fn test_async_conn_reader_held_call_keeps_phase_a() {
         let (ctx, cancel) = context::with_cancel(&context::background());
         let (client, notes, run_done, runner) = run_on_reader(&ctx);
-        hold_a_call(&client, "calls");
+        hold_a_call(&client, "calls", "hold");
         cancel();
         std::thread::sleep(Duration::from_millis(100));
         client
@@ -2514,7 +2543,7 @@ pub(crate) mod tests {
     fn test_async_conn_reader_held_call_passes_the_end() {
         let (ctx, cancel) = context::with_cancel(&context::background());
         let (client, notes, run_done, runner) = run_on_reader(&ctx);
-        hold_a_call(&client, "slowcalls");
+        hold_a_call(&client, "slowcalls", "hold");
         cancel();
         std::thread::sleep(Duration::from_millis(100));
         client
@@ -2543,7 +2572,7 @@ pub(crate) mod tests {
     fn test_async_conn_reader_held_reply_without_a_signal() {
         let ctx = context::background();
         let (client, notes, run_done, runner) = run_on_reader(&ctx);
-        hold_a_call(&client, "calls");
+        hold_a_call(&client, "calls", "hold");
         write_framed(&client, r#"{"jsonrpc":"2.0","id":"api1","result":null}"#);
         std::thread::sleep(Duration::from_millis(100));
         client
@@ -2564,6 +2593,40 @@ pub(crate) mod tests {
         assert!(!rest.contains(r#""id":"api3""#), "{rest}");
     }
 
+    // PORT: no Go test; Go `Run` (ipc/conn_async.go:95-96). As
+    // `..._held_reply_without_a_signal`, but the nested request calls back
+    // after the end. Go's `Run` gave the reply to its call when it read
+    // it, before the end, so the end does not close that call: it returns
+    // the reply. The nested call comes after the end (Phase B).
+    #[test]
+    fn test_async_conn_reader_held_call_keeps_its_reply_at_the_end() {
+        let ctx = context::background();
+        let (client, notes, run_done, runner) = run_on_reader(&ctx);
+        hold_a_call(&client, "calls", "holdcall");
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":"api1","result":null}"#);
+        std::thread::sleep(Duration::from_millis(100));
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown");
+        let first = notes.recv_timeout(Duration::from_secs(5)).expect("note");
+        assert_eq!(first, "holdcall | ipc: connection closed");
+        let note = notes.recv_timeout(Duration::from_secs(5)).expect("note");
+        assert_eq!(
+            note,
+            r#"calls | ["ok", "ipc: connection closed", "ipc: connection closed"]"#
+        );
+        let result = run_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("run returned");
+        assert_eq!(result, Ok(()));
+        runner.join().expect("run thread");
+        // api2 is the nested call (no write), api3 the request's second.
+        let rest = rest(&client);
+        assert!(!rest.contains(r#""id":"api2""#), "{rest}");
+        assert!(rest.contains(r#""id":"api3""#), "{rest}");
+        assert!(!rest.contains(r#""id":"api4""#), "{rest}");
+    }
+
     // PORT: no Go test; Go `Run` and `Call` (ipc/conn_async.go:71-74,
     // :289-303). EOF with no signal while a call with the handler context
     // (the module resolver's) is held: Go's `closePendingCalls` closed its
@@ -2574,7 +2637,7 @@ pub(crate) mod tests {
     fn test_async_conn_reader_held_call_end_before_a_signal() {
         let ctx = context::background();
         let (client, notes, run_done, runner) = run_on_reader(&ctx);
-        hold_a_call(&client, "hcall");
+        hold_a_call(&client, "hcall", "hold");
         client
             .shutdown(std::net::Shutdown::Write)
             .expect("shutdown");
@@ -2595,7 +2658,7 @@ pub(crate) mod tests {
     fn test_async_conn_reader_held_call_read_error_after_a_signal() {
         let (ctx, cancel) = context::with_cancel(&context::background());
         let (client, notes, run_done, runner) = run_on_reader(&ctx);
-        hold_a_call(&client, "calls");
+        hold_a_call(&client, "calls", "hold");
         cancel();
         std::thread::sleep(Duration::from_millis(100));
         (&client)

@@ -774,6 +774,65 @@ fn api_async_read_error_after_a_signal_keeps_context_canceled() {
     assert!(!answer.contains("context canceled"), "{what}: {answer}");
 }
 
+/// A request whose callback waits gets its reply while a nested request
+/// reads a FIFO, then the read loop ends, and the nested request calls
+/// back after the end. Go's `Run` gave the reply to the request when it
+/// read it, so the request went on before the end: it writes its next
+/// callback request (getAccessibleEntries of src) and gets Go's error.
+#[test]
+fn api_async_held_request_keeps_its_reply_at_the_end() {
+    let cases = [
+        (Some(Signal::INT), "eof"),
+        (None, "eof"),
+        (Some(Signal::INT), "bad"),
+    ];
+    for (signal, end) in cases {
+        let what = format!("--api --async, a held request gets its reply, {signal:?}, {end}");
+        let dir = project("heldkeep");
+        dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+        let config = dir.fifo("p2/tsconfig.json");
+        let mut tsgo = api_async(&dir, &["--callbacks", "getAccessibleEntries"]);
+        tsgo.send_json(&create_snapshot(1, &dir.0));
+        let call = tsgo.wait_callback("getAccessibleEntries");
+        tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
+        let mut writer = open_fifo_writer(&config);
+        tsgo.reply(&call);
+        tsgo.expect_alive(&what);
+        if let Some(signal) = signal {
+            tsgo.signal(signal);
+            tsgo.expect_alive(&what);
+        }
+        end_read_loop(&mut tsgo, end);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        writer.write_all(FIFO_TEXT).unwrap();
+        drop(writer);
+        tsgo.expect_end(start, &what, 0, "");
+        let src = format!(
+            r#""method":"getAccessibleEntries","params":"{}""#,
+            dir.path("src")
+        );
+        assert!(
+            tsgo.messages().iter().any(|m| m.contains(&src)),
+            "{what}: no getAccessibleEntries of src: {:?}",
+            tsgo.messages()
+        );
+        let closed = r#""message":"panic: ipc: connection closed\n"#;
+        let first = if signal.is_some() {
+            PANIC_CANCELED
+        } else {
+            closed
+        };
+        tsgo.expect_answer(1, first, &what);
+        let nested = if end == "bad" {
+            r#""message":"panic: ipc: connection closed\njsontext: "#
+        } else {
+            closed
+        };
+        tsgo.expect_answer(3, nested, &what);
+    }
+}
+
 /// resolveModuleName calls back with the request's context (Go
 /// `handlerCtx`). EOF while the callback waits, with no signal: Go's
 /// `closePendingCalls` closes its channel before `cancelHandlers`, so the
