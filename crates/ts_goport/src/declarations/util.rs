@@ -4,7 +4,6 @@
 //! body is not ported yet, so some are not called yet.
 #![allow(dead_code)]
 
-use super::DeclarationEmitHost;
 use crate::prelude::*;
 use crate::printer::{EmitContext, EmitResolver};
 
@@ -17,9 +16,10 @@ pub(crate) fn needs_scope_marker(result: Node) -> bool {
 }
 
 // Go: transformers/declarations/util.go:13 canHaveLiteralInitializer
-pub(crate) fn can_have_literal_initializer(host: &dyn DeclarationEmitHost, node: Node) -> bool {
+// ts#64649: takes the emit resolver, not the host.
+pub(crate) fn can_have_literal_initializer(resolver: &dyn EmitResolver, node: Node) -> bool {
     match node.kind() {
-        SyntaxKind::PropertyDeclaration | SyntaxKind::PropertySignature => host
+        SyntaxKind::PropertyDeclaration | SyntaxKind::PropertySignature => resolver
             .get_effective_declaration_flags(node, ModifierFlags::PRIVATE)
             .is_empty(),
         SyntaxKind::Parameter | SyntaxKind::VariableDeclaration => true,
@@ -181,9 +181,10 @@ pub(crate) fn unwrap_parenthesized_expression(mut o: Node) -> Node {
 }
 
 // Go: transformers/declarations/util.go:149 isPrivateMethodTypeParameter
-pub(crate) fn is_private_method_type_parameter(host: &dyn DeclarationEmitHost, node: Node) -> bool {
+// ts#64649: takes the emit resolver, not the host.
+pub(crate) fn is_private_method_type_parameter(resolver: &dyn EmitResolver, node: Node) -> bool {
     node.parent().kind() == SyntaxKind::MethodDeclaration
-        && !host
+        && !resolver
             .get_effective_declaration_flags(node.parent(), ModifierFlags::PRIVATE)
             .is_empty()
 }

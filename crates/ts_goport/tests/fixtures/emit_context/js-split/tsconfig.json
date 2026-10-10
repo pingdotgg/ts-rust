@@ -1,0 +1,1 @@
+{ "compilerOptions": { "allowJs": true, "isolatedModules": true, "target": "es2022", "module": "esnext", "declaration": true, "declarationMap": true, "sourceMap": true, "outDir": "out", "rootDir": "src" }, "include": ["src"] }

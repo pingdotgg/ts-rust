@@ -18,7 +18,6 @@ pub use tracker::SymbolTrackerImpl;
 pub use transform::*;
 
 use crate::prelude::*;
-use crate::printer::EmitResolver;
 
 // Go: transformers/declarations/transform.go:28 OutputPaths
 pub trait OutputPaths {
@@ -43,6 +42,6 @@ pub trait DeclarationEmitHost {
     fn get_output_paths_for(&self, file: Node, force_dts_paths: bool) -> Box<dyn OutputPaths>;
     /// #4712
     fn source_file_may_be_emitted(&self, file: Node, force_dts_emit: bool) -> bool;
-    fn get_effective_declaration_flags(&self, node: Node, flags: ModifierFlags) -> ModifierFlags;
-    fn get_emit_resolver(&self) -> Rc<dyn EmitResolver>;
+    // ts#64649 removes `GetEffectiveDeclarationFlags` and `GetEmitResolver`:
+    // the transformer gets its emit resolver as an argument and asks it.
 }

@@ -384,7 +384,7 @@ impl DeclarationTransformer {
     pub(crate) fn ensure_type_params(&mut self, node: Node, params: NodeList) -> NodeList {
         let ec = self.emit_context.clone();
         if !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(node), ModifierFlags::PRIVATE)
             .is_empty()
         {
@@ -415,7 +415,6 @@ impl DeclarationTransformer {
             let nodes = self
                 .resolver
                 .create_type_parameters_of_signature_declaration(
-                    &ec,
                     node,
                     self.enclosing_declaration,
                     DECLARATION_EMIT_NODE_BUILDER_FLAGS,
@@ -441,7 +440,7 @@ impl DeclarationTransformer {
     pub(crate) fn update_param_list(&mut self, node: Node, params: NodeList) -> NodeList {
         let ec = self.emit_context.clone();
         if !self
-            .host
+            .resolver
             .get_effective_declaration_flags(ec.parse_node(node), ModifierFlags::PRIVATE)
             .is_empty()
             || params.nodes().is_empty()
@@ -502,11 +501,9 @@ impl DeclarationTransformer {
                 self.tracker.report_inference_fallback(node);
             }
             let ec = self.emit_context.clone();
-            return self.resolver.create_literal_const_value(
-                &ec,
-                ec.parse_node(node),
-                emit_tracker(self),
-            );
+            return self
+                .resolver
+                .create_literal_const_value(ec.parse_node(node), emit_tracker(self));
         }
         Node::NIL
     }
@@ -1206,7 +1203,7 @@ impl DeclarationTransformer {
         cleanup.run(self);
     }
 
-    // Go: transformers/declarations/transform.go:2924 DeclarationTransformer.createFullExpandoBlock
+    // Go: transformers/declarations/transform.go:2934 DeclarationTransformer.createFullExpandoBlock
     pub(crate) fn create_full_expando_block(&mut self, id: Node) -> Node {
         // Process any expando assignments on this host that were skipped because it wasn't
         // visible when they were collected - if it's still not visible, they simply get
@@ -1258,7 +1255,7 @@ impl DeclarationTransformer {
         n
     }
 
-    // Go: transformers/declarations/transform.go:2987 DeclarationTransformer.tryGetPropertyName
+    // Go: transformers/declarations/transform.go:2997 DeclarationTransformer.tryGetPropertyName
     pub(crate) fn try_get_property_name(&mut self, node: Node) -> String {
         if is_element_access_expression(node) {
             return self.resolver.get_element_access_expression_name(node);
@@ -1275,7 +1272,7 @@ fn is_not_declare_modifier(m: Node) -> bool {
     m.kind() != SyntaxKind::DeclareKeyword
 }
 
-// Go: transformers/declarations/transform.go:2973 extractExpandoHostParams
+// Go: transformers/declarations/transform.go:2983 extractExpandoHostParams
 // Returns (typeParameters, parameters, asteriskToken).
 fn extract_expando_host_params(node: Node) -> (NodeList, NodeList, Node) {
     // PORT: Go switches on FunctionExpression, ArrowFunction and (default)

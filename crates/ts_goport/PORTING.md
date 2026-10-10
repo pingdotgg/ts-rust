@@ -878,7 +878,11 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   cannot change an output. The binder reference resolver reads the
   program's binder symbols (`transformers::reference_resolver::BinderSymbols`),
   on every thread. A d.ts part waits for its file's JS part before it
-  writes, so a file's outputs are written in Go's order. The pool is off
+  writes, so a file's outputs are written in Go's order. It also waits for
+  the JS transforms before its own transforms, and imports what they wrote
+  on parse-tree nodes (ts#64649: Go runs both parts of a file in one emit
+  context; `printer::emit_context::ParseEmitNodes`). A file whose two
+  parts run on its checker (the twins below) does the same. The pool is off
   with `--singleThreaded`, `--generateTrace`, an emit called on a checker
   thread and `GOPORT_EMIT_THREADS=0` (the variable sets the thread count,
   also when no core is spare).

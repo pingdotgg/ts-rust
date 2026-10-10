@@ -66,8 +66,6 @@ pub struct EmitResolverLinks {
 // values cached to avoid closure allocation. Here they are plain calls to
 // `is_value_alias_declaration_worker` and `alias_marking_visitor_worker`.
 // PORT: Go caches referenceResolver binder.ReferenceResolver; part 2 builds one per call in get_reference_resolver (it has no state when all hooks are set).
-// PORT: `emit_context` is `None` only for the resolver of
-// `get_emit_resolver` (not in Go N', see there).
 pub struct EmitResolver {
     /// Index of the owning checker in the program checker pool.
     pub checker_index: usize,
@@ -76,20 +74,14 @@ pub struct EmitResolver {
     /// and `new_emit_resolver_of_shared_checker`). Weak, because the checker
     /// holds the resolver of `get_emit_resolver`.
     shared_checker: OnceCell<Weak<RefCell<Checker>>>,
-    emit_context: Option<Rc<EmitContext>>,
+    emit_context: Rc<EmitContext>,
     request_node_builder: OnceCell<Rc<RefCell<NodeBuilder>>>,
 }
 
 // Go: checker/emitresolver.go:50 newEmitResolver (ts#64649 adds the emit context)
-// PORT: Go `checker.id` is `checker_index + 1` (see `Checker::new`).
+// PORT: Go `checker.id` is `checker_index + 1` (see `Checker::new`). Go
+// panics on a nil emit context; here the type has no nil.
 pub fn new_emit_resolver(checker: &Checker, emit_context: Rc<EmitContext>) -> EmitResolver {
-    new_emit_resolver_worker(checker, Some(emit_context))
-}
-
-fn new_emit_resolver_worker(
-    checker: &Checker,
-    emit_context: Option<Rc<EmitContext>>,
-) -> EmitResolver {
     EmitResolver {
         checker_index: checker.id as usize - 1,
         shared_checker: OnceCell::new(),
@@ -105,15 +97,17 @@ impl Checker {
     }
 
     // Go: checker/checker.go:32651 GetEmitResolver (removed upstream by ts#64649)
-    // PORT: not in Go N'. ts#64649 replaced it with `NewEmitResolver`; the
-    // emit host (program lane), the declaration transformer (emit lane) and
-    // find-all-references (ls lane) still call it until they port their
-    // ts#64649 parts. Its resolver has no emit context, so each Create* call
-    // makes a node builder for the context it is given (the Go N behavior).
-    // `sync.Once` is the `Option` in `emit_resolver`.
+    // PORT: not in Go N'. ts#64649 replaced it with `NewEmitResolver`.
+    // find-all-references (ls lane) calls it until it ports its ts#64649
+    // part (Go N' `checker.NewEmitResolver(printer.NewEmitContext())`,
+    // findallreferences.go:512), and the declarations symbol tracker uses it
+    // to reach the unsafe resolver methods with the checker in hand (they
+    // read no resolver state). Its resolver has its own new emit context, as
+    // the Go N' callers make one. `sync.Once` is the `Option` in
+    // `emit_resolver`.
     pub fn get_emit_resolver(&mut self) -> Rc<EmitResolver> {
         if self.emit_resolver.is_none() {
-            self.emit_resolver = Some(Rc::new(new_emit_resolver_worker(self, None)));
+            self.emit_resolver = Some(Rc::new(new_emit_resolver(self, new_emit_context())));
         }
         self.emit_resolver.clone().expect("emit resolver")
     }
@@ -160,33 +154,17 @@ impl EmitResolver {
     }
 
     // Go: checker/emitresolver.go:61 EmitResolver.EmitContext (ts#64649)
-    // PORT: `None` only for the resolver of `get_emit_resolver`.
-    pub fn emit_context(&self) -> Option<&Rc<EmitContext>> {
-        self.emit_context.as_ref()
+    pub fn emit_context(&self) -> &Rc<EmitContext> {
+        &self.emit_context
     }
 
     // Go: checker/emitresolver.go:65 EmitResolver.nodeBuilder (ts#64649)
     // One node builder per resolver, so its caches (module specifiers among
     // them) are shared by the requests of one emit.
-    // PORT: the printer trait still passes the emit context to each Create*
-    // call until the emit lane ports its ts#64649 part. When that context is
-    // the resolver's own, the request uses the cached builder; otherwise (the
-    // resolver of `get_emit_resolver`) it gets a new builder, as in Go N.
-    pub(crate) fn node_builder(
-        &self,
-        c: &Checker,
-        emit_context: &EmitContext,
-    ) -> Rc<RefCell<NodeBuilder>> {
-        match &self.emit_context {
-            Some(own) if std::ptr::eq(Rc::as_ptr(own), emit_context) => self
-                .request_node_builder
-                .get_or_init(|| Rc::new(RefCell::new(new_node_builder(c, own.clone()))))
-                .clone(),
-            _ => Rc::new(RefCell::new(new_node_builder(
-                c,
-                emit_context.factory.emit_context(),
-            ))),
-        }
+    pub(crate) fn node_builder(&self, c: &Checker) -> Rc<RefCell<NodeBuilder>> {
+        self.request_node_builder
+            .get_or_init(|| Rc::new(RefCell::new(new_node_builder(c, self.emit_context.clone()))))
+            .clone()
     }
 
     // Go: checker/emitsupport.go:12 Checker.isDeclarationVisible
@@ -858,6 +836,11 @@ fn get_meaning_of_entity_name_reference(entity_name: Node) -> SymbolFlags {
 // PORT: Go exported methods. Methods from emitresolver.go lines 1 to 600 are
 // ported here in full. The others call the part 2 inherent methods.
 impl crate::printer::EmitResolver for EmitResolver {
+    // Go: checker/emitresolver.go:61 EmitResolver.EmitContext (ts#64649)
+    fn emit_context(&self) -> &Rc<EmitContext> {
+        EmitResolver::emit_context(self)
+    }
+
     // PORT: not in Go (Go `make(ast.SymbolTable)` in the declaration transformer).
     fn make_symbol_table(&self, entries: &[(&str, SymbolId)]) -> SymbolTable {
         self.with_checker(|c| {
@@ -1287,10 +1270,9 @@ impl crate::printer::EmitResolver for EmitResolver {
         EmitResolver::get_referenced_value_declaration_unsafe(self, node)
     }
 
-    // Go: checker/emitresolver.go:974 EmitResolver.CreateTypeOfDeclaration
+    // Go: checker/emitresolver.go:662 EmitResolver.CreateTypeOfDeclaration
     fn create_type_of_declaration(
         &self,
-        emit_context: &EmitContext,
         declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -1299,7 +1281,6 @@ impl crate::printer::EmitResolver for EmitResolver {
     ) -> Node {
         EmitResolver::create_type_of_declaration(
             self,
-            emit_context,
             declaration,
             enclosing_declaration,
             flags,
@@ -1308,10 +1289,9 @@ impl crate::printer::EmitResolver for EmitResolver {
         )
     }
 
-    // Go: checker/emitresolver.go:950 EmitResolver.CreateReturnTypeOfSignatureDeclaration
+    // Go: checker/emitresolver.go:640 EmitResolver.CreateReturnTypeOfSignatureDeclaration
     fn create_return_type_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -1320,7 +1300,6 @@ impl crate::printer::EmitResolver for EmitResolver {
     ) -> Node {
         EmitResolver::create_return_type_of_signature_declaration(
             self,
-            emit_context,
             signature_declaration,
             enclosing_declaration,
             flags,
@@ -1329,10 +1308,9 @@ impl crate::printer::EmitResolver for EmitResolver {
         )
     }
 
-    // Go: checker/emitresolver.go:962 EmitResolver.CreateTypeParametersOfSignatureDeclaration
+    // Go: checker/emitresolver.go:651 EmitResolver.CreateTypeParametersOfSignatureDeclaration
     fn create_type_parameters_of_signature_declaration(
         &self,
-        emit_context: &EmitContext,
         signature_declaration: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -1341,7 +1319,6 @@ impl crate::printer::EmitResolver for EmitResolver {
     ) -> Vec<Node> {
         EmitResolver::create_type_parameters_of_signature_declaration(
             self,
-            emit_context,
             signature_declaration,
             enclosing_declaration,
             flags,
@@ -1350,20 +1327,14 @@ impl crate::printer::EmitResolver for EmitResolver {
         )
     }
 
-    // Go: checker/emitresolver.go:988 EmitResolver.CreateLiteralConstValue
-    fn create_literal_const_value(
-        &self,
-        emit_context: &EmitContext,
-        node: Node,
-        tracker: EmitSymbolTracker,
-    ) -> Node {
-        EmitResolver::create_literal_const_value(self, emit_context, node, tracker)
+    // Go: checker/emitresolver.go:675 EmitResolver.CreateLiteralConstValue
+    fn create_literal_const_value(&self, node: Node, tracker: EmitSymbolTracker) -> Node {
+        EmitResolver::create_literal_const_value(self, node, tracker)
     }
 
-    // Go: checker/emitresolver.go:1049 EmitResolver.CreateTypeOfExpression
+    // Go: checker/emitresolver.go:735 EmitResolver.CreateTypeOfExpression
     fn create_type_of_expression(
         &self,
-        emit_context: &EmitContext,
         expression: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -1372,7 +1343,6 @@ impl crate::printer::EmitResolver for EmitResolver {
     ) -> Node {
         EmitResolver::create_type_of_expression(
             self,
-            emit_context,
             expression,
             enclosing_declaration,
             flags,
@@ -1381,10 +1351,9 @@ impl crate::printer::EmitResolver for EmitResolver {
         )
     }
 
-    // Go: checker/emitresolver.go:1061 EmitResolver.CreateLateBoundIndexSignatures
+    // Go: checker/emitresolver.go:746 EmitResolver.CreateLateBoundIndexSignatures
     fn create_late_bound_index_signatures(
         &self,
-        emit_context: &EmitContext,
         container: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -1393,7 +1362,6 @@ impl crate::printer::EmitResolver for EmitResolver {
     ) -> Vec<Node> {
         EmitResolver::create_late_bound_index_signatures(
             self,
-            emit_context,
             container,
             enclosing_declaration,
             flags,
@@ -1402,10 +1370,9 @@ impl crate::printer::EmitResolver for EmitResolver {
         )
     }
 
-    // Go: checker/emitresolver.go:1272 EmitResolver.TryJSTypeNodeToTypeNode
+    // Go: checker/emitresolver.go:957 EmitResolver.TryJSTypeNodeToTypeNode
     fn try_js_type_node_to_type_node(
         &self,
-        emit_context: &EmitContext,
         type_node: Node,
         enclosing_declaration: Node,
         flags: NodeBuilderFlags,
@@ -1414,7 +1381,6 @@ impl crate::printer::EmitResolver for EmitResolver {
     ) -> Node {
         EmitResolver::try_js_type_node_to_type_node(
             self,
-            emit_context,
             type_node,
             enclosing_declaration,
             flags,

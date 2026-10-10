@@ -4278,15 +4278,9 @@ fn get_declaration_diagnostics_worker(host: Rc<EmitHost>, file: Node) -> Vec<Dia
     // needs `&'static`, so read the program options directly.
     let options = options();
     // ts#64649 (emitter.go:558): a new emit resolver for a new emit context.
-    let emit_context = crate::printer::emit_context::new_emit_context();
-    let emit_resolver = host.new_emit_resolver(emit_context.clone());
-    let mut transform = crate::declarations::new_declaration_transformer(
-        host.with_emit_resolver(emit_resolver),
-        Some(emit_context),
-        options,
-        "",
-        "",
-    );
+    let emit_resolver = host.new_emit_resolver(crate::printer::emit_context::new_emit_context());
+    let mut transform =
+        crate::declarations::new_declaration_transformer(host, emit_resolver, options, "", "");
     transform.transform_source_file_root(file);
     transform.get_diagnostics()
 }
@@ -4300,12 +4294,6 @@ pub struct EmitHost {
     /// Go `newEmitResolver`: a new emit resolver of the file's checker for
     /// an emit context.
     new_emit_resolver: Rc<dyn Fn(Rc<EmitContext>) -> Rc<dyn crate::printer::EmitResolver>>,
-    /// PORT: not in Go N'. The resolver that the printer and declaration
-    /// host traits give (`get_emit_resolver`, `get_effective_declaration_flags`):
-    /// the declaration transformer still reads it from its host until the
-    /// emit lane's ts#64649 part passes it (Go `NewDeclarationTransformer(host,
-    /// emitResolver, ...)`). Only a host from `with_emit_resolver` has one.
-    emit_resolver: Option<Rc<dyn crate::printer::EmitResolver>>,
 }
 
 // Go: compiler/emitHost.go:39 newEmitHost
@@ -4323,11 +4311,11 @@ pub fn new_emit_host(file: Node) -> Rc<EmitHost> {
 
 /// PORT: not in Go. The emit host of a JS part on the emit pool
 /// (`send_emit_pool_jobs`), which has no checker. Its emit resolvers panic
-/// on every call (`emitter::no_checker`).
+/// on every call except `emit_context` (`emitter::no_checker`).
 pub fn new_emit_host_without_checker() -> Rc<EmitHost> {
-    new_emit_host_with(Rc::new(|_| {
+    new_emit_host_with(Rc::new(|emit_context| {
         let resolver: Rc<dyn crate::printer::EmitResolver> =
-            Rc::new(crate::emitter::no_checker::NoCheckerEmitResolver);
+            Rc::new(crate::emitter::no_checker::NoCheckerEmitResolver { emit_context });
         resolver
     }))
 }
@@ -4337,10 +4325,7 @@ pub fn new_emit_host_without_checker() -> Rc<EmitHost> {
 pub fn new_emit_host_with(
     new_emit_resolver: Rc<dyn Fn(Rc<EmitContext>) -> Rc<dyn crate::printer::EmitResolver>>,
 ) -> Rc<EmitHost> {
-    Rc::new(EmitHost {
-        new_emit_resolver,
-        emit_resolver: None,
-    })
+    Rc::new(EmitHost { new_emit_resolver })
 }
 
 impl EmitHost {
@@ -4351,28 +4336,6 @@ impl EmitHost {
         emit_context: Rc<EmitContext>,
     ) -> Rc<dyn crate::printer::EmitResolver> {
         (self.new_emit_resolver)(emit_context)
-    }
-
-    /// PORT: not in Go N'. This host with `emit_resolver` as the resolver
-    /// of the printer and declaration host traits, for the declaration
-    /// transformer of one emit (see `EmitHost::emit_resolver`).
-    #[must_use]
-    pub fn with_emit_resolver(
-        &self,
-        emit_resolver: Rc<dyn crate::printer::EmitResolver>,
-    ) -> Rc<EmitHost> {
-        Rc::new(EmitHost {
-            new_emit_resolver: self.new_emit_resolver.clone(),
-            emit_resolver: Some(emit_resolver),
-        })
-    }
-
-    /// The resolver of `with_emit_resolver`.
-    fn emit_resolver(&self) -> Rc<dyn crate::printer::EmitResolver> {
-        self.emit_resolver.clone().expect(
-            "Go N' has no emitHost.GetEmitResolver (ts#64649): use the host of an emit \
-             (EmitHost::with_emit_resolver)",
-        )
     }
 }
 
@@ -4444,19 +4407,6 @@ impl crate::declarations::DeclarationEmitHost for EmitHost {
     fn source_file_may_be_emitted(&self, file: Node, force_dts_emit: bool) -> bool {
         source_file_may_be_emitted_worker(file, force_dts_emit, false)
     }
-
-    // Go: compiler/emitHost.go:90 emitHost.GetEffectiveDeclarationFlags (at 673a5f17d713;
-    // removed by ts#64649: the declarations code asks the emit resolver)
-    fn get_effective_declaration_flags(&self, node: Node, flags: ModifierFlags) -> ModifierFlags {
-        self.emit_resolver()
-            .get_effective_declaration_flags(node, flags)
-    }
-
-    // Go: compiler/emitHost.go:128 emitHost.GetEmitResolver (at 673a5f17d713;
-    // ts#64649 makes it NewEmitResolver, compiler/emitHost.go:130)
-    fn get_emit_resolver(&self) -> Rc<dyn crate::printer::EmitResolver> {
-        self.emit_resolver()
-    }
 }
 
 impl crate::printer::EmitHost for EmitHost {
@@ -4503,10 +4453,12 @@ impl crate::printer::EmitHost for EmitHost {
         get_emit_module_format_of_file(crate::emitter::emitter::parsed_source_file(file))
     }
 
-    // Go: compiler/emitHost.go:128 emitHost.GetEmitResolver (at 673a5f17d713;
-    // ts#64649 makes it NewEmitResolver, compiler/emitHost.go:130)
-    fn get_emit_resolver(&self) -> Rc<dyn crate::printer::EmitResolver> {
-        self.emit_resolver()
+    // Go: compiler/emitHost.go:130 emitHost.NewEmitResolver (ts#64649)
+    fn new_emit_resolver(
+        &self,
+        emit_context: Rc<EmitContext>,
+    ) -> Rc<dyn crate::printer::EmitResolver> {
+        EmitHost::new_emit_resolver(self, emit_context)
     }
 
     // Go: compiler/emitHost.go:134 emitHost.IsSourceFileFromExternalLibrary

@@ -25,9 +25,7 @@ use crate::ast::visitor::syntax_list_children;
 use crate::checker::nodebuilder_types::{InternalNodeBuilderFlags, NodeBuilderFlags};
 use crate::frontend::tspath;
 use crate::prelude::*;
-use crate::printer::{
-    CommentRange, EmitContext, EmitResolver, SymbolAccessibilityResult, new_emit_context,
-};
+use crate::printer::{CommentRange, EmitContext, EmitResolver, SymbolAccessibilityResult};
 use crate::transformers::utilities::is_original_node_single_line;
 
 // Go: transformers/declarations/transform.go:23 ReferencedFilePair
@@ -37,7 +35,7 @@ pub struct ReferencedFilePair {
     pub r#ref: FileReference,
 }
 
-// Go: transformers/declarations/transform.go:46 thisPropertyAssignmentKey
+// Go: transformers/declarations/transform.go:43 thisPropertyAssignmentKey
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ThisPropertyAssignmentKey {
     pub(crate) name: String,
@@ -46,7 +44,7 @@ pub(crate) struct ThisPropertyAssignmentKey {
     pub(crate) is_private: bool,
 }
 
-// Go: transformers/declarations/transform.go:53 getThisPropertyAssignmentKey
+// Go: transformers/declarations/transform.go:50 getThisPropertyAssignmentKey
 pub(crate) fn get_this_property_assignment_key(
     name: Node,
     node: Node,
@@ -72,7 +70,7 @@ pub(crate) fn get_this_property_assignment_key(
     }
 }
 
-// Go: transformers/declarations/transform.go:63 DeclarationTransformer
+// Go: transformers/declarations/transform.go:60 DeclarationTransformer
 // PORT: Go embeds `transformers.Transformer` (emit context, factory and root
 // visitor). The emit context is the `emit_context` field; the factory is
 // `emit_context.factory()`; the root visitor is built by `with_visitor`
@@ -120,20 +118,21 @@ pub struct DeclarationTransformer {
     pub(crate) in_class_expression_declaration: bool,
 }
 
-// Go: transformers/declarations/transform.go:103 NewDeclarationTransformer
+// Go: transformers/declarations/transform.go:99 NewDeclarationTransformer
 // TODO: Convert to transformers.TransformerFactory signature to allow more automatic composition with other transforms
-// PORT: a nil Go `context` is `None` (Go `NewTransformer` then makes a new
-// emit context). Go stores `reportExpandoFunctionErrors` as a closure on the
-// state; it is `SymbolTrackerSharedState::report_expando_function_errors`.
-// The Go visitor fields are built on demand (see the struct comment).
+// ts#64649: takes the emit resolver, and the emit context is the resolver's.
+// Go panics when the resolver or its context is nil; neither is nil here.
+// PORT: Go stores `reportExpandoFunctionErrors` as a closure on the state;
+// it is `SymbolTrackerSharedState::report_expando_function_errors`. The Go
+// visitor fields are built on demand (see the struct comment).
 pub fn new_declaration_transformer(
     host: Rc<dyn DeclarationEmitHost>,
-    context: Option<Rc<EmitContext>>,
+    resolver: Rc<dyn EmitResolver>,
     compiler_options: &'static CompilerOptions,
     declaration_file_path: &str,
     declaration_map_path: &str,
 ) -> DeclarationTransformer {
-    let resolver = host.get_emit_resolver();
+    let emit_context = resolver.emit_context().clone();
     let state = Rc::new(RefCell::new(SymbolTrackerSharedState {
         late_marked_statements: Vec::new(),
         diagnostics: Vec::new(),
@@ -150,8 +149,6 @@ pub fn new_declaration_transformer(
         state.clone(),
     ));
     // TODO: Use new host GetOutputPathsFor method instead of passing in entrypoint paths (which will also better support bundled emit)
-    // Go: transformers/transformer.go:14 Transformer.NewTransformer
-    let emit_context = context.unwrap_or_else(new_emit_context);
     DeclarationTransformer {
         emit_context,
         host,
@@ -185,7 +182,7 @@ pub fn new_declaration_transformer(
 }
 
 /// Go `declarationEmitNodeBuilderFlags`.
-// Go: transformers/declarations/transform.go:215 declarationEmitNodeBuilderFlags
+// Go: transformers/declarations/transform.go:213 declarationEmitNodeBuilderFlags
 #[allow(dead_code)]
 pub(crate) const DECLARATION_EMIT_NODE_BUILDER_FLAGS: NodeBuilderFlags =
     NodeBuilderFlags::MULTILINE_OBJECT_LITERALS
@@ -197,7 +194,7 @@ pub(crate) const DECLARATION_EMIT_NODE_BUILDER_FLAGS: NodeBuilderFlags =
         .union(NodeBuilderFlags::NO_TRUNCATION);
 
 /// Go `declarationEmitInternalNodeBuilderFlags`.
-// Go: transformers/declarations/transform.go:223 declarationEmitInternalNodeBuilderFlags
+// Go: transformers/declarations/transform.go:221 declarationEmitInternalNodeBuilderFlags
 #[allow(dead_code)]
 pub(crate) const DECLARATION_EMIT_INTERNAL_NODE_BUILDER_FLAGS: InternalNodeBuilderFlags =
     InternalNodeBuilderFlags::ALLOW_UNRESOLVED_NAMES;
@@ -213,7 +210,7 @@ pub(crate) struct CleanupDiagnosticContext {
 }
 
 impl CleanupDiagnosticContext {
-    // Go: transformers/declarations/transform.go:551 setupDiagnosticContext cleanup func
+    // Go: transformers/declarations/transform.go:545 setupDiagnosticContext cleanup func
     pub(crate) fn run(self, tx: &mut DeclarationTransformer) {
         {
             let mut state = tx.state.borrow_mut();
@@ -230,12 +227,12 @@ impl DeclarationTransformer {
         self.with_visitor(|v| v.visit_source_file(file))
     }
 
-    // Go: transformers/declarations/transform.go:142 DeclarationTransformer.GetDiagnostics
+    // Go: transformers/declarations/transform.go:140 DeclarationTransformer.GetDiagnostics
     pub fn get_diagnostics(&self) -> Vec<Diagnostic> {
         self.state.borrow().diagnostics.clone()
     }
 
-    // Go: transformers/declarations/transform.go:146 DeclarationTransformer.shouldStripInternal
+    // Go: transformers/declarations/transform.go:144 DeclarationTransformer.shouldStripInternal
     pub(crate) fn should_strip_internal(&self, node: Node) -> bool {
         let (strip_internal, current_source_file) = {
             let state = self.state.borrow();
@@ -244,7 +241,7 @@ impl DeclarationTransformer {
         strip_internal && node.is_some() && self.is_internal_declaration(node, current_source_file)
     }
 
-    // Go: transformers/declarations/transform.go:150 DeclarationTransformer.isInternalDeclaration
+    // Go: transformers/declarations/transform.go:148 DeclarationTransformer.isInternalDeclaration
     fn is_internal_declaration(&self, node: Node, source_file: Node) -> bool {
         if node.is_nil() {
             return false;
@@ -306,7 +303,7 @@ impl DeclarationTransformer {
         false
     }
 
-    // Go: transformers/declarations/transform.go:203 DeclarationTransformer.getLeadingCommentRangesOfNode
+    // Go: transformers/declarations/transform.go:201 DeclarationTransformer.getLeadingCommentRangesOfNode
     fn get_leading_comment_ranges_of_node(
         &self,
         node: Node,
@@ -318,7 +315,7 @@ impl DeclarationTransformer {
         get_leading_comment_ranges(&source_file_text(source_file), node.pos())
     }
 
-    // Go: transformers/declarations/transform.go:226 DeclarationTransformer.visit
+    // Go: transformers/declarations/transform.go:224 DeclarationTransformer.visit
     // functions as both `visitDeclarationStatements` and `transformRoot`, utilitzing SyntaxList nodes
     pub fn visit(&mut self, node: Node) -> Node {
         if node.is_nil() {
@@ -366,7 +363,7 @@ impl DeclarationTransformer {
         }
     }
 
-    // Go: transformers/declarations/transform.go:280 DeclarationTransformer.visitSourceFile
+    // Go: transformers/declarations/transform.go:278 DeclarationTransformer.visitSourceFile
     fn visit_source_file(&mut self, node: Node) -> Node {
         self.cjs_export_assignment_name = Node::NIL;
         if source_file_info(node).is_declaration_file {
@@ -399,7 +396,7 @@ impl DeclarationTransformer {
         updated
     }
 
-    // Go: transformers/declarations/transform.go:310 DeclarationTransformer.collectFileReferences
+    // Go: transformers/declarations/transform.go:308 DeclarationTransformer.collectFileReferences
     fn collect_file_references(&mut self, source_file: Node) {
         let info = source_file_info(source_file);
         self.raw_referenced_files
@@ -413,7 +410,7 @@ impl DeclarationTransformer {
             .extend(info.lib_reference_directives.iter().cloned());
     }
 
-    // Go: transformers/declarations/transform.go:327 DeclarationTransformer.appendCjsExports
+    // Go: transformers/declarations/transform.go:325 DeclarationTransformer.appendCjsExports
     fn append_cjs_exports(&self, combined_statements: NodeList) -> NodeList {
         let mut result: Vec<Node> = Vec::new();
         if self.cjs_export_assignment.is_some() {
@@ -535,7 +532,7 @@ impl DeclarationTransformer {
         result
     }
 
-    // Go: transformers/declarations/transform.go:386 DeclarationTransformer.transformAndReplaceLatePaintedStatements
+    // Go: transformers/declarations/transform.go:383 DeclarationTransformer.transformAndReplaceLatePaintedStatements
     pub(crate) fn transform_and_replace_late_painted_statements(
         &mut self,
         statements: NodeList,
@@ -676,19 +673,19 @@ impl DeclarationTransformer {
         results
     }
 
-    // Go: transformers/declarations/transform.go:519 DeclarationTransformer.getLibReferences
+    // Go: transformers/declarations/transform.go:513 DeclarationTransformer.getLibReferences
     fn get_lib_references(&self) -> Vec<FileReference> {
         // clone retained references
         retained_references(&self.raw_lib_reference_directives)
     }
 
-    // Go: transformers/declarations/transform.go:535 DeclarationTransformer.getTypeReferences
+    // Go: transformers/declarations/transform.go:529 DeclarationTransformer.getTypeReferences
     fn get_type_references(&self) -> Vec<FileReference> {
         // clone retained references
         retained_references(&self.raw_type_reference_directives)
     }
 
-    // Go: transformers/declarations/transform.go:551 DeclarationTransformer.setupDiagnosticContext
+    // Go: transformers/declarations/transform.go:545 DeclarationTransformer.setupDiagnosticContext
     pub(crate) fn setup_diagnostic_context(
         &mut self,
         input: Node,
@@ -739,7 +736,7 @@ impl DeclarationTransformer {
         )
     }
 
-    // Go: transformers/declarations/transform.go:573 DeclarationTransformer.visitDeclarationSubtree
+    // Go: transformers/declarations/transform.go:567 DeclarationTransformer.visitDeclarationSubtree
     // PERF: emitast2. `kind` is the kind of `input`, which `visit` has read.
     // The kind tests below use it: a kind read of a factory node goes to the
     // synthetic arena each time.
@@ -889,7 +886,7 @@ impl DeclarationTransformer {
         result
     }
 
-    // Go: transformers/declarations/transform.go:708 DeclarationTransformer.checkName
+    // Go: transformers/declarations/transform.go:702 DeclarationTransformer.checkName
     pub(crate) fn check_name(&mut self, node: Node) {
         let old_diag = self
             .state
@@ -912,7 +909,7 @@ impl DeclarationTransformer {
         self.state.borrow_mut().error_name_node = Node::NIL;
     }
 
-    // Go: transformers/declarations/transform.go:723 DeclarationTransformer.transformMappedTypeNode
+    // Go: transformers/declarations/transform.go:717 DeclarationTransformer.transformMappedTypeNode
     fn transform_mapped_type_node(&mut self, input: Node) -> Node {
         // handle missing template type nodes, since the printer does not
         let type_node = if input.type_().is_nil() {
@@ -935,7 +932,7 @@ impl DeclarationTransformer {
         )
     }
 
-    // Go: transformers/declarations/transform.go:742 DeclarationTransformer.transformHeritageClause
+    // Go: transformers/declarations/transform.go:736 DeclarationTransformer.transformHeritageClause
     fn transform_heritage_clause(&mut self, clause: Node) -> Node {
         let types = clause.types().nodes();
         let retained_clauses: Vec<Node> = types
@@ -964,14 +961,14 @@ impl DeclarationTransformer {
     }
 }
 
-// Go: transformers/declarations/transform.go:210 hasInternalAnnotation
+// Go: transformers/declarations/transform.go:208 hasInternalAnnotation
 fn has_internal_annotation(comment_range: &CommentRange, source_file: Node) -> bool {
     let comment =
         &source_file_text(source_file)[comment_range.pos() as usize..comment_range.end() as usize];
     comment.contains("@internal")
 }
 
-// Go: transformers/declarations/transform.go:276 throwDiagnostic
+// Go: transformers/declarations/transform.go:274 throwDiagnostic
 fn throw_diagnostic() -> GetSymbolAccessibilityDiagnostic {
     Rc::new(
         |_result: &SymbolAccessibilityResult| -> Option<SymbolAccessibilityDiagnostic> {
@@ -980,7 +977,7 @@ fn throw_diagnostic() -> GetSymbolAccessibilityDiagnostic {
     )
 }
 
-// Go: transformers/declarations/transform.go:316 nodeOrSyntaxListChildren
+// Go: transformers/declarations/transform.go:314 nodeOrSyntaxListChildren
 pub(crate) fn node_or_syntax_list_children(node: Node) -> Vec<Node> {
     if is_syntax_list(node) {
         return syntax_list_children(node);
@@ -988,7 +985,7 @@ pub(crate) fn node_or_syntax_list_children(node: Node) -> Vec<Node> {
     vec![node]
 }
 
-// Go: transformers/declarations/transform.go:323 flattenSyntaxLists
+// Go: transformers/declarations/transform.go:321 flattenSyntaxLists
 pub(crate) fn flatten_syntax_lists(nodes: &[Node]) -> Vec<Node> {
     nodes
         .iter()
@@ -996,7 +993,7 @@ pub(crate) fn flatten_syntax_lists(nodes: &[Node]) -> Vec<Node> {
         .collect()
 }
 
-// Go: transformers/declarations/transform.go:382 createEmptyExports
+// Go: transformers/declarations/transform.go:379 createEmptyExports
 pub(crate) fn create_empty_exports(factory: &NodeFactory) -> Node {
     factory.new_export_declaration(
         ModifierList::NIL,
@@ -1007,7 +1004,7 @@ pub(crate) fn create_empty_exports(factory: &NodeFactory) -> Node {
     )
 }
 
-// Go: transformers/declarations/transform.go:519 getLibReferences loop body
+// Go: transformers/declarations/transform.go:513 getLibReferences loop body
 // PORT: `getLibReferences` and `getTypeReferences` have the same loop over a
 // different field; it is shared here.
 fn retained_references(refs: &[FileReference]) -> Vec<FileReference> {
@@ -1026,14 +1023,14 @@ fn retained_references(refs: &[FileReference]) -> Vec<FileReference> {
     result
 }
 
-// Go: scanner/scanner.go:2799 GetLeadingCommentRanges
+// Go: scanner/scanner.go:2800 GetLeadingCommentRanges
 // PORT: Go takes the node factory only to allocate the ranges; it is dropped.
 // The Go iterator is collected into a Vec; every caller reads all of it.
 fn get_leading_comment_ranges(text: &str, pos: i32) -> Vec<CommentRange> {
     iterate_comment_ranges(text, pos, false)
 }
 
-// Go: scanner/scanner.go:2803 GetTrailingCommentRanges
+// Go: scanner/scanner.go:2804 GetTrailingCommentRanges
 // PORT: see get_leading_comment_ranges.
 fn get_trailing_comment_ranges(text: &str, pos: i32) -> Vec<CommentRange> {
     iterate_comment_ranges(text, pos, true)
@@ -1049,7 +1046,7 @@ fn decode_rune(text: &str, pos: usize) -> (char, usize) {
     }
 }
 
-// Go: scanner/scanner.go:2474 isShebangTrivia
+// Go: scanner/scanner.go:2475 isShebangTrivia
 // PORT: the scanner_util copy is private.
 fn is_shebang_trivia(text: &str, pos: usize) -> bool {
     let bytes = text.as_bytes();
@@ -1063,7 +1060,7 @@ fn is_shebang_trivia(text: &str, pos: usize) -> bool {
     bytes[0] == b'#' && bytes[1] == b'!'
 }
 
-// Go: scanner/scanner.go:2484 scanShebangTrivia
+// Go: scanner/scanner.go:2485 scanShebangTrivia
 // PORT: the scanner_util copy is private.
 fn scan_shebang_trivia(text: &str, pos: usize) -> usize {
     let mut pos = pos + 2;
@@ -1077,7 +1074,7 @@ fn scan_shebang_trivia(text: &str, pos: usize) -> usize {
     pos
 }
 
-// Go: scanner/scanner.go:2813 iterateCommentRanges
+// Go: scanner/scanner.go:2814 iterateCommentRanges
 /*
 Returns an iterator over each comment range following the provided position.
 
