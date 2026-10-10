@@ -173,10 +173,19 @@ run_set() {
 
 # one <name> <run> <tsc args>...: runs the tsc in the project dir and keeps its stdout, stderr
 # and exit code in <dir>/out/<name>/<run>.{out,err,rc}.
+# Under build-pgo.sh (PGO_PROFILE_DIR set), each run writes its own profile file, and llvm-profdata
+# merges them. rustc's default name (default_%m_%p.profraw) has the PID, and Windows can give the
+# next run the same PID. That run then merges into the file in the profile runtime, which crashed
+# (access violation) on arm64 Windows: the LLVM 22 runtime merge skips the padding after the
+# bitmap bytes, and that section has 3 bytes there.
 one() {
   local name=$1 run=$2 o="$dir/out/$1/$2" rc=0
   shift 2
-  (cd "$dir/projects/$name" && "$dir/bin/tsc$exe" "$@") > "$o.out" 2> "$o.err" || rc=$?
+  (
+    cd "$dir/projects/$name"
+    [[ -z ${PGO_PROFILE_DIR:-} ]] || export LLVM_PROFILE_FILE="$PGO_PROFILE_DIR/$name-$run-%p.profraw"
+    "$dir/bin/tsc$exe" "$@"
+  ) > "$o.out" 2> "$o.err" || rc=$?
   echo "$rc" > "$o.rc"
   if ((rc > 2)); then
     echo "error: tsc exited $rc on $name $run: $*" >&2
