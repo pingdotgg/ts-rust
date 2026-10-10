@@ -4,6 +4,7 @@ mod checker_common_source_directory;
 mod contentmapper_watch;
 mod effect_build_info;
 mod explain_files_cache;
+mod extended_counts;
 mod file_delete;
 mod flag_bytes;
 mod jsdoc_cut;
