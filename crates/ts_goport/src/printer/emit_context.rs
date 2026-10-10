@@ -257,40 +257,11 @@ impl EmitContext {
     }
 }
 
-// Go: printer/emitcontext.go:57 GetEmitContext (at 673a5f17d713; removed by
-// ts#64649 with `emitContextPool`: callers use `NewEmitContext`)
-// PORT: not in Go N'. Kept only for `baseline/type_symbol.rs` (harness lane)
-// until it ports its ts#64649 part (type_symbol_baseline.go:353). It makes a
-// new context, and the returned function resets it.
-#[must_use]
-pub fn get_emit_context() -> (Rc<EmitContext>, impl FnOnce()) {
-    let c = new_emit_context();
-    let c2 = Rc::clone(&c);
-    (c, move || c2.reset())
-}
-
 impl EmitContext {
     /// Go `c.Factory`.
     #[must_use]
     pub fn factory(&self) -> &NodeFactory {
         &self.factory
-    }
-
-    // Go: printer/emitcontext.go:65 Reset (at 673a5f17d713; removed by
-    // ts#64649)
-    // PORT: not in Go N'. Kept only for `get_emit_context` and
-    // `baseline/type_symbol.rs` (see `get_emit_context`).
-    pub fn reset(&self) {
-        self.auto_generate.borrow_mut().clear();
-        self.text_source.borrow_mut().clear();
-        self.original.borrow_mut().clear();
-        *self.emit_nodes.borrow_mut() = EmitNodes::default();
-        self.assigned_name.borrow_mut().clear();
-        self.class_this.borrow_mut().clear();
-        self.var_scope_stack.borrow_mut().clear();
-        self.let_scope_stack.borrow_mut().clear();
-        self.emit_helpers.borrow_mut().clear();
-        self.emit_node_refs.set(false);
     }
 
     // Go: printer/emitcontext.go:50 onCreate

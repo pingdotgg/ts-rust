@@ -14,7 +14,7 @@ use std::rc::Weak;
 //   pool `RefCell`, as the Go mutex would deadlock.
 // - A language-service pool keeps its checkers on the dispatch thread as
 //   `Rc<RefCell<Checker>>`, where there is no compile worker checker. A
-//   resolver from `get_emit_resolver_of_shared_checker` also keeps a weak
+//   resolver from `new_emit_resolver_of_shared_checker` also keeps a weak
 //   link to that `Rc`, and `with_checker` borrows the checker through it.
 // - Go unexported methods take `c: &mut Checker` as their first argument
 //   (the checker that Go reaches through `r.checker`). The emitsupport.go
@@ -70,9 +70,8 @@ pub struct EmitResolver {
     /// Index of the owning checker in the program checker pool.
     pub checker_index: usize,
     /// The owning checker when a language-service pool shares it as
-    /// `Rc<RefCell<Checker>>` (set by `get_emit_resolver_of_shared_checker`
-    /// and `new_emit_resolver_of_shared_checker`). Weak, because the checker
-    /// holds the resolver of `get_emit_resolver`.
+    /// `Rc<RefCell<Checker>>` (set by `new_emit_resolver_of_shared_checker`).
+    /// Weak, so that a resolver does not keep its checker alive.
     shared_checker: OnceCell<Weak<RefCell<Checker>>>,
     emit_context: Rc<EmitContext>,
     request_node_builder: OnceCell<Rc<RefCell<NodeBuilder>>>,
@@ -97,13 +96,11 @@ impl Checker {
     }
 
     // Go: checker/checker.go:32651 GetEmitResolver (removed upstream by ts#64649)
-    // PORT: not in Go N'. ts#64649 replaced it with `NewEmitResolver`.
-    // find-all-references (ls lane) calls it until it ports its ts#64649
-    // part (Go N' `checker.NewEmitResolver(printer.NewEmitContext())`,
-    // findallreferences.go:512), and the declarations symbol tracker uses it
-    // to reach the unsafe resolver methods with the checker in hand (they
-    // read no resolver state). Its resolver has its own new emit context, as
-    // the Go N' callers make one. `sync.Once` is the `Option` in
+    // PORT: not in Go N'. ts#64649 replaced it with `NewEmitResolver`. The
+    // declarations symbol tracker and declaration diagnostics use it to
+    // reach the unsafe resolver methods with the checker in hand (they read
+    // no resolver state). Its resolver has its own new emit context, as the
+    // Go N' callers make one. `sync.Once` is the `Option` in
     // `emit_resolver`.
     pub fn get_emit_resolver(&mut self) -> Rc<EmitResolver> {
         if self.emit_resolver.is_none() {
@@ -111,19 +108,6 @@ impl Checker {
         }
         self.emit_resolver.clone().expect("emit resolver")
     }
-}
-
-// Go: checker/checker.go:32651 GetEmitResolver (removed upstream by ts#64649),
-// for a checker that a language-service pool shares as `Rc<RefCell<Checker>>`.
-// PORT: see `Checker::get_emit_resolver`. The resolver also links to
-// `checker`, so `with_checker` can reach it on the dispatch thread (Go
-// `r.checker`). The checker owns one resolver, so the link never changes.
-pub fn get_emit_resolver_of_shared_checker(checker: &Rc<RefCell<Checker>>) -> Rc<EmitResolver> {
-    let resolver = checker.borrow_mut().get_emit_resolver();
-    resolver
-        .shared_checker
-        .get_or_init(|| Rc::downgrade(checker));
-    resolver
 }
 
 // Go: checker/checker.go:32716 NewEmitResolver (ts#64649), for a checker that
