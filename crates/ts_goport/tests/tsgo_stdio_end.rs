@@ -27,9 +27,12 @@
 //!   - The end code is 0 (`api/server.go:134-139`).
 //!   - The port runs the requests one at a time, so it holds a request
 //!     that waits in a callback while a nested request runs, or that waits
-//!     behind a running request. Go's goroutine went on at once, so each
-//!     of its callbacks keeps Go's phase (`ipc/conn_async.rs`, "the Go
-//!     clock"); only the order of the answers differs.
+//!     behind a running request. Go's goroutine went on at once, so the
+//!     port runs each of its callbacks in Go's phase (`ipc/conn_async.rs`,
+//!     "the Go clock"). The order of the answers differs, and in a window
+//!     of about 0.5 to 1 ms between a signal and the end a held build's
+//!     later writes come after the end (PORTING.md, "Not ported (plan
+//!     level)").
 //!
 //!   A panic answer is compared up to its stack (Go's goroutine stack and
 //!   the port's backtrace differ). `TSGO_STDIO_END_BIN` runs the tests on

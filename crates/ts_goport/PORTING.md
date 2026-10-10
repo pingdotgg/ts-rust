@@ -1600,17 +1600,20 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
       `context canceled`. The run ends with exit code 0.
     - The end of the input after the signal; a second signal does
       nothing.
-    - A request that the port holds keeps Go's result for each
-      callback. The port holds a request that waits in a callback while
-      a nested request runs (until that one returns), and a request read
-      while another one runs (until that one returns). Go's goroutines go
-      on at once. So each request has a Go clock: the port time less the
-      time that the port held it (`ipc/conn_async.rs`, file header). A
-      callback that Go made before the read loop ended writes its request
-      and returns Go's error (`context canceled` after a signal, else
+    - A request that the port holds keeps Go's phase for each callback,
+      except in the window under "Still different". The port holds a
+      request that waits in a callback while a nested request runs
+      (until that one returns), and a request read while another one
+      runs (until that one returns). Go's goroutines go on at once. So
+      each request has a Go clock: the port time less the time that the
+      port held it (`ipc/conn_async.rs`, file header). A callback that
+      Go made before the read loop ended writes its request and returns
+      Go's error (`context canceled` after a signal, else
       `ipc: connection closed`), also when the port makes it after the
       end. A callback that Go made after the end writes nothing (Phase
-      B).
+      B). A reply that the port read before the end goes to its call,
+      also when a nested request holds that call at the end (Go's `Run`
+      gives each reply to its call when it reads it).
   - Still different in `--api --async` (the requests run one at a time):
     - A held request answers, writes its later callback requests and
       crashes (a worker callback) only after the request that held it
@@ -1627,13 +1630,31 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
         read loop gets no reply (the read loop has ended). Go wrote it
         earlier, and its client could answer it before the end.
     - Go's races give more outcomes than the port: a reply that comes
-      just before the signal, and a signal less than about 1 ms before
-      the end of the read loop. The port gives one of Go's outcomes.
+      just before the signal, and a signal less than about 0.5 ms before
+      the end of the read loop. There the port gives one of Go's
+      outcomes.
+    - A held build in a window of about 0.5 to 1 ms gives an outcome
+      that Go and R188 do not give. The build waits in its first
+      writeFile, a nested request holds it, and SIGINT and then the end
+      of the input come 0.5 to 1 ms apart. Go and R188 fail both writes
+      with `context canceled`. The port fails them with
+      `ipc: connection closed`: Go wrote the later writeFile requests
+      before the signal, from concurrent emit workers, but the port's
+      held worker hands over its writes one at a time after the hold, and
+      the Go clock adds that work, so the later writes come after the
+      end (Phase B). Runs with `ipc: connection closed` of 10 per cell
+      (the apisig4 skeptic's `heldbuild.py`; Go and R188: 0 in each
+      cell): 0.5 ms: 10 on alvin, 5 on mini-743d; 0.75 ms: 10 and 0;
+      1 ms: 2 and 0; 1.5 ms and 2 ms: 0. At 0.25 ms Go gives both
+      outcomes and the port only `ipc: connection closed`.
     - A worker makes one callback at a time, so fewer directoryExists or
       writeFile requests are out at the signal (Go: 2 or more). The
       answers are the same, except for a build after a write error: the
-      port writes b.js a second time and orders the diagnostics in
-      another way (not a signal effect; R188 does the same).
+      port's build writes its outputs again after a failed write, so its
+      write errors can differ from Go's, and it orders the diagnostics in
+      another way. With no signal, b.js written and a.js failed gives 2
+      write errors (Go: 1), and b.js failed then written gives 0 (Go:
+      1). It is not a signal effect; R188 does the same.
     - On wasm, which has no threads, the reads stay on the dispatch
       thread: a waiting callback wakes only at the next message, and
       there is no Phase B.
