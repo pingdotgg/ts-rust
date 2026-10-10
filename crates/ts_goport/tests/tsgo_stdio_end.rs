@@ -10,11 +10,12 @@
 //!   and checks the context after it, so a signal during a request ends
 //!   the run right after the answer.
 //!
-//! `--api --async` is not here. Go's read loop (`ipc/conn_async.go:83`)
-//! waits in the read while a request runs on its own goroutine, so a signal
-//! during that request ends the run after the next message. The port ends
-//! right after the answer: PORTING.md, "Not ported (plan level)", "The end
-//! on SIGINT or SIGTERM in `--api --async`".
+//! `--api --async` is not here. Go's read loop waits in its read
+//! (`ipc/conn_async.go:87`) while a request runs on its own goroutine
+//! (`:98`), so a signal during that request ends the run after the next
+//! message or at the end of stdin. The port ends right after the answer:
+//! PORTING.md, "Not ported (plan level)", "The end on SIGINT or SIGTERM in
+//! `--api --async`".
 //!
 //! `--lsp` is not here. Go's `Run` (lsp/server.go:859) does not wait for
 //! the work that Go runs on goroutines (the async part of a request, an API
