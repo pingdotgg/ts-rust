@@ -30,7 +30,10 @@
 //! build first waits until a new file gets a later mtime than every file of
 //! the build (`Solution::wait_for_a_later_mtime`), so `tsc -b` sees it. The
 //! barrier test loads the fixture and checks that `send_checker_barrier`
-//! waits for the emit pool and the d.ts twins.
+//! waits for the emit pool and the d.ts twins. The emitretry1 tests (Unix)
+//! make their own project there too: a read-only output, or a `writeFile`
+//! callback that gives an error, makes a write fail in `tsc -b`, `tsc -p`
+//! or the API build, and the output must be Go N''s.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -455,6 +458,273 @@ fn build_two_composite_projects_without_a_panic() {
         "the build after an edit emits p1 again"
     );
     solution.remove();
+}
+
+/// emitretry1. `tsc -b` of an incremental project whose `out/a.js` is
+/// read-only. The early emit keeps its writes until the task finishes, so
+/// the write fails in the flush, and the files emit again with the kept
+/// results (`emit_files::Writes::Replay`). Go N' (fed0bf24149f) reports the
+/// TS5033 once, leaves `a.js` out of `EmittedFiles`, writes `b.js` and the
+/// build info, and keeps the TS5033 in the build info's
+/// `emitDiagnosticsPerFile`.
+#[cfg(unix)]
+#[test]
+fn build_reports_a_failed_write_as_go() {
+    if rustix::process::geteuid().is_root() {
+        return; // root writes a read-only file
+    }
+    let project = write_failure_project(r#""incremental": true"#);
+    let root = norm(&project.root);
+    let (status, stdout) = project.build(&["tsconfig.json", "--listEmittedFiles"]);
+    assert_eq!(
+        (status, stdout),
+        (
+            Some(2),
+            format!(
+                "error TS5033: Could not write file '{root}/out/a.js': open {root}/out/a.js: permission denied.\n\
+                 TSFILE: {root}/out/b.js\nTSFILE: {root}/tsconfig.tsbuildinfo\n"
+            )
+        ),
+        "Go N' output"
+    );
+    assert_eq!(project.read("out/a.js"), "old\n", "a.js is not written");
+    assert_eq!(project.read("out/b.js"), "export const b = 1;\n");
+    let diagnostic = format!(
+        r#"{{"noFile":true,"pos":-1,"end":-1,"code":5033,"category":1,"messageKey":"Could_not_write_file_0_Colon_1_5033","messageArgs":["{root}/out/a.js","open {root}/out/a.js: permission denied"]}}"#
+    );
+    assert_eq!(
+        project
+            .read("tsconfig.tsbuildinfo")
+            .matches(&diagnostic)
+            .count(),
+        1,
+        "the build info keeps the TS5033 once"
+    );
+    project.remove();
+}
+
+/// emitretry1. A composite project whose `out/a.js` is read-only. Go's d.ts
+/// callback computes the signature of `a.ts` from `data.Diagnostics`, which
+/// holds the TS5033 of the failed JS write, and dereferences its nil file
+/// (incremental/snapshot.go:411): tsgo panics before it writes `a.d.ts`,
+/// with exit 2 and nothing on stdout (Go N', `tsc -b` and `tsc -p`). Go's
+/// runtime line ends with ` [recovered, repanicked]` in both modes. PORT:
+/// `tsc -p` prints the line without it (the emit jobs do not mark a Go
+/// panic as a work group's), so only `tsc -b` checks the whole line.
+#[cfg(unix)]
+#[test]
+fn failed_write_before_a_dts_signature_panics_as_go() {
+    if rustix::process::geteuid().is_root() {
+        return; // root writes a read-only file
+    }
+    const LINE: &str = "panic: runtime error: invalid memory address or nil pointer dereference";
+    for mode in ["-b", "-p"] {
+        let project = write_failure_project(r#""composite": true"#);
+        let output = Command::new(env!("CARGO_BIN_EXE_tsgo"))
+            .current_dir(&project.root)
+            .args([mode, "tsconfig.json", "--pretty", "false"])
+            .env("GOPORT_EARLY_EMIT", "1")
+            .output()
+            .expect("run tsgo");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr.lines().next().unwrap_or_default();
+        assert_eq!(
+            (output.status.code(), output.stdout.is_empty()),
+            (Some(2), true),
+            "tsc {mode}: Go N' exit code and stdout; stderr: {stderr}"
+        );
+        if mode == "-b" {
+            assert_eq!(first, format!("{LINE} [recovered, repanicked]"), "tsc -b");
+        } else {
+            assert!(first.starts_with(LINE), "tsc -p: {stderr}");
+        }
+        assert_eq!(project.read("out/a.js"), "old\n", "tsc {mode}: a.js");
+        assert!(
+            !project.root.join("out/a.d.ts").exists(),
+            "tsc {mode}: Go panics before it writes a.d.ts"
+        );
+        project.remove();
+    }
+}
+
+/// emitretry1. The API build with the `writeFile` callback: the client
+/// answers the first `writeFile` with `first` and every later one with
+/// `rest` (an error, or `{"kind":"noop"}`). Go N' sends one request per
+/// output, in a varying order (its emit goroutines write in parallel), and
+/// its answer has one TS5033 for each output whose request got an error,
+/// sorted by file name. Before emitretry1 the port wrote the outputs again
+/// after a failed write: `ok, err` gave 4 requests and 2 TS5033, `err, ok`
+/// 3 requests and none.
+#[cfg(unix)]
+#[test]
+fn api_build_writes_each_output_once_after_a_failed_write() {
+    for (first, rest) in [(false, true), (true, false), (false, false), (true, true)] {
+        let project = write_failure_project("");
+        let root = norm(&project.root);
+        let (requests, answer) = api_build(&project.root, first, rest);
+        let mut files = requests.clone();
+        files.sort();
+        assert_eq!(files, ["a.js", "b.js"], "one writeFile request per output");
+        let mut failed: Vec<&String> = requests
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| !if i == 0 { first } else { rest })
+            .map(|(_, file)| file)
+            .collect();
+        failed.sort();
+        let diagnostics: Vec<String> = failed
+            .iter()
+            .map(|file| {
+                format!(
+                    r#"{{"pos":-1,"end":-1,"code":5033,"category":1,"text":"Could not write file '{root}/out/{file}': ipc: remote error [-32000]: client says no."}}"#
+                )
+            })
+            .collect();
+        let statistics = r#""statistics":{"Projects":1,"ProjectsBuilt":1,"TimestampUpdates":0}"#;
+        let expected = if diagnostics.is_empty() {
+            format!(r#"{{"jsonrpc":"2.0","id":7,"result":{{"status":0,{statistics}}}}}"#)
+        } else {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":7,"result":{{"status":2,"diagnostics":[{}],{statistics}}}}}"#,
+                diagnostics.join(",")
+            )
+        };
+        assert_eq!(
+            answer, expected,
+            "first ok {first}, rest ok {rest}: Go N' answer"
+        );
+        project.remove();
+    }
+}
+
+/// The project of the write failure tests: `src/a.ts` imports `src/b.ts`,
+/// with `options` added to `strict`, `outDir` and `rootDir`. `out/a.js`
+/// exists, holds `old` and is read-only.
+#[cfg(unix)]
+fn write_failure_project(options: &str) -> Solution {
+    let project = Solution::new();
+    let options = if options.is_empty() {
+        String::new()
+    } else {
+        format!(", {options}")
+    };
+    project.write(
+        "tsconfig.json",
+        &format!(
+            r#"{{"compilerOptions": {{"strict": true, "outDir": "out", "rootDir": "src"{options}}}, "include": ["src"]}}"#
+        ),
+    );
+    project.write(
+        "src/a.ts",
+        "import { b } from \"./b\";\nexport const a: number = b;\n",
+    );
+    project.write("src/b.ts", "export const b: number = 1;\n");
+    project.write("out/a.js", "old\n");
+    let path = project.root.join("out/a.js");
+    fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+        .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
+    project
+}
+
+/// Builds the project in `root` through `tsgo --api --async --callbacks
+/// writeFile` (createBuildOrchestrator, then build 7). The client answers
+/// the first `writeFile` request with success when `first` and with an
+/// error else, every later one as `rest`. Returns the file name of each
+/// request in order, and the build answer.
+#[cfg(unix)]
+fn api_build(root: &Path, first: bool, rest: bool) -> (Vec<String>, String) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tsgo"))
+        .args(["--api", "--async", "--callbacks", "writeFile", "--cwd"])
+        .arg(norm(root))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run tsgo --api");
+    let mut stdin = child.stdin.take().expect("tsgo stdin");
+    let (sender, messages) = std::sync::mpsc::channel::<String>();
+    let mut stdout = BufReader::new(child.stdout.take().expect("tsgo stdout"));
+    std::thread::spawn(move || {
+        loop {
+            let mut length = None;
+            loop {
+                let mut line = String::new();
+                if stdout.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse::<usize>().ok();
+                }
+            }
+            let mut body = vec![0; length.expect("a Content-Length header")];
+            if stdout.read_exact(&mut body).is_err()
+                || sender
+                    .send(String::from_utf8_lossy(&body).into_owned())
+                    .is_err()
+            {
+                return;
+            }
+        }
+    });
+    let mut send = |message: String| {
+        write!(stdin, "Content-Length: {}\r\n\r\n{message}", message.len())
+            .expect("write a request");
+        stdin.flush().expect("flush a request");
+    };
+    let next = || {
+        messages
+            .recv_timeout(Duration::from_secs(60))
+            .expect("a message from tsgo")
+    };
+    let config = norm(&root.join("tsconfig.json"));
+    send(format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"createBuildOrchestrator","params":{{"rootNames":["{config}"],"cwd":"{}"}}}}"#,
+        norm(root)
+    ));
+    let created = next();
+    let id = created
+        .split(r#""buildOrchestratorID":"#)
+        .nth(1)
+        .and_then(|rest| rest.split(['}', ',']).next())
+        .unwrap_or_else(|| panic!("no orchestrator id in {created}"))
+        .to_owned();
+    send(format!(
+        r#"{{"jsonrpc":"2.0","id":7,"method":"build","params":{{"buildOrchestratorID":{id}}}}}"#
+    ));
+    let mut requests = Vec::new();
+    let answer = loop {
+        let message = next();
+        if message.starts_with(r#"{"jsonrpc":"2.0","id":7,"#) {
+            break message;
+        }
+        let call = message
+            .strip_prefix(r#"{"jsonrpc":"2.0","id":""#)
+            .and_then(|rest| rest.split_once(r#"","method":"writeFile","params":{"path":""#))
+            .unwrap_or_else(|| panic!("not a writeFile request: {message}"));
+        let (call_id, path) = (
+            call.0.to_owned(),
+            call.1.split('"').next().unwrap_or_default(),
+        );
+        requests.push(path.rsplit('/').next().unwrap_or_default().to_owned());
+        let ok = if requests.len() == 1 { first } else { rest };
+        send(if ok {
+            format!(r#"{{"jsonrpc":"2.0","id":"{call_id}","result":{{"kind":"noop"}}}}"#)
+        } else {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":"{call_id}","error":{{"code":-32000,"message":"client says no"}}}}"#
+            )
+        });
+    };
+    drop(send);
+    drop(stdin);
+    child
+        .wait()
+        .expect("tsgo --api exits after the end of stdin");
+    (requests, answer)
 }
 
 /// The solution config of p1, p2 and p3.
