@@ -28,14 +28,16 @@ const { values: args } = parseArgs({
   },
 });
 
-const config = (dateSeverity) =>
+// `plugin` adds plugin options (the allow-list steps).
+const config = (dateSeverity, plugin = {}) =>
   JSON.stringify({
     compilerOptions: {
       strict: true, noEmit: true, allowImportingTsExtensions: true, module: "NodeNext", moduleResolution: "NodeNext", target: "ESNext", skipLibCheck: true,
-      plugins: [{ name: "@effect/language-service", diagnosticSeverity: { globalDate: dateSeverity, floatingEffect: "error" } }],
+      plugins: [{ name: "@effect/language-service", diagnosticSeverity: { globalDate: dateSeverity, floatingEffect: "error" }, ...plugin }],
     },
     include: ["src"],
   });
+const cliOverride = (apis) => ({ overrides: [{ include: ["src/cli.ts"], options: { allowedUnstableApis: apis } }] });
 
 const steps = [
   {
@@ -57,6 +59,13 @@ const steps = [
     name: "add directive",
     files: { "src/index.ts": 'import { make } from "./make.ts";\n\n// @effect-diagnostics-next-line floatingEffect:off\nmake();\n// @effect-diagnostics-next-line globalDate:off\nexport const when = new Date();\nexport const later = new Date();\n' },
   },
+  // unstableApiUsage and its allow lists. With an effect that has no
+  // @stability tags (before 4.0.0) these steps report nothing new.
+  { name: "use unstable API", files: { "src/cli.ts": 'import { Command } from "effect/cli";\n\nexport const cmd = Command.make("x");\n' } },
+  { name: "allow at root", files: { "tsconfig.json": config("error", { allowedUnstableApis: ["effect/cli/Command#make"] }) } },
+  { name: "allow in override", files: { "tsconfig.json": config("error", cliOverride(["effect/cli/Command"])) } },
+  { name: "empty override list", files: { "tsconfig.json": config("error", { allowedUnstableApis: ["effect/cli"], ...cliOverride([]) }) } },
+  { name: "restore allow lists", files: { "tsconfig.json": config("error") } },
 ];
 
 const work = path.resolve(args.work);

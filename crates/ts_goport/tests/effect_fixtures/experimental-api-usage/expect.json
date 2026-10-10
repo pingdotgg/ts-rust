@@ -1,0 +1,12 @@
+{
+  "fails": true,
+  "has": [
+    "src/index.ts(6,19): error TS377135: `local-exp#epsilon` is an experimental API. effect(experimentalApiUsage)",
+    "src/index.ts(8,19): warning TS377136: `local-exp#gamma` is an unstable API.",
+    "src/index.ts(10,19): error TS377135: `local-exp#over` is an experimental API.",
+    "src/index.ts(12,19): error TS377135: `local-exp#dual` is an experimental API.",
+    "src/index.ts(17,20): error TS377135: `delta` is an experimental API.",
+    "src/index.ts(18,35): error TS377135: `local-exp#Box` is an experimental API."
+  ],
+  "lacks": ["TS377134", "src/index.ts(5,", "src/index.ts(11,", "src/index.ts(13,", "src/index.ts(19,"]
+}

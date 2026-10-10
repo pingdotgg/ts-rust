@@ -527,8 +527,24 @@
         "category": "Suggestion",
         "code": 377132
     },
+    "`{0}` is an experimental API. effect(experimentalApiUsage)": {
+        "category": "Warning",
+        "code": 377135
+    },
+    "`{0}` is an unstable API. Breaking changes may happen between versions. effect(unstableApiUsage)": {
+        "category": "Warning",
+        "code": 377136
+    },
     "Unknown Effect diagnostic rule `{0}` in `diagnosticSeverity`. effect(unknownRuleName)": {
         "category": "Warning",
         "code": 377134
+    },
+    "`{0}` exposes `{1}`, an {2} API. effect(apiStabilityLeak)": {
+        "category": "Warning",
+        "code": 377137
+    },
+    "`{0}` is declared {1} here. effect(apiStabilityLeak)": {
+        "category": "Message",
+        "code": 377138
     }
 }

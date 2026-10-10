@@ -1,5 +1,5 @@
 {
-  "note": "A child \"plugins\": [] replaces the base list (tsgo --showConfig prints []), but the reference keeps the base's Effect options: effectconfigraw MergeEffectCompilerOptions returns when the child has no Effect entry. Effect still runs, as in effect-tsgo 0.46.1 and 0.48.1.",
+  "note": "A child \"plugins\": [] replaces the base list (tsgo --showConfig prints []), but the reference keeps the base's Effect options: effectconfigraw MergeEffectCompilerOptions returns when the child has no Effect entry. Effect still runs, as in effect-tsgo 0.46.1, 0.48.1 and 0.51.1.",
   "fails": true,
   "has": ["src/index.ts(3,36): error TS377023:"],
   "lacks": []

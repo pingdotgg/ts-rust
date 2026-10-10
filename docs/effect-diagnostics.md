@@ -7,7 +7,7 @@ binary, patch or second pass is needed.
 
 The code is `crates/ts_goport/src/effect`, a port of
 [Effect-TS/tsgo](https://github.com/Effect-TS/tsgo) at the
-`@effect/tsgo@0.46.1` release commit `f1a7cad0`. Read
+`@effect/tsgo@0.51.1` release commit `47cb1ed7`. Read
 `crates/ts_goport/src/effect/PORTING.md` before you change it.
 
 ## What it does
@@ -20,7 +20,7 @@ The code is `crates/ts_goport/src/effect`, a port of
   replaces the plugin list but keeps the base's Effect options, so Effect
   still runs. To turn the rules off in a child, list the plugin with
   `"diagnostics": false`.
-- Runs all 116 rules after the checker has checked each project file
+- Runs all 119 rules after the checker has checked each project file
   (not declaration files and not files from `node_modules`). Rule
   severities come from `diagnosticSeverity`, matching `overrides`, and
   `@effect-diagnostics` / `@effect-diagnostics-next-line` comments.
@@ -36,7 +36,7 @@ The code is `crates/ts_goport/src/effect`, a port of
   `@ts-ignore` does not hide Effect diagnostics.
 - Effect options are stored in `.tsbuildinfo`, so a change to them
   invalidates the cached diagnostics. With the plugin on, `.tsbuildinfo`
-  records the version `<version>+effect-tsgo.0.46.1`, as effect-tsgo does.
+  records the version `<version>+effect-tsgo.0.51.1`, as effect-tsgo does.
   Plain tsgo and tsc-rs without the plugin then check the project again
   instead of reading Effect diagnostics (plain tsgo panics on those:
   "Unknown diagnostic message"). tsc-rs from Theo PR #4, before this
@@ -45,10 +45,46 @@ The code is `crates/ts_goport/src/effect`, a port of
   still panics on it until one tsc-rs run writes it again. The language
   server shows the same diagnostics. `tsc -v`, `tsc --help` and the
   language server's `serverInfo` print the plain version; effect-tsgo
-  prints `<version>+effect-tsgo.0.46.1` there.
+  prints `<version>+effect-tsgo.0.51.1` there.
 - With no plugin entry, nothing runs. An entry with only a `name` runs every
   rule at its default severity. `"diagnostics": false` or
   `"diagnosticSeverity": null` turns the rules off.
+
+## API stability rules
+
+Effect marks APIs with a JSDoc tag: `@stability unstable` or
+`@stability experimental` (`@stability stable` is the default). Three rules
+read the tags:
+
+- `unstableApiUsage` (TS377136, warning by default) and
+  `experimentalApiUsage` (TS377135, warning by default) report each use of a
+  tagged API. A call uses the tag of its selected overload first, then the tag
+  of the symbol. The message names the API as `module#export`, where the
+  module is the declaring package name plus its path (without `src/`,
+  `dist/`, `dist/dts/`, `dist/esm/`, `dist/cjs/`, the extension and a final
+  `index`), for example `effect/cli/Command#make`.
+- `allowedUnstableApis` and `allowedExperimentalApis` (string arrays, at the
+  root of the plugin entry and in `overrides[].options`) turn the report off
+  for listed APIs. An entry `module` allows that module and every module under
+  it (`module/...`); an entry `module#export` allows one export (the same
+  symbol, or the same one after aliases). In `overrides` and through
+  `extends`, a list that a config sets replaces the inherited list; `[]`
+  clears it.
+- `apiStabilityLeak` (TS377137, off by default, group `maintainers`) is for
+  library maintainers. It reports an export whose public surface (members,
+  signatures, type arguments, bases, namespace members) exposes a type with a
+  less stable tag than the export itself: a stable export may not expose an
+  unstable or experimental type, and an unstable export may not expose an
+  experimental type. A tag on an `export ... from` declaration sets the
+  ceiling of the exports it forwards. `@internal` exports are skipped. The
+  related location (TS377138) names the tagged declaration. effect-tsgo also
+  has a `maintainers` preset for its `setup` command; the tsconfig entry has
+  no preset key, so turn the rule on with `diagnosticSeverity`.
+
+Effect 4 tags many modules, so a project on `effect@4` gets TS377136
+warnings for its unstable imports (for example `effect/cli`), as with
+effect-tsgo 0.48 and later. Turn the rule off, or allow the modules, to keep
+the earlier output.
 
 ## Where it hooks in
 
@@ -68,8 +104,10 @@ The messages are generated from
 
 All take the reference Effect-patched `tsc` as `--ref`:
 
-- `scripts/effect/reference-cases.mjs`: the reference's own 529 test cases
+- `scripts/effect/reference-cases.mjs`: the reference's own 542 test cases
   (Effect v3 and v4), compiler against compiler.
+- `scripts/effect/go-unit-cases.mjs`: the inline sources of the reference's
+  API stability Go unit tests, with the 3 stability rules on.
 - `scripts/effect/focused-fixtures.mjs`: `crates/ts_goport/tests/effect_fixtures`,
   each with expected codes and exit status.
 - `scripts/effect/incremental-check.mjs`: `--incremental` and `--watch`

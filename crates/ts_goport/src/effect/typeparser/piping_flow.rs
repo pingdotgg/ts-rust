@@ -1262,7 +1262,10 @@ pub fn piping_flow_type_arguments(node: Node, callee: Node) -> NodeList {
 /// Returns nil if the signature has no mapper.
 // PORT: the Rust checker has no port of this patched export, so its body is
 // here.
-fn get_type_arguments_for_resolved_signature(c: &mut Checker, sig: SignatureId) -> Vec<TypeId> {
+pub(crate) fn get_type_arguments_for_resolved_signature(
+    c: &mut Checker,
+    sig: SignatureId,
+) -> Vec<TypeId> {
     if sig.is_nil() || c.sig(sig).mapper.is_nil() {
         return Vec::new();
     }

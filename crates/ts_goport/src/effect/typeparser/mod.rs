@@ -1,5 +1,5 @@
-//! Port of Effect-TS/tsgo `internal/typeparser` at `@effect/tsgo@0.46.1`
-//! (`f1a7cad0`). It recognizes Effect values, services, layers, schemas and
+//! Port of Effect-TS/tsgo `internal/typeparser` at `@effect/tsgo@0.51.1`
+//! (`47cb1ed7`). It recognizes Effect values, services, layers, schemas and
 //! call shapes from checker types. One file per Go file, in Go order.
 //!
 //! Go `Cached(&tp.links.X, key, compute)` is `cached!(self, x, key, compute)`.
@@ -8,7 +8,13 @@
 
 use crate::prelude::*;
 
+mod api_stability_inheritance;
+mod api_stability_p1;
+mod api_stability_p2;
+mod api_stability_p3;
+mod api_stability_safety;
 mod cause_type;
+pub mod checker_integration;
 mod constant_evaluation;
 mod context_tag;
 mod context_type;
@@ -65,6 +71,11 @@ mod unroll_members;
 mod vitest_api;
 mod yieldable_error;
 
+pub use api_stability_inheritance::*;
+pub use api_stability_p1::*;
+pub use api_stability_p2::*;
+pub use api_stability_p3::*;
+pub use api_stability_safety::*;
 pub use cause_type::*;
 pub use constant_evaluation::*;
 pub use context_tag::*;
@@ -152,6 +163,25 @@ pub struct EffectLinks {
     pub reference_symbol: FxHashMap<Node, SymbolId>,
     pub module_export_reference: FxHashMap<ModuleExportReferenceCacheKey, bool>,
     pub pipeable_signature_shape: FxHashMap<PipeableSignatureShapeCacheKey, bool>,
+    // API-stability caches. Declared lookups persist per checker: the declared
+    // stability of a symbol, of a raw signature overload and of one
+    // declaration, shared with the unstableApiUsage/experimentalApiUsage rules.
+    // Declared lookups never trigger computed analysis. A computed stability
+    // surface lives in an analysis-local ApiStabilitySession, and every
+    // complete, settled, context-free concrete type or signature surface is
+    // additionally published here as an immutable snapshot so a later export,
+    // file or TypeParser over the same checker composes it instead of
+    // recomputing. The snapshot excludes the component's own declared tag,
+    // which stays in the declared caches and is re-added by each consumer; a
+    // substitution-context or incomplete/blocked result is never published and
+    // stays analysis-local. Ceilings, locations and diagnostics are never
+    // cached.
+    pub api_stability_declared_symbol: FxHashMap<SymbolId, ApiStabilityDeclaration>,
+    pub api_stability_declared_signature: FxHashMap<SignatureId, ApiStabilityDeclaration>,
+    pub api_stability_declared_declaration: FxHashMap<Node, ApiStabilityDeclaration>,
+    pub api_stability_surface_type:
+        FxHashMap<ApiStabilitySurfaceTypeKey, ApiStabilitySharedSurface>,
+    pub api_stability_surface_signature: FxHashMap<SignatureId, ApiStabilitySharedSurface>,
 
     pub extends_context_tag: FxHashMap<Node, Option<Rc<ContextTagResult>>>,
     pub extends_data_tagged_error: FxHashMap<Node, Option<Rc<DataTaggedErrorResult>>>,

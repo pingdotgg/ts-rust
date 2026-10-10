@@ -1,4 +1,4 @@
-//! Port of Effect-TS/tsgo `etscore` at `@effect/tsgo@0.46.1`: the
+//! Port of Effect-TS/tsgo `etscore` at `@effect/tsgo@0.51.1`: the
 //! `@effect/language-service` plugin options, severities and the command
 //! line mode flag.
 
@@ -12,7 +12,7 @@ pub const EFFECT_PLUGIN_NAME: &str = "@effect/language-service";
 // Go: etscore/version_generated.go EffectVersion
 /// The `@effect/tsgo` release this port follows. Update it with the port.
 /// Build info written with the rules on records it (`build_info_version`).
-pub const EFFECT_VERSION: &str = "0.46.1";
+pub const EFFECT_VERSION: &str = "0.51.1";
 
 // Go: etscore/severity.go
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -122,7 +122,8 @@ pub enum TopLevelNamedReexportsMode {
 
 /// Go `EffectPluginOptions`. Go `map[string]Severity` is an `IndexMap` (only
 /// lookups read it). Go nil slices and maps are `None` where Go tells nil
-/// from empty (`DiagnosticSeverity`), else empty.
+/// from empty (`DiagnosticSeverity`; the 3 strict allow lists, which build
+/// info writes as `[]` when the config sets `[]`), else empty.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EffectPluginOptions {
     pub refactors: bool,
@@ -148,7 +149,9 @@ pub struct EffectPluginOptions {
     pub key_patterns: Vec<KeyPattern>,
     pub extended_key_detection: bool,
     pub pipeable_min_arg_count: i64,
-    pub allowed_duplicated_packages: Vec<String>,
+    pub allowed_unstable_apis: Option<Vec<String>>,
+    pub allowed_experimental_apis: Option<Vec<String>>,
+    pub allowed_duplicated_packages: Option<Vec<String>>,
     pub effect_fn: Vec<String>,
     pub diagnostic_severity: Option<IndexMap<String, Severity>>,
     pub overrides: Vec<Override>,
@@ -165,6 +168,8 @@ pub struct ResolvedEffectPluginOptions {
     pub extended_key_detection: bool,
     pub pipeable_min_arg_count: i64,
     pub allowed_duplicated_packages: Vec<String>,
+    pub allowed_unstable_apis: Vec<String>,
+    pub allowed_experimental_apis: Vec<String>,
     pub effect_fn: Vec<String>,
 }
 
@@ -181,6 +186,8 @@ pub struct OverrideOptions {
     pub pipeable_min_arg_count: Option<i64>,
     pub key_patterns: Option<Vec<KeyPattern>>,
     pub extended_key_detection: Option<bool>,
+    pub allowed_unstable_apis: Option<Vec<String>>,
+    pub allowed_experimental_apis: Option<Vec<String>>,
     pub allowed_duplicated_packages: Option<Vec<String>>,
     pub effect_fn: Option<Vec<String>>,
 }
@@ -440,8 +447,15 @@ fn parse_plugin(plugin: Getter<'_>) -> Option<EffectPluginOptions> {
     if let Some(arr) = get("effectFn").and_then(as_list) {
         result.effect_fn = string_items(arr);
     }
+    if let Some(apis) = get("allowedUnstableApis").and_then(parse_string_array_strict) {
+        result.allowed_unstable_apis = Some(apis);
+    }
+    if let Some(apis) = get("allowedExperimentalApis").and_then(parse_string_array_strict) {
+        result.allowed_experimental_apis = Some(apis);
+    }
+    // Go: lenient (a non-string item is skipped), and `[]` is not nil.
     if let Some(arr) = get("allowedDuplicatedPackages").and_then(as_list) {
-        result.allowed_duplicated_packages = string_items(arr);
+        result.allowed_duplicated_packages = Some(string_items(arr));
     }
     if let Some(pkgs) =
         get("namespaceImportPackages").and_then(parse_normalized_string_array_strict)
@@ -530,6 +544,18 @@ fn parse_override_options(value: &CompilerOptionsValue) -> OverrideOptions {
     }
     if let Some(b) = options.get("extendedKeyDetection").and_then(as_bool) {
         result.extended_key_detection = Some(b);
+    }
+    if let Some(apis) = options
+        .get("allowedUnstableApis")
+        .and_then(parse_string_array_strict)
+    {
+        result.allowed_unstable_apis = Some(apis);
+    }
+    if let Some(apis) = options
+        .get("allowedExperimentalApis")
+        .and_then(parse_string_array_strict)
+    {
+        result.allowed_experimental_apis = Some(apis);
     }
     if let Some(pkgs) = options
         .get("allowedDuplicatedPackages")
@@ -704,11 +730,15 @@ impl EffectPluginOptions {
                 CompilerOptionsValue::Int(self.pipeable_min_arg_count),
             );
         }
-        if !self.allowed_duplicated_packages.is_empty() {
-            m.insert(
-                "allowedDuplicatedPackages".into(),
-                list(&self.allowed_duplicated_packages),
-            );
+        // Go `omitzero` leaves out only a nil slice, so `[]` is written.
+        if let Some(apis) = &self.allowed_unstable_apis {
+            m.insert("allowedUnstableApis".into(), list(apis));
+        }
+        if let Some(apis) = &self.allowed_experimental_apis {
+            m.insert("allowedExperimentalApis".into(), list(apis));
+        }
+        if let Some(pkgs) = &self.allowed_duplicated_packages {
+            m.insert("allowedDuplicatedPackages".into(), list(pkgs));
         }
         if !self.effect_fn.is_empty() {
             m.insert("effectFn".into(), list(&self.effect_fn));
@@ -747,6 +777,12 @@ impl EffectPluginOptions {
                             CompilerOptionsValue::Bool(b),
                         );
                     }
+                    if let Some(p) = &o.options.allowed_unstable_apis {
+                        opts.insert("allowedUnstableApis".to_string(), list(p));
+                    }
+                    if let Some(p) = &o.options.allowed_experimental_apis {
+                        opts.insert("allowedExperimentalApis".to_string(), list(p));
+                    }
                     if let Some(p) = &o.options.allowed_duplicated_packages {
                         opts.insert("allowedDuplicatedPackages".to_string(), list(p));
                     }
@@ -776,6 +812,7 @@ impl EffectPluginOptions {
                 .map(string_items)
                 .unwrap_or_default()
         };
+        let opt_strings = |k: &str| m.get(k).and_then(as_list).map(string_items);
         let mut result = EffectPluginOptions {
             refactors: b("refactors"),
             diagnostics: b("diagnostics"),
@@ -820,7 +857,9 @@ impl EffectPluginOptions {
                 .unwrap_or_default(),
             extended_key_detection: b("extendedKeyDetection"),
             pipeable_min_arg_count: m.get("pipeableMinArgCount").and_then(as_int).unwrap_or(0),
-            allowed_duplicated_packages: strings("allowedDuplicatedPackages"),
+            allowed_unstable_apis: opt_strings("allowedUnstableApis"),
+            allowed_experimental_apis: opt_strings("allowedExperimentalApis"),
+            allowed_duplicated_packages: opt_strings("allowedDuplicatedPackages"),
             effect_fn: strings("effectFn"),
             diagnostic_severity: m
                 .get("diagnosticSeverity")
@@ -966,5 +1005,85 @@ mod tests {
             EffectPluginOptions::from_value(&options.to_value()),
             Some(options)
         );
+    }
+
+    /// The allow lists of effect-tsgo 0.51.1: a strict parse at the root and in
+    /// an override, `[]` kept apart from absent, and the build info order
+    /// (`pipeableMinArgCount`, the 2 API lists, `allowedDuplicatedPackages`).
+    #[test]
+    fn allow_lists_parse_and_round_trip() {
+        let strings = |items: &[&str]| {
+            CompilerOptionsValue::List(
+                items
+                    .iter()
+                    .map(|s| CompilerOptionsValue::String((*s).into()))
+                    .collect(),
+            )
+        };
+        let map = |pairs: Vec<(&str, CompilerOptionsValue)>| {
+            CompilerOptionsValue::Map(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        };
+        let plugin = CompilerOptionsValue::List(vec![map(vec![
+            (
+                "name",
+                CompilerOptionsValue::String(EFFECT_PLUGIN_NAME.into()),
+            ),
+            ("allowedUnstableApis", strings(&["effect/cli/Command#make"])),
+            ("allowedExperimentalApis", strings(&[])),
+            (
+                "allowedDuplicatedPackages",
+                CompilerOptionsValue::List(vec![
+                    CompilerOptionsValue::String("x".into()),
+                    CompilerOptionsValue::Int(1),
+                ]),
+            ),
+            ("pipeableMinArgCount", CompilerOptionsValue::Int(3)),
+            (
+                "overrides",
+                CompilerOptionsValue::List(vec![map(vec![
+                    ("include", strings(&["src/a.ts"])),
+                    (
+                        "options",
+                        map(vec![
+                            ("allowedUnstableApis", strings(&[])),
+                            (
+                                "allowedExperimentalApis",
+                                CompilerOptionsValue::List(vec![
+                                    CompilerOptionsValue::String("q".into()),
+                                    CompilerOptionsValue::Int(1),
+                                ]),
+                            ),
+                        ]),
+                    ),
+                ])]),
+            ),
+        ])]);
+        let options = parse_from_plugins(&plugin).expect("plugin");
+        assert_eq!(
+            options.allowed_unstable_apis,
+            Some(vec!["effect/cli/Command#make".to_string()])
+        );
+        assert_eq!(options.allowed_experimental_apis, Some(Vec::new()));
+        // The root `allowedDuplicatedPackages` parse skips a non-string item.
+        assert_eq!(
+            options.allowed_duplicated_packages,
+            Some(vec!["x".to_string()])
+        );
+        let o = &options.overrides[0].options;
+        assert_eq!(o.allowed_unstable_apis, Some(Vec::new()));
+        // A strict parse drops the whole list for a non-string item.
+        assert_eq!(o.allowed_experimental_apis, None);
+
+        let value = options.to_value();
+        let CompilerOptionsValue::Map(m) = &value else {
+            panic!("map")
+        };
+        let keys: Vec<&str> = m.keys().map(String::as_str).collect();
+        let at = |k: &str| keys.iter().position(|key| *key == k).expect(k);
+        assert!(at("pipeableMinArgCount") < at("allowedUnstableApis"));
+        assert!(at("allowedUnstableApis") < at("allowedExperimentalApis"));
+        assert!(at("allowedExperimentalApis") < at("allowedDuplicatedPackages"));
+        assert!(at("allowedDuplicatedPackages") < at("diagnosticSeverity"));
+        assert_eq!(EffectPluginOptions::from_value(&value), Some(options));
     }
 }

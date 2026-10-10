@@ -1,0 +1,10 @@
+{
+  "effect": "4.0.0",
+  "fails": true,
+  "has": [
+    "src/index.ts(3,28): error TS377136: `effect/cli/Command#make` is an unstable API. Breaking changes may happen between versions. effect(unstableApiUsage)"
+  ],
+  "lacks": [
+    "TS377134"
+  ]
+}

@@ -27,7 +27,7 @@ pub fn merge_effect_compiler_options(
     let Some(source) = source_options.effect.as_deref() else {
         return;
     };
-    let mut source_effect = source.clone();
+    let mut source_effect = clone_effect_options(source);
     rewrite_effect_options_overrides(&mut source_effect, source_config_path, base_path);
     let Some(source_plugin_raw) = get_effect_plugin_raw(raw_source) else {
         target_options.effect = Some(Arc::new(source_effect));
@@ -49,7 +49,7 @@ fn merge_effect_options(
     source: &EffectPluginOptions,
     raw: &IndexMap<String, CompilerOptionsValue>,
 ) -> EffectPluginOptions {
-    let mut merged = target.clone();
+    let mut merged = clone_effect_options(target);
     let has = |key: &str| raw.contains_key(key);
     macro_rules! take {
         ($($key:literal => $field:ident,)*) => {
@@ -81,6 +81,8 @@ fn merge_effect_options(
         "keyPatterns" => key_patterns,
         "extendedKeyDetection" => extended_key_detection,
         "pipeableMinArgCount" => pipeable_min_arg_count,
+        "allowedUnstableApis" => allowed_unstable_apis,
+        "allowedExperimentalApis" => allowed_experimental_apis,
         "allowedDuplicatedPackages" => allowed_duplicated_packages,
         "effectFn" => effect_fn,
     }
@@ -94,6 +96,25 @@ fn merge_effect_options(
         merged.overrides.extend(source.overrides.iter().cloned());
     }
     merged
+}
+
+// Go: effectconfigraw cloneEffectOptions
+/// A copy of the options. Go copies the root lists with
+/// `append([]string(nil), ...)`, which turns `[]` into nil: through
+/// `extends`, a root `[]` is not written to build info. The other fields keep
+/// the plain clone (their empty and nil forms already write the same).
+fn clone_effect_options(source: &EffectPluginOptions) -> EffectPluginOptions {
+    let mut cloned = source.clone();
+    for list in [
+        &mut cloned.allowed_unstable_apis,
+        &mut cloned.allowed_experimental_apis,
+        &mut cloned.allowed_duplicated_packages,
+    ] {
+        if list.as_ref().is_some_and(Vec::is_empty) {
+            *list = None;
+        }
+    }
+    cloned
 }
 
 // Go: mergeSeverityMaps. Go nil stays None only when both are nil.

@@ -1,0 +1,17 @@
+{
+  "effect": "4.0.0",
+  "fails": true,
+  "has": [
+    "src/allowed.ts(7,23): error TS377136: `effect/cli/Flag#String` is an unstable API.",
+    "src/allowed.ts(10,29): error TS377136: `effect/http/HttpClient#get` is an unstable API.",
+    "src/other.ts(4,26): error TS377136: `effect/cli/Command#make` is an unstable API.",
+    "src/other.ts(9,29): error TS377136: `effect/http/HttpClient#get` is an unstable API."
+  ],
+  "lacks": [
+    "TS377134",
+    "src/allowed.ts(5,",
+    "src/allowed.ts(8,",
+    "src/other.ts(6,",
+    "src/other.ts(8,"
+  ]
+}

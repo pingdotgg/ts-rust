@@ -1,0 +1,26 @@
+{
+  "fails": true,
+  "has": [
+    "src/index.ts(3,14): warning TS377137: `value` exposes `Unstable`, an unstable API. effect(apiStabilityLeak)",
+    "src/lib/index.ts(11,18): warning TS377137: `local-leak#StableLeak` exposes `Unstable`, an unstable API.",
+    "src/lib/index.ts(17,25): warning TS377137: `local-leak#make` exposes `Experimental`, an experimental API.",
+    "src/lib/index.ts(17,25): warning TS377137: `local-leak#make` exposes `Unstable`, an unstable API.",
+    "src/lib/index.ts(20,18): warning TS377137: `local-leak#UnstableLeak` exposes `Experimental`, an experimental API.",
+    "src/lib/index.ts(39,14): warning TS377137: `local-leak#Service` exposes `Unstable`, an unstable API.",
+    "src/lib/index.ts(50,14): warning TS377137: `local-leak#Derived` exposes `TaggedBase`, an experimental API.",
+    "src/lib/index.ts(52,18): warning TS377137: `local-leak#Api` exposes `Unstable`, an unstable API.",
+    "src/lib/forwarded.ts(6,18): warning TS377137: `local-leak/forwarded#UsesExp` exposes `Exp`, an experimental API.",
+    "src/lib/reexports.ts(2,1): warning TS377137: `local-leak/reexports#UsesExp` exposes `Exp`, an experimental API.",
+    "src/lib/reexports.ts(4,13): warning TS377137: `local-leak/reexports#ns` exposes `UnstableLeak`, an unstable API."
+  ],
+  "lacks": [
+    "TS377134",
+    "TS377136",
+    "#UnstableOk` exposes",
+    "#ExperimentalOk` exposes",
+    "#Hidden` exposes",
+    "Hidden`, an",
+    "HiddenInside",
+    "#Service` exposes `Experimental`"
+  ]
+}

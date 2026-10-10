@@ -6,13 +6,13 @@
 //! kind, in `tsgo -p` and in `tsgo -b` (the status check and its prefetch).
 //!
 //! PORT: no Go counterpart. In `effect_build_info_is_reused` the `-b
-//! --verbose` statuses are the ones that effect-tsgo 0.46.1 prints in the
+//! --verbose` statuses are the ones that effect-tsgo 0.51.1 prints in the
 //! same steps. In `build_info_of_the_other_kind_is_built_again` they are not
-//! (the effectfix2 design): effect-tsgo 0.46.1 records its suffix with and
+//! (the effectfix2 design): effect-tsgo 0.51.1 records its suffix with and
 //! without the plugin, so it calls steps 2 and 3 up to date and loses
-//! TS377068. There the step 2 status is the one effect-tsgo 0.46.1 prints on
+//! TS377068. There the step 2 status is the one effect-tsgo 0.51.1 prints on
 //! build info of plain tsgo N, and the step 3 status the one plain tsgo N
-//! prints on build info of effect-tsgo 0.46.1. The fixture needs no Effect
+//! prints on build info of effect-tsgo 0.51.1. The fixture needs no Effect
 //! package: `globalDate` (TS377068) flags `new Date()`.
 #![cfg(unix)]
 

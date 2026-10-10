@@ -43,7 +43,7 @@ fn run_global_fetch(ctx: &mut RuleContext<'_, '_>, check_in_effect: bool) -> Vec
         return Vec::new();
     }
 
-    let mut package_name = "effect/unstable/http";
+    let mut package_name = "effect/http";
     if ctx.tp.supported_effect_version() == EffectMajorVersion::V3 {
         package_name = "@effect/platform";
     }

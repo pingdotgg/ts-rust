@@ -99,6 +99,12 @@ fn apply_override(target: &mut ResolvedEffectPluginOptions, o: &Override) {
     if let Some(b) = o.options.extended_key_detection {
         target.extended_key_detection = b;
     }
+    if let Some(apis) = &o.options.allowed_unstable_apis {
+        target.allowed_unstable_apis = apis.clone();
+    }
+    if let Some(apis) = &o.options.allowed_experimental_apis {
+        target.allowed_experimental_apis = apis.clone();
+    }
     if let Some(pkgs) = &o.options.allowed_duplicated_packages {
         target.allowed_duplicated_packages = pkgs.clone();
     }
@@ -116,7 +122,12 @@ fn clone_options(config: &EffectPluginOptions) -> ResolvedEffectPluginOptions {
         key_patterns: config.key_patterns.clone(),
         extended_key_detection: config.extended_key_detection,
         pipeable_min_arg_count: config.pipeable_min_arg_count,
-        allowed_duplicated_packages: config.allowed_duplicated_packages.clone(),
+        allowed_duplicated_packages: config
+            .allowed_duplicated_packages
+            .clone()
+            .unwrap_or_default(),
+        allowed_unstable_apis: config.allowed_unstable_apis.clone().unwrap_or_default(),
+        allowed_experimental_apis: config.allowed_experimental_apis.clone().unwrap_or_default(),
         effect_fn: config.effect_fn.clone(),
     }
 }

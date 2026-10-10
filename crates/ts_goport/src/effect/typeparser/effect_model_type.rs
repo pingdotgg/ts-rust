@@ -10,7 +10,7 @@ static EFFECT_MODEL_PACKAGE_SOURCE_FILE_DESCRIPTOR: LazyLock<PackageSourceFileDe
     });
 
 // Go: typeparser/effect_model_type.go isEffectModelTypeSourceFile
-/// isEffectModelTypeSourceFile checks if a source file is the effect/unstable/schema Model module
+/// isEffectModelTypeSourceFile checks if a source file is the effect/schema Model module
 /// by verifying it exports "Class", "Generated", and "FieldOption".
 /// These symbols are chosen to disambiguate Model from Schema (which also exports "Class"),
 /// matching the TypeScript reference implementation.
@@ -63,7 +63,7 @@ impl TypeParser<'_> {
     // Go: typeparser/effect_model_type.go IsNodeReferenceToEffectModelModuleApi
     /// IsNodeReferenceToEffectModelModuleApi reports whether node resolves to a member
     /// exported by the "effect" package from a module that exports the Model API
-    /// (effect/unstable/schema).
+    /// (effect/schema).
     pub fn is_node_reference_to_effect_model_module_api(
         &mut self,
         node: Node,

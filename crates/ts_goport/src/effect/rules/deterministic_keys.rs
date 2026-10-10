@@ -325,7 +325,7 @@ fn match_custom_pattern(
 
 // Go: rules/deterministic_keys.go getPackageJsonDirectory
 /// getPackageJsonDirectory gets the package.json directory for a source file from its metadata.
-fn get_package_json_directory(_program: &'static GoProgram, sf: Node) -> String {
+pub(crate) fn get_package_json_directory(_program: &'static GoProgram, sf: Node) -> String {
     // PORT: Go asserts the program to a `GetSourceFileMetaData` provider.
     // The port's program always has it, and `get_source_file_meta_data`
     // reads the current program of the thread (as `PackageJsonForSourceFile`

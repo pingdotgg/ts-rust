@@ -1,8 +1,8 @@
 # Effect diagnostics reference data
 
 `effectDiagnosticMessages.json` is copied unchanged from
-[Effect-TS/tsgo](https://github.com/Effect-TS/tsgo) at the `@effect/tsgo@0.46.1`
-release commit `f1a7cad0292d9d315e7f87694f127f605711d55e`
+[Effect-TS/tsgo](https://github.com/Effect-TS/tsgo) at the `@effect/tsgo@0.51.1`
+release commit `47cb1ed7704aff44cacaa0f4d2ef24de990cba0e`
 (`internal/diagnostics/effectDiagnosticMessages.json`).
 
 `scripts/effect/gen-effect-messages.mjs` turns it into

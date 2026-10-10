@@ -36,10 +36,23 @@ if (!args.ours || !args.ref) {
 fs.mkdirSync(args.out, { recursive: true });
 args.out = fs.realpathSync(args.out);
 
+// Go effecttest DefaultTsConfig (runner.go): the 3 stability rules are off
+// unless a case's own tsconfig turns them on.
 const DEFAULT_TSCONFIG = {
   compilerOptions: {
     skipLibCheck: true,
-    plugins: [{ name: "@effect/language-service", ignoreEffectErrorsInTscExitCode: true, skipDisabledOptimization: true }],
+    plugins: [
+      {
+        name: "@effect/language-service",
+        ignoreEffectErrorsInTscExitCode: true,
+        skipDisabledOptimization: true,
+        diagnosticSeverity: {
+          experimentalApiUsage: "off",
+          unstableApiUsage: "off",
+          apiStabilityLeak: "off",
+        },
+      },
+    ],
   },
 };
 

@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2024",
+    "lib": ["esnext"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnosticSeverity": { "experimentalApiUsage": "error", "unstableApiUsage": "warning" },
+        "allowedExperimentalApis": ["local-exp#beta"]
+      }
+    ]
+  },
+  "include": ["src"]
+}

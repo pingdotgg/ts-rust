@@ -6,7 +6,8 @@
 // Effect-patched tsc. Both must meet the expectations, and their Effect
 // diagnostic lines (TS377xxx) must be identical. An optional "ref" object
 // replaces fails/has/lacks for the reference, where it has a known bug
-// ("refNote" says which).
+// ("refNote" says which). An optional "effect" names the effect version the
+// fixture needs; with another version in --modules the fixture is skipped.
 //
 // usage: node scripts/effect/focused-fixtures.mjs --ours <tsc> [--ref <tsc>] --modules <node_modules dir with effect>
 //          [--filter NAME] [--work DIR]
@@ -50,12 +51,17 @@ async function check(bin, dir) {
   }
 }
 
+const effectVersion = JSON.parse(fs.readFileSync(path.join(work, "node_modules/effect/package.json"), "utf8")).version;
 const effectLines = (out) => out.split("\n").filter((l) => / TS377\d\d\d: /.test(l)).join("\n");
 let failures = 0;
 for (const name of fs.readdirSync(work).sort()) {
   const dir = path.join(work, name);
   if (name.startsWith("_") || name === "node_modules" || !fs.statSync(path.join(work, name)).isDirectory() || !name.includes(args.filter)) continue;
   const expect = JSON.parse(fs.readFileSync(path.join(dir, "expect.json"), "utf8"));
+  if (expect.effect && expect.effect !== effectVersion) {
+    console.log(`skip ${name} (needs effect ${expect.effect}, --modules has ${effectVersion})`);
+    continue;
+  }
   const results = { ours: await check(args.ours, dir) };
   if (args.ref) results.ref = await check(args.ref, dir);
   const problems = [];

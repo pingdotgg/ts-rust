@@ -327,7 +327,7 @@ static MODULE_ALTERNATIVES_V4: &[(&str, ModuleAlternative)] = &[
         "child_process",
         ModuleAlternative {
             alternative: "ChildProcess",
-            package: "effect/unstable/process",
+            package: "effect/process",
             module: "child_process",
         },
     ),
@@ -335,7 +335,7 @@ static MODULE_ALTERNATIVES_V4: &[(&str, ModuleAlternative)] = &[
         "node:child_process",
         ModuleAlternative {
             alternative: "ChildProcess",
-            package: "effect/unstable/process",
+            package: "effect/process",
             module: "child_process",
         },
     ),
@@ -343,7 +343,7 @@ static MODULE_ALTERNATIVES_V4: &[(&str, ModuleAlternative)] = &[
         "http",
         ModuleAlternative {
             alternative: "HttpClient",
-            package: "effect/unstable/http",
+            package: "effect/http",
             module: "http",
         },
     ),
@@ -351,7 +351,7 @@ static MODULE_ALTERNATIVES_V4: &[(&str, ModuleAlternative)] = &[
         "node:http",
         ModuleAlternative {
             alternative: "HttpClient",
-            package: "effect/unstable/http",
+            package: "effect/http",
             module: "http",
         },
     ),
@@ -359,7 +359,7 @@ static MODULE_ALTERNATIVES_V4: &[(&str, ModuleAlternative)] = &[
         "https",
         ModuleAlternative {
             alternative: "HttpClient",
-            package: "effect/unstable/http",
+            package: "effect/http",
             module: "https",
         },
     ),
@@ -367,7 +367,7 @@ static MODULE_ALTERNATIVES_V4: &[(&str, ModuleAlternative)] = &[
         "node:https",
         ModuleAlternative {
             alternative: "HttpClient",
-            package: "effect/unstable/http",
+            package: "effect/http",
             module: "https",
         },
     ),
