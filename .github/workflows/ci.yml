@@ -1,7 +1,8 @@
 # Format, lint, build and test on every pull request and on each push to main that changes code.
 # The full protected set (TestLocal shards, gate, bound runs, LSP and API oracles, np-suite) stays in
 # the revision pipeline (scripts/goport/candidate.sh). This workflow is a fast check that the tree
-# builds and its own tests pass on Linux (x64 and arm64), macOS and Windows (x64, MSVC).
+# builds and its own tests pass on Linux (x64 and arm64), macOS and Windows (x64, MSVC), and that
+# the tsc compiles for Intel macOS.
 name: CI
 
 on:
@@ -160,3 +161,10 @@ jobs:
           (cd "go-pin${SUBDIR:+/$SUBDIR}" && GOWORK=off CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
           cargo build --release --locked -p ts_goport --bin tsgo
           scripts/goport/win-go-compare.sh target/release/tsgo.exe "$RUNNER_TEMP/go/tsc.exe" "$RUNNER_TEMP/win-go"
+      # Intel Macs: the release ships an x86_64-apple-darwin tsc (release.yml builds it on an Intel
+      # runner). A cross check of the tsc here finds compile errors in its cfg paths on each PR.
+      - name: Check x86_64-apple-darwin
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: |
+          rustup target add --toolchain "$RUSTUP_TOOLCHAIN" x86_64-apple-darwin
+          cargo check --locked -p ts_goport --bin tsgo --target x86_64-apple-darwin
