@@ -25,6 +25,11 @@
 //!     race that the deferred function wins in practice, also for the
 //!     request read after the signal.
 //!   - The end code is 0 (`api/server.go:134-139`).
+//!   - The port runs the requests one at a time, so it holds a request
+//!     that waits in a callback while a nested request runs, or that waits
+//!     behind a running request. Go's goroutine went on at once, so each
+//!     of its callbacks keeps Go's phase (`ipc/conn_async.rs`, "the Go
+//!     clock"); only the order of the answers differs.
 //!
 //!   A panic answer is compared up to its stack (Go's goroutine stack and
 //!   the port's backtrace differ). `TSGO_STDIO_END_BIN` runs the tests on
@@ -527,6 +532,268 @@ fn api_sync_signal_while_a_callback_waits() {
     // [CallResponse, "readFile", null]
     tsgo.send(b"\x93\x02\xc4\x08readFile\xc4\x04null");
     tsgo.expect_end_with_stderr(start, what, 2, REPANICKED_CANCELED);
+}
+
+/// The text of a FIFO tsconfig.json.
+const FIFO_TEXT: &[u8] = br#"{"compilerOptions":{"strict":true},"include":["src"]}"#;
+
+/// A frame whose JSON is cut: Go's read fails (`jsontext: unexpected EOF`).
+const BAD_FRAME: &[u8] = b"Content-Length: 22\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":";
+
+/// How the read loop ends after a signal in the held-request tests: EOF,
+/// a read error, or the 1 message read after the signal (a ping, id 9).
+fn end_read_loop(tsgo: &mut Tsgo, end: &str) {
+    match end {
+        "eof" => tsgo.close_stdin(),
+        "bad" => tsgo.send(BAD_FRAME),
+        _ => tsgo.send_json(r#"{"jsonrpc":"2.0","id":9,"method":"ping"}"#),
+    }
+}
+
+/// Starts a held request: a project with a second project p2 whose
+/// tsconfig.json is a FIFO, a build orchestrator, a build (id 7) and a
+/// cleanBuild (id 8) that waits for its removeFile of a.js, then
+/// createSnapshot of p2 (id 3), which runs nested in that wait and reads
+/// the FIFO. Returns tsgo, the project, the removeFile id and the FIFO.
+fn held_clean_build(prefix: &str, what: &str) -> (Tsgo, TempDir, String, std::fs::File) {
+    let dir = project(prefix);
+    dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+    let config = dir.fifo("p2/tsconfig.json");
+    let mut tsgo = api_async(&dir, &["--callbacks", "removeFile"]);
+    let orchestrator = tsgo.build_orchestrator(&dir.0);
+    tsgo.send_json(&build(7, "build", orchestrator));
+    tsgo.expect_answer(7, r#""result""#, what);
+    tsgo.send_json(&build(8, "cleanBuild", orchestrator));
+    let call = tsgo.wait_callback("removeFile");
+    tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
+    let writer = open_fifo_writer(&config);
+    (tsgo, dir, call, writer)
+}
+
+/// Checks that cleanBuild (id 8) answered and sent a removeFile request
+/// for both outputs.
+fn expect_both_removed(tsgo: &Tsgo, dir: &TempDir, what: &str) {
+    tsgo.expect_answer(8, r#""result""#, what);
+    for file in ["a.js", "b.js"] {
+        let request = format!(
+            r#""method":"removeFile","params":"{}""#,
+            dir.path(&format!("out/src/{file}"))
+        );
+        assert!(
+            tsgo.messages().iter().any(|m| m.contains(&request)),
+            "{what}: no removeFile of {file}: {:?}",
+            tsgo.messages()
+        );
+    }
+}
+
+/// A request whose callback waits at a signal is held while a nested
+/// request reads a FIFO, and the read loop ends during the hold. Go's
+/// request went on at the signal, before the end, so its later callbacks
+/// write their requests and fail with `context canceled` (Phase A). The
+/// port runs them after the nested request answers, on the request's Go
+/// clock (`ipc/conn_async.rs`).
+#[test]
+fn api_async_held_request_writes_later_callbacks_after_a_signal() {
+    for end in ["eof", "bad", "ping"] {
+        let what = format!("--api --async, cleanBuild held by a FIFO request, SIGINT, {end}");
+        let (mut tsgo, dir, _call, mut writer) = held_clean_build("held", &what);
+        tsgo.signal(Signal::INT);
+        tsgo.expect_alive(&what);
+        end_read_loop(&mut tsgo, end);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        writer.write_all(FIFO_TEXT).unwrap();
+        drop(writer);
+        tsgo.expect_end(start, &what, 0, "");
+        expect_both_removed(&tsgo, &dir, &what);
+        if end == "ping" {
+            tsgo.expect_answer(9, r#""result":"pong""#, &what);
+        }
+    }
+}
+
+/// As `api_async_held_request_writes_later_callbacks_after_a_signal`, for
+/// a build whose writeFile waits: both write errors are
+/// `context canceled`, as Go's. PORT: the port can write a file's request
+/// twice after a write error, so only the files count.
+#[test]
+fn api_async_held_build_write_errors_after_a_signal() {
+    let cases = [
+        (Signal::TERM, "eof"),
+        (Signal::INT, "eof"),
+        (Signal::INT, "bad"),
+        (Signal::INT, "ping"),
+    ];
+    for (signal, end) in cases {
+        let what = format!("--api --async, build held by a FIFO request, {signal:?}, {end}");
+        let dir = project("heldbuild");
+        dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+        let config = dir.fifo("p2/tsconfig.json");
+        let mut tsgo = api_async(&dir, &["--callbacks", "writeFile"]);
+        let orchestrator = tsgo.build_orchestrator(&dir.0);
+        tsgo.send_json(&build(7, "build", orchestrator));
+        tsgo.wait_callback("writeFile");
+        tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
+        let mut writer = open_fifo_writer(&config);
+        tsgo.signal(signal);
+        tsgo.expect_alive(&what);
+        end_read_loop(&mut tsgo, end);
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        writer.write_all(FIFO_TEXT).unwrap();
+        drop(writer);
+        tsgo.expect_end(start, &what, 0, "");
+        let answer = tsgo.expect_answer(7, r#""result""#, &what);
+        for file in ["a.js", "b.js"] {
+            let text = format!("{file}': context canceled.");
+            assert!(answer.contains(&text), "{what}: no {text:?} in {answer}");
+            let request = format!(
+                r#""method":"writeFile","params":{{"path":"{}"#,
+                dir.path(&format!("out/src/{file}"))
+            );
+            assert!(
+                tsgo.messages().iter().any(|m| m.contains(&request)),
+                "{what}: no writeFile of {file}: {:?}",
+                tsgo.messages()
+            );
+        }
+        if end == "ping" {
+            tsgo.expect_answer(9, r#""result":"pong""#, &what);
+        }
+    }
+}
+
+/// A held request gets the reply to its callback during the hold, then the
+/// read loop ends (with or without a signal before it). Go's request went
+/// on at the reply and wrote its next callback before the end.
+#[test]
+fn api_async_held_request_after_its_reply() {
+    for signal in [true, false] {
+        let what = format!("--api --async, cleanBuild held, reply, signal {signal}, EOF");
+        let (mut tsgo, dir, call, mut writer) = held_clean_build("heldreply", &what);
+        tsgo.reply(&call);
+        tsgo.expect_alive(&what);
+        if signal {
+            tsgo.signal(Signal::INT);
+            tsgo.expect_alive(&what);
+        }
+        tsgo.close_stdin();
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        writer.write_all(FIFO_TEXT).unwrap();
+        drop(writer);
+        tsgo.expect_end(start, &what, 0, "");
+        expect_both_removed(&tsgo, &dir, &what);
+    }
+}
+
+/// createSnapshot of a project whose tsconfig.json is a FIFO, then a
+/// createSnapshot that calls back, in one write: the second waits behind
+/// the first in the port. Go ran it at once, so its callback went out
+/// before the signal or the end; after the end it fails with Go's error.
+/// The first one calls back after the end (Phase B).
+#[test]
+fn api_async_request_queued_behind_a_blocked_request() {
+    for signal in [true, false] {
+        let what =
+            format!("--api --async, a request queued behind a FIFO request, signal {signal}");
+        let dir = project("queued");
+        dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+        let config = dir.fifo("p2/tsconfig.json");
+        let mut tsgo = api_async(&dir, &["--callbacks", "getAccessibleEntries"]);
+        let mut both = frame(&create_snapshot(3, &dir.0.join("p2")));
+        both.extend(frame(&create_snapshot(1, &dir.0)));
+        tsgo.send(&both);
+        let mut writer = open_fifo_writer(&config);
+        tsgo.expect_alive(&what);
+        if signal {
+            tsgo.signal(Signal::INT);
+            tsgo.expect_alive(&what);
+        }
+        tsgo.close_stdin();
+        tsgo.expect_alive(&what);
+        let start = Instant::now();
+        writer.write_all(FIFO_TEXT).unwrap();
+        drop(writer);
+        tsgo.expect_end(start, &what, 0, "");
+        let first = if signal {
+            PANIC_CANCELED
+        } else {
+            r#""message":"panic: ipc: connection closed\n"#
+        };
+        tsgo.expect_answer(1, first, &what);
+        let answer = tsgo.expect_answer(3, r#""message":"panic: ipc: connection closed\n"#, &what);
+        assert!(!answer.contains(r"closed\ncontext"), "{what}: {answer}");
+        let root = format!(
+            r#""method":"getAccessibleEntries","params":"{}""#,
+            dir.0.display()
+        );
+        let calls: Vec<String> = tsgo
+            .messages()
+            .into_iter()
+            .filter(|m| m.contains(r#""method":"getAccessibleEntries""#))
+            .collect();
+        assert!(
+            calls.len() == 1 && calls[0].contains(&root),
+            "{what}: {:?}",
+            tsgo.messages()
+        );
+    }
+}
+
+/// As `api_async_signal_then_end_of_stdin_while_a_request_reads`, with a
+/// read error in place of EOF: request 1 answers `context canceled` (Go's
+/// `Call` returned at the signal), and request 3 calls back after the end
+/// and gets the read error.
+#[test]
+fn api_async_read_error_after_a_signal_keeps_context_canceled() {
+    let what = "--api --async, getAccessibleEntries waits, a request reads a FIFO, SIGINT, bad";
+    let dir = project("cbfifobad");
+    dir.write("p2/src/c.ts", "export const c: number = 3;\n");
+    let config = dir.fifo("p2/tsconfig.json");
+    let mut tsgo = api_async(&dir, &["--callbacks", "getAccessibleEntries"]);
+    tsgo.send_json(&create_snapshot(1, &dir.0));
+    tsgo.wait_callback("getAccessibleEntries");
+    tsgo.send_json(&create_snapshot(3, &dir.0.join("p2")));
+    let mut writer = open_fifo_writer(&config);
+    tsgo.signal(Signal::INT);
+    tsgo.expect_alive(what);
+    end_read_loop(&mut tsgo, "bad");
+    tsgo.expect_alive(what);
+    let start = Instant::now();
+    writer.write_all(FIFO_TEXT).unwrap();
+    drop(writer);
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(1, PANIC_CANCELED, what);
+    let answer = tsgo.expect_answer(
+        3,
+        r#""message":"panic: ipc: connection closed\njsontext: "#,
+        what,
+    );
+    assert!(!answer.contains("context canceled"), "{what}: {answer}");
+}
+
+/// resolveModuleName calls back with the request's context (Go
+/// `handlerCtx`). EOF while the callback waits, with no signal: Go's
+/// `closePendingCalls` closes its channel before `cancelHandlers`, so the
+/// callback fails with `ipc: connection closed` alone.
+#[test]
+fn api_async_resolver_end_of_stdin_before_a_signal() {
+    let what = "--api --async, resolveModuleName waits, EOF";
+    let dir = project("resolveeof");
+    let mut tsgo = api_async(&dir, &[]);
+    let resolver = tsgo.module_resolver();
+    tsgo.send_json(&resolve_module_name(6, resolver, &dir.0));
+    tsgo.wait_callback("resolveMod");
+    let start = Instant::now();
+    tsgo.close_stdin();
+    tsgo.expect_end(start, what, 0, "");
+    tsgo.expect_answer(
+        6,
+        r#""message":"resolveModuleName callback failed: ipc: connection closed""#,
+        what,
+    );
 }
 
 /// A two-file project (src/a.ts imports src/b.ts) that emits to out/.

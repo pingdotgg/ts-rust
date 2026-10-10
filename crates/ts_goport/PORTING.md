@@ -1600,15 +1600,35 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
       `context canceled`. The run ends with exit code 0.
     - The end of the input after the signal; a second signal does
       nothing.
-  - Still different in `--api --async` after a signal (the requests run
-    one at a time):
-    - Requests read before the signal run one after another, so a later
-      one answers later (Go answers request 2 of a pipelined pair first),
-      and one that has not started when the read loop ends runs in Phase
-      B (Go started it in Phase A).
+    - A request that the port holds keeps Go's result for each
+      callback. The port holds a request that waits in a callback while
+      a nested request runs (until that one returns), and a request read
+      while another one runs (until that one returns). Go's goroutines go
+      on at once. So each request has a Go clock: the port time less the
+      time that the port held it (`ipc/conn_async.rs`, file header). A
+      callback that Go made before the read loop ended writes its request
+      and returns Go's error (`context canceled` after a signal, else
+      `ipc: connection closed`), also when the port makes it after the
+      end. A callback that Go made after the end writes nothing (Phase
+      B).
+  - Still different in `--api --async` (the requests run one at a time):
+    - A held request answers, writes its later callback requests and
+      crashes (a worker callback) only after the request that held it
+      answers. Go does it at once: at the signal, or at the reply to its
+      callback. So:
+      - The answers come in another order (Go answers request 2 of a
+        pipelined pair first, and a held request before the nested one).
+      - When Go's held worker callback panics at the signal (rc 2), Go
+        ends before the nested request answers. The port answers the
+        nested request first, then ends with rc 2.
+      - A callback request that the port writes after the end of the
+        read loop gets no reply (the read loop has ended). Go wrote it
+        earlier, and its client could answer it before the end.
     - A worker makes one callback at a time, so fewer directoryExists or
       writeFile requests are out at the signal (Go: 2 or more). The
-      answers are the same.
+      answers are the same, except for a build after a write error: the
+      port writes b.js a second time and orders the diagnostics in
+      another way (not a signal effect; R188 does the same).
     - On wasm, which has no threads, the reads stay on the dispatch
       thread: a waiting callback wakes only at the next message, and
       there is no Phase B.
