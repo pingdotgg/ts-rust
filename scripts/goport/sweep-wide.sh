@@ -312,6 +312,11 @@ for entry in \
  "withastro-astro:astro-types-test|withastro-astro|src/packages/astro|test/types/tsconfig.json|oracle/astro-types-test.txt" ; do
   IFS='|' read -r l n cwd c of <<< "$entry"
   OR=$X/$n/$of; O=$X/measure/$1; mkdir -p $O
+  # Effect gate rule (Theo, 2026-10-10, issue #28): a config whose tsconfig lists @effect/language-service
+  # expects the plain oracle lines plus the TS377xxx lines of effect-tsgo at the Effect pin. effect-oracle.py
+  # writes that file, oracle/<label>.effect.txt, next to the plain one; the plain one stays the expected output
+  # when it has no such file.
+  [[ -f ${OR%.txt}.effect.txt ]] && OR=${OR%.txt}.effect.txt
   s=$(date +%s.%N); (cd $X/$n/$cwd && timeout 900 $B -p $c > $O/$l.out 2> $O/$l.err); e=$?
   t=$(python3 -c "import sys;print(round(float(sys.argv[2])-float(sys.argv[1]),1))" $s $(date +%s.%N))
   if incomplete $e $O/$l.err; then m=INCOMPLETE; elif diff -q $OR $O/$l.out >/dev/null; then m=MATCH; else m="DIFF(+$(diff $OR $O/$l.out | grep -c '^>') -$(diff $OR $O/$l.out | grep -c '^<'))"; fi
