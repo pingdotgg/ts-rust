@@ -573,13 +573,10 @@ impl SourceDefResolver<'_> {
             return String::new();
         };
 
-        // Ensure the file only contains one /node_modules/ segment. If there's more
-        // than one, the package name extraction may be incorrect, so bail out.
-        // PORT: Go `strings.LastIndex` returns -1 when absent.
-        let last_node_modules_index = dts_file_name
-            .rfind("/node_modules/")
-            .map_or(-1, |i| i as isize);
-        if last_node_modules_index != parts.top_level_node_modules_index {
+        // ts#64159: Go N' bails out on `parts.HasNestedNodeModules`
+        // (sourcedefinition.go:398). N bailed out on any second
+        // `/node_modules/`, also when it was the package's own name.
+        if has_nested_node_modules(dts_file_name, &parts) {
             return String::new();
         }
         // ts#64159: a file directly in node_modules (or in a scope directory)
@@ -1084,4 +1081,53 @@ pub fn find_closest_declaration_node(source_file: Node, pos: i32) -> Node {
         current = current.parent();
     }
     get_source_definition_entry_node(source_file)
+}
+
+// Go N' `NodeModulePathParts.HasNestedNodeModules` (modulespecifiers/util.go:315-318):
+// a `/node_modules/` segment after the first package root. The root comes after
+// the scope of a scoped package, so `node_modules/node_modules/x/a.d.ts` and
+// `node_modules/@s/node_modules/a.d.ts` (a package named `node_modules`) are not nested.
+// PORT: the port keeps the index form of `NodeModulePathParts`, whose
+// `package_root_index` is the root of the last package. This finds the first
+// root from `top_level_package_name_index`, as the Go parse states do (:301-314).
+fn has_nested_node_modules(file_name: &str, parts: &modulespecifiers::NodeModulePathParts) -> bool {
+    let name_start = (parts.top_level_package_name_index + 1) as usize;
+    let next_slash = |from: usize| file_name[from..].find('/').map(|i| from + i);
+    let mut root = next_slash(name_start);
+    if file_name.as_bytes().get(name_start) == Some(&b'@') {
+        root = root.and_then(|scope_end| next_slash(scope_end + 1));
+    }
+    root.is_some_and(|root| file_name[root..].contains("/node_modules/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_nested_node_modules;
+    use crate::modulespecifiers::get_node_module_path_parts;
+
+    fn nested(file_name: &str) -> bool {
+        let parts = get_node_module_path_parts(file_name).expect("node_modules path");
+        has_nested_node_modules(file_name, &parts)
+    }
+
+    // Go: modulespecifiers/specifiers_test.go:16 TestGetNodeModulePathParts (ts#64159),
+    // the `hasNestedNodeModules` values, and the ls skeptic's sourcedef2 probe paths.
+    #[test]
+    fn test_has_nested_node_modules() {
+        assert!(!nested("/workspace/node_modules/pkg/lib/index.d.ts"));
+        assert!(!nested("/node_modules/@scope/pkg/index.d.ts"));
+        assert!(!nested("c:/node_modules/pkg/index.d.ts"));
+        assert!(nested(
+            "/workspace/node_modules/pkg/node_modules/@scope/dep/index.d.ts"
+        ));
+        assert!(nested("/p/node_modules/@s/a/node_modules/b/index.d.ts"));
+        // A package named `node_modules` (unscoped and scoped) is not nested.
+        assert!(!nested("/p/node_modules/node_modules/x/types/index.d.ts"));
+        assert!(!nested("/p/node_modules/@sc/node_modules/t/s.d.ts"));
+        assert!(nested("/p/node_modules/node_modules/node_modules/x/a.d.ts"));
+        // Files directly in node_modules or in a scope directory have no root.
+        assert!(!nested("/workspace/node_modules/pkg"));
+        assert!(!nested("/workspace/node_modules/@scope"));
+        assert!(!nested("/workspace/node_modules/@scope/a.d.ts"));
+    }
 }
