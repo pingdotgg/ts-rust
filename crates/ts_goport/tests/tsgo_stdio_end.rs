@@ -148,6 +148,7 @@ fn api_async_signal_while_a_callback_waits() {
         let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
         tsgo.send_json(&create_snapshot(1, &dir.0));
         let call = tsgo.wait_callback("readFile");
+        tsgo.settle(&what);
         tsgo.signal(Signal::INT);
         tsgo.expect_answer(1, PANIC_CANCELED, &what);
         tsgo.expect_alive(&what);
@@ -193,6 +194,7 @@ fn api_async_signal_answers_each_callback_kind() {
             (tsgo, 1, kind)
         };
         let call = tsgo.wait_callback(method);
+        tsgo.settle(&what);
         tsgo.signal(signal);
         tsgo.expect_answer(id, answer, &what);
         tsgo.expect_alive(&what);
@@ -214,6 +216,7 @@ fn api_async_callbacks_after_a_signal_write_their_requests() {
     tsgo.expect_answer(3, r#""result""#, what);
     tsgo.send_json(&build(4, "cleanBuild", orchestrator));
     let call = tsgo.wait_callback("removeFile");
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_answer(4, r#""result""#, what);
     assert!(
@@ -233,6 +236,7 @@ fn api_async_callbacks_after_a_signal_write_their_requests() {
     let orchestrator = tsgo.build_orchestrator(&dir.0);
     tsgo.send_json(&build(3, "build", orchestrator));
     let call = tsgo.wait_callback("writeFile");
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     let answer = tsgo.expect_answer(3, r#""result""#, what);
     for file in ["a.js", "b.js"] {
@@ -269,6 +273,7 @@ fn api_async_worker_callback_ends_the_process_at_the_signal() {
             tsgo.reply(&call);
             tsgo.wait_callback_number(kind, 2);
         }
+        tsgo.settle(&what);
         let start = Instant::now();
         tsgo.signal(Signal::INT);
         tsgo.expect_end_with_stderr(start, &what, 2, REPANICKED_CANCELED);
@@ -284,6 +289,7 @@ fn api_async_signal_then_end_of_stdin() {
     let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
     tsgo.send_json(&create_snapshot(1, &dir.0));
     tsgo.wait_callback("readFile");
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_answer(1, PANIC_CANCELED, what);
     tsgo.expect_alive(what);
@@ -367,6 +373,7 @@ fn api_async_request_after_an_idle_signal_makes_no_callback() {
         };
         tsgo.send_json(r#"{"jsonrpc":"2.0","id":0,"method":"ping"}"#);
         tsgo.expect_answer(0, r#""result":"pong""#, &what);
+        tsgo.settle(&what);
         tsgo.signal(Signal::INT);
         tsgo.expect_alive(&what);
         let start = Instant::now();
@@ -398,6 +405,7 @@ fn api_async_request_read_after_the_signal_makes_no_callback() {
     let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
     tsgo.send_json(&create_snapshot(1, &dir.0));
     tsgo.wait_callback("readFile");
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_answer(1, PANIC_CANCELED, what);
     let start = Instant::now();
@@ -466,6 +474,7 @@ fn api_async_reads_one_message_after_a_signal() {
     let mut tsgo = api_async(&dir, &[]);
     tsgo.send_json(r#"{"jsonrpc":"2.0","id":0,"method":"ping"}"#);
     tsgo.expect_answer(0, r#""result":"pong""#, what);
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_alive(what);
     let start = Instant::now();
@@ -496,6 +505,7 @@ fn api_async_signal_answers_every_waiting_request() {
             tsgo.send_json(&create_snapshot(3, &dir.0));
         }
         let second = tsgo.wait_callback_number("readFile", 2);
+        tsgo.settle(&what);
         tsgo.signal(Signal::INT);
         tsgo.expect_answer(1, PANIC_CANCELED, &what);
         tsgo.expect_answer(3, PANIC_CANCELED, &what);
@@ -513,6 +523,7 @@ fn api_async_second_signal_does_nothing() {
     let mut tsgo = api_async(&dir, &["--callbacks", "readFile"]);
     tsgo.send_json(&create_snapshot(1, &dir.0));
     tsgo.wait_callback("readFile");
+    tsgo.settle(what);
     tsgo.signal(Signal::INT);
     tsgo.expect_answer(1, PANIC_CANCELED, what);
     tsgo.signal(Signal::TERM);
