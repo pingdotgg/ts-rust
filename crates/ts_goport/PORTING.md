@@ -1618,12 +1618,17 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
       callback. So:
       - The answers come in another order (Go answers request 2 of a
         pipelined pair first, and a held request before the nested one).
-      - When Go's held worker callback panics at the signal (rc 2), Go
-        ends before the nested request answers. The port answers the
-        nested request first, then ends with rc 2.
+      - When Go's held worker callback panics (at the signal, or at the
+        end of the read loop), Go ends at once with exit code 2, and the
+        nested request never goes on. The port runs the nested request to
+        its answer (with its callbacks), then the worker panics and the
+        port ends with exit code 2.
       - A callback request that the port writes after the end of the
         read loop gets no reply (the read loop has ended). Go wrote it
         earlier, and its client could answer it before the end.
+    - Go's races give more outcomes than the port: a reply that comes
+      just before the signal, and a signal less than about 1 ms before
+      the end of the read loop. The port gives one of Go's outcomes.
     - A worker makes one callback at a time, so fewer directoryExists or
       writeFile requests are out at the signal (Go: 2 or more). The
       answers are the same, except for a build after a write error: the
