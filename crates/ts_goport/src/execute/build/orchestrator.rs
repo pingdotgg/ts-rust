@@ -56,7 +56,7 @@ use crate::execute::build::config_prefetch::{
 };
 use crate::execute::build::host::BuildHost;
 use crate::execute::build::shared_outputs::{PathKeys, outputs_overlap};
-use crate::execute::incremental::build_info::{BuildInfo, is_build_info_file_name_default_library};
+use crate::execute::incremental::build_info::{BuildInfo, resolve_build_info_file_name};
 use crate::execute::incremental::incremental::new_build_info_reader;
 use crate::execute::tsc::compile::{
     CommandLineResult, ExitStatus, System, Watcher, Writer, new_content_mapper_host, write_str,
@@ -211,12 +211,13 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    // Go: build/orchestrator.go:93 (*Orchestrator).relativeFileName
+    // Go: build/orchestrator.go:94 (*Orchestrator).relativeFileName
     pub fn relative_file_name(&self, file_name: &str) -> String {
         convert_to_relative_path(file_name, &self.compare_paths_options)
     }
 
-    // Go: build/orchestrator.go:97 (*Orchestrator).toPath
+    // Go: build/orchestrator.go:97 (*Orchestrator).toPath (at 673a5f17d713; removed by
+    // ts#64159: Go N' calls caseSensitivity.PathKey)
     pub fn to_path(&self, file_name: &str) -> Path {
         to_path(
             file_name,
@@ -225,29 +226,29 @@ impl Orchestrator {
         )
     }
 
-    // Go: build/orchestrator.go:101 (*Orchestrator).resolveBuildInfoFileName
+    // Go: build/orchestrator.go:101 (*Orchestrator).resolveBuildInfoFileName (at
+    // 673a5f17d713; ts#64159 makes it incremental.ResolveBuildInfoFileName,
+    // incremental/buildInfo.go:529)
     pub fn resolve_build_info_file_name(&self, file_name: &str, build_info_dir: &str) -> String {
-        if is_build_info_file_name_default_library(file_name) {
-            return combine_paths(
-                &CompilerHost::default_library_path(&*self.host),
-                &[file_name],
-            );
-        }
-        get_normalized_absolute_path(file_name, build_info_dir)
+        resolve_build_info_file_name(
+            file_name,
+            build_info_dir,
+            &CompilerHost::default_library_path(&*self.host),
+        )
     }
 
-    // Go: build/orchestrator.go:108 (*Orchestrator).Order
+    // Go: build/orchestrator.go:105 (*Orchestrator).Order
     pub fn order(&self) -> &[String] {
         &self.order
     }
 
-    // Go: build/orchestrator.go:113 (*Orchestrator).ScheduleOrder (ts#64220)
+    // Go: build/orchestrator.go:112 (*Orchestrator).ScheduleOrder (ts#64220)
     // ScheduleOrder is the order in which builders pick up projects: Order() stably sorted by dependency depth.
     pub fn schedule_order(&self) -> &[String] {
         &self.schedule_order
     }
 
-    // Go: build/orchestrator.go:126 (*Orchestrator).computeScheduleOrder (ts#64220)
+    // Go: build/orchestrator.go:127 (*Orchestrator).computeScheduleOrder (ts#64220)
     // computeScheduleOrder sorts the build order by dependency depth (projects with no
     // upstream first, then their dependents, and so on). Builders take projects from this
     // order and block until upstream projects are done, so with the plain depth-first order
@@ -760,7 +761,7 @@ impl Orchestrator {
         result
     }
 
-    // Go: build/orchestrator.go:416 (*Orchestrator).getBuildOrderFor (ts#64158)
+    // Go: build/orchestrator.go:417 (*Orchestrator).getBuildOrderFor (ts#64158)
     // PORT: Go returns `o.order` itself for an empty project; this clones it.
     fn get_build_order_for(&self, project: &str) -> (Vec<String>, bool) {
         if project.is_empty() {
@@ -832,13 +833,13 @@ impl Orchestrator {
         true
     }
 
-    // Go: build/orchestrator.go:869 (*Orchestrator).buildOrClean
+    // Go: build/orchestrator.go:865 (*Orchestrator).buildOrClean
     pub(crate) fn build_or_clean(&mut self) -> CommandLineResult {
         let order = self.order.clone();
         self.build_or_clean_order(&order).result
     }
 
-    // Go: build/orchestrator.go:873 (*Orchestrator).buildOrCleanOrder (ts#64158)
+    // Go: build/orchestrator.go:869 (*Orchestrator).buildOrCleanOrder (ts#64158)
     fn build_or_clean_order(&mut self, order: &[String]) -> OrchestratorResult {
         if !self.opts.command.build_options.clean.is_true()
             && self.opts.command.build_options.verbose.is_true()
@@ -870,7 +871,7 @@ impl Orchestrator {
         build_result
     }
 
-    // Go: build/orchestrator.go:924 the numRoutines part of (*Orchestrator).rangeTasks
+    // Go: build/orchestrator.go:918 the numRoutines part of (*Orchestrator).rangeTasks
     pub(crate) fn num_routines(&self) -> i64 {
         let mut num_routines = 4;
         if self.opts.command.compiler_options.single_threaded.is_true() {
@@ -881,8 +882,8 @@ impl Orchestrator {
         num_routines
     }
 
-    // Go: build/orchestrator.go:923 (*Orchestrator).rangeTasks over `order`
-    // with build/orchestrator.go:959 (*Orchestrator).buildOrCleanProject, and
+    // Go: build/orchestrator.go:917 (*Orchestrator).rangeTasks over `order`
+    // with build/orchestrator.go:951 (*Orchestrator).buildOrCleanProject, and
     // the reporting goroutine of build/orchestrator.go:873 buildOrCleanOrder
     // (ts#64220, ts#64158).
     // PORT: see the top comment for the schedule. Go `numRoutines <= 0`
@@ -1059,7 +1060,7 @@ impl Orchestrator {
         self.host.written.clear();
     }
 
-    // Go: build/orchestrator.go:959 (*Orchestrator).buildOrCleanProject,
+    // Go: build/orchestrator.go:951 (*Orchestrator).buildOrCleanProject,
     // after the build (ts#64220).
     fn task_built(&self, task: &mut BuildTask) {
         if self.opts.testing.is_none() {
@@ -1194,7 +1195,7 @@ impl Orchestrator {
         Some(BuildInfoPrefetch { slots })
     }
 
-    // Go: build/buildtask.go:119 (*BuildTask).report, the orchestrator part
+    // Go: build/buildtask.go:121 (*BuildTask).report, the orchestrator part
     // (see `BuildTask::report`).
     fn report_task(&self, task: &mut BuildTask, build_result: &mut OrchestratorResult) {
         let (result, errors) = task.report();
@@ -1230,12 +1231,12 @@ impl Orchestrator {
         }
     }
 
-    // Go: build/orchestrator.go:976 (*Orchestrator).getWriter with a nil task
+    // Go: build/orchestrator.go:968 (*Orchestrator).getWriter with a nil task
     fn writer(&self) -> Writer {
         self.opts.sys.writer()
     }
 
-    // Go: build/orchestrator.go:983 (*Orchestrator).createBuilderStatusReporter(nil)
+    // Go: build/orchestrator.go:975 (*Orchestrator).createBuilderStatusReporter(nil)
     fn create_builder_status_reporter(&self) -> DiagnosticReporter {
         create_builder_status_reporter(
             self.opts.sys.clone(),
@@ -1246,7 +1247,7 @@ impl Orchestrator {
         )
     }
 
-    // Go: build/orchestrator.go:987 (*Orchestrator).createDiagnosticReporter(nil)
+    // Go: build/orchestrator.go:979 (*Orchestrator).createDiagnosticReporter(nil)
     fn create_diagnostic_reporter(&self) -> DiagnosticReporter {
         create_diagnostic_reporter(
             &*self.opts.sys,
@@ -1256,7 +1257,7 @@ impl Orchestrator {
         )
     }
 
-    // Go: build/orchestrator.go:983 (*Orchestrator).createBuilderStatusReporter(task)
+    // Go: build/orchestrator.go:975 (*Orchestrator).createBuilderStatusReporter(task)
     fn create_task_builder_status_reporter(&self) -> TaskDiagnosticReporter {
         task_reporter(|w| {
             create_builder_status_reporter(
@@ -1269,7 +1270,7 @@ impl Orchestrator {
         })
     }
 
-    // Go: build/orchestrator.go:987 (*Orchestrator).createDiagnosticReporter(task)
+    // Go: build/orchestrator.go:979 (*Orchestrator).createDiagnosticReporter(task)
     fn create_task_diagnostic_reporter(&self) -> TaskDiagnosticReporter {
         task_reporter(|w| {
             create_diagnostic_reporter(
@@ -1433,13 +1434,15 @@ impl BuildInfoPrefetch {
     }
 }
 
-// Go: build/orchestrator.go:991 NewOrchestrator
+// Go: build/orchestrator.go:983 NewOrchestrator
 pub fn new_orchestrator(opts: Options) -> Orchestrator {
     // PORT: Go passes the method value `opts.Sys.FS().DirectoryExists`.
     let fs = opts.sys.fs();
+    let use_case_sensitive_file_names = fs.use_case_sensitive_file_names();
     let wm = new_watch_manager(
         opts.sys.writer(),
         Box::new(move |path: &str| fs.directory_exists(path)),
+        use_case_sensitive_file_names,
     );
     // Go: the `comparePathsOptions` field of the `Orchestrator` literal.
     let compare_paths_options = ComparePathsOptions {

@@ -17,7 +17,7 @@ use crate::gostd::errors;
 use std::io::Write;
 use std::time::Duration;
 
-// Go: cmd/tsc/lsp.go:20 runLSP
+// Go: cmd/tsc/lsp.go:21 runLSP
 pub fn run_lsp(args: &[String]) -> i32 {
     let mut flag = new_flag_set("lsp", ErrorHandling::ContinueOnError);
     let stdio = flag.bool("stdio", false, "use stdio for communication");
@@ -62,6 +62,11 @@ pub fn run_lsp(args: &[String]) -> i32 {
     let fs = bundled::wrap_fs_exported(osvfs::osvfs_fs());
     let default_library_path = bundled::lib_path_exported();
     let typings_location = get_global_typings_cache_location();
+    // ts#64159: Go roots and normalizes the current directory and the
+    // typings location (cmd/tsc/lsp.go:47 RootedDirectoryPathFromAbsolute,
+    // :60 ToRootedDirectoryPath).
+    let cwd = tspath::get_normalized_absolute_path(&must_getwd(), "");
+    let typings_location = tspath::get_normalized_absolute_path(&typings_location, &cwd);
 
     // Go: ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     let (ctx, stop) = notify_context(&context::background());
@@ -71,7 +76,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
         in_: crate::lsp::to_reader(Box::new(std::io::BufReader::new(stdio::Stdin))),
         out: crate::lsp::to_writer(Box::new(stdio::Stdout)),
         err: Box::new(stdio::Stderr),
-        cwd: must_getwd(),
+        cwd,
         fs,
         default_library_path,
         typings_location,
@@ -122,7 +127,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
     0
 }
 
-// Go: cmd/tsc/lsp.go:79 newParentProcessWatchdog
+// Go: cmd/tsc/lsp.go:81 newParentProcessWatchdog
 // newParentProcessWatchdog returns a SetParentProcessID callback if the platform
 // supports process-alive checking and no client process ID override was provided,
 // or nil otherwise.
@@ -147,7 +152,7 @@ pub fn new_parent_process_watchdog(
     }))
 }
 
-// Go: cmd/tsc/lsp.go:95 startParentProcessWatchdog
+// Go: cmd/tsc/lsp.go:97 startParentProcessWatchdog
 // startParentProcessWatchdog starts a goroutine that monitors the parent process
 // and cancels the context if the parent dies. This prevents orphaned language
 // server processes when the editor crashes or is killed.
@@ -187,7 +192,7 @@ pub fn start_parent_process_watchdog(ctx: &Context, stop: &CancelFunc, parent_pi
         });
 }
 
-// Go: vfs/osvfs/os.go:193 GetGlobalTypingsCacheLocation
+// Go: vfs/osvfs/os.go:191 GetGlobalTypingsCacheLocation
 // PORT: ported here; `vfs/osvfs` is an accepted compiler file.
 pub fn get_global_typings_cache_location() -> String {
     let cache_dir = match user_cache_dir() {

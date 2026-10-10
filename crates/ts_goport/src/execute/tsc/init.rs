@@ -14,7 +14,7 @@ use crate::frontend::tsoptions::{
 use crate::frontend::tspath::{combine_paths, normalize_path};
 use crate::locale::Locale;
 
-// Go: execute/tsc/init.go:19 WriteConfigFile
+// Go: execute/tsc/init.go:18 WriteConfigFile
 // PORT: Go `options` is the command line `Raw` map
 // (`*collections.OrderedMap[string, any]`); here it is the `IndexMap` in
 // `CompilerOptionsValue::Map`.
@@ -45,10 +45,10 @@ pub fn write_config_file(
     }
 }
 
-// Go: execute/tsc/init.go:34 tab
+// Go: execute/tsc/init.go:33 tab
 const TAB: &str = "  ";
 
-// Go: execute/tsc/init.go:107 commented
+// Go: execute/tsc/init.go:106 commented
 // commentedNever': Never comment this out
 // commentedAlways': Always comment this out, even if it's on commandline
 // commentedOptional': Comment out unless it's on commandline
@@ -73,7 +73,7 @@ struct TsConfigWriter<'a> {
 }
 
 impl TsConfigWriter<'_> {
-    // Go: execute/tsc/init.go:44 emitHeader
+    // Go: execute/tsc/init.go:43 emitHeader
     fn emit_header(&mut self, header: &'static Message) {
         self.result.push(format!(
             "{TAB}{TAB}// {}",
@@ -81,17 +81,17 @@ impl TsConfigWriter<'_> {
         ));
     }
 
-    // Go: execute/tsc/init.go:47 newline
+    // Go: execute/tsc/init.go:46 newline
     fn newline(&mut self) {
         self.result.push(String::new());
     }
 
-    // Go: execute/tsc/init.go:50 push
+    // Go: execute/tsc/init.go:49 push
     fn push(&mut self, line: String) {
         self.result.push(line);
     }
 
-    // Go: execute/tsc/init.go:113 emitOption
+    // Go: execute/tsc/init.go:112 emitOption
     fn emit_option(
         &mut self,
         setting: &str,
@@ -131,7 +131,7 @@ impl TsConfigWriter<'_> {
     }
 }
 
-// Go: execute/tsc/init.go:33 generateTSConfig
+// Go: execute/tsc/init.go:32 generateTSConfig
 fn generate_ts_config(options: &IndexMap<String, CompilerOptionsValue>, locale: &Locale) -> String {
     let mut all_set_options: Vec<&str> = Vec::with_capacity(options.len());
     for k in options.keys() {
@@ -317,7 +317,7 @@ fn generate_ts_config(options: &IndexMap<String, CompilerOptionsValue>, locale: 
     w.result.join("\n")
 }
 
-// Go: execute/tsc/init.go:54 formatSingleValue
+// Go: execute/tsc/init.go:53 formatSingleValue
 // PORT: Go `value == v` compares two `any` values by dynamic type and
 // value. `CompilerOptionsValue` equality compares the variant and the value,
 // and the command line parser stores the enum map value itself
@@ -351,7 +351,7 @@ fn format_single_value(
     b
 }
 
-// Go: execute/tsc/init.go:76 formatValueOrArray
+// Go: execute/tsc/init.go:75 formatValueOrArray
 // PORT: Go tests `reflect.Kind() == reflect.Slice`. The slice values here
 // are `List` and `NilList` (Go `[]any`: a parsed list option or the `types`
 // default) and `StringList` (Go `[]string`: the parser's value for a list

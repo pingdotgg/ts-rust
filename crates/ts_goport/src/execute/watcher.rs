@@ -40,7 +40,7 @@ use crate::gostd::{Context, GoError};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-// Go: execute/watcher.go:26 cachedSourceFile
+// Go: execute/watcher.go:25 cachedSourceFile
 // PORT: Go `time.Time` is `Option<SystemTime>` (`None` = zero), as in
 // `vfs::FileInfo`.
 pub struct CachedSourceFile {
@@ -48,7 +48,7 @@ pub struct CachedSourceFile {
     pub mod_time: Option<SystemTime>,
 }
 
-// Go: execute/watcher.go:31 watchCompilerHost
+// Go: execute/watcher.go:30 watchCompilerHost
 // PORT: the embedded Go `compiler.CompilerHost` is the `compiler_host`
 // field; the trait impl below forwards to it. Go `*collections.SyncMap`
 // shared with the watcher is `Rc<RefCell<FxHashMap>>` (one thread).
@@ -136,7 +136,7 @@ impl CompilerHost for WatchCompilerHost {
         self.compiler_host.trace(msg, args);
     }
 
-    // Go: execute/watcher.go:34 (*watchCompilerHost).GetSourceFile
+    // Go: execute/watcher.go:35 (*watchCompilerHost).GetSourceFile
     fn get_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
         let info = self.compiler_host.fs().stat(&opts.file_name);
 
@@ -233,7 +233,7 @@ impl CompilerHost for WatchCompilerHost {
     }
 }
 
-// Go: execute/watcher.go:59 Watcher
+// Go: execute/watcher.go:58 Watcher
 // PORT: Go `*tsoptions.ParsedCommandLine` is `Rc<ParsedCommandLine>`. Go
 // `*collections.OrderedMap[string, any]` is
 // `Option<IndexMap<String, CompilerOptionsValue>>` (as in build/host.rs).
@@ -323,7 +323,7 @@ pub(crate) fn test_watch_backend() -> Option<Rc<dyn WatchBackend>> {
     TEST_WATCH_BACKEND.with(|slot| slot.borrow().clone())
 }
 
-// Go: execute/watcher.go:105 createWatcher
+// Go: execute/watcher.go:104 createWatcher
 pub fn create_watcher(
     sys: Rc<dyn System>,
     config_parse_result: Rc<ParsedCommandLine>,
@@ -335,9 +335,11 @@ pub fn create_watcher(
 ) -> Watcher {
     // PORT: Go passes the method value `sys.FS().DirectoryExists`.
     let fs = sys.fs();
+    let use_case_sensitive_file_names = fs.use_case_sensitive_file_names();
     let mut wm = new_watch_manager(
         sys.writer(),
         Box::new(move |path: &str| fs.directory_exists(path)),
+        use_case_sensitive_file_names,
     );
     // Go: if t, ok := testing.(CommandLineTestingWithWatchBackend); ok { wm.SetBackend(t.WatchBackend()) }
     if let Some(backend) = test_watch_backend() {
@@ -457,7 +459,7 @@ impl Watcher {
         }
     }
 
-    // Go: execute/watcher.go:172 (*Watcher).replaceContentMapperProject
+    // Go: execute/watcher.go:178 (*Watcher).replaceContentMapperProject
     fn replace_content_mapper_project(&mut self, config: &ParsedCommandLine) {
         let Some(host) = &self.content_mapper_host else {
             return;
@@ -473,7 +475,7 @@ impl Watcher {
         self.content_mapper_project = project;
     }
 
-    // Go: execute/watcher.go:187 (*Watcher).contentMapperWatchedFiles
+    // Go: execute/watcher.go:193 (*Watcher).contentMapperWatchedFiles
     fn content_mapper_watched_files(&self) -> Vec<String> {
         let mut files = Vec::new();
         for mapper in self.config.content_mappers() {
@@ -504,7 +506,7 @@ impl Watcher {
             .collect()
     }
 
-    // Go: execute/watcher.go:207 (*Watcher).computeDesiredWatches
+    // Go: execute/watcher.go:213 (*Watcher).computeDesiredWatches
     // PORT: Go ranges over `WildcardDirectories()` (a map, random order).
     pub fn compute_desired_watches(&self, seen_file_paths: &[String]) -> FxHashMap<String, bool> {
         let cwd = self.sys.get_current_directory();
@@ -554,9 +556,27 @@ impl Watcher {
         for (dir, recursive) in &resolved_dirs {
             coverage.set(dir, *recursive);
         }
+        // ts#64366: program files and root files are watched at any depth.
+        let program = self.get_program();
+        let program_files = program.files_by_path();
+        let case_sensitive = self.sys.fs().use_case_sensitive_file_names();
+        let root_files: FxHashSet<Path> = self
+            .config
+            .file_names()
+            .iter()
+            .map(|file_name| to_path(file_name, &cwd, case_sensitive))
+            .collect();
         for file_path in seen_file_paths {
             let dir = get_directory_path(file_path);
-            if !coverage.covered(&dir) && can_watch_directory(&dir) {
+            if coverage.covered(&dir) {
+                continue;
+            }
+            // Seen files mix program files with lookup locations. Only lookups keep the depth check, so an imported
+            // file outside the tsconfig directory (say /shared next to /app) is still watched. A root file is not in
+            // the program while it is missing, but its directory stays watched so that recreating it rebuilds.
+            let p = to_path(file_path, &cwd, case_sensitive);
+            let is_program_file = program_files.contains_key(&p);
+            if is_program_file || root_files.contains(&p) || can_watch_directory(&dir) {
                 coverage.set(&dir, false);
             }
         }
@@ -565,13 +585,14 @@ impl Watcher {
         self.wm.borrow().resolve_desired_dirs(&coverage.dirs())
     }
 
-    // Go: execute/watcher.go:201 (*Watcher).reconcileWatches
+    // Go: execute/watcher.go:282 (*Watcher).reconcileWatches
     pub fn reconcile_watches(&self, seen_file_paths: &[String]) -> Result<(), GoError> {
         let desired_dirs = self.compute_desired_watches(seen_file_paths);
         self.wm.borrow().reconcile_watches(&desired_dirs)
     }
 
-    // Go: execute/watcher.go:206 (*Watcher).comparePathsOptions
+    // Go: execute/watcher.go:271 (*Watcher).comparePathsOptions (at 673a5f17d713; ts#64159
+    // makes it caseSensitivity, execute/watcher.go:287)
     pub fn compare_paths_options(&self) -> ComparePathsOptions {
         ComparePathsOptions {
             use_case_sensitive_file_names: self.sys.fs().use_case_sensitive_file_names(),
@@ -579,7 +600,7 @@ impl Watcher {
         }
     }
 
-    // Go: execute/watcher.go:278 (*Watcher).DoCycle
+    // Go: execute/watcher.go:291 (*Watcher).DoCycle
     // PORT: Go unlocks with `defer`; the port unlocks before each return.
     pub fn do_cycle(&mut self) {
         self.wm.borrow().lock();
@@ -701,7 +722,7 @@ impl Watcher {
         self.wm.borrow().unlock();
     }
 
-    // Go: execute/watcher.go:378 (*Watcher).isRelevantChange
+    // Go: execute/watcher.go:390 (*Watcher).isRelevantChange
     // PORT: Go map iteration order is random; `changed_paths` is an
     // `FxHashMap`. The result does not depend on the order.
     pub fn is_relevant_change(
@@ -710,7 +731,6 @@ impl Watcher {
     ) -> bool {
         let case_sensitive = self.sys.fs().use_case_sensitive_file_names();
         let cwd = self.sys.get_current_directory();
-        let opts = self.compare_paths_options();
         let content_mapper_watched_files = self.content_mapper_watched_paths(&cwd, case_sensitive);
         for event_path in changed_paths.keys() {
             let p = to_path(event_path, &cwd, case_sensitive);
@@ -730,7 +750,7 @@ impl Watcher {
                 return true;
             }
             if self.sys.fs().directory_exists(event_path)
-                && self.wm.borrow().is_path_under_watch(event_path, &opts)
+                && self.wm.borrow().is_path_under_watch(event_path)
             {
                 return true;
             }
@@ -738,7 +758,7 @@ impl Watcher {
         false
     }
 
-    // Go: execute/watcher.go:408 (*Watcher).doBuild
+    // Go: execute/watcher.go:419 (*Watcher).doBuild
     pub fn do_build(&mut self) -> Result<(), GoError> {
         // PORT: the full build below can still use the parses of the old
         // cache (`WatchCompilerHost::reuse_parse`); Go drops them here.
@@ -1054,7 +1074,7 @@ impl Watcher {
         self.retired_program = None;
     }
 
-    // Go: execute/watcher.go:536 (*Watcher).tryUpdateProgram
+    // Go: execute/watcher.go:558 (*Watcher).tryUpdateProgram
     // PORT: Go `w.program.GetProgram()` is `get_program`. The parses and the
     // reuse run with no current program, as `program::update_program_version`
     // does. A reused program gets a new program version that shares the
@@ -1125,7 +1145,7 @@ impl Watcher {
         reused
     }
 
-    // Go: execute/watcher.go:575 (*Watcher).FastPathBuilds
+    // Go: execute/watcher.go:597 (*Watcher).FastPathBuilds
     /// FastPathBuilds reports how many builds reused an existing program via the
     /// UpdateProgram single-file fast path. It is intended for tests that need to
     /// verify which build path was taken.
@@ -1133,7 +1153,7 @@ impl Watcher {
         self.fast_path_builds
     }
 
-    // Go: execute/watcher.go:579 (*Watcher).FullBuilds
+    // Go: execute/watcher.go:601 (*Watcher).FullBuilds
     /// FullBuilds reports how many builds constructed a full program via NewProgram.
     /// It is intended for tests that need to verify which build path was taken.
     pub fn full_builds(&self) -> i32 {
@@ -1167,7 +1187,7 @@ impl Watcher {
         testing.on_program(program);
     }
 
-    // Go: execute/watcher.go:593 (*Watcher).evictChangedSourceFiles
+    // Go: execute/watcher.go:615 (*Watcher).evictChangedSourceFiles
     pub fn evict_changed_source_files(
         &self,
         changed_paths: &FxHashMap<String, fswatch::EventKind>,
@@ -1188,7 +1208,7 @@ impl Watcher {
         }
     }
 
-    // Go: execute/watcher.go:370 (*Watcher).compileAndEmit
+    // Go: execute/watcher.go:628 (*Watcher).compileAndEmit
     // PORT: `EmitInput.Program` is the current program (see tsc/emit.rs);
     // `do_build` makes the build's version current. Go leaves `WriteFile`
     // nil; see `os_write_file`.
@@ -1208,27 +1228,40 @@ impl Watcher {
         })
     }
 
-    // Go: execute/watcher.go:621 (*Watcher).contentMapperManifestChanged
+    // Go: execute/watcher.go:642 (*Watcher).contentMapperManifestChanged
     // PORT: Go looks up the map by key; the order does not matter.
+    // ts#64544: the event paths and the manifest compare by path key, so a
+    // manifest event with other casing counts on a case-insensitive file
+    // system.
     fn content_mapper_manifest_changed(
         &self,
         changed_paths: &FxHashMap<String, fswatch::EventKind>,
     ) -> bool {
+        let compare_paths_options = self.compare_paths_options();
+        let to_key = |path: &str| {
+            to_path(
+                path,
+                &compare_paths_options.current_directory,
+                compare_paths_options.use_case_sensitive_file_names,
+            )
+        };
+        let mut changed_path_keys: Option<FxHashSet<Path>> = None;
         for mapper in self.config.content_mappers() {
             if mapper.package_directory.is_empty() || !mapper.contribution_id.is_empty() {
                 continue;
             }
+            let changed_path_keys = changed_path_keys
+                .get_or_insert_with(|| changed_paths.keys().map(|path| to_key(path)).collect());
             // ts#63936: `package_directory` is already a real path.
-            if changed_paths
-                .contains_key(&combine_paths(&mapper.package_directory, &["package.json"]))
-            {
+            let manifest_path = combine_paths(&mapper.package_directory, &["package.json"]);
+            if changed_path_keys.contains(&to_key(&manifest_path)) {
                 return true;
             }
         }
         false
     }
 
-    // Go: execute/watcher.go:633 (*Watcher).recheckTsConfig
+    // Go: execute/watcher.go:663 (*Watcher).recheckTsConfig
     pub fn recheck_ts_config(&mut self, force: bool) -> bool {
         if self.config_file_name.is_empty() {
             return false;
@@ -1269,7 +1302,9 @@ impl Watcher {
         let mut config_file_paths = vec![self.config_file_name.clone()];
         config_file_paths.extend(config_parse_result.extended_source_files().iter().cloned());
         self.config_file_paths = config_file_paths;
-        // PORT: Go `reflect.DeepEqual` is `PartialEq` (see `ParsedOptions`).
+        // PORT: ts#64457 makes Go call `ParsedOptions.Equals`
+        // (tsoptions/parsedoptions.go:21) in place of `reflect.DeepEqual`.
+        // Both are `PartialEq` here (see `ParsedOptions`).
         if self.config.parsed_config != config_parse_result.parsed_config {
             self.config_modified = true;
         }
@@ -1278,7 +1313,7 @@ impl Watcher {
         false
     }
 
-    // Go: execute/watcher.go:425 (*Watcher).parseConfigFile
+    // Go: execute/watcher.go:705 (*Watcher).parseConfigFile
     pub fn parse_config_file(&mut self) -> Option<Rc<ParsedCommandLine>> {
         let extended_config_cache = Rc::new(TscExtendedConfigCache::default());
         let (config_parse_result, errors) = get_parsed_command_line_of_config_file(
@@ -1312,7 +1347,7 @@ impl Watcher {
     }
 }
 
-// Go: execute/watcher.go:581 equalJSXImplicitImport
+// Go: execute/watcher.go:603 equalJSXImplicitImport
 // PORT: the files are frontend `ParsedSourceFile`s (the new one is not
 // published), so the base comes from the file loader's
 // `get_jsx_implicit_import_base_of_file`, Go `ast.GetJSXImplicitImportBase`

@@ -7,7 +7,8 @@ use std::cell::OnceCell;
 // buildOptionsParser / ParseBuildOptions parts of tsoptions/parsinghelpers.go
 // that the frontend port left out.
 
-// Go: core/buildoptions.go:3 BuildOptions
+// Go: core/buildoptions.go:3 BuildOptions (at 673a5f17d713; ts#64457 generates it,
+// core/options_generated.go:860)
 // PORT: Go `*int` (64-bit) is `Option<i64>`. The `noCopy` marker is dropped.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BuildOptions {
@@ -23,7 +24,7 @@ pub struct BuildOptions {
     pub clean: Tristate,
 }
 
-// Go: tsoptions/parsinghelpers.go:252 buildOptionsParser
+// Go: tsoptions/parsinghelpers.go:299 buildOptionsParser
 // PORT: the embedded Go `*core.BuildOptions` is a mutable borrow, as in
 // `CompilerOptionsParser`.
 pub struct BuildOptionsParser<'a> {
@@ -31,23 +32,24 @@ pub struct BuildOptionsParser<'a> {
 }
 
 impl OptionParser for BuildOptionsParser<'_> {
-    // Go: tsoptions/parsinghelpers.go:180 (*buildOptionsParser).ParseOption
+    // Go: tsoptions/parsinghelpers.go:303 (*buildOptionsParser).ParseOption
     fn parse_option(&mut self, key: &str, value: CompilerOptionsValue) -> Vec<Diagnostic> {
         parse_build_options(key, value, self.build_options)
     }
 
-    // Go: tsoptions/parsinghelpers.go:184 (*buildOptionsParser).UnknownOptionDiagnostic
+    // Go: tsoptions/parsinghelpers.go:307 (*buildOptionsParser).UnknownOptionDiagnostic
     fn unknown_option_diagnostic(&self) -> &'static Message {
         extra_key_diagnostics("buildOptions").expect("known key")
     }
 
-    // Go: tsoptions/parsinghelpers.go:188 (*buildOptionsParser).UnknownDidYouMeanDiagnostic
+    // Go: tsoptions/parsinghelpers.go:311 (*buildOptionsParser).UnknownDidYouMeanDiagnostic
     fn unknown_did_you_mean_diagnostic(&self) -> &'static Message {
         extra_key_did_you_mean_diagnostics("buildOptions").expect("known key")
     }
 }
 
-// Go: tsoptions/parsinghelpers.go:626 ParseBuildOptions
+// Go: tsoptions/parsinghelpers.go:626 ParseBuildOptions (at 673a5f17d713; ts#64457
+// generates it, tsoptions/options_generated.go:342)
 // PORT: Go `allOptions` can be nil; the Rust caller always has options, so
 // that nil check is dropped (as in `parse_compiler_options`).
 pub fn parse_build_options(
@@ -96,7 +98,7 @@ pub struct ParsedBuildCommandLine {
 }
 
 impl ParsedBuildCommandLine {
-    // Go: tsoptions/parsedbuildcommandline.go:29 (*ParsedBuildCommandLine).ResolvedProjectPaths
+    // Go: tsoptions/parsedbuildcommandline.go:28 (*ParsedBuildCommandLine).ResolvedProjectPaths
     pub fn resolved_project_paths(&self) -> &[String] {
         self.resolved_project_paths.get_or_init(|| {
             self.projects
@@ -111,7 +113,7 @@ impl ParsedBuildCommandLine {
         })
     }
 
-    // Go: tsoptions/parsedbuildcommandline.go:40 (*ParsedBuildCommandLine).Locale
+    // Go: tsoptions/parsedbuildcommandline.go:39 (*ParsedBuildCommandLine).Locale
     // PORT: Go returns the `Locale` value; this returns a clone of the
     // cached value.
     pub fn locale(&self) -> crate::locale::Locale {

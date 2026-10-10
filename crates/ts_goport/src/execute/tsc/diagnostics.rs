@@ -24,7 +24,7 @@ use crate::diagnostics_loc::message_localize;
 use crate::frontend::tspath::{ComparePathsOptions, convert_to_relative_path, path_is_absolute};
 use crate::locale::Locale;
 
-// Go: diagnosticwriter/diagnosticwriter.go:196 FormattingOptions
+// Go: diagnosticwriter/diagnosticwriter.go:203 FormattingOptions
 #[derive(Clone, Debug, Default)]
 pub struct FormattingOptions {
     pub new_line: String,
@@ -136,7 +136,7 @@ pub fn create_colors(sys: &dyn System) -> Colors {
 }
 
 impl Colors {
-    // Go: execute/tsc/diagnostics.go:93 (*colors).bold
+    // Go: execute/tsc/diagnostics.go:98 (*colors).bold
     pub fn bold(&self, str: &str) -> String {
         if !self.show_colors {
             return str.to_string();
@@ -144,7 +144,7 @@ impl Colors {
         format!("\x1b[1m{str}\x1b[22m")
     }
 
-    // Go: execute/tsc/diagnostics.go:100 (*colors).blue
+    // Go: execute/tsc/diagnostics.go:105 (*colors).blue
     pub fn blue(&self, str: &str) -> String {
         if !self.show_colors {
             return str.to_string();
@@ -158,7 +158,7 @@ impl Colors {
         format!("\x1b[94m{str}\x1b[39m")
     }
 
-    // Go: execute/tsc/diagnostics.go:113 (*colors).blueBackground
+    // Go: execute/tsc/diagnostics.go:118 (*colors).blueBackground
     pub fn blue_background(&self, str: &str) -> String {
         if !self.show_colors {
             return str.to_string();
@@ -170,7 +170,7 @@ impl Colors {
         }
     }
 
-    // Go: execute/tsc/diagnostics.go:124 (*colors).brightWhite
+    // Go: execute/tsc/diagnostics.go:129 (*colors).brightWhite
     pub fn bright_white(&self, str: &str) -> String {
         if !self.show_colors {
             return str.to_string();
@@ -535,7 +535,7 @@ impl Hash for FileLike {
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:44 ASTDiagnostic
+// Go: diagnosticwriter/diagnosticwriter.go:51 ASTDiagnostic
 // ASTDiagnostic wraps ast.Diagnostic to implement the Diagnostic interface
 // PORT: Go reads `Code`, `Category` and `Localize` through the embedded
 // `*ast.Diagnostic`; the port reads them from `.0`. The api lane calls it
@@ -544,12 +544,12 @@ impl Hash for FileLike {
 pub struct AstDiagnostic<'a>(pub &'a Diagnostic);
 
 impl<'a> AstDiagnostic<'a> {
-    // Go: diagnosticwriter/diagnosticwriter.go:48 (*ASTDiagnostic).RelatedInformation
+    // Go: diagnosticwriter/diagnosticwriter.go:55 (*ASTDiagnostic).RelatedInformation
     pub fn related_information(self) -> impl Iterator<Item = AstDiagnostic<'a>> {
         self.0.related_information.iter().map(AstDiagnostic)
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:57 (*ASTDiagnostic).File (tsgo#4712, ts#63936)
+    // Go: diagnosticwriter/diagnosticwriter.go:64 (*ASTDiagnostic).File (tsgo#4712, ts#63936)
     pub fn file(self) -> Option<FileLike> {
         let file = self.0.file;
         if file.is_nil() {
@@ -572,22 +572,22 @@ impl<'a> AstDiagnostic<'a> {
         Some(FileLike::Source(file))
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:71 (*ASTDiagnostic).Source (tsgo#4712)
+    // Go: diagnosticwriter/diagnosticwriter.go:85 (*ASTDiagnostic).Source (tsgo#4712)
     pub fn source(self) -> &'a str {
         self.0.source()
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:82 (*ASTDiagnostic).Pos (tsgo#4712)
+    // Go: diagnosticwriter/diagnosticwriter.go:89 (*ASTDiagnostic).Pos (tsgo#4712)
     pub fn pos(self) -> i32 {
         self.resolve().loc.pos()
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:83 (*ASTDiagnostic).End (ts#63935)
+    // Go: diagnosticwriter/diagnosticwriter.go:90 (*ASTDiagnostic).End (ts#63935)
     pub fn end(self) -> i32 {
         self.resolve().loc.end()
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:84 (*ASTDiagnostic).Len (tsgo#4712)
+    // Go: diagnosticwriter/diagnosticwriter.go:91 (*ASTDiagnostic).Len (tsgo#4712)
     // PORT: Go `TextRange.Len` subtracts the int32 ends, which wraps for a
     // bad range from a `.tsbuildinfo` (core/text.go:30).
     fn len(self) -> i32 {
@@ -595,7 +595,7 @@ impl<'a> AstDiagnostic<'a> {
         loc.end().wrapping_sub(loc.pos())
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:90 (*ASTDiagnostic).resolve (tsgo#4712)
+    // Go: diagnosticwriter/diagnosticwriter.go:104 (*ASTDiagnostic).resolve (tsgo#4712)
     // resolve determines where and against which text a diagnostic should be reported. A content mapper's
     // own diagnostics already carry original ranges. A compiler diagnostic on a content-mapped file has its
     // virtual range mapped back to the original; if it falls entirely within synthesized code, there is no
@@ -637,7 +637,7 @@ impl<'a> AstDiagnostic<'a> {
         }
     }
 
-    // Go: diagnosticwriter/diagnosticwriter.go:130 (*ASTDiagnostic).MessageChain (tsgo#4712)
+    // Go: diagnosticwriter/diagnosticwriter.go:153 (*ASTDiagnostic).MessageChain (tsgo#4712)
     // PORT: the chain entries are borrowed; the note is a new diagnostic.
     pub fn message_chain(self) -> Vec<Cow<'a, Diagnostic>> {
         let mut result: Vec<Cow<'a, Diagnostic>> =
@@ -655,12 +655,12 @@ impl<'a> AstDiagnostic<'a> {
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:164 WrapASTDiagnostic (ts#63935)
+// Go: diagnosticwriter/diagnosticwriter.go:171 WrapASTDiagnostic (ts#63935)
 pub fn wrap_ast_diagnostic(d: &Diagnostic) -> AstDiagnostic<'_> {
     AstDiagnostic(d)
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:87 resolvedLocation (tsgo#4712)
+// Go: diagnosticwriter/diagnosticwriter.go:94 resolvedLocation (tsgo#4712)
 // resolvedLocation describes how a diagnostic on a content-mapped file should be reported.
 #[derive(Clone, Copy)]
 struct ResolvedLocation {
@@ -669,7 +669,7 @@ struct ResolvedLocation {
     synthesized: bool,  // the range is in virtual code with no corresponding original location
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:118 originalTextFile (tsgo#4712)
+// Go: diagnosticwriter/diagnosticwriter.go:125 originalTextFile (tsgo#4712)
 /// Go `originalTextFile`: a content-mapped source file's original
 /// (untransformed) text as a `FileLike`, so that diagnostics whose ranges
 /// point into that text render at the correct locations.
@@ -679,7 +679,7 @@ pub struct OriginalTextFile {
     line_map: Vec<i32>,
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:124 newOriginalTextFile (tsgo#4712, ts#63936)
+// Go: diagnosticwriter/diagnosticwriter.go:131 newOriginalTextFile (tsgo#4712, ts#63936)
 fn new_original_text_file(file: Node, file_name: &'static str) -> Rc<OriginalTextFile> {
     let text = source_file_original_text(file);
     Rc::new(OriginalTextFile {
@@ -689,7 +689,7 @@ fn new_original_text_file(file: Node, file_name: &'static str) -> Rc<OriginalTex
     })
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:137 renamedFile (ts#63936)
+// Go: diagnosticwriter/diagnosticwriter.go:144 renamedFile (ts#63936)
 /// Go `renamedFile`: a source file shown under another name (the name of
 /// its canonical source file); its text and line map are the file's own.
 pub struct RenamedFile {
@@ -697,14 +697,14 @@ pub struct RenamedFile {
     file_name: &'static str,
 }
 
-// Go: scanner/scanner.go:2676 GetECMALineOfPosition
+// Go: scanner/scanner.go:2677 GetECMALineOfPosition
 // PORT: Go takes an `ast.SourceFileLike`. The Rust scanner function takes a
 // file node, so this is its code on a `FileLike`.
 fn get_ecma_line_of_file_position(file: &FileLike, pos: i32) -> i32 {
     compute_line_of_position(&file.ecma_line_map(), pos)
 }
 
-// Go: scanner/scanner.go:2684 GetECMALineAndUTF16CharacterOfPosition
+// Go: scanner/scanner.go:2685 GetECMALineAndUTF16CharacterOfPosition
 // PORT: Go takes an `ast.SourceFileLike`. The code is
 // `scanner_util::ecma_line_and_utf16_character_of_text_position` (a `pos`
 // inside a char, and the Go panics for a `pos` out of the text) on a
@@ -717,27 +717,27 @@ pub fn get_ecma_line_and_utf16_character_of_file_position(file: &FileLike, pos: 
     )
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:203 foregroundColorEscapeGrey
+// Go: diagnosticwriter/diagnosticwriter.go:211 foregroundColorEscapeGrey
 const FOREGROUND_COLOR_ESCAPE_GREY: &str = "\u{1b}[90m";
-// Go: diagnosticwriter/diagnosticwriter.go:204 foregroundColorEscapeRed
+// Go: diagnosticwriter/diagnosticwriter.go:212 foregroundColorEscapeRed
 const FOREGROUND_COLOR_ESCAPE_RED: &str = "\u{1b}[91m";
-// Go: diagnosticwriter/diagnosticwriter.go:205 foregroundColorEscapeYellow
+// Go: diagnosticwriter/diagnosticwriter.go:213 foregroundColorEscapeYellow
 const FOREGROUND_COLOR_ESCAPE_YELLOW: &str = "\u{1b}[93m";
-// Go: diagnosticwriter/diagnosticwriter.go:206 foregroundColorEscapeBlue
+// Go: diagnosticwriter/diagnosticwriter.go:214 foregroundColorEscapeBlue
 const FOREGROUND_COLOR_ESCAPE_BLUE: &str = "\u{1b}[94m";
-// Go: diagnosticwriter/diagnosticwriter.go:207 foregroundColorEscapeCyan
+// Go: diagnosticwriter/diagnosticwriter.go:215 foregroundColorEscapeCyan
 const FOREGROUND_COLOR_ESCAPE_CYAN: &str = "\u{1b}[96m";
 
-// Go: diagnosticwriter/diagnosticwriter.go:211 gutterStyleSequence
+// Go: diagnosticwriter/diagnosticwriter.go:219 gutterStyleSequence
 const GUTTER_STYLE_SEQUENCE: &str = "\u{1b}[7m";
-// Go: diagnosticwriter/diagnosticwriter.go:212 gutterSeparator
+// Go: diagnosticwriter/diagnosticwriter.go:220 gutterSeparator
 const GUTTER_SEPARATOR: &str = " ";
-// Go: diagnosticwriter/diagnosticwriter.go:213 resetEscapeSequence
+// Go: diagnosticwriter/diagnosticwriter.go:221 resetEscapeSequence
 const RESET_ESCAPE_SEQUENCE: &str = "\u{1b}[0m";
-// Go: diagnosticwriter/diagnosticwriter.go:214 ellipsis
+// Go: diagnosticwriter/diagnosticwriter.go:222 ellipsis
 const ELLIPSIS: &str = "...";
 
-// Go: diagnosticwriter/diagnosticwriter.go:229 FormatDiagnosticWithColorAndContext
+// Go: diagnosticwriter/diagnosticwriter.go:237 FormatDiagnosticWithColorAndContext
 pub fn format_diagnostic_with_color_and_context(
     output: &Writer,
     diagnostic: &Diagnostic,
@@ -827,7 +827,7 @@ pub fn format_diagnostic_with_color_and_context(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:264 writeCodeSnippet
+// Go: diagnosticwriter/diagnosticwriter.go:272 writeCodeSnippet
 fn write_code_snippet(
     writer: &Writer,
     source_file: &FileLike,
@@ -952,7 +952,7 @@ fn write_code_snippet(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:358 WriteFlattenedDiagnosticMessage
+// Go: diagnosticwriter/diagnosticwriter.go:366 WriteFlattenedDiagnosticMessage
 // PORT: also Go `WriteFlattenedASTDiagnosticMessage` (:338): the port takes
 // the ast diagnostic and wraps it.
 pub fn write_flattened_diagnostic_message(
@@ -968,7 +968,7 @@ pub fn write_flattened_diagnostic_message(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:366 flattenDiagnosticMessageChain
+// Go: diagnosticwriter/diagnosticwriter.go:374 flattenDiagnosticMessageChain
 fn flatten_diagnostic_message_chain(
     writer: &Writer,
     chain: &Diagnostic,
@@ -987,7 +987,7 @@ fn flatten_diagnostic_message_chain(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:380 diagnosticPrefix (tsgo#4712)
+// Go: diagnosticwriter/diagnosticwriter.go:388 diagnosticPrefix (tsgo#4712)
 // diagnosticPrefix returns the prefix shown before a diagnostic's code, e.g. "TS" for compiler
 // diagnostics or a content mapper's custom source for its diagnostics.
 fn diagnostic_prefix(diagnostic: AstDiagnostic<'_>) -> &str {
@@ -998,7 +998,7 @@ fn diagnostic_prefix(diagnostic: AstDiagnostic<'_>) -> &str {
     "TS"
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:387 getCategoryFormat
+// Go: diagnosticwriter/diagnosticwriter.go:395 getCategoryFormat
 fn get_category_format(category: Category) -> &'static str {
     match category {
         Category::Error => FOREGROUND_COLOR_ESCAPE_RED,
@@ -1009,17 +1009,17 @@ fn get_category_format(category: Category) -> &'static str {
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:401 FormattedWriter
+// Go: diagnosticwriter/diagnosticwriter.go:409 FormattedWriter
 pub type FormattedWriter = fn(output: &Writer, text: &str, format_style: &str);
 
-// Go: diagnosticwriter/diagnosticwriter.go:403 writeWithStyleAndReset
+// Go: diagnosticwriter/diagnosticwriter.go:411 writeWithStyleAndReset
 fn write_with_style_and_reset(output: &Writer, text: &str, format_style: &str) {
     write_str(output, format_style);
     write_str(output, text);
     write_str(output, RESET_ESCAPE_SEQUENCE);
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:409 WriteLocation
+// Go: diagnosticwriter/diagnosticwriter.go:417 WriteLocation
 // PORT: `file` is a `FileLike` or a source file node.
 pub fn write_location(
     output: &Writer,
@@ -1054,7 +1054,7 @@ pub fn write_location(
 
 // Some of these lived in watch.ts, but they're not specific to the watch API.
 
-// Go: diagnosticwriter/diagnosticwriter.go:427 ErrorSummary
+// Go: diagnosticwriter/diagnosticwriter.go:435 ErrorSummary
 // PORT: the lists borrow the diagnostics.
 struct ErrorSummary<'a> {
     total_error_count: i32,
@@ -1063,7 +1063,7 @@ struct ErrorSummary<'a> {
     sorted_files: Vec<FileLike>,
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:434 WriteErrorSummaryText
+// Go: diagnosticwriter/diagnosticwriter.go:442 WriteErrorSummaryText
 pub fn write_error_summary_text(
     output: &Writer,
     all_diagnostics: &[Diagnostic],
@@ -1124,7 +1124,7 @@ pub fn write_error_summary_text(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:481 getErrorSummary
+// Go: diagnosticwriter/diagnosticwriter.go:489 getErrorSummary
 // PORT: Go calls `File()` twice for each diagnostic. For a content-mapped
 // file each call makes a new `originalTextFile`, so each such diagnostic has
 // its own entry (tsgo#4712). One call per diagnostic gives the same entries.
@@ -1174,7 +1174,7 @@ fn get_error_summary(diags: &[Diagnostic]) -> ErrorSummary<'_> {
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:516 writeTabularErrorsDisplay
+// Go: diagnosticwriter/diagnosticwriter.go:524 writeTabularErrorsDisplay
 fn write_tabular_errors_display(
     output: &Writer,
     error_summary: &ErrorSummary<'_>,
@@ -1219,7 +1219,7 @@ fn write_tabular_errors_display(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:547 prettyPathForFileError
+// Go: diagnosticwriter/diagnosticwriter.go:555 prettyPathForFileError
 fn pretty_path_for_file_error(
     file: Option<&FileLike>,
     file_errors: &[&Diagnostic],
@@ -1247,7 +1247,7 @@ fn pretty_path_for_file_error(
     )
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:571 WriteFormatDiagnostic
+// Go: diagnosticwriter/diagnosticwriter.go:576 WriteFormatDiagnostic
 pub fn write_format_diagnostic(
     output: &Writer,
     diagnostic: &Diagnostic,
@@ -1284,7 +1284,7 @@ pub fn write_format_diagnostic(
     write_str(output, &format_opts.new_line);
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:565 WriteFormatDiagnostics
+// Go: diagnosticwriter/diagnosticwriter.go:570 WriteFormatDiagnostics
 pub fn write_format_diagnostics_to(
     output: &Writer,
     diagnostics: &[Diagnostic],
@@ -1295,7 +1295,7 @@ pub fn write_format_diagnostics_to(
     }
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:584 FormatDiagnosticsStatusWithColorAndTime
+// Go: diagnosticwriter/diagnosticwriter.go:589 FormatDiagnosticsStatusWithColorAndTime
 pub fn format_diagnostics_status_with_color_and_time(
     output: &Writer,
     time: &str,
@@ -1308,7 +1308,7 @@ pub fn format_diagnostics_status_with_color_and_time(
     write_flattened_diagnostic_message(output, diag, &format_opts.new_line, &format_opts.locale);
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:591 FormatDiagnosticsStatusAndTime
+// Go: diagnosticwriter/diagnosticwriter.go:596 FormatDiagnosticsStatusAndTime
 pub fn format_diagnostics_status_and_time(
     output: &Writer,
     time: &str,
@@ -1319,7 +1319,7 @@ pub fn format_diagnostics_status_and_time(
     write_flattened_diagnostic_message(output, diag, &format_opts.new_line, &format_opts.locale);
 }
 
-// Go: diagnosticwriter/diagnosticwriter.go:601 TryClearScreen
+// Go: diagnosticwriter/diagnosticwriter.go:606 TryClearScreen
 pub fn try_clear_screen(output: &Writer, diag: &Diagnostic, options: &CompilerOptions) -> bool {
     // Go: diagnosticwriter/diagnosticwriter.go:596 ScreenStartingCodes
     let screen_starting_codes = [

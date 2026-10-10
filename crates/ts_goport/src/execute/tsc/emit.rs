@@ -24,7 +24,7 @@ use crate::frontend::tspath::Path;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-// Go: compiler/program.go:1957 ProgramLike
+// Go: compiler/program.go:1980 ProgramLike
 // PORT: only the methods that `EmitFilesAndReportErrors` and
 // `GetDiagnosticsOfAnyProgram` call. Config, syntactic and program
 // diagnostics are read from the current program by
@@ -56,7 +56,7 @@ impl ProgramLike for CompilerProgram {
     fn options(&self) -> &'static CompilerOptions {
         options()
     }
-    // Go: compiler/program.go:787 GetBindDiagnostics
+    // Go: compiler/program.go:811 GetBindDiagnostics
     fn get_bind_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         get_bind_diagnostics(file)
     }
@@ -64,7 +64,7 @@ impl ProgramLike for CompilerProgram {
     fn get_global_diagnostics(&self) -> Vec<Diagnostic> {
         get_global_diagnostics()
     }
-    // Go: compiler/program.go:798 GetSemanticDiagnostics
+    // Go: compiler/program.go:822 GetSemanticDiagnostics
     fn get_semantic_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         get_semantic_diagnostics(file)
     }
@@ -298,7 +298,13 @@ fn list_files(input: &EmitInput, emit_result: &EmitResult) {
         }
     }
     if options.explain_files.is_true() {
-        crate::program::explain_files(&mut *input.writer.borrow_mut(), &input.config_locale());
+        // ts#64159: the names are relative to the system's current directory
+        // (execute/tsc/emit.go:156).
+        crate::program::explain_files_relative_to(
+            &mut *input.writer.borrow_mut(),
+            &input.config_locale(),
+            &input.sys.get_current_directory(),
+        );
     } else if options.list_files.is_true() || options.list_files_only.is_true() {
         for file in source_files() {
             write_str(&input.writer, &format!("{}\n", source_file_file_name(file)));
