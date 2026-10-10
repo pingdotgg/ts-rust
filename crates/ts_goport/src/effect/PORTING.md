@@ -91,7 +91,10 @@ The Go internals are at `~/.explore/repos/microsoft__TypeScript@673a5f17d713/tsc
   Go free functions that take only `c` -> `pub fn foo(c: &mut Checker, ..)`.
 - Go `Cached(&tp.links.Foo, key, func() V { .. })` ->
   `cached!(self, foo, key, { .. })` (the macro is in `mod.rs`; the closure
-  body becomes a block that can use `self`).
+  body becomes a block that can use `self`). The large node caches
+  (`TypeAtLocation`, `ReferenceSymbol`, `ParseEffectFnOpportunity`, the
+  effect context stores) use node link pages instead of hash maps, and
+  their call sites spell out the cache; the `EffectLinks` doc says why.
 - Go struct results: a Go `*T` result -> `Option<Rc<T>>`. A Go `[]*T` ->
   `Vec<Rc<T>>`; a Go `[]T` -> `Vec<T>`. Every Go type and field is `pub`.
   Go field names become snake case. Keep Go type names (an unexported Go

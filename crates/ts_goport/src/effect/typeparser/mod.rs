@@ -130,9 +130,14 @@ pub struct TypeParser<'c> {
 
 /// Go `EffectLinks`: the per-checker caches. A present key with a `None`
 /// value is a cached Go nil, as `LinkStore.TryGet` gives.
+///
+/// PORT: the caches keep Go's keys and entries, but the large node caches
+/// use node link pages (`LinkStore`, Go `core.PagedLinkStore`) with small
+/// slots: rules ask about most nodes of a file. On the effect project these
+/// caches held about 110 MB in hash maps (effcache1).
 #[derive(Default)]
 pub struct EffectLinks {
-    pub type_at_location: FxHashMap<Node, TypeId>,
+    pub type_at_location: LinkStore<Node, CachedId>,
     pub effect_type: FxHashMap<TypeId, Option<Rc<Effect>>>,
     pub stream_type: FxHashMap<TypeId, Option<Rc<Effect>>>,
     pub strict_effect_type: FxHashMap<TypeId, Option<Rc<Effect>>>,
@@ -149,8 +154,10 @@ pub struct EffectLinks {
     pub promise_type: FxHashMap<TypeId, TypeId>,
     pub is_global_error_type: FxHashMap<TypeId, bool>,
     pub is_yieldable_error_type: FxHashMap<TypeId, bool>,
-    pub reference_symbol: FxHashMap<Node, SymbolId>,
+    pub reference_symbol: LinkStore<Node, CachedId>,
     pub module_export_reference: FxHashMap<ModuleExportReferenceCacheKey, bool>,
+    /// The member names of `module_export_reference` keys, by id.
+    pub module_export_members: FxHashMap<Box<str>, u32>,
     pub pipeable_signature_shape: FxHashMap<PipeableSignatureShapeCacheKey, bool>,
 
     pub extends_context_tag: FxHashMap<Node, Option<Rc<ContextTagResult>>>,
@@ -169,11 +176,11 @@ pub struct EffectLinks {
 
     pub effect_gen_call: FxHashMap<Node, Option<Rc<EffectGenCallResult>>>,
     pub effect_fn_call: FxHashMap<Node, Option<Rc<EffectFnCallResult>>>,
-    pub parse_effect_fn_opportunity: FxHashMap<Node, Option<Rc<EffectFnOpportunityResult>>>,
+    pub parse_effect_fn_opportunity: NodeOptCache<EffectFnOpportunityResult>,
     pub parse_pipe_call: FxHashMap<Node, Option<Rc<ParsedPipeCallResult>>>,
     pub execution_flow: FxHashMap<Node, Option<Rc<ExecutionFlow>>>,
-    pub effect_context_flags: FxHashMap<Node, EffectContextFlags>,
-    pub effect_yield_generator_function: FxHashMap<Node, Node>,
+    pub effect_context_flags: LinkStore<Node, EffectContextFlags>,
+    pub effect_yield_generator_function: LinkStore<Node, CachedNode>,
 
     pub discover_packages_computed: bool,
     pub discover_packages_value: Vec<DiscoveredPackage>,
@@ -184,6 +191,90 @@ pub struct EffectLinks {
     pub expected_and_real_types: FxHashMap<Node, Rc<Vec<ExpectedAndRealType>>>,
     pub piping_flows_with_effect_fn: FxHashMap<Node, Rc<Vec<Rc<PipingFlow>>>>,
     pub piping_flows_without_effect_fn: FxHashMap<Node, Rc<Vec<Rc<PipingFlow>>>>,
+}
+
+/// A cached `TypeId` or `SymbolId` in a node link page. Go caches nil
+/// too, so the slot keeps the handle plus one: `Option<CachedId>` is 4
+/// bytes, a page of 64 nodes 256 bytes. The default is nil.
+#[derive(Clone, Copy)]
+pub struct CachedId(std::num::NonZeroU32);
+
+impl CachedId {
+    #[must_use]
+    pub fn new(handle: u32) -> Self {
+        Self(std::num::NonZeroU32::new(handle.wrapping_add(1)).expect("handle below u32::MAX"))
+    }
+
+    #[must_use]
+    pub fn get(self) -> u32 {
+        self.0.get() - 1
+    }
+}
+
+impl Default for CachedId {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+/// A cached `Node` in a node link page, kept like `CachedId`: 8 bytes in
+/// an `Option`. The default is nil.
+#[derive(Clone, Copy)]
+pub struct CachedNode(std::num::NonZeroU64);
+
+impl CachedNode {
+    #[must_use]
+    pub fn new(node: Node) -> Self {
+        Self(std::num::NonZeroU64::new(node.0.wrapping_add(1)).expect("node handle below u64::MAX"))
+    }
+
+    #[must_use]
+    pub fn get(self) -> Node {
+        Node(self.0.get() - 1)
+    }
+}
+
+impl Default for CachedNode {
+    fn default() -> Self {
+        Self::new(Node::NIL)
+    }
+}
+
+/// Go `core.LinkStore[*ast.Node, *T]` for a cache that rules fill for
+/// nearly every node of a file and that is nil for most of them
+/// (`ParseEffectFnOpportunity`). Node link pages mark the cached nodes (one
+/// byte each), and a map holds the results that are not nil.
+pub struct NodeOptCache<T> {
+    cached: LinkStore<Node, ()>,
+    values: FxHashMap<Node, Rc<T>>,
+}
+
+impl<T> Default for NodeOptCache<T> {
+    fn default() -> Self {
+        Self {
+            cached: LinkStore::default(),
+            values: FxHashMap::default(),
+        }
+    }
+}
+
+impl<T> NodeOptCache<T> {
+    /// Go `store.TryGet(node)`: `None` when `node` is not cached.
+    #[must_use]
+    pub fn get(&self, node: Node) -> Option<Option<Rc<T>>> {
+        self.cached
+            .has(node)
+            .then(|| self.values.get(&node).cloned())
+    }
+
+    /// Go `*store.Get(node) = value`.
+    pub fn insert(&mut self, node: Node, value: Option<Rc<T>>) {
+        self.cached.get(node);
+        match value {
+            Some(value) => self.values.insert(node, value),
+            None => self.values.remove(&node),
+        };
+    }
 }
 
 /// Go `Cached(&tp.links.<field>, key, compute)`: the cached value, or

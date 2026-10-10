@@ -14,9 +14,13 @@ impl TypeParser<'_> {
             return TypeId::NIL;
         }
 
-        cached!(self, type_at_location, node, {
-            self.get_type_at_location_uncached(node)
-        })
+        // Go `Cached(&tp.links.TypeAtLocation, node, ..)`.
+        if let Some(cached) = self.links().type_at_location.try_get(node) {
+            return TypeId(cached.get());
+        }
+        let t = self.get_type_at_location_uncached(node);
+        *self.links().type_at_location.get(node) = CachedId::new(t.0);
+        t
     }
 
     pub fn get_type_at_location_uncached(&mut self, node: Node) -> TypeId {

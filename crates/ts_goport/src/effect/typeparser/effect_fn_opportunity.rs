@@ -71,9 +71,15 @@ impl TypeParser<'_> {
             return None;
         }
 
-        cached!(self, parse_effect_fn_opportunity, node, {
-            self.parse_effect_fn_opportunity_inner(node)
-        })
+        // Go `Cached(&tp.links.ParseEffectFnOpportunity, node, ..)`.
+        if let Some(cached) = self.links().parse_effect_fn_opportunity.get(node) {
+            return cached;
+        }
+        let result = self.parse_effect_fn_opportunity_inner(node);
+        self.links()
+            .parse_effect_fn_opportunity
+            .insert(node, result.clone());
+        result
     }
 
     /// parseEffectFnOpportunityInner contains the actual parsing logic for ParseEffectFnOpportunity.

@@ -23,11 +23,15 @@ pub struct PackageSourceFileDescriptorCacheKey(pub u32);
 /// The next `PackageSourceFileDescriptorCacheKey` (Go `new`).
 static NEXT_PACKAGE_SOURCE_FILE_DESCRIPTOR_CACHE_KEY: AtomicU32 = AtomicU32::new(1);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Go `moduleExportReferenceCacheKey`.
+/// PORT: Go keys by the member name. Here `member` is the descriptor id
+/// (low 8 bits) and the id of the member name in
+/// `EffectLinks::module_export_members` (high 24 bits), so an entry with
+/// its value is 12 bytes and no key holds a string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModuleExportReferenceCacheKey {
     pub symbol: SymbolId,
-    pub descriptor: PackageSourceFileDescriptorCacheKey,
-    pub member_name: String,
+    pub member: u32,
 }
 
 // Go: newPackageSourceFileDescriptor
@@ -51,22 +55,24 @@ impl TypeParser<'_> {
             return SymbolId::NIL;
         }
 
-        cached!(self, reference_symbol, node, {
-            let mut sym = self.get_symbol_at_location(node);
-            if sym.is_nil() && node.kind() == SyntaxKind::PropertyAccessExpression {
-                let prop = node;
-                if prop.name().is_some() {
-                    sym = self.get_symbol_at_location(prop.name());
-                }
+        // Go `Cached(&tp.links.ReferenceSymbol, node, ..)`.
+        if let Some(cached) = self.links().reference_symbol.try_get(node) {
+            return SymbolId(cached.get());
+        }
+        let mut sym = self.get_symbol_at_location(node);
+        if sym.is_nil() && node.kind() == SyntaxKind::PropertyAccessExpression {
+            let prop = node;
+            if prop.name().is_some() {
+                sym = self.get_symbol_at_location(prop.name());
             }
+        }
 
-            sym = self.resolve_aliased_symbol(sym);
-            if node.kind() == SyntaxKind::Identifier && !is_declaration_name(node) {
-                self.resolve_constant_alias_symbol(sym)
-            } else {
-                sym
-            }
-        })
+        sym = self.resolve_aliased_symbol(sym);
+        if node.kind() == SyntaxKind::Identifier && !is_declaration_name(node) {
+            sym = self.resolve_constant_alias_symbol(sym);
+        }
+        *self.links().reference_symbol.get(node) = CachedId::new(sym.0);
+        sym
     }
 
     pub fn resolve_constant_alias_symbol(&mut self, sym: SymbolId) -> SymbolId {
@@ -130,14 +136,37 @@ impl TypeParser<'_> {
             return self.is_symbol_reference_to_module_export(sym, desc, member_name);
         };
 
+        let Some(member) = self.module_export_member_key(cache_key, member_name) else {
+            return self.is_symbol_reference_to_module_export(sym, desc, member_name);
+        };
         let key = ModuleExportReferenceCacheKey {
             symbol: sym,
-            descriptor: cache_key,
-            member_name: member_name.to_string(),
+            member,
         };
         cached!(self, module_export_reference, key, {
             self.is_symbol_reference_to_module_export(sym, desc, member_name)
         })
+    }
+
+    /// The `member` of a `ModuleExportReferenceCacheKey`, or `None` when the
+    /// descriptor id or the member name id does not fit (then the caller
+    /// does not cache, as for a descriptor with no cache key).
+    fn module_export_member_key(
+        &mut self,
+        descriptor: PackageSourceFileDescriptorCacheKey,
+        member_name: &str,
+    ) -> Option<u32> {
+        let descriptor = u8::try_from(descriptor.0).ok()?;
+        let members = &mut self.links().module_export_members;
+        let id = match members.get(member_name) {
+            Some(&id) => id,
+            None => {
+                let id = u32::try_from(members.len()).ok()?;
+                members.insert(member_name.into(), id);
+                id
+            }
+        };
+        (id < 1 << 24).then_some((id << 8) | u32::from(descriptor))
     }
 
     pub fn is_symbol_reference_to_module_export(

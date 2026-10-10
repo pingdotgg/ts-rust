@@ -23,7 +23,7 @@ impl TypeParser<'_> {
         if ok {
             return links
                 .effect_context_flags
-                .get(&closest)
+                .try_get(closest)
                 .copied()
                 .unwrap_or_default()
                 & EffectContextFlags::IN_EFFECT;
@@ -41,23 +41,25 @@ impl TypeParser<'_> {
         if ok {
             return links
                 .effect_yield_generator_function
-                .get(&closest)
-                .copied()
-                .unwrap_or(Node::NIL);
+                .try_get(closest)
+                .map_or(Node::NIL, |n| n.get());
         }
         Node::NIL
     }
 }
 
 /// Go `getClosestNodeWithLinks[T]` over a `core.LinkStore[*ast.Node, T]`.
-pub fn get_closest_node_with_links<T>(store: &FxHashMap<Node, T>, node: Node) -> (Node, bool) {
+pub fn get_closest_node_with_links<T: Default>(
+    store: &LinkStore<Node, T>,
+    node: Node,
+) -> (Node, bool) {
     if node.is_nil() {
         return (Node::NIL, false);
     }
 
     let mut current = node;
     while current.is_some() {
-        if store.contains_key(&current) {
+        if store.has(current) {
             return (current, true);
         }
         current = current.parent();
@@ -72,7 +74,7 @@ impl TypeParser<'_> {
             return None;
         }
 
-        if self.links().effect_context_flags.contains_key(&node) {
+        if self.links().effect_context_flags.has(node) {
             return Some(self.links());
         }
 
@@ -174,41 +176,33 @@ pub fn effect_context_walk(tp: &mut TypeParser<'_>, w: &mut EffectContextWalk, n
         let links = tp.links();
         if node.parent().is_some() {
             // inherit from parent, if any
-            let parent_flags = *links.effect_context_flags.entry(node.parent()).or_default();
-            links.effect_context_flags.insert(node, parent_flags);
-            if !links.effect_yield_generator_function.contains_key(&node) {
-                let parent_generator = *links
-                    .effect_yield_generator_function
-                    .entry(node.parent())
-                    .or_insert(Node::NIL);
-                links
-                    .effect_yield_generator_function
-                    .insert(node, parent_generator);
+            let parent_flags = *links.effect_context_flags.get(node.parent());
+            *links.effect_context_flags.get(node) = parent_flags;
+            if !links.effect_yield_generator_function.has(node) {
+                let parent_generator = *links.effect_yield_generator_function.get(node.parent());
+                *links.effect_yield_generator_function.get(node) = parent_generator;
             }
         } else {
             // default, no flags.
-            links
-                .effect_context_flags
-                .insert(node, EffectContextFlags::NONE);
+            *links.effect_context_flags.get(node) = EffectContextFlags::NONE;
         }
 
         // disable pending disable flags
         if let Some(&disable) = w.pending_disable_flags.get(&node) {
-            let flags = links.effect_context_flags.entry(node).or_default();
+            let flags = links.effect_context_flags.get(node);
             *flags = flags.without(disable);
         }
 
         // merge pending state for this node
         if let Some(&enable) = w.pending_enable_flags.get(&node) {
-            *links.effect_context_flags.entry(node).or_default() |= enable;
+            *links.effect_context_flags.get(node) |= enable;
         }
     }
 
     if tp
         .links()
         .effect_context_flags
-        .entry(node)
-        .or_default()
+        .get(node)
         .intersects(EffectContextFlags::PENDING_NEXT_FUNCTION_IS_EFFECT_THUNK)
         && (node.kind() == SyntaxKind::ArrowFunction
             || node.kind() == SyntaxKind::FunctionExpression)
@@ -222,8 +216,7 @@ pub fn effect_context_walk(tp: &mut TypeParser<'_>, w: &mut EffectContextWalk, n
     } else if tp
         .links()
         .effect_context_flags
-        .entry(node)
-        .or_default()
+        .get(node)
         .intersects(EffectContextFlags::PENDING_NEXT_OBJECT_TRY_PROPERTY_IS_EFFECT_THUNK)
         && node.kind() == SyntaxKind::ObjectLiteralExpression
     {
@@ -248,14 +241,12 @@ pub fn effect_context_walk(tp: &mut TypeParser<'_>, w: &mut EffectContextWalk, n
         }
     } else if transparent_pending_expression(node).is_some() {
         let expr = transparent_pending_expression(node);
-        let flags =
-            *tp.links().effect_context_flags.entry(node).or_default() & w.pending_flags_mask;
+        let flags = *tp.links().effect_context_flags.get(node) & w.pending_flags_mask;
         w.set_pending_enable_flags(expr, flags);
     } else if tp
         .links()
         .effect_context_flags
-        .entry(node)
-        .or_default()
+        .get(node)
         .intersects(w.pending_flags_mask)
     {
         node.for_each_child(|child| w.reset_pending_flags(child));
@@ -265,9 +256,8 @@ pub fn effect_context_walk(tp: &mut TypeParser<'_>, w: &mut EffectContextWalk, n
     if let Some(effect_gen) = tp.effect_gen_call(node) {
         let body_node = effect_gen.body;
         w.set_pending_enable_flags(body_node, EffectContextFlags::CAN_YIELD_EFFECT);
-        tp.links()
-            .effect_yield_generator_function
-            .insert(body_node, effect_gen.generator_function);
+        *tp.links().effect_yield_generator_function.get(body_node) =
+            CachedNode::new(effect_gen.generator_function);
     } else if let Some(effect_fn) = tp.effect_fn_call(node)
         && effect_fn.is_generator()
     {
@@ -276,9 +266,7 @@ pub fn effect_context_walk(tp: &mut TypeParser<'_>, w: &mut EffectContextWalk, n
         if body.is_some() && gen_fn.is_some() {
             let body_node = body;
             w.set_pending_enable_flags(body_node, EffectContextFlags::CAN_YIELD_EFFECT);
-            tp.links()
-                .effect_yield_generator_function
-                .insert(body_node, gen_fn);
+            *tp.links().effect_yield_generator_function.get(body_node) = CachedNode::new(gen_fn);
         }
     }
 
@@ -320,13 +308,10 @@ pub fn effect_context_walk(tp: &mut TypeParser<'_>, w: &mut EffectContextWalk, n
     if !tp
         .links()
         .effect_context_flags
-        .entry(node)
-        .or_default()
+        .get(node)
         .intersects(EffectContextFlags::CAN_YIELD_EFFECT)
     {
-        tp.links()
-            .effect_yield_generator_function
-            .insert(node, Node::NIL);
+        *tp.links().effect_yield_generator_function.get(node) = CachedNode::default();
     }
 
     node.for_each_child(|child| effect_context_walk(tp, w, child));
