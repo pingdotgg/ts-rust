@@ -1,0 +1,8 @@
+<time> - Starting compilation in watch mode...
+
+<time> - Found 0 errors. Watching for file changes.
+
+<time> - File change detected. Starting incremental compilation...
+
+<time> - Found 0 errors. Watching for file changes.
+

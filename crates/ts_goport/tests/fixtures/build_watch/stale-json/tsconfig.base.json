@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "types": [],
+    "outDir": "${configDir}/dist"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "resolveJsonModule": true,
+    "newLine": "crlf",
+    "strict": true,
+    "types": [],
+    "outDir": "${configDir}/dist"
+  }
+}

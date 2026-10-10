@@ -319,7 +319,9 @@ pub struct BuildHost {
     // (the task `writeFile`) or touched (`set_m_time`). A check reads such
     // a file again, as Go does, in place of what the build info prefetch
     // read before the write (orchestrator.rs `BuildInfoPrefetch`). The
-    // orchestrator clears it at the start and the end of each build.
+    // orchestrator clears it at the start and the end of each build; at the
+    // end, the kept watch parses of its paths go first
+    // (`drop_written_watch_sources`).
     pub written: Arc<WrittenPaths>,
 }
 
@@ -403,8 +405,9 @@ impl BuildHost {
 
     /// PORT: not in Go (memory and time). In `tsc -b --watch` a file keeps
     /// its parse while its modification time does not change, no watch
-    /// event names it and no build of this cycle wrote it, as Go
-    /// `tsc --watch` keeps its files (execute/watcher.go `sourceFileCache`).
+    /// event names it and no build wrote it since the parse (`written`,
+    /// `drop_written_watch_sources`), as Go `tsc --watch` keeps its files
+    /// (execute/watcher.go `sourceFileCache`).
     /// Go parses every file of each project that it builds again in each
     /// cycle (`resetCaches`, and `sourceFiles` keeps the `.d.ts` and `.json`
     /// files of one cycle). Here each such parse is a new file version, and
@@ -490,6 +493,35 @@ impl BuildHost {
                 None => sources.clear(),
             }
         }
+    }
+
+    /// PORT: not in Go (`watch_source_file`). At the end of a build, drops
+    /// the kept parses of the files that the build wrote or touched
+    /// (`written`). Go keeps no parse from one cycle to the next
+    /// (`resetCaches`), so the next cycle parses each written file again.
+    /// A kept parse is checked only by its modification time: a parse that
+    /// a project with no reference to the writer made before the write
+    /// would stay when the write keeps that time (a coarse clock) and no
+    /// watch event names the file (an output directory that is not
+    /// watched). In the cycle that writes a file, `source_files` keeps
+    /// giving the first parse of the cycle, as Go does.
+    pub fn drop_written_watch_sources(&self) {
+        let written = self
+            .written
+            .paths
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if written.is_empty() {
+            return;
+        }
+        let unwritten =
+            |key: &SourceFileCacheKey, _: &mut WatchSource| !written.contains(&key.0.path);
+        if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
+            sources.retain(unwritten);
+        }
+        self.watch_sources_before_config_change
+            .borrow_mut()
+            .retain(unwritten);
     }
 
     /// PORT: not in Go (`watch_source_file`). A cycle with a config change
@@ -1099,5 +1131,76 @@ impl CompilerHost for BuildCompilerHost {
     // PORT: not in Go (see `CompilerHost::freeable_worker_parses`).
     fn freeable_worker_parses(&self) -> bool {
         self.host.freeable_worker_parses()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execute::build::command_line::BuildOptions;
+    use std::cell::OnceCell;
+
+    const OLD: &str = "export declare const a: number;\n";
+    const NEW: &str = "export declare const a: string;\n";
+
+    /// bwsig2: a build writes a `.d.ts` that a project of its cycle parsed
+    /// before the write. The write keeps the modification time (a coarse
+    /// clock) and no watch event names the file (an output directory that
+    /// is not watched). The cycle keeps the first parse (Go `sourceFiles`),
+    /// and the next cycle parses the file again, as Go does
+    /// (`drop_written_watch_sources`).
+    #[test]
+    fn a_written_file_is_parsed_again_in_the_next_cycle() {
+        let dir = std::env::temp_dir().join(format!(
+            "ts_goport_written_watch_parse_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dts = dir.join("a.d.ts");
+        std::fs::write(&dts, OLD).unwrap();
+        // The compiler takes normalized paths: a Windows temp dir has backslashes.
+        let normalized =
+            |p: &std::path::Path| crate::frontend::tspath::normalize_slashes(p.to_str().unwrap());
+        let compare_paths_options = ComparePathsOptions {
+            use_case_sensitive_file_names: true,
+            current_directory: normalized(&dir),
+        };
+        let command = Rc::new(ParsedBuildCommandLine {
+            build_options: BuildOptions::default(),
+            compiler_options: Rc::new(CompilerOptions::default()),
+            projects: Vec::new(),
+            errors: Vec::new(),
+            raw: CompilerOptionsValue::Nil,
+            compare_paths_options: compare_paths_options.clone(),
+            resolved_project_paths: OnceCell::new(),
+            locale: OnceCell::new(),
+        });
+        let sys: Rc<dyn System> = Rc::new(crate::execute::tsc::new_os_system().unwrap());
+        let host = BuildHost::new(sys, command, compare_paths_options);
+        host.watch_sources.replace(Some(FxHashMap::default()));
+        let file_name = normalized(&dts);
+        let opts = SourceFileParseOptions {
+            path: host.to_path(&file_name),
+            file_name,
+            external_module_indicator_options: ExternalModuleIndicatorOptions::default(),
+        };
+        let text = || host.get_source_file(&opts).unwrap().text.to_string();
+
+        assert_eq!(text(), OLD);
+        let m_time = std::fs::metadata(&dts).unwrap().modified().unwrap();
+        // The task write: the path goes into `written`, then the file.
+        host.written.insert(opts.path.clone());
+        std::fs::write(&dts, NEW).unwrap();
+        let file = std::fs::File::options().write(true).open(&dts).unwrap();
+        file.set_modified(m_time).unwrap();
+        drop(file);
+        assert_eq!(text(), OLD, "a later program of the cycle");
+        // The end of `build_all_tasks`, then `resetCaches`.
+        host.drop_written_watch_sources();
+        host.written.clear();
+        host.source_files.reset();
+        assert_eq!(text(), NEW, "the next cycle");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
