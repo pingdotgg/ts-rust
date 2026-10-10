@@ -8,7 +8,7 @@
 #                                             (e.g. run scripts/run-cargo-capped.sh build --release -p ts_goport --bins)
 #        testbox.sh get <remote> [local]      copy a file or dir back (remote path relative to the repo root)
 #        testbox.sh status | stop | list      the saved testbox's status, stop it, list active testboxes
-# TESTBOX_ID overrides the saved ID. TESTBOX_IDLE: idle minutes before the testbox stops (default 60).
+# TESTBOX_ID overrides the saved ID. TESTBOX_IDLE: idle minutes before the testbox stops (default 15).
 # TESTBOX_REF: the ref the workflow runs from (default main: the workflow must be on the default branch).
 # Auth: `blacksmith auth login` once per host (`blacksmith auth status` shows it).
 set -euo pipefail
@@ -28,7 +28,7 @@ cmd="$1"
 shift
 case "$cmd" in
   warmup)
-    out="$(blacksmith testbox warmup testbox.yml --ref "${TESTBOX_REF:-main}" --idle-timeout "${TESTBOX_IDLE:-60}" 2>&1)"
+    out="$(blacksmith testbox warmup testbox.yml --ref "${TESTBOX_REF:-main}" --idle-timeout "${TESTBOX_IDLE:-15}" 2>&1)"
     echo "$out"
     id="$(grep -oE 'tbx_[A-Za-z0-9_-]+' <<<"$out" | head -1)"
     [[ -n "$id" ]] || { echo "warmup printed no testbox ID" >&2; exit 1; }
