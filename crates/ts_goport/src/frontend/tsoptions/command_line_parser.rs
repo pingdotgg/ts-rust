@@ -75,15 +75,27 @@ pub fn parse_command_line(
             compiler_options: &mut compiler_options,
         },
     );
+    // ts#64159 (commandlineparser.go:55-58): the root file names are rooted
+    // against the current directory, and the diagnostics keep the names as
+    // given.
+    // PORT: `to_rooted_path` is the API copy of Go `ToRootedPath`; Go
+    // `ToRootedFilePath` is the same text with file intent.
+    let current_directory = host.get_current_directory();
+    let file_names = parser
+        .file_names
+        .iter()
+        .map(|file_name| crate::api::session_p2::to_rooted_path(file_name, &current_directory))
+        .collect();
     let mut result = new_parsed_command_line(
         Rc::new(compiler_options),
-        parser.file_names,
+        file_names,
         None,
         ComparePathsOptions {
             use_case_sensitive_file_names: host.fs().use_case_sensitive_file_names(),
-            current_directory: host.get_current_directory(),
+            current_directory,
         },
     );
+    result.root_file_names_for_diagnostics = parser.file_names;
     result.errors = parser.errors;
     result.raw = CompilerOptionsValue::Map(parser.options);
     result

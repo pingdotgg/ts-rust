@@ -463,6 +463,10 @@ pub struct ParsedCommandLine {
 
     // PORT: Go `int` is `i32`.
     pub literal_file_names_len: i32,
+    /// ts#64159: the root file names as the command line gave them, for the
+    /// root file diagnostics (`root_file_name_for_diagnostic`). Empty for a
+    /// config file.
+    pub root_file_names_for_diagnostics: Vec<String>,
     /// maps file names to their paths, used for quick lookups
     pub file_names_by_path: OnceCell<FxHashMap<Path, String>>,
 
@@ -511,6 +515,7 @@ impl ParsedCommandLine {
             wildcard_directories: self.wildcard_directories.clone(),
             include_globs: self.include_globs.clone(),
             literal_file_names_len: self.literal_file_names_len,
+            root_file_names_for_diagnostics: self.root_file_names_for_diagnostics.clone(),
             ..Default::default()
         }
     }
@@ -852,6 +857,16 @@ impl ParsedCommandLine {
         &self.parsed_config.file_names
     }
 
+    // Go: tsoptions/parsedcommandline.go:362 (*ParsedCommandLine).RootFileNameForDiagnostic (ts#64159)
+    /// The text of root file `index` in the root file diagnostics: the name
+    /// as the command line gave it, else the rooted file name.
+    pub fn root_file_name_for_diagnostic(&self, index: usize) -> &str {
+        match self.root_file_names_for_diagnostics.get(index) {
+            Some(name) => name,
+            None => &self.parsed_config.file_names[index],
+        }
+    }
+
     // Go: tsoptions/parsedcommandline.go:334 (*ParsedCommandLine).FileNamesByPath (at 673a5f17d713;
     // ts#64159 makes it FilePaths, tsoptions/parsedcommandline.go:369)
     pub fn file_names_by_path(&self) -> &FxHashMap<Path, String> {
@@ -1096,6 +1111,7 @@ impl ParsedCommandLine {
             wildcard_directories: self.wildcard_directories.clone(),
             include_globs: self.include_globs.clone(),
             literal_file_names_len,
+            root_file_names_for_diagnostics: self.root_file_names_for_diagnostics.clone(),
             ..Default::default()
         }
     }

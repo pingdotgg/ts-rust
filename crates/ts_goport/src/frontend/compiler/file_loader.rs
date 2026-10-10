@@ -384,8 +384,16 @@ pub fn process_all_program_files(
         )
     });
     for (index, root_file) in root_files.iter().enumerate() {
+        // ts#64159 (Go N' fileloader.go:210): the diagnostics name a root
+        // file as the command line gave it.
+        let reference_text = loader
+            .opts
+            .config
+            .root_file_name_for_diagnostic(index)
+            .to_string();
         loader.add_root_file_task(
             root_file,
+            &reference_text,
             None,
             new_file_include_reason(
                 FileIncludeKind::ROOT_FILE,
@@ -875,15 +883,18 @@ impl FileLoader {
     }
 
     // Go: fileloader.go:253 (*fileLoader).addRootFileTask
+    // ts#64159: `reference_text` is the diagnostic text of the root file.
     pub fn add_root_file_task(
         &mut self,
         file_name: &str,
+        reference_text: &str,
         lib_file: Option<Rc<LibFile>>,
         include_reason: Rc<FileIncludeReason>,
     ) {
         let curr_dir = self.host.get_current_directory().to_string();
         let abs_path = get_normalized_absolute_path(file_name, &curr_dir);
-        let (resolved_file, diagnostic) = self.get_source_file_from_reference(&abs_path, file_name);
+        let (resolved_file, diagnostic) =
+            self.get_source_file_from_reference(&abs_path, reference_text);
         let mut root_task = ParseTask {
             normalized_file_path: resolved_file,
             lib_file,
