@@ -904,8 +904,9 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   while they check, which race in Go. Go also gives each class with private
   names an id at bind time; the port does not
   (`get_symbol_name_for_private_identifier`), so such a class gets its id
-  later, at its first id site. The 4 check-time private name sites give the
-  class its id, as Go does (`Checker::private_identifier_symbol_name`).
+  later, at its first id site. The 4 check-time private name sites give an
+  id to the symbol that they look in, as Go does: the class, or the symbol
+  of a `this` or source type (`Checker::private_identifier_symbol_name`).
 - Several programs in one process: Go's one counter runs on from one
   program to the next, and a bound file keeps the ids of its symbols. The
   one-checker pool of a program with `singleThreaded` (on the command line

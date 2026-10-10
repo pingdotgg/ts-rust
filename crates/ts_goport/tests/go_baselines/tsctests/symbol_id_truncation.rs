@@ -296,7 +296,8 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
 // `c.valueSymbolLinks.Get(s).f = <call>` Go reads the links of the new
 // symbol `s` (and gives its id) before the call on the right side, and a
 // `links := c.valueSymbolLinks.Get(s)` comes right after `s` is made.
-// `binder.GetSymbolNameForPrivateIdentifier` gives the class its id. Each
+// `binder.GetSymbolNameForPrivateIdentifier` gives an id to the symbol that
+// it gets: the class, or the symbol of the type that the site looks in. Each
 // test below puts the first id of `u` on the right side of one such site
 // (or after the private name site), with Go's id of `u` at a digit boundary
 // (10 or 100, `--checkers 1`). With the old order `u` gets one id less, so
@@ -318,9 +319,6 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
 // - the JSX children symbol: the right side can give ids, but only to the
 //   element and `length` symbols of a new tuple target (createTupleType).
 //   No name holds their ids.
-// - the contextual type of `this.#x = ...`: the checker checks the left side
-//   `this.#x` first, and lookupSymbolForPrivateIdentifierDeclaration gives
-//   the class its id there.
 // - reportUnmatchedProperty: the error then prints the source class, which
 //   gives it its id in the old order too, and nothing between gives an id.
 
@@ -510,5 +508,19 @@ fn private_name_assertion_calls_give_the_class_its_id() {
             10
         ),
         site_error(90, "u", 10)
+    );
+}
+
+#[test]
+fn this_private_name_contextual_types_give_the_this_type_its_id() {
+    // getContextualTypeForAssignmentExpression: the contextual type of the
+    // right side of `this.#x = ...` looks up `#x` in the `this` type
+    // `Other`, which gives `Other` its id before `u`. The left side
+    // `this.#x` and its error do not give `Other` an id.
+    let site = "class K { #x = () => 0; m() { function g(this: Other) { this.#x = () => 1; } return g; } }\n";
+    assert_eq!(
+        check_site("interface Other { a: number }\n", site, None, "u", 85, 10),
+        "a.ts(86,62): error TS2339: Property '#x' does not exist on type 'Other'.\n".to_string()
+            + &site_error(88, "u", 10)
     );
 }
