@@ -64,7 +64,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
     let default_library_path = bundled::lib_path_exported();
     let typings_location = get_global_typings_cache_location();
     // ts#64159: Go roots and normalizes the current directory and the
-    // typings location (cmd/tsc/lsp.go:47 RootedDirectoryPathFromAbsolute,
+    // typings location (cmd/tsc/lsp.go:48 RootedDirectoryPathFromAbsolute,
     // :60 ToRootedDirectoryPath).
     let cwd = tspath::get_normalized_absolute_path(&must_getwd(), "");
     let typings_location = tspath::get_normalized_absolute_path(&typings_location, &cwd);
