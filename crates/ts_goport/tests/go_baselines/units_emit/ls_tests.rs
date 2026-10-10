@@ -209,15 +209,16 @@ fn test_document_uri_to_file_name() {
         ("file:///c:/test %25/path", "c:/test %/path"),
         // {"file:?q", "/"},
         ("file:///_:/path", "/_:/path"),
-        ("file:///users/me/c%23-projects/", "/users/me/c#-projects/"),
+        ("file:///users/me/c%23-projects/", "/users/me/c#-projects"),
+        ("file:///a/../b.ts", "/b.ts"),
         ("file://localhost/c%24/GitDevelopment/express", "//localhost/c$/GitDevelopment/express"),
         ("file:///c%3A/test%20with%20%2525/c%23code", "c:/test with %25/c#code"),
 
-        ("untitled:Untitled-1", "^/untitled/ts-nul-authority/Untitled-1"),
-        ("untitled:Untitled-1#fragment", "^/untitled/ts-nul-authority/Untitled-1#fragment"),
-        ("untitled:c:/Users/jrieken/Code/abc.txt", "^/untitled/ts-nul-authority/c:/Users/jrieken/Code/abc.txt"),
-        ("untitled:C:/Users/jrieken/Code/abc.txt", "^/untitled/ts-nul-authority/C:/Users/jrieken/Code/abc.txt"),
-        ("untitled://wsl%2Bubuntu/home/jabaile/work/TypeScript-go/newfile.ts", "^/untitled/wsl%2Bubuntu/home/jabaile/work/TypeScript-go/newfile.ts"),
+        ("untitled:Untitled-1", "^/~ts-uri~/untitled/ts-nul-authority/Untitled-1"),
+        ("untitled:Untitled-1#fragment", "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~556e7469746c65642d310023667261676d656e74~"),
+        ("untitled:c:/Users/jrieken/Code/abc.txt", "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~633a~/Users/jrieken/Code/abc.txt"),
+        ("untitled:C:/Users/jrieken/Code/abc.txt", "^/~ts-uri~/untitled/ts-nul-authority/~ts-uri-escape~433a~/Users/jrieken/Code/abc.txt"),
+        ("untitled://wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts", "^/~ts-uri~/untitled/wsl%2Bubuntu/home/jabaile/work/TypeScript/newfile.ts"),
     ];
     let mut t = Subtests::new("TestDocumentURIToFileName");
     for &(uri, file_name) in tests {
@@ -230,6 +231,72 @@ fn test_document_uri_to_file_name() {
         });
     }
     t.finish();
+}
+
+// Go: ls/lsconv/converters_test.go:97 TestNonFileDocumentURIRoundTripsThroughNormalizedFileName (ts#64544)
+// PORT: the Directory and PathKey asserts (:117-189) need the typed
+// RootedFilePath methods; the port compares the file names.
+#[test]
+fn test_non_file_document_uri_round_trips_through_normalized_file_name() {
+    let file_name = |uri: &str| lsproto::DocumentUri(uri.to_string()).file_name();
+    assert_eq!(
+        file_name("custom:folder/../~ts-uri~/caf\u{e9}\\file.ts"),
+        "^/~ts-uri~/custom/ts-nul-authority/folder/~ts-uri-escape~2e2e~/~ts-uri~/~ts-uri-escape~636166c3a95c66696c65~.ts"
+    );
+    assert_eq!(
+        file_name("custom:.git/file.ts"),
+        "^/~ts-uri~/custom/ts-nul-authority/.git/file.ts"
+    );
+    assert_eq!(
+        file_name("custom:~ts-uri-escape~dir.js/file.ts?x=1"),
+        "^/~ts-uri~/custom/ts-nul-authority/~ts-uri-escape~7e74732d7572692d6573636170657e6469722e6a73~/~ts-uri-escape~66696c65003f783d31~.ts"
+    );
+    let mut t = Subtests::new("TestNonFileDocumentURIRoundTripsThroughNormalizedFileName");
+    for uri in [
+        "untitled:folder/../file.ts",
+        "vscode-vfs://github/path//file.ts",
+        "custom:/path/./file.ts/",
+        "custom:",
+        "custom:///path",
+        "custom://authority",
+        "custom://authority/",
+        "custom:path/file.ts?rev=a/b#frag/c",
+        "custom://authority/path/file.ts#frag/a",
+        "custom:path\\file.ts",
+        "custom:.git/file.ts",
+        "custom:..hidden/file.ts",
+        "custom://~ts-uri~/path",
+        "custom://ts-nul-authority/path",
+        "custom:~ts-uri-escape~file.ts",
+        "custom:~ts-uri-escape~no-path",
+        "custom://authority/~ts-uri-no-path~~",
+        "custom:~ts-uri-spec~666f6f~/file.ts?x=1",
+        "custom:folder/../~ts-uri~/caf\u{e9}\\file.ts",
+        "custom:name.ts\\",
+        "custom:name..ts",
+    ] {
+        t.run(uri, || {
+            assert_equal(
+                file_name_to_document_uri(&file_name(uri)).0.as_str(),
+                uri,
+                "lsconv.FileNameToDocumentURI(uri.FileName())",
+            )
+        });
+    }
+    t.finish();
+    for uri in [
+        "custom:path\\file.ts",
+        "custom:~ts-uri~file.ts",
+        "custom:~ts-uri-escape~file.ts",
+    ] {
+        assert_eq!(
+            ts_goport::frontend::tspath::try_get_extension_from_path(&file_name(uri)),
+            ".ts",
+            "{uri}"
+        );
+    }
+    assert_ne!(file_name("custom:name.ts\\"), file_name("custom:name..ts"));
+    assert!(file_name("custom:~ts-uri-escape~types.d.css.ts").ends_with(".d.css.ts"));
 }
 
 // Go: ls/lsconv/converters_test.go:61 TestFileNameToDocumentURI
