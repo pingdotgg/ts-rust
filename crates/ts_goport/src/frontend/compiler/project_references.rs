@@ -877,7 +877,7 @@ impl ProjectReferenceDtsFakingVfs {
                         get_normalized_absolute_path(file_or_directory, &current_directory);
                     self.known_symlinks.borrow_mut().set_file(
                         &absolute_path,
-                        file_or_directory_path.clone(),
+                        file_or_directory_path,
                         &real_file_or_directory,
                     );
                 }

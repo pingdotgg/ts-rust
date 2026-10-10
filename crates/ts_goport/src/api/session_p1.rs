@@ -2723,7 +2723,7 @@ impl Session {
                 && autoimport::Registry::is_prepared_for_importing_file(
                     registry.as_deref(),
                     &uri.file_name(),
-                    &autoimport::ProjectID(proj.borrow().id().0.clone()),
+                    &autoimport::ProjectID(proj.borrow().id().0),
                     &snapshot.user_preferences(),
                 )
         });
