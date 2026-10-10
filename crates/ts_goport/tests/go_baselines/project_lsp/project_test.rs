@@ -121,6 +121,46 @@ child_test! {
 }
 
 child_test! {
+    // Server skeptic problem 3 (bump D round 2). Go N' compares the inferred
+    // project's options with the generated Equals (ts#64457,
+    // projectcollectionbuilder.go:1424), which checks the order of the
+    // `paths` keys (options_generated.go:510, OrderedMap.EqualFunc). So new
+    // options that differ only in that order replace the command line.
+    fn compiler_options_with_reordered_paths_update_inferred_project() {
+        const FILE_NAME: &str = "/src/index.ts";
+        let (session, _) = projecttestutil::setup(files(&[(FILE_NAME, "export const x = 1;")]));
+        let u = format!("file://{FILE_NAME}");
+        open(&session, &u, "export const x = 1;");
+        let paths_keys = |keys: &[&str]| -> Vec<String> {
+            let options = Rc::new(CompilerOptions {
+                no_lib: Tristate::True,
+                paths: Some(
+                    keys.iter()
+                        .map(|key| (key.to_string(), Some(vec![format!("./{key}")])))
+                        .collect(),
+                ),
+                ..Default::default()
+            });
+            session.did_change_compiler_options_for_inferred_projects(&bg(), Some(options));
+            session
+                .get_language_service(&bg(), &uri(&u))
+                .unwrap_or_else(|err| panic!("GetLanguageService: {}", err.error()));
+            let project = session
+                .snapshot()
+                .project_collection
+                .inferred_project()
+                .expect("inferred project");
+            let project = project.borrow();
+            let options = project.command_line.as_ref().expect("command line").compiler_options();
+            options.paths.as_ref().expect("paths").keys().cloned().collect()
+        };
+
+        assert_eq!(paths_keys(&["a/*", "b/*"]), ["a/*", "b/*"]);
+        assert_eq!(paths_keys(&["b/*", "a/*"]), ["b/*", "a/*"]);
+    }
+}
+
+child_test! {
     // Go: project_test.go:111 TestProjectProgramUpdateKind/NewFiles when import resolution mode changes
     // #4792
     fn program_update_kind_new_files_when_import_resolution_mode_changes() {

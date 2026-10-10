@@ -2262,9 +2262,10 @@ impl ProjectCollectionBuilder {
                 command_line.file_names() != new_command_line.file_names()
                     // Go: !p.CommandLine.CompilerOptions().Equals(compilerOptions) (ts#64457,
                     // projectcollectionbuilder.go:1338 at fed0bf24149f; it was
-                    // reflect.DeepEqual). PORT: the derived `PartialEq` compares every
-                    // field, as the generated Equals does.
-                    || **command_line.compiler_options() != *compiler_options
+                    // reflect.DeepEqual). PORT: `deep_equal` is the generated Equals:
+                    // every field, and the `paths` keys in order
+                    // (options_generated.go:510, OrderedMap.EqualFunc).
+                    || !command_line.compiler_options().deep_equal(&compiler_options)
                     || !project_references_equal(
                         command_line.project_references(),
                         project_references.as_deref().unwrap_or_default(),
@@ -2419,9 +2420,10 @@ impl ProjectCollectionBuilder {
                 command_line.file_names() != new_command_line.file_names()
                     // Go: !p.CommandLine.CompilerOptions().Equals(compilerOptions) (ts#64457,
                     // projectcollectionbuilder.go:1424 at fed0bf24149f; it was
-                    // reflect.DeepEqual). PORT: the derived `PartialEq` compares every
-                    // field, as the generated Equals does.
-                    || **command_line.compiler_options() != *compiler_options
+                    // reflect.DeepEqual). PORT: `deep_equal` is the generated Equals:
+                    // every field, and the `paths` keys in order
+                    // (options_generated.go:510, OrderedMap.EqualFunc).
+                    || !command_line.compiler_options().deep_equal(&compiler_options)
                     || !project_references_equal(
                         command_line.project_references(),
                         project_references.as_deref().unwrap_or_default(),
