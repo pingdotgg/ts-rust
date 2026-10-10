@@ -632,3 +632,215 @@ impl Checker {
             }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The test of microsoft/TypeScript#64475 (head 2aefafb51b54):
+    /// `testdata/tests/cases/compiler/instantiatedReferenceLazyMembers.ts`
+    /// and its `.errors.txt` baseline, which the PR made on unmodified main.
+    const PR_CASE_NAME: &str = "instantiatedReferenceLazyMembers.ts";
+    const PR_CASE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/lazy_members/instantiatedReferenceLazyMembers.ts"
+    ));
+    const PR_ERRORS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/lazy_members/instantiatedReferenceLazyMembers.errors.txt"
+    ));
+
+    /// Loads `name` with `text` (the PR case options: strict, target
+    /// esnext, noEmit), sets `lazy_members` on its checker, checks the file,
+    /// and calls `f` with the checker, the diagnostics in the `.errors.txt`
+    /// header format and the types of the file's type aliases in source
+    /// order. Each call writes its file in a temp dir of its own.
+    fn with_checked<R: Send + 'static>(
+        name: &'static str,
+        text: &str,
+        lazy: bool,
+        f: impl FnOnce(&mut Checker, String, Vec<TypeId>) -> R + Send + 'static,
+    ) -> R {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("ts_goport_lazymem_{}_{call}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), text).unwrap();
+        std::fs::write(
+            dir.join("tsconfig.json"),
+            format!(
+                r#"{{ "compilerOptions": {{ "strict": true, "target": "esnext", "noEmit": true }}, "files": [{name:?}] }}"#
+            ),
+        )
+        .unwrap();
+        let config = dir.join("tsconfig.json");
+        let program = crate::program::try_load_version(&config.to_string_lossy(), |_| {})
+            .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let scope = crate::core::enter_program(Some(program));
+        let file = program
+            .source_files()
+            .find(|file| file.info.file_name.ends_with(&format!("/{name}")))
+            .expect("the test file is not in the program")
+            .root;
+        let result = crate::program::with_type_checker_for_file(file, move |checker| {
+            checker.lazy_members = lazy;
+            let ctx = crate::gostd::context::background();
+            let mut errors = String::new();
+            for diagnostic in checker.get_diagnostics_exported(&ctx, file) {
+                let text = crate::program::format_diagnostic(&diagnostic);
+                // Keep the path from the file name on, as the baseline has it.
+                for line in text.lines() {
+                    errors.push_str(line.find(name).map_or(line, |i| &line[i..]));
+                    errors.push('\n');
+                }
+            }
+            let types = file
+                .statements()
+                .iter()
+                .filter(|s| s.kind() == SyntaxKind::TypeAliasDeclaration)
+                .map(|alias| checker.get_type_from_type_node(alias.type_()))
+                .collect();
+            f(checker, errors, types)
+        });
+        drop(scope);
+        crate::program::release_program(program);
+        result
+    }
+
+    /// The PR case as the compiler runner compiles it: the `// @` option
+    /// lines and the blank line after them are not in the unit, so the
+    /// baseline lines count from the first comment line.
+    fn pr_case_unit() -> String {
+        PR_CASE
+            .lines()
+            .skip_while(|line| line.starts_with("// @") || line.trim().is_empty())
+            .map(|line| format!("{line}\n"))
+            .collect()
+    }
+
+    /// The diagnostic lines at the top of a `.errors.txt` baseline.
+    fn baseline_header(baseline: &str) -> String {
+        let mut header = String::new();
+        for line in baseline.lines().map(|line| line.trim_end_matches('\r')) {
+            if line.is_empty() {
+                break;
+            }
+            header.push_str(line);
+            header.push('\n');
+        }
+        header
+    }
+
+    fn members_resolved(c: &Checker, t: TypeId) -> bool {
+        c.ty(t)
+            .object_flags
+            .intersects(ObjectFlags::MEMBERS_RESOLVED)
+    }
+
+    /// The PR case gives Go's diagnostics in both modes. With the switch on,
+    /// lazy tables are made and some types end the check with no full table.
+    #[test]
+    fn pr_case_diagnostics_match_go_in_both_modes() {
+        let expected = baseline_header(PR_ERRORS);
+        assert_eq!(expected.lines().count(), 13, "PR baseline header");
+        for lazy in [false, true] {
+            let (errors, tables) =
+                with_checked(PR_CASE_NAME, &pr_case_unit(), lazy, |c, errors, _| {
+                    (errors, c.lazy_member_tables.len())
+                });
+            assert_eq!(errors, expected, "diagnostics with lazy_members={lazy}");
+            if lazy {
+                assert!(tables > 0, "no lazy member table is left after the check");
+            } else {
+                assert_eq!(tables, 0, "a lazy member table with the switch off");
+            }
+        }
+    }
+
+    const LOOKUPS: &str = r#"
+interface Base<T> { value: T; shared: string; }
+interface Derived<T> extends Base<T[]> { own: T; shared: "derived"; }
+type T0 = Derived<number>;
+"#;
+
+    /// With the switch off, a member lookup resolves the full table and
+    /// makes no lazy table (the default path).
+    #[test]
+    fn switch_off_lookup_resolves_full_table() {
+        with_checked("a.ts", LOOKUPS, false, |c, _, types| {
+            let t = types[0];
+            assert!(!members_resolved(c, t));
+            let own = c.get_property_of_type(t, "own");
+            assert!(own.is_some());
+            assert!(members_resolved(c, t), "the lookup resolved the full table");
+            assert!(c.lazy_member_tables.is_empty());
+        });
+    }
+
+    /// With the switch on, a member lookup reads the lazy table, an
+    /// inherited member comes from the instantiated base, and the full
+    /// table keeps the symbols that lookups made. The full table and its
+    /// types equal those of the eager path.
+    #[test]
+    fn switch_on_lookup_is_lazy_and_full_table_reuses_members() {
+        let describe = |c: &mut Checker, t: TypeId| -> Vec<String> {
+            c.get_properties_of_type(t)
+                .iter()
+                .map(|&p| {
+                    let ty = c.get_type_of_symbol(p);
+                    let name = c.sym(p).name.clone();
+                    format!("{name}: {}", c.type_to_string(ty))
+                })
+                .collect()
+        };
+        let eager = with_checked("a.ts", LOOKUPS, false, move |c, _, types| {
+            describe(c, types[0])
+        });
+        let lazy = with_checked("a.ts", LOOKUPS, true, move |c, _, types| {
+            let t = types[0];
+            let own = c.get_property_of_type(t, "own");
+            let value = c.get_property_of_type(t, "value");
+            assert!(own.is_some() && value.is_some());
+            assert!(!members_resolved(c, t), "a lookup resolved the full table");
+            assert!(c.lazy_member_tables.contains_key(&t));
+            let value_type = c.get_type_of_symbol(value);
+            assert_eq!(c.type_to_string(value_type), "number[]");
+            let described = describe(c, t);
+            assert!(members_resolved(c, t));
+            assert!(
+                !c.lazy_member_tables.contains_key(&t),
+                "the table is dropped"
+            );
+            let members = c.ty(t).as_structured_type().members;
+            assert_eq!(
+                c.symbols.get(members, "own"),
+                own,
+                "the full table reuses the member"
+            );
+            described
+        });
+        assert_eq!(lazy, eager);
+        assert_eq!(
+            lazy,
+            ["own: number", "shared: \"derived\"", "value: number[]"]
+        );
+    }
+
+    /// A reserved member name takes the full table, as in Go.
+    #[test]
+    fn switch_on_reserved_name_resolves_full_table() {
+        with_checked("a.ts", LOOKUPS, true, |c, _, types| {
+            let t = types[0];
+            c.get_property_of_type(t, "own");
+            assert!(!members_resolved(c, t));
+            c.get_property_of_type(t, INTERNAL_SYMBOL_NAME_CALL);
+            assert!(
+                members_resolved(c, t),
+                "a reserved name resolved the full table"
+            );
+            assert!(!c.lazy_member_tables.contains_key(&t));
+        });
+    }
+}
