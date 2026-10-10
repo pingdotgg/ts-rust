@@ -11,8 +11,19 @@
 //!
 //! `GOPORT_LAZY_MEMBERS=1` turns it on (`Checker::lazy_members`). Go has no
 //! switch. With the switch off, nothing here runs and the checker does what
-//! it did before: each entry point tests the bool first. With it on, the
-//! output must equal Go at the pin with #64475 applied.
+//! it did before. With it on, the output must equal Go at the pin with
+//! #64475 applied.
+//!
+//! PERF (lazymem1 round 2): each hook in the checker keeps its old body and
+//! adds one test before it: for a type whose members are not resolved, it
+//! tests the switch and calls one cold function here. A resolved type does
+//! not test the switch (`is_string_index_signature_only_type_worker` tests
+//! it for every object type). This module calls no checker function that
+//! LLVM inlines at all its call sites: it has copies of those (see
+//! `resolve_declared_members_lazy`). Round 1 changed the bodies of the hooks
+//! and called those functions, and the PGO + BOLT release build then
+//! inlined differently on the member resolution path: multi-threaded wall
+//! time went up by 0.7 to 1.7% on mini-743d.
 //!
 //! PORT: Go keeps `*lazyMemberTable` in a map and a caller keeps its
 //! pointer after a nested `resolveLazyMembers` deletes the entry. Here the
@@ -142,6 +153,21 @@ fn is_reserved_member_key(name: TableKey<'_>) -> bool {
     }
 }
 
+/// Copy of `SharedList::concat` (types.rs; see the PERF note at
+/// `resolve_declared_members_lazy`).
+fn concat_lazy<T: Copy + Default>(a: SharedList<T>, b: SharedList<T>) -> SharedList<T> {
+    if b.is_empty() {
+        return a;
+    }
+    if a.is_empty() {
+        return b;
+    }
+    let mut items = Vec::with_capacity(a.len() + b.len());
+    items.extend_from_slice(&a);
+    items.extend_from_slice(&b);
+    SharedList::from(&items[..])
+}
+
 // Go: mayHaveLazyMembers (#64475)
 #[inline]
 fn may_have_lazy_members(t: &Type) -> bool {
@@ -255,7 +281,7 @@ impl Checker {
             declared_construct_signatures,
             declared_index_infos,
         ) = {
-            let resolved = self.resolve_declared_members(source);
+            let resolved = self.resolve_declared_members_lazy(source);
             (
                 resolved.declared_members,
                 resolved.declared_call_signatures.clone(),
@@ -276,17 +302,17 @@ impl Checker {
             }
         }
         let mapper = lm.mapper;
-        let mut call_signatures = self.instantiate_shared_list(
+        let mut call_signatures = self.instantiate_shared_list_lazy(
             declared_call_signatures,
             mapper,
             Checker::instantiate_signature,
         );
-        let mut construct_signatures = self.instantiate_shared_list(
+        let mut construct_signatures = self.instantiate_shared_list_lazy(
             declared_construct_signatures,
             mapper,
             Checker::instantiate_signature,
         );
-        let mut index_infos = self.instantiate_shared_list(
+        let mut index_infos = self.instantiate_shared_list_lazy(
             declared_index_infos,
             mapper,
             Checker::instantiate_index_info,
@@ -319,7 +345,7 @@ impl Checker {
         }
         let call_signature_count = call_signatures.len();
         let ready = LazyMembersReady {
-            signatures: SharedList::concat(call_signatures, construct_signatures),
+            signatures: concat_lazy(call_signatures, construct_signatures),
             call_signature_count,
             index_infos,
             base_types: base_types.into(),
@@ -343,7 +369,7 @@ impl Checker {
     /// the table.
     pub(crate) fn resolve_lazy_members(&mut self, t: TypeId, lm: &LazyMemberTable) {
         let source = self.ty(t).target();
-        let declared_members = self.resolve_declared_members(source).declared_members;
+        let declared_members = self.resolve_declared_members_lazy(source).declared_members;
         let mut members = SymbolTable::NIL;
         let declared_count = self.symbols.len(declared_members);
         if declared_count != 0 {
@@ -370,7 +396,7 @@ impl Checker {
         };
         for &base_type in base_types.iter() {
             let base_properties = self.get_properties_of_type(base_type);
-            members = self.add_inherited_members(members, &base_properties);
+            members = self.add_inherited_members_lazy(members, &base_properties);
         }
         // PORT: with no base types the table holds the named members of the
         // declared table in its order, as `instantiate_symbol_table` makes
@@ -390,6 +416,19 @@ impl Checker {
         );
         self.augment_members_set(t);
         self.lazy_member_tables.remove(t);
+    }
+
+    /// The first test of Go `resolveTypeReferenceMembers` with #64475: a
+    /// ready lazy member table of `t` gives its full members. True when it
+    /// did. `resolve_type_reference_members` calls it with the switch on.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn resolve_type_reference_members_lazy(&mut self, t: TypeId) -> bool {
+        let Some(lm) = self.lazy_member_tables.ready(t) else {
+            return false;
+        };
+        self.resolve_lazy_members(t, &lm);
+        true
     }
 
     // Go: getLazyDeclaredMember (#64475)
@@ -441,7 +480,7 @@ impl Checker {
         // addInheritedMembers).
         let mut result = SymbolId::NIL;
         let source = self.ty(t).target();
-        let declared_members = self.resolve_declared_members(source).declared_members;
+        let declared_members = self.resolve_declared_members_lazy(source).declared_members;
         let decl = self.symbols.get_key(declared_members, name);
         if decl.is_some() {
             // The table holds the name, so the text is interned and `from`
@@ -472,7 +511,7 @@ impl Checker {
                     false, /*includeTypeOnlyMembers*/
                 ),
             };
-            if prop.is_some() && !self.is_static_private_identifier_property(prop) {
+            if prop.is_some() && !self.is_static_private_identifier_property_lazy(prop) {
                 result = prop;
             }
         }
@@ -481,8 +520,30 @@ impl Checker {
 
     /// The object type case of `get_property_of_type_ex` (Go with #64475)
     /// for a type whose members are not resolved, with the switch on.
+    /// `None` when `t` has no ready lazy member table: the caller then
+    /// resolves `t`. The first read can prepare the table, and the prepare
+    /// step can resolve `t` (Go getMemberOfUnresolvedStructuredType calls
+    /// resolveStructuredTypeMembers).
+    #[cold]
     #[inline(never)]
-    pub(crate) fn get_property_of_unresolved_object_type_lazy(
+    pub(crate) fn get_property_of_lazy_object_type(
+        &mut self,
+        t: TypeId,
+        name: TableKey<'_>,
+        skip_object_function_property_augment: bool,
+        include_type_only_members: bool,
+    ) -> Option<SymbolId> {
+        self.get_ready_lazy_member_table(t)?;
+        Some(self.get_property_of_unresolved_object_type_lazy(
+            t,
+            name,
+            skip_object_function_property_augment,
+            include_type_only_members,
+        ))
+    }
+
+    /// `get_property_of_lazy_object_type` of a type with a ready table.
+    fn get_property_of_unresolved_object_type_lazy(
         &mut self,
         t: TypeId,
         name: TableKey<'_>,
@@ -522,7 +583,7 @@ impl Checker {
         }
         // PERF (propfilt1): see `get_property_of_type_ex`.
         if let TableKey::Name(key) = name {
-            if self.augment_lookups_miss(t, key) {
+            if self.augment_lookups_miss_lazy(t, key) {
                 return SymbolId::NIL;
             }
         }
@@ -546,24 +607,6 @@ impl Checker {
         self.get_property_of_object_type_key(global_object_type, name)
     }
 
-    /// The call and construct signature counts of the object type `t` after
-    /// `get_property_of_type_ex` read its member: Go
-    /// `len(getSignaturesOfStructuredType(t, kind))` with #64475
-    /// (checker.go:19262-19268). With the switch off, `t` is resolved and
-    /// this reads its members in place, as before.
-    #[inline]
-    pub(crate) fn signature_counts_of_looked_up_type(&mut self, t: TypeId) -> (usize, usize) {
-        let ty = self.ty(t);
-        if ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) || !self.lazy_members {
-            let resolved = ty.as_structured_type();
-            return (
-                resolved.call_signatures().len(),
-                resolved.construct_signatures().len(),
-            );
-        }
-        self.lazy_signature_counts(t)
-    }
-
     /// Go `len(getSignaturesOfStructuredType(t, kind))` of both kinds.
     #[inline(never)]
     fn lazy_signature_counts(&mut self, t: TypeId) -> (usize, usize) {
@@ -578,8 +621,10 @@ impl Checker {
 
     /// The signatures of `kind` of `t` from its lazy table, when it has a
     /// ready one (the first test of Go `getSignaturesOfStructuredType` with
-    /// #64475).
-    #[inline]
+    /// #64475). `get_signatures_of_structured_type` calls it for a type
+    /// whose members are not resolved, with the switch on.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn lazy_signatures_of_structured_type(
         &mut self,
         t: TypeId,
@@ -591,7 +636,9 @@ impl Checker {
 
     /// The index infos of `t` from its lazy table, when it has a ready one
     /// (the first test of Go `getIndexInfosOfStructuredType` with #64475).
-    #[inline]
+    /// `get_index_infos_of_structured_type` calls it as above.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn lazy_index_infos_of_structured_type(
         &mut self,
         t: TypeId,
@@ -633,7 +680,7 @@ impl Checker {
         f: fn(&Symbol) -> bool,
     ) -> bool {
         let source = self.ty(t).target();
-        let declared_members = self.resolve_declared_members(source).declared_members;
+        let declared_members = self.resolve_declared_members_lazy(source).declared_members;
         // PORT: Go loops over a map (random order); this is table order. The
         // answer is the same: `f` reads only flags.
         // PERF: `is_named_member` only reads a member that is not an alias,
@@ -680,7 +727,7 @@ impl Checker {
             }
             let properties = self.get_properties_of_type(base_type);
             for &prop in properties.iter() {
-                if !self.is_static_private_identifier_property(prop)
+                if !self.is_static_private_identifier_property_lazy(prop)
                     && seen.insert(self.sym(prop).name.id())
                     && !f(self.sym(prop))
                 {
@@ -707,7 +754,7 @@ impl Checker {
             let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             (links.resolved_type, links.write_type)
         };
-        if m.is_some() && self.mapper(m).maps_this_only() && self.is_thisless(symbol) {
+        if m.is_some() && self.mapper(m).maps_this_only() && self.is_thisless_lazy(symbol) {
             return true;
         }
         // If the type of the symbol is already resolved, and if that type could not possibly
@@ -794,11 +841,11 @@ impl Checker {
         SharedList<SignatureId>,
         SharedList<IndexInfoId>,
     ) {
-        let call_signatures = SharedList::concat(
+        let call_signatures = concat_lazy(
             call_signatures,
             self.get_signatures_of_type(base_type, SignatureKind::CALL),
         );
-        let construct_signatures = SharedList::concat(
+        let construct_signatures = concat_lazy(
             construct_signatures,
             self.get_signatures_of_type(base_type, SignatureKind::CONSTRUCT),
         );
@@ -815,8 +862,138 @@ impl Checker {
                 self.find_index_info(&index_infos, key_type).is_nil()
             })
             .collect();
-        let index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
+        let index_infos = concat_lazy(index_infos, SharedList::from(filtered));
         (call_signatures, construct_signatures, index_infos)
+    }
+
+    // PERF (lazymem1 round 2): copies of checker functions that LLVM inlines
+    // at every call site (their only callers are on the member resolution
+    // path). A call from here kept a separate copy, and in the PGO + BOLT
+    // release build LLVM then did not inline `add_inherited_members` and
+    // `is_thisless` in `resolve_structured_type_members_slow`, and changed
+    // the inlining around them. Keep each copy in step with its original.
+
+    /// Copy of `resolve_declared_members` (checker_p22.rs).
+    fn resolve_declared_members_lazy(&mut self, t: TypeId) -> &InterfaceType {
+        if !self.ty(t).as_interface_type().declared_members_resolved {
+            let symbol = self.ty(t).symbol;
+            let members = self.get_members_of_symbol(symbol);
+            {
+                let d = self.ty_mut(t).as_interface_type_mut();
+                d.declared_members_resolved = true;
+                d.declared_members = members;
+            }
+            let call_symbol = self.symbols.get(members, INTERNAL_SYMBOL_NAME_CALL);
+            let call_signatures = self.get_signatures_of_symbol(call_symbol);
+            self.ty_mut(t)
+                .as_interface_type_mut()
+                .declared_call_signatures = call_signatures.into();
+            let new_symbol = self.symbols.get(members, INTERNAL_SYMBOL_NAME_NEW);
+            let construct_signatures = self.get_signatures_of_symbol(new_symbol);
+            self.ty_mut(t)
+                .as_interface_type_mut()
+                .declared_construct_signatures = construct_signatures.into();
+            let index_infos = self.get_index_infos_of_symbol(symbol);
+            self.ty_mut(t).as_interface_type_mut().declared_index_infos = index_infos.into();
+        }
+        self.ty(t).as_interface_type()
+    }
+
+    /// Copy of `add_inherited_members` (checker_p22.rs).
+    fn add_inherited_members_lazy(
+        &mut self,
+        symbols: SymbolTable,
+        base_symbols: &[SymbolId],
+    ) -> SymbolTable {
+        let mut symbols = symbols;
+        self.symbols.reserve(symbols, base_symbols.len());
+        for &base in base_symbols {
+            if !self.is_static_private_identifier_property_lazy(base) {
+                let base_name = self.sym(base).name.clone();
+                if symbols.is_nil() {
+                    symbols = self.symbols.new_table_with_capacity(base_symbols.len());
+                }
+                self.symbols
+                    .set_if_absent_or(symbols, &base_name, base, |s| {
+                        !s.flags.intersects(SymbolFlags::VALUE)
+                    });
+            }
+        }
+        symbols
+    }
+
+    /// Copy of `is_static_private_identifier_property` (utilities_p1.rs).
+    fn is_static_private_identifier_property_lazy(&self, s: SymbolId) -> bool {
+        let sym = self.sym(s);
+        if !sym.name.is_internal() && !sym.name.is_default_symbol_name() {
+            return false;
+        }
+        let value_declaration = sym.value_declaration;
+        value_declaration.is_some()
+            && is_private_identifier_class_element_declaration(value_declaration)
+            && is_static(value_declaration)
+    }
+
+    /// Copy of `is_thisless` (checker_p23.rs).
+    fn is_thisless_lazy(&self, symbol: SymbolId) -> bool {
+        let declarations = &self.sym(symbol).declarations;
+        if declarations.len() == 1 {
+            let declaration = declarations[0];
+            if declaration.is_some() {
+                match declaration.kind() {
+                    SyntaxKind::Parameter
+                    | SyntaxKind::PropertyDeclaration
+                    | SyntaxKind::PropertySignature => {
+                        return is_thisless_variable_like_declaration(declaration);
+                    }
+                    SyntaxKind::MethodDeclaration
+                    | SyntaxKind::MethodSignature
+                    | SyntaxKind::Constructor
+                    | SyntaxKind::GetAccessor
+                    | SyntaxKind::SetAccessor => {
+                        return is_thisless_function_like_declaration(declaration);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// Copy of `instantiate_shared_list` (checker_p21.rs).
+    fn instantiate_shared_list_lazy<T: Copy + Default + PartialEq>(
+        &mut self,
+        values: SharedList<T>,
+        m: MapperId,
+        instantiator: fn(&mut Checker, T, MapperId) -> T,
+    ) -> SharedList<T> {
+        match self.instantiate_list_if_changed(&values, m, instantiator) {
+            Some(list) => list.into(),
+            None => values,
+        }
+    }
+
+    /// Copy of `augment_lookups_miss` (checker_p21.rs) for a type whose
+    /// members may not be resolved: the signature counts come through the
+    /// accessors (Go `len(getSignaturesOfStructuredType(t, kind))` with
+    /// #64475, checker.go:19262-19268).
+    fn augment_lookups_miss_lazy(&mut self, t: TypeId, name: &Name) -> bool {
+        let bits = augment_filter_bits(name);
+        if let Some(all) = self.augment_filters.all {
+            return !augment_filter_has(&all, bits);
+        }
+        let (call_count, construct_count) = self.lazy_signature_counts(t);
+        let function_slot = if t == self.any_function_type {
+            Some(AUGMENT_FUNCTION)
+        } else if call_count != 0 {
+            Some(AUGMENT_CALLABLE)
+        } else if construct_count != 0 {
+            Some(AUGMENT_NEWABLE)
+        } else {
+            None
+        };
+        function_slot.is_none_or(|slot| self.augment_filter_rejects(slot, bits))
+            && self.augment_filter_rejects(AUGMENT_OBJECT, bits)
     }
 
     // The 4 shape queries of #64475. Their callers run these bodies when
@@ -824,6 +1001,8 @@ impl Checker {
     // keep their own bodies when it is off.
 
     // Go: isWeakType (relater.go:679 with #64475), the object type case
+    #[cold]
+    #[inline(never)]
     pub(crate) fn is_weak_object_type_lazy(&mut self, t: TypeId) -> bool {
         self.get_signatures_of_structured_type(t, SignatureKind::CALL)
             .is_empty()
@@ -838,6 +1017,8 @@ impl Checker {
 
     // Go: getSingleSignature (checker.go:19690 with #64475), the object
     // type case
+    #[cold]
+    #[inline(never)]
     pub(crate) fn get_single_signature_lazy(
         &mut self,
         t: TypeId,
@@ -869,6 +1050,8 @@ impl Checker {
 
     // Go: isFunctionObjectType (checker.go:31624 with #64475), after the
     // evolving array test
+    #[cold]
+    #[inline(never)]
     pub(crate) fn is_function_object_type_lazy(&mut self, t: TypeId) -> bool {
         // We do a quick check for a "bind" property before performing the more expensive subtype
         // check. This gives us a quicker out in the common case where an object type is not a function.
@@ -889,6 +1072,8 @@ impl Checker {
 
     // Go: isStringIndexSignatureOnlyTypeWorker (checker.go:27830 with
     // #64475), the object type case
+    #[cold]
+    #[inline(never)]
     pub(crate) fn is_string_index_signature_only_object_type_lazy(&mut self, t: TypeId) -> bool {
         !self.is_generic_mapped_type(t)
             && !self.has_properties_of_structured_type(t)
