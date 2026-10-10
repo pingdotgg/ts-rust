@@ -1838,7 +1838,7 @@ impl Checker {
 
     /// `is_weak_type` of a resolved object type.
     // PORT: the resolved members are read in place, not copied.
-    #[inline]
+    #[inline(always)]
     fn is_weak_resolved_object_type(&self, t: TypeId) -> bool {
         let resolved = self.ty(t).as_structured_type();
         resolved.signatures().is_empty()

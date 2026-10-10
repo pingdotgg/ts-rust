@@ -493,22 +493,19 @@ impl Checker {
         let flags = self.ty(t).flags;
         if flags.intersects(TypeFlags::OBJECT) {
             // Go (#64475) reads the member with getMemberOfStructuredType and
-            // the signatures with getSignaturesOfStructuredType. A resolved
-            // type reads its members here. With the switch on, an unresolved
-            // type takes that path out of line (lazy_members.rs).
-            let ty = self.ty(t);
-            let mut symbol = if ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
-                self.symbols.get_key(ty.as_structured_type().members, name)
-            } else if self.lazy_members {
+            // the signatures with getSignaturesOfStructuredType. A type with a
+            // ready lazy member table takes that path out of line
+            // (lazy_members.rs); any other type is resolved here, as before.
+            let Some(resolved) = self.resolve_structured_type_members_unless_lazy(t) else {
                 return self.get_property_of_unresolved_object_type_lazy(
                     t,
                     name,
                     skip_object_function_property_augment,
                     include_type_only_members,
                 );
-            } else {
-                self.get_member_of_unresolved_structured_type(t, name)
             };
+            let members = resolved.members;
+            let mut symbol = self.symbols.get_key(members, name);
             if symbol.is_some() {
                 let t_symbol = self.ty(t).symbol;
                 if !include_type_only_members
@@ -798,7 +795,7 @@ impl Checker {
     }
 
     /// The signatures of `kind` of resolved members.
-    #[inline]
+    #[inline(always)]
     fn signatures_of_resolved(
         resolved: &StructuredType,
         kind: SignatureKind,
@@ -1011,6 +1008,35 @@ impl Checker {
             return self.ty(t).as_structured_type();
         }
         self.resolve_structured_type_members_slow(t)
+    }
+
+    /// `resolve_structured_type_members`, or `None` when `t` has a ready lazy
+    /// member table (lazy_members.rs). Same shape as the former, so the
+    /// resolved case costs the same.
+    #[inline]
+    pub(crate) fn resolve_structured_type_members_unless_lazy(
+        &mut self,
+        t: TypeId,
+    ) -> Option<&StructuredType> {
+        if self
+            .ty(t)
+            .object_flags
+            .intersects(ObjectFlags::MEMBERS_RESOLVED)
+        {
+            return Some(self.ty(t).as_structured_type());
+        }
+        self.resolve_structured_type_members_unless_lazy_slow(t)
+    }
+
+    #[inline(never)]
+    fn resolve_structured_type_members_unless_lazy_slow(
+        &mut self,
+        t: TypeId,
+    ) -> Option<&StructuredType> {
+        if self.lazy_members && self.get_ready_lazy_member_table(t).is_some() {
+            return None;
+        }
+        Some(self.resolve_structured_type_members_slow(t))
     }
 
     /// The member resolution dispatch of `resolve_structured_type_members`.
@@ -1688,7 +1714,7 @@ impl Checker {
     }
 
     /// The object type case of `get_single_signature` on resolved members.
-    #[inline]
+    #[inline(always)]
     fn single_signature_of_resolved(
         resolved: &StructuredType,
         kind: SignatureKind,

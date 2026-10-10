@@ -459,10 +459,19 @@ impl Checker {
             if result.is_some() && self.sym(result).flags.intersects(SymbolFlags::VALUE) {
                 break;
             }
-            let prop = self.get_property_of_type_ex(
-                base_type, name, true,  /*skipObjectFunctionPropertyAugment*/
-                false, /*includeTypeOnlyMembers*/
-            );
+            // PERF: by the key's own type, so `create_union_or_intersection_property`
+            // stays the one caller of the `TableKey` copy (LLVM then inlines
+            // it there, as before this lane).
+            let prop = match name {
+                TableKey::Name(name) => self.get_property_of_type_ex(
+                    base_type, name, true,  /*skipObjectFunctionPropertyAugment*/
+                    false, /*includeTypeOnlyMembers*/
+                ),
+                TableKey::Text(text) => self.get_property_of_type_ex(
+                    base_type, text, true,  /*skipObjectFunctionPropertyAugment*/
+                    false, /*includeTypeOnlyMembers*/
+                ),
+            };
             if prop.is_some() && !self.is_static_private_identifier_property(prop) {
                 result = prop;
             }
