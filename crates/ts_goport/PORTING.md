@@ -1570,9 +1570,7 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
     cancels it, so a long check answers early with what it has. The port
     answers in full and then ends, with Go's exit code. A SIGINT or
     SIGTERM while a request waits for a client callback ends that call in
-    Go at once; the port ends it after the next message. The run then ends
-    after that message in both (Go's read loop checks the context after
-    each read; `call` takes the same check after its reads).
+    Go at once; the port ends it after the next message.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of
