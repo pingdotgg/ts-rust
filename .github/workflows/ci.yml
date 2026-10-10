@@ -14,6 +14,8 @@ on:
       - "tools/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "npm/wasm/**"
+      - "scripts/wasm/**"
       - "UPSTREAM.json"
       - "scripts/upstream/pin.py"
       - ".github/workflows/ci.yml"
@@ -33,6 +35,28 @@ env:
   RUSTUP_TOOLCHAIN: 1.93.0
 
 jobs:
+  wasm:
+    name: WebAssembly compiler and language service
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      WASM_PROFILE: release
+      WASM_OPT: none
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: scripts/wasm/build.sh
+      - run: npm test --prefix npm/wasm
+
   lint:
     name: fmt, codegen, clippy
     runs-on: blacksmith-8vcpu-ubuntu-2404

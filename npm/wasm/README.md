@@ -61,10 +61,66 @@ To try the example, run `python3 -m http.server -d npm/wasm` and open
 `runTsc` (on the calling thread) and `runTscAsync` (a promise) from `ts-rust-wasm/core` take any
 `HostFileSystem` and a compiled module, for hosts that keep files elsewhere.
 
+## Editor language service
+
+`createLanguageService` keeps an in-memory project in its own WebAssembly instance. In browsers,
+call it in a module Web Worker so requests do not block the page. It runs on the calling thread in
+Node too; use a worker when the host needs the main thread to remain responsive.
+
+```js
+import { createLanguageService } from "ts-rust-wasm";
+
+const service = await createLanguageService({
+    cwd: "/app",
+    args: ["-p", "/app"],
+    files: {
+        "/app/tsconfig.json": '{ "compilerOptions": { "strict": true }, "files": ["index.ts"] }',
+        "/app/index.ts": "export const answer = 42;",
+    },
+});
+const hover = await service.request("textDocument/hover", {
+    textDocument: { uri: "file:///app/index.ts" },
+    position: { line: 0, character: 14 },
+});
+await service.updateFiles({ "/app/index.ts": 'export const answer = "forty-two";' });
+await service.dispose();
+```
+
+Requests take LSP parameter objects and return LSP result objects. Document URIs are `file://`
+URIs and positions count UTF-16 code units. Pass `capabilities` with the client's LSP capabilities
+to select supported response shapes and the semantic-token legend. This is a callable language
+service API; it does not start the native `--lsp` transport or its file watchers.
+
+Supported methods:
+
+- `textDocument/hover`, `textDocument/completion`, `textDocument/signatureHelp`
+- `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/implementation`
+- `textDocument/references`, `textDocument/rename`, `textDocument/documentHighlight`
+- `textDocument/diagnostic`, `textDocument/documentSymbol`, `textDocument/codeAction`
+- `textDocument/formatting`, `textDocument/rangeFormatting`
+- `textDocument/semanticTokens/full`, `textDocument/semanticTokens/range`
+
+`files` is copied on creation. `updateFiles` adds or replaces files; `deleteFiles` removes them.
+Calls are serialized per service. Changes release the old program and the next request rebuilds
+it, including its imports and configuration. Repeated reads share the current program. This first
+interface does not reuse the compiler program across changes, supply auto-import completions, or
+resolve completion/code-action items. Those operations need additional host integration.
+
+`dispose` releases the instance, and repeated disposal is safe. Rejected parameters leave the
+service usable. A WebAssembly trap ends that service; dispose it and create a new service.
+Each service and each `tsc` run has an independent instance, even when they share a compiled module.
+The `ts-rust-wasm/core` entry takes a compiled module as its first `createLanguageService` argument.
+
+After building the module, `npm test` runs the compiler controls and the persistent-service
+sequence. Serve `npm/wasm` and open `examples/language-service/` to run the same sequence in a
+browser worker, including compiler and DOM-library controls. The existing worker stack limits
+also apply to language-service requests.
+
 ## How it works
 
-- `crates/ts_wasm` is the module: `tsc` from `ts_goport` for `wasm32-wasip1`. The `wasm` cargo
-  profile (opt-level z, fat LTO) and wasm-opt make it 4.2 MB (1.8 MB gzip, 1.5 MB brotli) with
+- `crates/ts_wasm` is the module: `tsc` and editor services from `ts_goport` for `wasm32-wasip1`.
+  The previous compiler-only module, built with the `wasm` cargo profile (opt-level z, fat LTO)
+  and wasm-opt, measured 4.2 MB (1.8 MB gzip, 1.5 MB brotli) with
   Rust 1.98.1. Rust 1.93.0 makes it 2% bigger, with the same output. The libs are in it as one
   LZMA stream (0.31 MB), and the diagnostic message texts are packed too.
   `scripts/wasm/order-functions.mjs` puts similar functions next to each other, so gzip and

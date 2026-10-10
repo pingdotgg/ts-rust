@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>ts-rust WebAssembly language service</title>
+<style>body { font: 16px system-ui; max-width: 48rem; margin: 3rem auto; padding: 1rem; } pre { white-space: pre-wrap; }</style>
+<h1>WebAssembly language service</h1>
+<p>This worker checks hover, completion, cross-file navigation, file updates, Unicode positions and disposal.</p>
+<button id="run">Run checks</button>
+<pre id="result">Ready</pre>
+<script type="module">
+const button = document.querySelector("#run");
+const result = document.querySelector("#result");
+button.onclick = () => {
+    button.disabled = true;
+    result.textContent = "Running…";
+    const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+    worker.onmessage = ({ data }) => {
+        result.textContent = JSON.stringify(data, null, 2);
+        result.dataset.status = data.ok ? "passed" : "failed";
+        worker.terminate();
+        button.disabled = false;
+    };
+    worker.onerror = event => {
+        result.textContent = event.message;
+        result.dataset.status = "failed";
+        worker.terminate();
+        button.disabled = false;
+    };
+    worker.postMessage({ run: true });
+};
+</script>
+</html>

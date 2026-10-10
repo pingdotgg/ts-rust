@@ -6,7 +6,13 @@
 import { statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
+import { createLanguageService as createCoreLanguageService } from "./core.js";
 export { memoryFileSystem, runTsc, runTscAsync } from "./core.js";
+
+/** Creates a persistent, in-memory editor service on this thread. */
+export async function createLanguageService(options = {}) {
+    return createCoreLanguageService(await loadModule(), options);
+}
 
 const wasmUrl = new URL("./ts_rust.wasm", import.meta.url);
 

@@ -692,6 +692,7 @@ dependencies = [
 name = "ts_wasm"
 version = "7.0.0-dev"
 dependencies = [
+ "serde_json",
  "ts_goport",
 ]
 

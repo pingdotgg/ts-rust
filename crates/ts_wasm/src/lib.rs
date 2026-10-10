@@ -30,6 +30,8 @@ use ts_goport::gostd::context;
 use ts_goport::scanner_util::go_string_from_utf8;
 
 pub mod host;
+#[cfg(target_family = "wasm")]
+mod language_service;
 
 /// Report the diagnostics as JSON in the reply, not as text on stdout.
 pub const FLAG_DIAGNOSTICS_JSON: u32 = 1;
@@ -131,6 +133,7 @@ mod exports {
     thread_local! {
         static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
         static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        static SERVICE: RefCell<Option<super::language_service::Service>> = const { RefCell::new(None) };
     }
 
     /// Makes the input buffer `len` bytes long and returns its address. The
@@ -155,6 +158,17 @@ mod exports {
         let (status, reply) = super::run(&String::from_utf8_lossy(&request));
         OUTPUT.with(|output| *output.borrow_mut() = reply.into_bytes());
         status
+    }
+
+    /// Handles one editor request in this instance's persistent language service.
+    #[allow(unsafe_code)]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ts_service() {
+        install_panic_hook();
+        let request = INPUT.with(|input| std::mem::take(&mut *input.borrow_mut()));
+        let reply = SERVICE
+            .with(|service| super::language_service::receive(&mut service.borrow_mut(), &request));
+        OUTPUT.with(|output| *output.borrow_mut() = reply.into_bytes());
     }
 
     /// The address of the reply of the last `ts_run`.

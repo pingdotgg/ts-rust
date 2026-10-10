@@ -1,6 +1,8 @@
 import type { Diagnostic, WasmModule } from "./core.js";
+import type { LanguageService, LanguageServiceOptions } from "./core.js";
 
 export type { Diagnostic, HostFileSystem, MemoryFileSystem, Position, RunOptions, WasmModule } from "./core.js";
+export type { LanguageService, LanguageServiceOptions } from "./core.js";
 export { memoryFileSystem, runTsc, runTscAsync } from "./core.js";
 
 /**
@@ -47,3 +49,6 @@ export function tsc(args: string[], options?: TscOptions): Promise<TscResult>;
 
 /** The compiled module. The browser entry takes where to load it from. */
 export function loadModule(source?: TscOptions["wasm"]): Promise<WasmModule>;
+
+/** Creates an in-memory editor service on the calling thread. Use a worker in browsers. */
+export function createLanguageService(options?: LanguageServiceOptions & { wasm?: TscOptions["wasm"] }): Promise<LanguageService>;

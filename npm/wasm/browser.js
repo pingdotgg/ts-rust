@@ -6,9 +6,14 @@
 // more stack in Chrome. Safari has no JSPI, and its workers have a small
 // stack (see README.md).
 
-import { memoryFileSystem, runTsc, runTscAsync } from "./core.js";
+import { createLanguageService as createCoreLanguageService, memoryFileSystem, runTsc, runTscAsync } from "./core.js";
 
 export { memoryFileSystem, runTsc, runTscAsync };
+
+/** Creates a persistent editor service on this thread. Use a Web Worker in browsers. */
+export async function createLanguageService(options = {}) {
+    return createCoreLanguageService(await loadModule(options.wasm), options);
+}
 
 let modulePromise;
 

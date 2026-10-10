@@ -214,6 +214,16 @@ function prepareRun(module, options) {
     let exports;
     return {
         imports,
+        attach(instance) {
+            exports = instance.exports;
+            memory = exports.memory;
+            return exports;
+        },
+        detach() {
+            exports = undefined;
+            memory = undefined;
+        },
+        stderrText: () => stderrText,
         /** Writes the request into `instance` and returns its `ts_run`. */
         start(instance) {
             exports = instance.exports;
@@ -295,6 +305,95 @@ export async function runTscAsync(module, options) {
         error = thrown;
     }
     return run.result(exitCode, error);
+}
+
+/** A persistent, in-memory editor service. Run it in a worker in browsers. */
+export async function createLanguageService(module, options = {}) {
+    const files = options.files instanceof Map
+        ? new Map(options.files)
+        : new Map(Object.entries(options.files ?? {}));
+    const fs = memoryFileSystem(files);
+    validateFiles(files);
+    const run = prepareRun(module, { ...options, fs });
+    let exports = run.attach(await WebAssembly.instantiate(module, run.imports));
+    const jspi = typeof WebAssembly.promising === "function" && typeof document === "undefined";
+    let invoke = jspi ? WebAssembly.promising(exports.ts_service) : exports.ts_service;
+    let queue = Promise.resolve();
+    let disposal;
+    let failure;
+
+    async function call(request) {
+        if (failure) throw failure;
+        const input = encoder.encode(JSON.stringify(request));
+        let result;
+        try {
+            const ptr = exports.ts_input(input.length);
+            new Uint8Array(exports.memory.buffer).set(input, ptr);
+            await invoke();
+            result = JSON.parse(decoder.decode(new Uint8Array(
+                exports.memory.buffer, exports.ts_output(), exports.ts_output_len(),
+            )));
+        } catch (error) {
+            failure = Object.assign(error, { stderr: run.stderrText() });
+            throw failure;
+        }
+        if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code });
+        return result.result;
+    }
+
+    function enqueue(operation) {
+        if (disposal) return Promise.reject(new Error("language service is disposed"));
+        const result = queue.then(operation);
+        queue = result.catch(() => {});
+        return result;
+    }
+
+    await call({ action: "initialize", cwd: options.cwd ?? "/", args: options.args ?? [], caseInsensitive: options.caseInsensitive ?? false, capabilities: options.capabilities ?? {} });
+    return {
+        request(method, params = {}) {
+            return enqueue(() => call({ action: "request", method, params }));
+        },
+        updateFiles(changes) {
+            const entries = changes instanceof Map ? Array.from(changes) : Object.entries(changes);
+            try { validateFiles(entries); } catch (error) { return Promise.reject(error); }
+            return enqueue(async () => {
+                await call({ action: "invalidate" });
+                for (const [path, text] of entries) files.set(path, text);
+            });
+        },
+        deleteFiles(paths) {
+            const owned = Array.from(paths);
+            if (owned.some(path => typeof path !== "string" || !path.startsWith("/"))) {
+                return Promise.reject(new TypeError("file paths must be absolute"));
+            }
+            return enqueue(async () => {
+                await call({ action: "invalidate" });
+                for (const path of owned) files.delete(path);
+            });
+        },
+        dispose() {
+            disposal ??= queue.then(async () => {
+                try {
+                    if (!failure) await call({ action: "dispose" });
+                } finally {
+                    exports = undefined;
+                    invoke = undefined;
+                    failure = undefined;
+                    run.detach();
+                    files.clear();
+                }
+            });
+            return disposal;
+        },
+    };
+}
+
+function validateFiles(entries) {
+    for (const [path, text] of entries) {
+        if (typeof path !== "string" || !path.startsWith("/") || typeof text !== "string") {
+            throw new TypeError("files must map absolute paths to text");
+        }
+    }
 }
 
 /**

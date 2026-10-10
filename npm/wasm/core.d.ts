@@ -117,3 +117,27 @@ export function runTscAsync(
     module: WasmModule,
     options: RunOptions,
 ): Promise<{ exitCode: number; diagnostics?: Diagnostic[] }>;
+
+export interface LanguageServiceOptions {
+    /** In-memory project files, keyed by absolute paths. Copied on creation. */
+    files?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
+    /** Compiler arguments, including root files or `-p /path/to/tsconfig.json`. */
+    args?: readonly string[];
+    cwd?: string;
+    caseInsensitive?: boolean;
+    /** LSP client capabilities, including semantic-token legend and supported response shapes. */
+    capabilities?: unknown;
+}
+
+export interface LanguageService {
+    /** Requests use LSP method names and parameter/result shapes, with UTF-16 positions. */
+    request(method: string, params?: unknown): Promise<unknown>;
+    /** Adds or replaces project files. The next request rebuilds the program. */
+    updateFiles(files: ReadonlyMap<string, string> | Readonly<Record<string, string>>): Promise<void>;
+    deleteFiles(paths: readonly string[]): Promise<void>;
+    /** Releases the project. Repeated disposal is safe. */
+    dispose(): Promise<void>;
+}
+
+/** Creates one editor instance from a compiled module. It never shares state with compiler runs. */
+export function createLanguageService(module: WasmModule, options?: LanguageServiceOptions): Promise<LanguageService>;
