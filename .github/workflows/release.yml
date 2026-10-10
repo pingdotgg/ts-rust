@@ -300,62 +300,6 @@ jobs:
           path: ${{ runner.temp }}/dist
           if-no-files-found: error
 
-  # TEMPORARY (lane win1, reverted before merge): the Windows PGO tsc.exe against Go's tsc.exe
-  # (noembed, as Go's npm package) on the same runner: win-go-compare.sh and timing.
-  bench-windows:
-    needs: build
-    runs-on: blacksmith-16vcpu-windows-2025
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - name: Resolve the Go pin
-        id: pin
-        run: |
-          key=$(jq -r '.batch.upstreamPin.to // empty' docs/typechecker-state/current.json)
-          python scripts/upstream/pin.py show ${key:+"$key"} > "$RUNNER_TEMP/pin.json"
-          jq -r '"repo=\(.repo)", "commit=\(.commit)", "subdir=\(.subdir // "")", "go=\(.oracle.go | ltrimstr("go"))"' "$RUNNER_TEMP/pin.json" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v5
-        with:
-          repository: ${{ steps.pin.outputs.repo }}
-          ref: ${{ steps.pin.outputs.commit }}
-          path: go-pin
-          sparse-checkout: ${{ steps.pin.outputs.subdir }}
-          persist-credentials: false
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ steps.pin.outputs.go }}
-          cache: false
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-      - uses: actions/download-artifact@v5
-        with:
-          name: tsc-win32-x64
-          path: ${{ runner.temp }}/rs
-      - name: Build Go's tsc
-        run: |
-          (cd go-pin/tsc && GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -tags=noembed -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
-          cp go-pin/tsc/internal/bundled/libs/*.d.ts "$RUNNER_TEMP/go/"
-          crates/ts_goport/scripts/copy-libs.sh "$RUNNER_TEMP/rs"
-          "$RUNNER_TEMP/go/tsc.exe" --version
-          "$RUNNER_TEMP/rs/tsc.exe" --version
-          nproc
-          wmic cpu get name 2> /dev/null || true
-      - name: Compare with Go (noembed)
-        run: scripts/goport/win-go-compare.sh "$RUNNER_TEMP/rs/tsc.exe" "$RUNNER_TEMP/go/tsc.exe" "$RUNNER_TEMP/cmp"
-      - name: Projects
-        if: ${{ !cancelled() }}
-        run: scripts/goport/pgo-train.sh setup "$RUNNER_TEMP/train"
-      - name: Time
-        if: ${{ !cancelled() }}
-        run: scripts/goport/win-bench.sh "$RUNNER_TEMP/train" 5 go="$RUNNER_TEMP/go/tsc.exe" rs="$RUNNER_TEMP/rs/tsc.exe"
-
   # Installs the npm packages in a fresh project on each platform, as a user would. These are
   # GitHub-hosted runners, so the check runs on another host than the build (for darwin-x64 and
   # win32-arm64, another VM of the build's runner image). ubuntu-24.04-arm is GitHub's arm64
