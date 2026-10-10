@@ -2099,8 +2099,9 @@ pub(crate) mod tests {
     /// notes both errors and returns the second. `calls` makes 3 calls and
     /// notes their results; `slowcalls` too, but it waits `HOLD` after the
     /// first. `hcall` makes a call with its own context (the handler
-    /// context, as the API's module resolver) and notes the result. `hold`
-    /// waits `HOLD` and does not look at its context. Other requests answer
+    /// context, as the API's module resolver) and notes the result. `lags`
+    /// makes 2 calls and notes its frame's lag after each. `hold` waits
+    /// `HOLD` and does not look at its context. Other requests answer
     /// `true`.
     struct CallbackHandler {
         conn: std::cell::OnceCell<std::rc::Weak<AsyncConn>>,
@@ -2145,6 +2146,16 @@ pub(crate) mod tests {
                     }
                     let note = format!("{method} | {results:?}");
                     self.notes.send(note).expect("notes");
+                    return Ok(None);
+                }
+                "lags" => {
+                    let conn = conn();
+                    let mut lags = Vec::new();
+                    for _ in 0..2 {
+                        let _ = conn.call(&self.call_ctx, "callback", None);
+                        lags.push(conn.frames.borrow().last().copied());
+                    }
+                    self.notes.send(format!("lags | {lags:?}")).expect("notes");
                     return Ok(None);
                 }
                 "hcall" => {
@@ -2599,6 +2610,36 @@ pub(crate) mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("run returned");
         assert!(result.is_err(), "{result:?}");
+        runner.join().expect("run thread");
+    }
+
+    // PORT: no Go test; the Go clock (file header). A call that waits on an
+    // idle dispatch thread keeps its frame's lag at 0, after a reply and
+    // after a signal: the thread's own wake is not a hold. So without a
+    // hold the port decides as before the clock.
+    #[test]
+    fn test_async_conn_reader_idle_call_keeps_lag_zero() {
+        let (ctx, cancel) = context::with_cancel(&context::background());
+        let (client, notes, run_done, runner) = run_on_reader(&ctx);
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":1,"method":"lags"}"#);
+        let call = read_framed(&client);
+        assert!(call.contains(r#""id":"api1""#), "{call}");
+        std::thread::sleep(Duration::from_millis(50));
+        write_framed(&client, r#"{"jsonrpc":"2.0","id":"api1","result":null}"#);
+        let call = read_framed(&client);
+        assert!(call.contains(r#""id":"api2""#), "{call}");
+        std::thread::sleep(Duration::from_millis(50));
+        cancel();
+        let note = notes.recv_timeout(Duration::from_secs(5)).expect("note");
+        assert_eq!(note, "lags | [Some(0ns), Some(0ns)]");
+        // The 1 read after the signal is EOF: Go's `Run` returns nil.
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown");
+        let result = run_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("run returned");
+        assert_eq!(result, Ok(()));
         runner.join().expect("run thread");
     }
 }
