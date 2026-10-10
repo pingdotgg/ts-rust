@@ -31,7 +31,7 @@ use ts_goport::lsp::lsproto::{
     FileChangeType, FileEvent, FileSystemWatcher, PatternOrRelativePattern, WatchKind,
 };
 use ts_goport::lsp::lspwatcher::{
-    self, LocalWatchCallback, Watcher, WatcherBackend, new_with_backend, root_from_glob,
+    self, LocalWatchCallback, Watcher, WatcherBackend, new_with_backend, root_from_glob, watch_root,
 };
 
 use super::fswatch_watcher::{TmpDir, new_tmp_dir};
@@ -305,7 +305,7 @@ fn test_watcher_kind_filter() {
     }
 }
 
-// Go: lspwatcher_test.go:147 TestRootFromGlob
+// Go: lspwatcher_test.go:151 TestRootFromGlob
 #[test]
 fn test_root_from_glob() {
     let cases = [
@@ -313,9 +313,43 @@ fn test_root_from_glob() {
         ("/abs/path/", "/abs/path"),
         ("/abs/path/?.ts", "/abs/path"),
         ("/abs/path/{a,b}/*", "/abs/path"),
+        // ts#64159
+        ("/abs/path/../shared/*", "/abs/shared"),
     ];
     for (pattern, want) in cases {
         assert_eq!(root_from_glob(pattern), want, "rootFromGlob({pattern:?})");
+    }
+}
+
+// Go: lspwatcher_test.go:170 TestWatchRootFromRelativePattern (ts#64159)
+#[test]
+fn test_watch_root_from_relative_pattern() {
+    use ts_goport::lsp::lsproto::{RelativePattern, URI, WorkspaceFolderOrURI};
+    let base_uri = URI("file:///workspace/project".to_string());
+    let cases = [
+        ("**/*", "/workspace/project"),
+        ("src/**/*", "/workspace/project/src"),
+        ("../shared/*", "/workspace/shared"),
+    ];
+    for (pattern, want) in cases {
+        let watcher = FileSystemWatcher {
+            glob_pattern: PatternOrRelativePattern {
+                relative_pattern: Some(RelativePattern {
+                    base_uri: WorkspaceFolderOrURI {
+                        uri: Some(base_uri.clone()),
+                        ..Default::default()
+                    },
+                    pattern: pattern.to_string(),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (got, ok) = watch_root(&watcher);
+        assert!(
+            ok && got == want,
+            "watchRoot({pattern:?}) = {got:?}, {ok}, want {want:?}, true"
+        );
     }
 }
 

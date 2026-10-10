@@ -10,18 +10,22 @@ impl LanguageService {
     // Go: completions.go:5488 ResolveCompletionItem
     // PORT: Go takes `*lsproto.CompletionItem` and returns it after changing
     // it; Rust takes and returns the item by value. `data` is Go's nil-able
-    // `*lsproto.CompletionItemData`.
+    // `*lsproto.CompletionItemData`. `file_name` is Go's
+    // `tspath.RootedFilePath`: the server's rooted, normalized form of
+    // `data.file_name` (server.go:2178). The file is found by it, and the
+    // error text keeps `data.file_name` as Go does.
     pub fn resolve_completion_item(
         &self,
         ctx: &Context,
         item: lsproto::CompletionItem,
         data: Option<lsproto::CompletionItemData>,
+        file_name: &str,
     ) -> Result<lsproto::CompletionItem, GoError> {
         let Some(data) = data else {
             return Err(gostd::errors::new("completion item data is nil"));
         };
 
-        let (program, file) = self.try_get_program_and_file(&data.file_name);
+        let (program, file) = self.try_get_program_and_file(file_name);
         if file.is_nil() {
             return Err(gostd::errors::errorf(
                 format!("file not found: {}", data.file_name),

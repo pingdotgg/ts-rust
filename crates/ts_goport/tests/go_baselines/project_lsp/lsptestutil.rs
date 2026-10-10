@@ -26,6 +26,7 @@ use ts_goport::frontend::json_ext::AnyValue;
 use ts_goport::gostd::{Context, GoError, context, errors};
 use ts_goport::jsonrpc::{self, ID, MessageKind, ResponseError};
 use ts_goport::lsp::{self, lsproto};
+use ts_goport::project::ata;
 
 use super::projecttestutil::FileMap;
 use crate::support::vfstest::MapFs;
@@ -159,7 +160,7 @@ pub fn new_lsp_client(
                 None => (
                     bundled::wrap_fs(ts_goport::frontend::vfs::osvfs::osvfs_fs()),
                     ts_goport::cmd::tsgo::lsp::get_global_typings_cache_location(),
-                    Some(Box::new(npm_install) as NpmInstall),
+                    Some(Arc::new(ts_goport::cmd::tsgo::lsp::npm_install) as ata::NpmInstallFunc),
                 ),
             };
             let server = lsp::new_server(lsp::ServerOptions {
@@ -211,28 +212,6 @@ pub fn new_lsp_client(
         cancel: Some(cancel),
         server: Some(server),
         router: Some(router),
-    }
-}
-
-type NpmInstall = Box<dyn Fn(&str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>;
-
-/// Go `exec.Command("npm", args...)` in `cwd`, `cmd.Output()` (the
-/// `NpmInstall` of lsp `TestReplay`). PORT: the error text is approximated.
-fn npm_install(cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
-    match std::process::Command::new("npm")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-    {
-        Ok(output) if output.status.success() => (output.stdout, None),
-        Ok(output) => (
-            output.stdout,
-            Some(errors::new(format!(
-                "exit status {:?}",
-                output.status.code()
-            ))),
-        ),
-        Err(err) => (Vec::new(), Some(errors::new(err.to_string()))),
     }
 }
 

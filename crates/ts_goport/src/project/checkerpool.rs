@@ -243,34 +243,38 @@ impl CheckerPool {
             });
     }
 
-    // Go: project/checkerpool.go:157 checkerPool.tryReacquireForRequest
-    // tryReacquireForRequest checks whether the given request already has an
-    // associated checker. If so, it either returns the checker directly (still held)
-    // or reacquires it by claiming a semaphore slot. The caller must provide the
+    // Go: project/checkerpool.go:158 checkerPool.tryReacquireForRequest (ts#64543, at fed0bf24149f)
+    // tryReacquireForRequest claims a semaphore slot, then checks whether the given
+    // request has an idle associated checker. The caller must provide the
     // appropriate semaphore channel and indicate whether this is a diagnostics
     // request (isDiag). If the associated checker is in the wrong category
     // (e.g. a diagnostics index for a query request), the association is deleted
     // and normal acquisition proceeds.
     //
-    // Returns (checker, release, true) if the request was served (either still held
-    // or reclaimed). Returns (nil, nil, false) if the caller must proceed with
+    // Request affinity is only a preference for an idle checker, not permission to
+    // reuse a held checker: concurrent acquisitions can share the same request ID.
+    // Returns (checker, release, true) if the checker was reclaimed.
+    // Returns (nil, nil, false) if the caller must proceed with
     // normal acquisition — in this case, a semaphore slot has already been claimed.
     // Must NOT be called with p.mu held.
+    // PORT: a held checker's request no longer skips the slot, so a nested
+    // acquisition on a full semaphore is `Semaphore::send`'s `unreachable!`
+    // (Go blocks; compiler/checkerpool.go:20 says acquisitions are not
+    // reentrant).
     fn try_reacquire_for_request(
         &self,
         request_id: &str,
         sem: &Semaphore,
         is_diag: bool,
     ) -> (Option<Rc<RefCell<Checker>>>, Option<Release>, bool) {
+        sem.send();
         if request_id.is_empty() {
-            sem.send();
             return (None, None, false);
         }
 
         self.mu_lock();
         let index = self.request_associations.borrow().get(request_id).copied();
         let Some(index) = index else {
-            sem.send();
             return (None, None, false);
         };
 
@@ -278,46 +282,25 @@ impl CheckerPool {
         // Index 0 is for diagnostics; indices 1+ are for queries.
         if (is_diag && index != 0) || (!is_diag && index == 0) {
             self.request_associations.borrow_mut().remove(request_id);
-            sem.send();
             return (None, None, false);
         }
 
         let c = self.checkers.borrow()[index as usize].clone();
         let Some(c) = c else {
             self.request_associations.borrow_mut().remove(request_id);
-            sem.send();
             return (None, None, false);
         };
 
-        let held = self.held_by.borrow()[index as usize].clone();
-        if held == request_id {
-            // Same request, checker still held — return without claiming a slot.
-            return (Some(c), Some(Release::new(noop)), true);
+        if self.held_by.borrow()[index as usize].is_empty() {
+            self.held_by.borrow_mut()[index as usize] = request_id.to_string();
+            let release = self.create_release(request_id, index, c.clone());
+            return (Some(c), Some(release), true);
         }
 
-        if held.is_empty() {
-            // Same request reacquiring after release — need a semaphore slot.
-            sem.send();
-            self.mu_lock();
-            // Re-check: checker may have been disposed while waiting for the slot.
-            let cc = self.checkers.borrow()[index as usize].clone();
-            let same_checker = cc.as_ref().is_some_and(|cc| Rc::ptr_eq(cc, &c));
-            if same_checker && self.held_by.borrow()[index as usize].is_empty() {
-                self.held_by.borrow_mut()[index as usize] = request_id.to_string();
-                let release = self.create_release(request_id, index, c.clone());
-                return (Some(c), Some(release), true);
-            }
-            // Checker was replaced/disposed while waiting for the slot.
-            // The slot is still claimed; the caller will use it for normal acquisition.
-            return (None, None, false);
-        }
-
-        // Checker held by another request — claim a slot normally.
-        sem.send();
         (None, None, false)
     }
 
-    // Go: project/checkerpool.go:220 checkerPool.getDiagnosticsChecker
+    // Go: project/checkerpool.go:194 checkerPool.getDiagnosticsChecker
     // getDiagnosticsChecker returns the dedicated diagnostics checker (index 0).
     // Creates it on first use. Blocks on diagSem if it's currently in use.
     pub fn get_diagnostics_checker(
@@ -364,7 +347,7 @@ impl CheckerPool {
         (c, release)
     }
 
-    // Go: project/checkerpool.go:252 checkerPool.getQueryChecker
+    // Go: project/checkerpool.go:226 checkerPool.getQueryChecker
     // getQueryChecker returns an ephemeral query checker from indices 1+.
     // Uses request affinity, then file affinity, then finds/creates.
     // Blocks on querySem if all query slots are in use.
@@ -434,7 +417,7 @@ impl CheckerPool {
         (c, release)
     }
 
-    // Go: project/checkerpool.go:296 checkerPool.findOrCreateQueryCheckerLocked
+    // Go: project/checkerpool.go:270 checkerPool.findOrCreateQueryCheckerLocked
     // findOrCreateQueryCheckerLocked returns an idle query checker or creates one
     // in the first empty slot. The semaphore guarantees at least one slot is
     // available. Must be called with p.mu held.
@@ -464,7 +447,7 @@ impl CheckerPool {
         );
     }
 
-    // Go: project/checkerpool.go:315 checkerPool.getPersistentChecker
+    // Go: project/checkerpool.go:289 checkerPool.getPersistentChecker
     pub fn get_persistent_checker(&self) -> (Rc<RefCell<Checker>>, Release) {
         self.persistent_sem.send();
         self.mu_lock();
@@ -511,7 +494,7 @@ impl CheckerPool {
         (c, release)
     }
 
-    // Go: project/checkerpool.go:345 checkerPool.createRelease
+    // Go: project/checkerpool.go:319 checkerPool.createRelease
     pub fn create_release(&self, request_id: &str, index: i32, c: Rc<RefCell<Checker>>) -> Release {
         let p = self.this_rc();
         let request_id = request_id.to_string();
@@ -558,7 +541,7 @@ impl CheckerPool {
         })
     }
 
-    // Go: project/checkerpool.go:387 checkerPool.registerRequestCleanup
+    // Go: project/checkerpool.go:361 checkerPool.registerRequestCleanup
     // registerRequestCleanup uses context.AfterFunc to delete the request
     // association when the request context is done. This prevents the map
     // from growing unboundedly with completed request IDs.
@@ -577,7 +560,7 @@ impl CheckerPool {
         }
     }
 
-    // Go: project/checkerpool.go:399 checkerPool.scheduleCleanupLocked
+    // Go: project/checkerpool.go:373 checkerPool.scheduleCleanupLocked
     // scheduleCleanupLocked resets (or starts) the cleanup timer so it fires at
     // the earliest pending checker-expiration deadline among all currently idle,
     // unheld checkers.
@@ -633,7 +616,7 @@ impl CheckerPool {
         }
     }
 
-    // Go: project/checkerpool.go:431 checkerPool.cleanupIdleCheckers
+    // Go: project/checkerpool.go:405 checkerPool.cleanupIdleCheckers
     // cleanupIdleCheckers disposes checkers that have been idle for longer than
     // the idle timeout. The API checker is separate and never idle-cleaned.
     pub fn cleanup_idle_checkers(&self) {
@@ -672,7 +655,7 @@ impl CheckerPool {
         self.schedule_cleanup_locked();
     }
 
-    // Go: project/checkerpool.go:463 checkerPool.disposeCheckerLocked
+    // Go: project/checkerpool.go:437 checkerPool.disposeCheckerLocked
     // disposeCheckerLocked removes a checker from the pool and clears all associations
     // (file and request) that reference it. Must be called with p.mu held.
     pub fn dispose_checker_locked(&self, index: i32, c: &Rc<RefCell<Checker>>) {
@@ -695,7 +678,7 @@ impl CheckerPool {
             .retain(|_req, idx| *idx != index);
     }
 
-    // Go: project/checkerpool.go:484 checkerPool.mergeGlobalDiagnosticsFromCheckerLocked
+    // Go: project/checkerpool.go:458 checkerPool.mergeGlobalDiagnosticsFromCheckerLocked
     // mergeGlobalDiagnosticsFromCheckerLocked checks if the given checker has produced new global
     // diagnostics since the last time we looked, and if so merges them into the accumulated set.
     // Must be called with p.mu held.
@@ -719,7 +702,7 @@ impl CheckerPool {
         }
     }
 
-    // Go: project/checkerpool.go:499 checkerPool.GetGlobalDiagnostics
+    // Go: project/checkerpool.go:473 checkerPool.GetGlobalDiagnostics
     // GetGlobalDiagnostics returns the global diagnostics accumulated from the dedicated
     // diagnostics checker across its instances during this pool's lifetime.
     pub fn get_global_diagnostics(&self) -> Vec<Diagnostic> {
@@ -727,7 +710,7 @@ impl CheckerPool {
         self.global_diag_accumulated.borrow().clone()
     }
 
-    // Go: project/checkerpool.go:507 checkerPool.TakeNewGlobalDiagnostics
+    // Go: project/checkerpool.go:481 checkerPool.TakeNewGlobalDiagnostics
     // TakeNewGlobalDiagnostics reports whether new global diagnostics have been
     // accumulated since the last call, and resets the flag.
     pub fn take_new_global_diagnostics(&self) -> bool {
@@ -737,7 +720,7 @@ impl CheckerPool {
         changed
     }
 
-    // Go: project/checkerpool.go:519 checkerPool.Discard
+    // Go: project/checkerpool.go:493 checkerPool.Discard
     // Discard signals that this pool's program has been replaced. The pool
     // remains functional but stops its idle-cleanup timer so that checkers
     // are not disposed until the pool is GC'd. The API checker is unaffected
@@ -756,8 +739,7 @@ impl CheckerPool {
     }
 }
 
-// Go: project/checkerpool.go:533 noop
-pub fn noop() {}
+// Go: project/checkerpool.go:533 noop (at 673a5f17d713; removed by ts#64543)
 
 // Not in Go: the GC frees the checkers of a released pool in the background.
 // PERF (freecheck1): a language server edit frees the old program's pool on

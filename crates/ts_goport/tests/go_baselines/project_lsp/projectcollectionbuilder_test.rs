@@ -747,9 +747,18 @@ child_test! {
         assert_eq!(ts_goport::program::ls_program::registered_programs(), 1);
 
         edit(&session, A_URI, 2, (0, 0), (0, 0), "// edited\n");
-        session.get_language_services_for_documents_loading_project_tree(
+        // ts#64642: a request that also loads the project trees ends with
+        // the inferred project's roots, the open files not in a configured
+        // project (projectcollectionbuilder.go:763 cleanupInferredProject),
+        // which drops the closed b.ts again. So the clone asks for the two
+        // documents only (Go `ResourceRequest{Documents: uris}`).
+        session.get_snapshot(
             &bg(),
-            &[uri(A_URI), uri(B_URI)],
+            ts_goport::project::ResourceRequest {
+                documents: vec![uri(A_URI), uri(B_URI)],
+                ..Default::default()
+            },
+            false, /*callerRef*/
         );
         let program = program(&session, A_URI);
         assert!(has_file(&program, B), "b.ts should be a root of the inferred project");
@@ -955,4 +964,45 @@ fn files_for_indirect_project(project_index: i32, compiler_options: &str) -> Fil
         (config_name.as_str(), tsconfig.as_str()),
         (main_name.as_str(), "export const indirect = 1;"),
     ])
+}
+
+child_test! {
+    // Go: fourslash/tests/workspaceSymbolNewInferredProject_test.go:15 TestWorkspaceSymbolNewInferredProject (ts#64642)
+    // PORT: the session part of the fourslash test (the LSP oracle's
+    // fourslash battery runs the test itself). workspace/symbol loads the
+    // project trees and reads the program of every language service project.
+    // After e.ts leaves the tsconfig project, it is in a new inferred
+    // project, which needs a program too.
+    fn workspace_symbol_new_inferred_project() {
+        const A_URI: &str = "file:///home/src/projects/p/a.ts";
+        const E_URI: &str = "file:///home/src/projects/p/e.ts";
+        let session = bare_session(files(&[
+            ("/home/src/projects/p/tsconfig.json", r#"{ "files": ["a.ts", "b.ts"] }"#),
+            ("/home/src/projects/p/a.ts", "import \"./e\";\n"),
+            ("/home/src/projects/p/b.ts", "export const b = 1;\n"),
+            ("/home/src/projects/p/e.ts", "export const e = 1;\n"),
+        ]));
+        open(&session, A_URI, "import \"./e\";\n");
+        open(&session, E_URI, "export const e = 1;\n");
+        // e.ts isn't listed in tsconfig.json, it only gets pulled in by the import in a.ts.
+        // Once that import is gone, e.ts should move to the inferred project.
+        edit(&session, A_URI, 2, (0, 0), (0, 13), "");
+
+        let mut projects: Vec<(Kind, bool)> = Vec::new();
+        session.with_snapshot_loading_project_tree(&bg(), None, &mut |snapshot| {
+            for project in snapshot.project_collection.language_service_projects() {
+                let project = project.borrow();
+                let program = project
+                    .get_program()
+                    .expect("every language service project has a program");
+                let has_e = program.get_source_file("/home/src/projects/p/e.ts").is_some();
+                projects.push((project.kind, has_e));
+            }
+        });
+        assert!(
+            projects.contains(&(Kind::INFERRED, true)),
+            "e.ts is in the inferred project's program: {projects:?}"
+        );
+        session.close();
+    }
 }

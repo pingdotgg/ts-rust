@@ -139,9 +139,26 @@ impl SnapshotHost {
             released: Cell::new(false),
         })
     }
+
+    // Go: project/snapshothost.go:65 SnapshotHost.AcquireExistingSourceFile (ts#64518)
+    // PORT: Go's parse cache binds a file before it stores it, so a live entry
+    // is bound. Here a program load binds its files later (see
+    // `new_parse_cache`), so the file is bound here, as `acquire_bound` does
+    // for `acquire_source_file`. A bound file is not bound again.
+    pub fn acquire_existing_source_file(&self, key: ParseCacheKey) -> Option<Rc<SourceFileLease>> {
+        let source_file = self.parse_cache.acquire_existing(&key)?.file;
+        crate::program::publish_parsed_files(&self.options.current_directory);
+        crate::program::bind_file_outside_program(source_file.root);
+        Some(Rc::new(SourceFileLease {
+            cache: self.parse_cache.clone(),
+            key,
+            source_file,
+            released: Cell::new(false),
+        }))
+    }
 }
 
-// Go: project/snapshothost.go:65 NewSnapshotHost
+// Go: project/snapshothost.go:77 NewSnapshotHost
 pub fn new_snapshot_host(init: &SessionInit) -> Rc<SnapshotHost> {
     let current_directory = init.options.current_directory.clone();
     let use_case_sensitive_file_names = init.fs.use_case_sensitive_file_names();
@@ -176,20 +193,20 @@ pub fn new_snapshot_host(init: &SessionInit) -> Rc<SnapshotHost> {
 }
 
 impl SnapshotHost {
-    // Go: project/snapshothost.go:93 NewRootSnapshot (ts#64204: was NewStandaloneRootSnapshot)
+    // Go: project/snapshothost.go:100 NewRootSnapshot (ts#64204: was NewStandaloneRootSnapshot)
     // NewRootSnapshot creates an independent root snapshot.
     // PORT: `_exported`, because Go also has `newRootSnapshot` (PORTING "Names").
     pub fn new_root_snapshot_exported(self: &Rc<Self>) -> Rc<Snapshot> {
         self.new_root_snapshot(0, false)
     }
 
-    // Go: project/snapshothost.go:98 RetainSnapshot
+    // Go: project/snapshothost.go:105 RetainSnapshot
     // RetainSnapshot adds a reference to a snapshot owned by this host.
     pub fn retain_snapshot(&self, snapshot: &Snapshot) {
         snapshot.ref_();
     }
 
-    // Go: project/snapshothost.go:104 CloneSnapshot
+    // Go: project/snapshothost.go:111 CloneSnapshot
     // CloneSnapshot derives a snapshot from baseSnapshot without adopting it as any
     // canonical session state or performing session side effects.
     // PORT: Go returns `(*Snapshot, error)` and returns the snapshot also with
@@ -212,13 +229,20 @@ impl SnapshotHost {
             change.fs = api_request.file_system.clone();
             change.file_system_override = api_request.file_system.is_some();
             change.replace_file_system = api_request.replace_file_system;
+            // ts#64554 (snapshothost.go:125 at fed0bf24149f)
+            change.new_config = api_request.user_preferences.clone();
+            if !api_request.prepare_auto_imports.0.is_empty() {
+                change.resource_request =
+                    base_snapshot.resource_request_for_document(&api_request.prepare_auto_imports);
+                change.resource_request.auto_imports = api_request.prepare_auto_imports.clone();
+            }
         }
         let snapshot = self.update(ctx, base_snapshot, change);
         let api_error = snapshot.api_error.clone();
         (snapshot, api_error)
     }
 
-    // Go: project/snapshothost.go:125 SnapshotHost.update
+    // Go: project/snapshothost.go:137 SnapshotHost.update
     // update derives a snapshot from baseSnapshot without adopting it as any
     // canonical session state or performing session side effects.
     pub fn update(
@@ -230,7 +254,7 @@ impl SnapshotHost {
         base_snapshot.clone_(ctx, change, &base_snapshot.overlays(), None, None)
     }
 
-    // Go: project/snapshothost.go:131 CloneSnapshotWithAutoImports
+    // Go: project/snapshothost.go:143 CloneSnapshotWithAutoImports
     // CloneSnapshotWithAutoImports derives a snapshot with auto-import preparation without
     // adopting the clone in the background.
     pub fn clone_snapshot_with_auto_imports(
@@ -253,7 +277,7 @@ impl SnapshotHost {
         base_snapshot.clone_(ctx, change, &base_snapshot.overlays(), logger, None)
     }
 
-    // Go: project/snapshothost.go:142 SnapshotHost.newRootSnapshot
+    // Go: project/snapshothost.go:154 SnapshotHost.newRootSnapshot
     pub fn new_root_snapshot(
         self: &Rc<Self>,
         id: u64,
@@ -304,22 +328,22 @@ impl SnapshotHost {
         )
     }
 
-    // Go: project/snapshothost.go:172 SnapshotHost.FS
+    // Go: project/snapshothost.go:184 SnapshotHost.FS
     pub fn fs(&self) -> Rc<dyn vfs::Fs> {
         self.fs.clone()
     }
 
-    // Go: project/snapshothost.go:176 SnapshotHost.GetCurrentDirectory
+    // Go: project/snapshothost.go:188 SnapshotHost.GetCurrentDirectory
     pub fn get_current_directory(&self) -> String {
         self.options.current_directory.clone()
     }
 
-    // Go: project/snapshothost.go:180 SnapshotHost.DefaultLibraryPath (ts#64158)
+    // Go: project/snapshothost.go:192 SnapshotHost.DefaultLibraryPath (ts#64158)
     pub fn default_library_path(&self) -> String {
         self.options.default_library_path.clone()
     }
 
-    // Go: project/snapshothost.go:184 SnapshotHost.Close
+    // Go: project/snapshothost.go:196 SnapshotHost.Close
     pub fn close(&self) {
         if let Some(content_mapper_host) = &self.content_mapper_host {
             let _ = content_mapper_host.close();

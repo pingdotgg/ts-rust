@@ -264,7 +264,7 @@ pub fn new_watched_files_for_paths(
     )
 }
 
-// Go: project/watch.go:211 Watchers
+// Go: project/watch.go:206 Watchers
 #[derive(Clone, Debug, Default)]
 pub struct Watchers {
     pub watcher_id: WatcherID,
@@ -274,7 +274,7 @@ pub struct Watchers {
 }
 
 impl<T> WatchedFiles<T> {
-    // Go: project/watch.go:218 WatchedFiles.Watchers
+    // Go: project/watch.go:213 WatchedFiles.Watchers
     // PORT: Go returns the shared slices and map; the port returns copies.
     pub fn watchers(&self) -> Watchers {
         // Go: w.computeWatchersOnce.Do(...)
@@ -356,7 +356,7 @@ impl<T> WatchedFiles<T> {
         }
     }
 
-    // Go: project/watch.go:266 WatchedFiles.ID
+    // Go: project/watch.go:265 WatchedFiles.ID
     // PORT: Go allows a nil receiver; call as `WatchedFiles::id(w.as_deref())`.
     pub fn id(w: Option<&WatchedFiles<T>>) -> WatcherID {
         let Some(w) = w else {
@@ -365,17 +365,17 @@ impl<T> WatchedFiles<T> {
         w.watchers().watcher_id
     }
 
-    // Go: project/watch.go:273 WatchedFiles.Name
+    // Go: project/watch.go:272 WatchedFiles.Name
     pub fn name(&self) -> String {
         self.name.clone()
     }
 
-    // Go: project/watch.go:277 WatchedFiles.WatchKind
+    // Go: project/watch.go:276 WatchedFiles.WatchKind
     pub fn watch_kind(&self) -> lsproto::WatchKind {
         self.watch_kind
     }
 
-    // Go: project/watch.go:281 WatchedFiles.Clone
+    // Go: project/watch.go:280 WatchedFiles.Clone
     // PORT: Go allows a nil receiver; call as
     // `WatchedFiles::clone_(w.as_deref(), input)`. `clone_` keeps it apart
     // from `std::clone::Clone`. Go does not copy `id` (it stays 0) or
@@ -397,18 +397,22 @@ impl<T> WatchedFiles<T> {
     }
 }
 
-// Go: project/watch.go:298 createResolutionLookupGlobMapper
-// PORT: the Go input `*collections.SyncSet[tspath.Path]` is
-// `Option<Rc<RefCell<FxHashSet<tspath::Path>>>>` (the sourceFS seen files).
-// Go ranges over the set (random order); the result does not depend on the
-// order (one file per directory, sorted outputs).
+// Go: project/watch.go:297 createResolutionLookupGlobMapper
+// PORT: the Go input `*collections.SyncMap[tspath.Path, string]` is
+// `Option<SeenFiles>` (the sourceFS seen files). Go ranges over the map
+// (random order); the result does not depend on the order (one file per
+// directory, sorted outputs), except which spelling of a directory that
+// differs only in case is kept on a case-insensitive file system.
+// ts#64544: the globs and directories keep the spelling of the directories
+// and of the seen file names, and the external directories are compared
+// with the host's case sensitivity.
 #[allow(clippy::type_complexity)]
 pub fn create_resolution_lookup_glob_mapper(
     workspace_directory: &str,
     lib_directory: &str,
     current_directory: &str,
     use_case_sensitive_file_names: bool,
-) -> Rc<dyn Fn(&Option<Rc<RefCell<FxHashSet<tspath::Path>>>>) -> PatternsAndIgnored> {
+) -> Rc<dyn Fn(&Option<SeenFiles>) -> PatternsAndIgnored> {
     let workspace_directory_path = tspath::to_path(
         workspace_directory,
         current_directory,
@@ -424,93 +428,111 @@ pub fn create_resolution_lookup_glob_mapper(
         current_directory,
         use_case_sensitive_file_names,
     );
+    let (workspace_directory, lib_directory, current_directory) = (
+        workspace_directory.to_string(),
+        lib_directory.to_string(),
+        current_directory.to_string(),
+    );
 
-    Rc::new(
-        move |data: &Option<Rc<RefCell<FxHashSet<tspath::Path>>>>| -> PatternsAndIgnored {
-            let mut ignored: FxHashSet<String> = FxHashSet::default();
-            let mut seen_dirs: FxHashSet<tspath::Path> = FxHashSet::default();
-            let mut include_workspace = false;
-            let mut include_root = false;
-            let mut include_lib = false;
-            let mut node_modules_directories: FxHashSet<tspath::Path> = FxHashSet::default();
-            let mut external_directories: FxHashSet<tspath::Path> = FxHashSet::default();
+    Rc::new(move |data: &Option<SeenFiles>| -> PatternsAndIgnored {
+        let mut ignored: FxHashSet<String> = FxHashSet::default();
+        let mut seen_dirs: FxHashSet<tspath::Path> = FxHashSet::default();
+        let mut include_workspace = false;
+        let mut include_root = false;
+        let mut include_lib = false;
+        let mut node_modules_directories: FxHashMap<tspath::Path, String> = FxHashMap::default();
+        let mut external_directories: FxHashMap<tspath::Path, String> = FxHashMap::default();
 
-            if let Some(data) = data {
-                for path in data.borrow().iter() {
-                    if tspath::is_dynamic_file_name(path) {
-                        continue;
-                    }
-                    // Assuming all of the input paths are file paths, we can avoid
-                    // duplicate work by only taking one file per dir, since their outputs
-                    // will always be the same.
-                    if !seen_dirs.insert(path.get_directory_path()) {
-                        continue;
-                    }
-
-                    if workspace_directory_path.contains_path(path) {
-                        include_workspace = true;
-                    } else if current_directory_path.contains_path(path) {
-                        include_root = true;
-                    } else if lib_directory_path.contains_path(path) {
-                        include_lib = true;
-                    } else if let Some(idx) = path.0.find("/node_modules/") {
-                        node_modules_directories.insert(tspath::Path(
-                            path.0[..idx + "/node_modules".len()].to_string(),
-                        ));
-                    } else {
-                        external_directories.insert(path.get_directory_path());
-                    }
+        if let Some(data) = data {
+            for (path, file_name) in data.borrow().iter() {
+                if tspath::is_dynamic_file_name(path) {
+                    continue;
                 }
-            }
+                // Assuming all of the input paths are file paths, we can avoid
+                // duplicate work by only taking one file per dir, since their outputs
+                // will always be the same.
+                if !seen_dirs.insert(path.get_directory_path()) {
+                    continue;
+                }
 
-            let mut globs: Vec<String> = Vec::new();
-            if include_workspace {
-                globs.push(get_recursive_glob_pattern(&workspace_directory_path));
-            }
-            if include_root {
-                globs.push(get_recursive_glob_pattern(&current_directory_path));
-            }
-            if include_lib {
-                globs.push(get_recursive_glob_pattern(&lib_directory_path));
-            }
-            if !node_modules_directories.is_empty() {
-                let mut node_modules_globs: Vec<String> =
-                    Vec::with_capacity(node_modules_directories.len());
-                for dir in &node_modules_directories {
-                    node_modules_globs.push(get_recursive_glob_pattern(dir));
-                }
-                node_modules_globs.sort();
-                globs.extend(node_modules_globs);
-            }
-            let mut outside_dirs: Vec<String> = Vec::new();
-            if !external_directories.is_empty() {
-                let mut external_dir_strings: Vec<String> =
-                    Vec::with_capacity(external_directories.len());
-                for dir in &external_directories {
-                    external_dir_strings.push(dir.0.clone());
-                }
-                let (mut external_directory_parents, ignored_external_dirs) =
-                    tspath::get_common_parents(
-                        &external_dir_strings,
-                        MIN_WATCH_LOCATION_DEPTH,
-                        &get_path_components_for_watching,
-                        &tspath::ComparePathsOptions {
-                            use_case_sensitive_file_names: true, // Already using tspath.Path
-                            ..Default::default()
-                        },
+                if workspace_directory_path.contains_path(path) {
+                    include_workspace = true;
+                } else if current_directory_path.contains_path(path) {
+                    include_root = true;
+                } else if lib_directory_path.contains_path(path) {
+                    include_lib = true;
+                } else {
+                    let canonical_components = tspath::get_path_components(path, "");
+                    let file_name_components = tspath::get_path_components(file_name, "");
+                    if canonical_components.len() == file_name_components.len() {
+                        if let Some(i) = canonical_components
+                            .iter()
+                            .position(|component| component == "node_modules")
+                        {
+                            let node_modules_directory =
+                                tspath::get_path_from_path_components(&file_name_components[..=i]);
+                            node_modules_directories.insert(
+                                tspath::to_path(
+                                    &node_modules_directory,
+                                    &current_directory,
+                                    use_case_sensitive_file_names,
+                                ),
+                                node_modules_directory,
+                            );
+                            continue;
+                        }
+                    }
+                    external_directories.insert(
+                        path.get_directory_path(),
+                        tspath::get_directory_path(file_name),
                     );
-                external_directory_parents.sort();
-                ignored = ignored_external_dirs;
-                outside_dirs = external_directory_parents;
+                }
             }
+        }
 
-            PatternsAndIgnored {
-                directories_outside_workspace: outside_dirs,
-                patterns_inside_workspace: globs,
-                ignored,
+        let mut globs: Vec<String> = Vec::new();
+        if include_workspace {
+            globs.push(get_recursive_glob_pattern(&workspace_directory));
+        }
+        if include_root {
+            globs.push(get_recursive_glob_pattern(&current_directory));
+        }
+        if include_lib {
+            globs.push(get_recursive_glob_pattern(&lib_directory));
+        }
+        if !node_modules_directories.is_empty() {
+            let mut node_modules_globs: Vec<String> =
+                Vec::with_capacity(node_modules_directories.len());
+            for dir in node_modules_directories.values() {
+                node_modules_globs.push(get_recursive_glob_pattern(dir));
             }
-        },
-    )
+            node_modules_globs.sort();
+            globs.extend(node_modules_globs);
+        }
+        let mut outside_dirs: Vec<String> = Vec::new();
+        if !external_directories.is_empty() {
+            let external_dir_strings: Vec<String> = external_directories.into_values().collect();
+            let (mut external_directory_parents, ignored_external_dirs) =
+                tspath::get_common_parents(
+                    &external_dir_strings,
+                    MIN_WATCH_LOCATION_DEPTH,
+                    &get_path_components_for_watching,
+                    &tspath::ComparePathsOptions {
+                        use_case_sensitive_file_names,
+                        ..Default::default()
+                    },
+                );
+            external_directory_parents.sort();
+            ignored = ignored_external_dirs;
+            outside_dirs = external_directory_parents;
+        }
+
+        PatternsAndIgnored {
+            directories_outside_workspace: outside_dirs,
+            patterns_inside_workspace: globs,
+            ignored,
+        }
+    })
 }
 
 // Go: project/watch.go:380 getTypingsLocationsGlobs
@@ -580,7 +602,7 @@ pub fn get_typings_locations_globs(
     }
 }
 
-// Go: project/watch.go:424 getPathComponentsForWatching
+// Go: project/watch.go:420 getPathComponentsForWatching
 pub fn get_path_components_for_watching(path: &str, current_directory: &str) -> Vec<String> {
     let components = tspath::get_path_components(path, current_directory);
     let root_length = perceived_os_root_length_for_watching(&components);
@@ -598,7 +620,7 @@ pub fn get_path_components_for_watching(path: &str, current_directory: &str) -> 
     result
 }
 
-// Go: project/watch.go:434 perceivedOsRootLengthForWatching
+// Go: project/watch.go:430 perceivedOsRootLengthForWatching
 pub fn perceived_os_root_length_for_watching(path_components: &[String]) -> i32 {
     let length = path_components.len() as i32;
     if length <= 1 {
@@ -626,7 +648,7 @@ pub fn perceived_os_root_length_for_watching(path_components: &[String]) -> i32 
     1
 }
 
-// Go: project/watch.go:458 getRecursiveGlobPattern
+// Go: project/watch.go:454 getRecursiveGlobPattern
 pub fn get_recursive_glob_pattern(directory: &str) -> String {
     format!(
         "{}/{}",
@@ -635,7 +657,7 @@ pub fn get_recursive_glob_pattern(directory: &str) -> String {
     )
 }
 
-// Go: project/watch.go:464 recursiveDirectoryGlobPattern
+// Go: project/watch.go:460 recursiveDirectoryGlobPattern
 // recursiveDirectoryGlobPattern returns the string form of a recursive watcher
 // for the given directory that would be produced by newRecursiveDirectoryWatcher.
 pub fn recursive_directory_glob_pattern(directory: &str, use_relative_pattern: bool) -> String {
@@ -645,7 +667,7 @@ pub fn recursive_directory_glob_pattern(directory: &str, use_relative_pattern: b
     get_recursive_glob_pattern(directory)
 }
 
-// Go: project/watch.go:474 newRecursiveDirectoryWatcher
+// Go: project/watch.go:470 newRecursiveDirectoryWatcher
 // newRecursiveDirectoryWatcher creates a FileSystemWatcher for recursively
 // watching a directory. When useRelativePattern is true, a RelativePattern with
 // a file:// base URI is used; otherwise a plain glob Pattern is used.

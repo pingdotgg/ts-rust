@@ -11,7 +11,7 @@ use crate::gostd;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct NameValidationResult(pub i32);
 
-// Go: project/ata/validatepackagename.go:12 NameOk .. NameContainsNonURISafeCharacters
+// Go: project/ata/validatepackagename.go:13 NameOk .. NameContainsNonURISafeCharacters
 pub const NAME_OK: NameValidationResult = NameValidationResult(0);
 pub const EMPTY_NAME: NameValidationResult = NameValidationResult(1);
 pub const NAME_TOO_LONG: NameValidationResult = NameValidationResult(2);

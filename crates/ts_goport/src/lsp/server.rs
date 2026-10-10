@@ -144,9 +144,10 @@ fn write_lock<T>(m: &RwLock<T>, value: T) {
 // Go: server.go:42 ServerOptions
 // PORT: Go `In`, `Out` and `Err` move to the reader, writer and logging
 // threads, so they are `Send`. `NpmInstall` and `SetParentProcessID` are
-// nil-able Go funcs (`None`). `NpmInstall` returns Go's `([]byte, error)`
-// pair, as `ata::NpmExecutor` does, and is `Send`: ATA runs it on a helper
-// thread (`ata::NpmExecutor::npm_install_func`).
+// nil-able Go funcs (`None`). `NpmInstall` is `ata::NpmInstallFunc`: it takes
+// the ctx (ts#64544), returns Go's `([]byte, error)` pair, as
+// `ata::NpmExecutor` does, and is `Send`: ATA runs it on a helper thread
+// (`ata::NpmExecutor::npm_install_func`).
 pub struct ServerOptions {
     pub in_: Box<dyn Reader + Send>,
     pub out: Box<dyn Writer + Send>,
@@ -157,8 +158,7 @@ pub struct ServerOptions {
     pub default_library_path: String,
     pub typings_location: String,
     pub parse_cache: Option<Rc<project::ParseCache>>,
-    pub npm_install:
-        Option<Box<dyn Fn(&str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>>,
+    pub npm_install: Option<ata::NpmInstallFunc>,
     // Spawn launches a child process, returning its stdio as an io.ReadWriteCloser (Read is its stdout,
     // Write is its stdin). It is nil when the host cannot spawn processes. Currently used for content mappers.
     // PORT: tsgo#4712. The Go func returns an `io.ReadWriteCloser`; the
@@ -234,11 +234,13 @@ pub fn new_server(opts: ServerOptions) -> Rc<Server> {
         builtin_watcher: RefCell::new(None),
         session: RefCell::new(None),
         api_sessions: RefCell::new(None),
+        stopping_api_sessions: RefCell::new(Vec::new()),
+        close_session_after_api_sessions: Cell::new(false),
         client: None,
         init_complete: Cell::new(false),
         compiler_options_for_inferred_projects: RefCell::new(None),
         parse_cache,
-        npm_install: npm_install.map(Arc::from),
+        npm_install,
         spawn,
         content_mapper_extensions_registered: Cell::new(false),
         cpu_profiler: crate::pprof::CpuProfiler::default(),
@@ -411,6 +413,77 @@ pub struct ApiAccepted {
     rwc: Option<Arc<dyn ipc::ReadWriteCloser>>,
 }
 
+// Go: server.go:255 apiSessionState (ts#64544)
+// PORT: `mu` is dropped (dispatch thread). Go's `transport` stays with the
+// accept thread, which closes it after `Accept` (see `stop`). The rest of
+// the accept goroutine runs on the dispatch thread (`serve_api_connection`),
+// so `done` is `ended`, set when that rest has finished.
+pub struct ApiSessionState {
+    session: Rc<api::Session>,
+    cancel: CancelFunc,
+    // PORT: Go makes `apiCtx` in `handleInitializeAPISession` and the
+    // goroutine reads it; the state keeps it for `serve_api_connection`.
+    api_ctx: Context,
+    connection: RefCell<Option<Arc<dyn ipc::ReadWriteCloser>>>,
+    stopped: Cell<bool>,
+    ended: Cell<bool>,
+    // PORT: the state of the running connection (`run_api_connection`),
+    // for `stop`.
+    conn_state: RefCell<Option<Rc<ApiConnState>>>,
+}
+
+impl ApiSessionState {
+    // Go: server.go:266 apiSessionState.attachConnection
+    fn attach_connection(&self, connection: Arc<dyn ipc::ReadWriteCloser>) -> bool {
+        if self.stopped.get() {
+            let _ = connection.close();
+            return false;
+        }
+        *self.connection.borrow_mut() = Some(connection);
+        true
+    }
+
+    // Go: server.go:277 apiSessionState.stop
+    // PORT: Go also closes the transport, which ends a pending `Accept`. The
+    // port's listener holds its lock while it waits in accept, so a close
+    // from the dispatch thread would wait for a client. When no client has
+    // connected yet, the accept thread waits until the process exits; the
+    // connection it may still accept finds no session
+    // (`serve_api_connection`) and is closed. Go then waits for `done`:
+    // - Without a connection, the port runs the end of the goroutine here
+    //   (`apiSession.Close()`; the caller removed the session). Go also logs
+    //   the accept error of the closed transport; the port does not.
+    // - With a connection, the connection waits for its next message below
+    //   on this thread's stack (an LSP message that it serves called this),
+    //   so the port cannot wait. Closing the connection ends its wait, and
+    //   `serve_api_connection` runs the end of the goroutine afterwards;
+    //   Shutdown closes the project session then
+    //   (`Server::close_session_after_api_sessions`).
+    // - When an API request below waits for the answer of a call to the
+    //   client, its wait keeps the LSP requests that need the session
+    //   (`ApiConnProtocol`), and Go's dispatch goroutine would still be
+    //   blocked on them. Ending the wait would serve them on the session
+    //   that Shutdown closes, so the port leaves this connection and ends
+    //   it with the dispatch loop (exit), as before ts#64544.
+    fn stop(&self) {
+        let waits_for_client = self
+            .conn_state
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.calls.get() > 0);
+        if !self.stopped.replace(true) && !waits_for_client {
+            (self.cancel)();
+            if let Some(connection) = self.connection.borrow().as_ref() {
+                let _ = connection.close();
+            }
+        }
+        if !self.ended.get() && self.connection.borrow().is_none() {
+            self.session.close();
+            self.ended.set(true);
+        }
+    }
+}
+
 // Go: server.go:171 Server (the fields that other threads use)
 pub struct ServerShared {
     pub background_ctx: OnceLock<Context>,
@@ -498,7 +571,14 @@ pub struct Server {
 
     // apiSessions holds active API sessions keyed by their ID
     // PORT: `apiSessionsMu` is dropped (dispatch thread). `None` is Go's nil map.
-    pub api_sessions: RefCell<Option<FxHashMap<String, Rc<api::Session>>>>,
+    pub api_sessions: RefCell<Option<FxHashMap<String, Rc<ApiSessionState>>>>,
+    // PORT: the API sessions that `close_api_sessions` stopped while their
+    // connection still ran below on the dispatch thread's stack. Go's
+    // `stop` waits for them before Shutdown closes the project session; the
+    // port closes the project session when the last of them has ended
+    // (`close_session_after_api_sessions`).
+    pub stopping_api_sessions: RefCell<Vec<Rc<ApiSessionState>>>,
+    pub close_session_after_api_sessions: Cell<bool>,
 
     // Test options for initializing session
     pub client: Option<Rc<dyn project::Client>>,
@@ -588,7 +668,7 @@ impl ServerShared {
 }
 
 impl Server {
-    // Go: server.go:255 Session
+    // Go: server.go:291 Session
     pub fn session(&self) -> Option<Rc<project::Session>> {
         self.session.borrow().clone()
     }
@@ -602,7 +682,7 @@ impl Server {
             .unwrap_or_else(|| crate::core::go_nil_dereference())
     }
 
-    // Go: server.go:260 InitComplete
+    // Go: server.go:296 InitComplete
     // InitComplete returns a channel that is closed when the server has finished
     // processing the initialized notification, including the initial configuration
     // exchange with the client.
@@ -640,7 +720,7 @@ const CONTENT_MAPPER_LINKED_EDITING_REGISTRATION_ID: &str = "content-mapper-link
 const CONTENT_MAPPER_CALL_HIERARCHY_REGISTRATION_ID: &str = "content-mapper-call-hierarchy";
 const CONTENT_MAPPER_WILL_RENAME_FILES_REGISTRATION_ID: &str = "content-mapper-will-rename-files";
 
-// Go: server.go:352 supportedCodeActionKinds (ts#63951)
+// Go: server.go:388 supportedCodeActionKinds (ts#63951)
 pub fn supported_code_action_kinds() -> Vec<lsproto::CodeActionKind> {
     vec![
         lsproto::CodeActionKind::QUICK_FIX,
@@ -652,7 +732,7 @@ pub fn supported_code_action_kinds() -> Vec<lsproto::CodeActionKind> {
 }
 
 impl Server {
-    // Go: server.go:362 supportsContentMapperRegistration (tsgo#4712)
+    // Go: server.go:398 supportsContentMapperRegistration (tsgo#4712)
     pub fn supports_content_mapper_registration(&self, id: &str) -> bool {
         let caps = self.shared.client_capabilities();
         let text_document = &caps.text_document;
@@ -734,7 +814,7 @@ impl Server {
 }
 
 impl project::Client for Server {
-    // Go: server.go:263 WatchFiles
+    // Go: server.go:299 WatchFiles
     // WatchFiles implements project.Client.
     fn watch_files(
         &self,
@@ -782,7 +862,7 @@ impl project::Client for Server {
         Ok(())
     }
 
-    // Go: server.go:292 UnwatchFiles
+    // Go: server.go:328 UnwatchFiles
     // UnwatchFiles implements project.Client.
     fn unwatch_files(&self, ctx: &Context, id: project::WatcherID) -> Result<(), GoError> {
         let builtin_watcher = self.builtin_watcher.borrow().clone();
@@ -833,7 +913,7 @@ impl project::Client for Server {
         )))
     }
 
-    // Go: server.go:422 RegisterContentMapperExtensions (tsgo#4712)
+    // Go: server.go:458 RegisterContentMapperExtensions (tsgo#4712)
     // RegisterContentMapperExtensions implements project.Client. It dynamically registers text document
     // synchronization and pull diagnostics for the given otherwise unsupported file extensions so the editor forwards their
     // open/change/close notifications to the server and requests diagnostics for them. It is called with the
@@ -1355,7 +1435,7 @@ impl project::Client for Server {
         Ok(())
     }
 
-    // Go: server.go:705 RefreshDiagnostics
+    // Go: server.go:741 RefreshDiagnostics
     // RefreshDiagnostics implements project.Client.
     fn refresh_diagnostics(&self, ctx: &Context) -> Result<(), GoError> {
         if !self
@@ -1389,7 +1469,7 @@ impl project::Client for Server {
         Ok(())
     }
 
-    // Go: server.go:725 PublishDiagnostics
+    // Go: server.go:761 PublishDiagnostics
     // PublishDiagnostics implements project.Client.
     fn publish_diagnostics(
         &self,
@@ -1403,7 +1483,7 @@ impl project::Client for Server {
         )
     }
 
-    // Go: server.go:730 SendTelemetry
+    // Go: server.go:766 SendTelemetry
     // SendTelemetry implements project.Client.
     fn send_telemetry(
         &self,
@@ -1416,14 +1496,14 @@ impl project::Client for Server {
         send_notification(&self.shared, &lsproto::TELEMETRY_EVENT_INFO, telemetry)
     }
 
-    // Go: server.go:738 IsActive
+    // Go: server.go:774 IsActive
     // IsActive implements project.Client.
     fn is_active(&self) -> bool {
         let last = self.shared.last_request_time_ms.load(Ordering::SeqCst);
         last == 0 || unix_milli_now() - last <= Duration::from_secs(60).as_millis() as i64
     }
 
-    // Go: server.go:743 RefreshInlayHints
+    // Go: server.go:779 RefreshInlayHints
     fn refresh_inlay_hints(&self, _ctx: &Context) -> Result<(), GoError> {
         if !self
             .shared
@@ -1448,7 +1528,7 @@ impl project::Client for Server {
         Ok(())
     }
 
-    // Go: server.go:754 RefreshCodeLens
+    // Go: server.go:790 RefreshCodeLens
     fn refresh_code_lens(&self, _ctx: &Context) -> Result<(), GoError> {
         if !self
             .shared
@@ -1473,7 +1553,7 @@ impl project::Client for Server {
         Ok(())
     }
 
-    // Go: server.go:766 ProgressStart
+    // Go: server.go:802 ProgressStart
     // ProgressStart implements project.Client.
     fn progress_start(&self, message: &'static crate::diagnostics::Message, args: Vec<String>) {
         if let Some(project_progress) = self.shared.project_progress.get() {
@@ -1481,7 +1561,7 @@ impl project::Client for Server {
         }
     }
 
-    // Go: server.go:773 ProgressFinish
+    // Go: server.go:809 ProgressFinish
     // ProgressFinish implements project.Client.
     fn progress_finish(&self, message: &'static crate::diagnostics::Message, args: Vec<String>) {
         if let Some(project_progress) = self.shared.project_progress.get() {
@@ -1489,13 +1569,13 @@ impl project::Client for Server {
         }
     }
 
-    // Go: server.go:780 GetLocale
+    // Go: server.go:816 GetLocale
     // GetLocale implements project.Client.
     fn get_locale(&self) -> locale::Locale {
         self.shared.locale()
     }
 
-    // Go: server.go:787 SetLocale
+    // Go: server.go:823 SetLocale
     // SetLocale implements project.Client.
     fn set_locale(&self, locale_string: &str) {
         let mut new_locale = self.shared.init_locale();
@@ -1510,7 +1590,7 @@ impl project::Client for Server {
     }
 }
 
-// Go: server.go:1896 generateDiagnosticDiffString
+// Go: server.go:1936 generateDiagnosticDiffString
 // PORT: Go `[]*lsproto.Diagnostic` are the borrowed results of
 // `lsproto::compare_diagnostics`.
 fn generate_diagnostic_diff_string(
@@ -1543,7 +1623,7 @@ fn unix_milli_now() -> i64 {
 }
 
 impl Server {
-    // Go: server.go:801 RequestConfiguration
+    // Go: server.go:837 RequestConfiguration
     pub fn request_configuration(&self, ctx: &Context) -> Result<lsutil::UserPreferences, GoError> {
         let caps = lsproto::get_client_capabilities(ctx);
         if !caps.workspace.configuration {
@@ -1677,7 +1757,7 @@ pub fn panic_value_string(r: &(dyn Any + Send)) -> String {
 }
 
 impl Server {
-    // Go: server.go:859 Run
+    // Go: server.go:895 Run
     // PORT: the dispatch loop runs on the calling thread, because it owns
     // the `!Send` state. Its result joins the group after it returns, so
     // the group keeps the first error in the same order as Go.
@@ -1813,7 +1893,7 @@ fn served_during_api_call(method: &lsproto::Method) -> bool {
 }
 
 impl ServerShared {
-    // Go: server.go:883 readLoop
+    // Go: server.go:919 readLoop
     // PORT: `r` is the reader, which this thread owns.
     pub fn read_loop(self: &Arc<Self>, ctx: &Context, r: &mut dyn Reader) -> Result<(), GoError> {
         loop {
@@ -1999,7 +2079,7 @@ impl ServerShared {
         exit_request
     }
 
-    // Go: server.go:954 cancelRequest
+    // Go: server.go:990 cancelRequest
     pub fn cancel_request(&self, raw_id: &lsproto::IntegerOrString) {
         let id = lsproto::new_id(raw_id);
         let mut pending_client_requests = lock(&self.pending_client_requests);
@@ -2009,13 +2089,13 @@ impl ServerShared {
         }
     }
 
-    // Go: server.go:964 read
+    // Go: server.go:1000 read
     // PORT: the reader is owned by the reader thread; `read_loop` calls
     // `r.read()` directly.
 }
 
 impl Server {
-    // Go: server.go:968 dispatchLoop
+    // Go: server.go:1004 dispatchLoop
     pub fn dispatch_loop(self: &Rc<Self>, ctx: &Context) -> Result<(), GoError> {
         let (ctx, lsp_exit) = context::with_cancel_cause(ctx);
         // Go: defer lspExit(nil)
@@ -2220,7 +2300,7 @@ fn run_idle_work(
 pub const IDLE_QUIET_PERIOD: Duration = Duration::from_millis(50);
 
 impl ServerShared {
-    // Go: server.go:1029 writeLoop
+    // Go: server.go:1065 writeLoop
     // PORT: `w` is the writer, which this thread owns.
     pub fn write_loop(&self, ctx: &Context, w: &mut dyn Writer) -> Result<(), GoError> {
         loop {
@@ -2252,7 +2332,7 @@ impl ServerShared {
     }
 }
 
-// Go: server.go:1053 sendClientRequest
+// Go: server.go:1089 sendClientRequest
 // WARNING: this should only be called in the async portion of a request handler,
 // otherwise a deadlock can occur.
 // PORT: the reader thread delivers the response, so the dispatch thread can
@@ -2299,7 +2379,7 @@ pub fn send_client_request<
     result
 }
 
-// Go: server.go:1090 sendClientRequestFireAndForget
+// Go: server.go:1126 sendClientRequestFireAndForget
 // sendClientRequestFireAndForget sends a request to the client without waiting for a response.
 // The response, if any, will be silently ignored by the read loop since no pending channel is registered.
 // This means any error returned by the client will not be observed. Use only for requests where the
@@ -2318,7 +2398,7 @@ pub fn send_client_request_fire_and_forget<Req: AnyValue, Resp>(
 }
 
 impl ServerShared {
-    // Go: server.go:1096 sendResult
+    // Go: server.go:1132 sendResult
     pub fn send_result(
         &self,
         id: Option<crate::jsonrpc::ID>,
@@ -2332,7 +2412,7 @@ impl ServerShared {
     }
 }
 
-// Go: server.go:1103 userFacingRequestFailedError
+// Go: server.go:1139 userFacingRequestFailedError
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserFacingRequestFailedError(pub String);
 
@@ -2353,7 +2433,7 @@ pub fn user_facing_request_failed_error(msg: String) -> GoError {
 }
 
 impl ServerShared {
-    // Go: server.go:1108 sendError
+    // Go: server.go:1144 sendError
     pub fn send_error(&self, id: Option<crate::jsonrpc::ID>, err: GoError) -> Result<(), GoError> {
         // Do not send error response for notifications,
         // except for parse errors which may occur before determining if the message is a request or notification.
@@ -2379,7 +2459,7 @@ impl ServerShared {
     }
 }
 
-// Go: server.go:1129 sendNotification
+// Go: server.go:1165 sendNotification
 pub fn send_notification<Params: AnyValue>(
     s: &ServerShared,
     info: &lsproto::NotificationInfo<Params>,
@@ -2389,12 +2469,12 @@ pub fn send_notification<Params: AnyValue>(
 }
 
 impl ServerShared {
-    // Go: server.go:1133 sendResponse
+    // Go: server.go:1169 sendResponse
     pub fn send_response(&self, resp: lsproto::ResponseMessage) -> Result<(), GoError> {
         self.send(resp.message())
     }
 
-    // Go: server.go:1138 send
+    // Go: server.go:1174 send
     // send writes a message to the outgoing queue, respecting context cancellation.
     pub fn send(&self, msg: lsproto::Message) -> Result<(), GoError> {
         self.outgoing_queue.put(&self.background_ctx(), msg)
@@ -2405,7 +2485,7 @@ impl ServerShared {
 pub type AsyncWork = Box<dyn FnOnce() -> Result<(), GoError>>;
 
 impl Server {
-    // Go: server.go:1144 handleRequestOrNotification
+    // Go: server.go:1180 handleRequestOrNotification
     // handleRequestOrNotification looks up the handler for the given request or notification, executes its synchronous work
     // and returns any asynchronous work as a function to be executed by the caller.
     pub fn handle_request_or_notification(
@@ -2508,7 +2588,7 @@ impl Server {
     }
 }
 
-// Go: server.go:1198 contentMapperFallbackResponse (tsgo#4712)
+// Go: server.go:1234 contentMapperFallbackResponse (tsgo#4712)
 // contentMapperFallbackResponse returns an empty response for requests made for
 // unknown file types not handled by any content mapper. This typically serves a
 // short window in time between when the server has unregistered content mapper
@@ -2549,7 +2629,7 @@ pub fn content_mapper_fallback_response(
     None
 }
 
-// Go: server.go:1227 handlerMap
+// Go: server.go:1263 handlerMap
 // handlerMap maps LSP method to a handler function. The handler function executes any work that must be done synchronously
 // before other requests/notifications can be processed, and returns any additional work as a function to be executed
 // asynchronously after the synchronous work is complete.
@@ -2566,7 +2646,7 @@ pub type Handler = Box<
 >;
 pub type HandlerMap = FxHashMap<lsproto::Method, Handler>;
 
-// Go: server.go:1229 handlers
+// Go: server.go:1265 handlers
 static HANDLERS: LazyLock<HandlerMap> = LazyLock::new(|| {
     let mut handlers = HandlerMap::default();
 
@@ -2864,7 +2944,7 @@ pub fn handlers() -> &'static HandlerMap {
     &HANDLERS
 }
 
-// Go: server.go:1300 registerNotificationHandler
+// Go: server.go:1336 registerNotificationHandler
 // PORT: Go `fn func(*Server, context.Context, Req) error`. `Req` is a
 // pointer type (or `NoParams`), so the handler gets `Option<&Req>` (`None`
 // is a nil pointer). `lsproto.UnmarshalParams` never gives a nil pointer
@@ -2898,7 +2978,7 @@ pub fn register_notification_handler<
     );
 }
 
-// Go: server.go:1317 registerRequestHandler
+// Go: server.go:1353 registerRequestHandler
 // PORT: `params` as in `register_notification_handler`.
 pub fn register_request_handler<
     Req: crate::frontend::json::UnmarshalerFrom + Default + 'static,
@@ -2936,7 +3016,7 @@ pub fn register_request_handler<
     );
 }
 
-// Go: server.go:1341 registerLanguageServiceDocumentRequestHandler
+// Go: server.go:1377 registerLanguageServiceDocumentRequestHandler
 // PORT: Go calls `params.TextDocumentURI()` in the sync part, which
 // dereferences the params pointer, so `fn` gets `&Req`. The async part
 // owns the decoded params (Go captures the pointer).
@@ -2984,7 +3064,7 @@ pub fn register_language_service_document_request_handler<
     );
 }
 
-// Go: server.go:1368 registerLanguageServiceWithAutoImportsRequestHandler
+// Go: server.go:1404 registerLanguageServiceWithAutoImportsRequestHandler
 // PORT: the async part owns the decoded params (Go captures the pointer).
 pub fn register_language_service_with_auto_imports_request_handler<
     Req: HasTextDocumentURI + crate::frontend::json::UnmarshalerFrom + Default + 'static,
@@ -3055,7 +3135,7 @@ pub fn register_language_service_with_auto_imports_request_handler<
     );
 }
 
-// Go: server.go:1403 registerMultiProjectReferenceRequestHandler
+// Go: server.go:1439 registerMultiProjectReferenceRequestHandler
 // PORT: the async part owns the decoded params (Go captures the pointer).
 pub fn register_multi_project_reference_request_handler<
     Req: HasTextDocumentPosition + crate::frontend::json::UnmarshalerFrom + Default + 'static,
@@ -3106,7 +3186,7 @@ pub fn register_multi_project_reference_request_handler<
     );
 }
 
-// Go: server.go:1431 crossProjectOrchestrator
+// Go: server.go:1467 crossProjectOrchestrator
 // PORT: Go `defaultProject *project.Project` is the session's
 // `Rc<RefCell<Project>>`. Go stores `req`, which no code reads.
 pub struct CrossProjectOrchestrator {
@@ -3119,17 +3199,17 @@ pub struct CrossProjectOrchestrator {
 // Go: server.go:1438 `var _ ls.CrossProjectOrchestrator = (*crossProjectOrchestrator)(nil)`: the impl below.
 
 impl ls::CrossProjectOrchestrator for CrossProjectOrchestrator {
-    // Go: server.go:1440 GetDefaultProject
+    // Go: server.go:1476 GetDefaultProject
     fn get_default_project(&self) -> Rc<dyn ls::Project> {
         self.default_project.clone()
     }
 
-    // Go: server.go:1444 GetAllProjectsForInitialRequest
+    // Go: server.go:1480 GetAllProjectsForInitialRequest
     fn get_all_projects_for_initial_request(&self) -> Vec<Rc<dyn ls::Project>> {
         self.all_projects.clone()
     }
 
-    // Go: server.go:1448 GetLanguageServiceForProjectWithFile
+    // Go: server.go:1484 GetLanguageServiceForProjectWithFile
     // PORT: Go asserts `p.(*project.Project)`; the session method takes the
     // `ls.Project` itself (see project/session.rs).
     fn get_language_service_for_project_with_file(
@@ -3143,7 +3223,7 @@ impl ls::CrossProjectOrchestrator for CrossProjectOrchestrator {
             .get_language_service_for_project_with_file(ctx, &**p, uri)
     }
 
-    // Go: server.go:1452 GetProjectsForFile
+    // Go: server.go:1488 GetProjectsForFile
     fn get_projects_for_file(
         &self,
         ctx: &Context,
@@ -3152,7 +3232,7 @@ impl ls::CrossProjectOrchestrator for CrossProjectOrchestrator {
         self.server.session_ref().get_projects_for_file(ctx, uri)
     }
 
-    // Go: server.go:1456 GetProjectsLoadingProjectTree
+    // Go: server.go:1492 GetProjectsLoadingProjectTree
     fn get_projects_loading_project_tree(
         &self,
         ctx: &Context,
@@ -3177,7 +3257,7 @@ impl ls::CrossProjectOrchestrator for CrossProjectOrchestrator {
 }
 
 impl Server {
-    // Go: server.go:1468 getLanguageServiceAndCrossProjectOrchestrator
+    // Go: server.go:1504 getLanguageServiceAndCrossProjectOrchestrator
     // PORT: Go returns the orchestrator only when err is nil.
     pub fn get_language_service_and_cross_project_orchestrator(
         self: &Rc<Self>,
@@ -3197,7 +3277,7 @@ impl Server {
         Ok((default_ls, orchestrator))
     }
 
-    // Go: server.go:1477 recover
+    // Go: server.go:1513 recover
     // PORT: Go `defer s.recover(req)`; `recover_guard` runs the guarded code
     // in `catch_unwind` and calls this with the panic value.
     // PORT: Go `debug.Stack()` is the stack of the panicking goroutine.
@@ -3272,7 +3352,7 @@ impl Server {
 }
 
 impl ServerShared {
-    // Go: server.go:1501 handleInitialize
+    // Go: server.go:1537 handleInitialize
     pub fn handle_initialize(
         self: &Arc<Self>,
         _ctx: &Context,
@@ -3550,7 +3630,7 @@ impl ServerShared {
 }
 
 impl Server {
-    // Go: server.go:1677 handleInitialized
+    // Go: server.go:1713 handleInitialized
     pub fn handle_initialized(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3618,23 +3698,31 @@ impl Server {
             },
             None => None,
         };
+        // ts#64159: the workspace folder and root URI give rooted file
+        // names, and a root path counts only when it is absolute; each is
+        // normalized (server.go:1752-1762).
         if client_capabilities.workspace.workspace_folders && single_workspace_folder.is_some() {
             let folder = single_workspace_folder
                 .expect("checked above")
                 .as_ref()
                 .unwrap_or_else(|| crate::core::go_nil_dereference());
-            cwd = lsproto::DocumentUri(folder.uri.0.clone()).file_name();
+            let file_name = lsproto::DocumentUri(folder.uri.0.clone()).file_name();
+            if !file_name.is_empty() {
+                cwd = file_name;
+            }
         } else if let Some(root_uri) = &initialize_params.root_uri.document_uri {
-            cwd = root_uri.file_name();
+            let file_name = root_uri.file_name();
+            if !file_name.is_empty() {
+                cwd = file_name;
+            }
         } else if let Some(root_path) = initialize_params
             .root_path
             .as_ref()
             .and_then(|root_path| root_path.string.as_ref())
         {
-            cwd = root_path.clone();
-        }
-        if !tspath::path_is_absolute(&cwd) {
-            cwd = self.shared.cwd.clone();
+            if tspath::path_is_absolute(root_path) {
+                cwd = lsproto::rooted_path_from_absolute(root_path);
+            }
         }
 
         self.telemetry_enabled.set(enable_telemetry);
@@ -3739,7 +3827,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1788 handleShutdown
+    // Go: server.go:1827 handleShutdown
     pub fn handle_shutdown(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -3750,11 +3838,19 @@ impl Server {
         if let Some(builtin_watcher) = builtin_watcher {
             builtin_watcher.close();
         }
-        self.session_ref().close();
+        // ts#64544
+        self.close_api_sessions();
+        if self.stopping_api_sessions.borrow().is_empty() {
+            self.session_ref().close();
+        } else {
+            // PORT: an API connection still runs below (see
+            // `stopping_api_sessions`); the session closes when it ends.
+            self.close_session_after_api_sessions.set(true);
+        }
         Ok(lsproto::ShutdownResponse::default())
     }
 
-    // Go: server.go:1796 handleExit
+    // Go: server.go:1836 handleExit
     pub fn handle_exit(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -3763,7 +3859,7 @@ impl Server {
         Err(errors::EOF.clone())
     }
 
-    // Go: server.go:1800 handleDidChangeWorkspaceConfiguration
+    // Go: server.go:1840 handleDidChangeWorkspaceConfiguration
     pub fn handle_did_change_workspace_configuration(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -3779,7 +3875,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1809 handleDidOpen
+    // Go: server.go:1849 handleDidOpen
     pub fn handle_did_open(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3800,7 +3896,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1814 handleDidChange
+    // Go: server.go:1854 handleDidChange
     pub fn handle_did_change(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3816,7 +3912,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1819 handleDidSave
+    // Go: server.go:1859 handleDidSave
     pub fn handle_did_save(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3828,7 +3924,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1824 handleDidClose
+    // Go: server.go:1864 handleDidClose
     pub fn handle_did_close(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3840,7 +3936,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1829 handleDidChangeWatchedFiles
+    // Go: server.go:1869 handleDidChangeWatchedFiles
     pub fn handle_did_change_watched_files(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3852,7 +3948,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1834 handleSetTrace
+    // Go: server.go:1874 handleSetTrace
     pub fn handle_set_trace(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -3864,7 +3960,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1841 handleSetLogVerbosity
+    // Go: server.go:1881 handleSetLogVerbosity
     pub fn handle_set_log_verbosity(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -3886,7 +3982,7 @@ impl Server {
         Ok(())
     }
 
-    // Go: server.go:1849 handleDocumentDiagnostic
+    // Go: server.go:1889 handleDocumentDiagnostic
     pub fn handle_document_diagnostic(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3979,7 +4075,7 @@ impl Server {
         Ok(direct)
     }
 
-    // Go: server.go:1907 handleHover
+    // Go: server.go:1947 handleHover
     pub fn handle_hover(
         self: &Rc<Self>,
         ctx: &Context,
@@ -3989,7 +4085,7 @@ impl Server {
         ls.provide_hover(ctx, params)
     }
 
-    // Go: server.go:1911 handlePrepareRename
+    // Go: server.go:1951 handlePrepareRename
     pub fn handle_prepare_rename(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4016,7 +4112,7 @@ impl Server {
         })
     }
 
-    // Go: server.go:1924 handleRename
+    // Go: server.go:1964 handleRename
     pub fn handle_rename(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4074,7 +4170,7 @@ impl Server {
         default_ls.provide_rename(ctx, params, Some(&orchestrator))
     }
 
-    // Go: server.go:1961 handleWillRenameFiles
+    // Go: server.go:2001 handleWillRenameFiles
     pub fn handle_will_rename_files(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4089,7 +4185,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:1968 handleWillRenameFilesWorker
+    // Go: server.go:2008 handleWillRenameFilesWorker
     // If `sendRenameFile` is true, the original `willRenameFiles` request is being handled as part of a rename operation
     // where the client doesn't support `willRenameFiles`,
     // so we should include the file rename in the edits we return
@@ -4237,7 +4333,7 @@ impl Server {
         })
     }
 
-    // Go: server.go:2070 handleSignatureHelp
+    // Go: server.go:2110 handleSignatureHelp
     pub fn handle_signature_help(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4252,7 +4348,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2079 handleFoldingRange
+    // Go: server.go:2119 handleFoldingRange
     pub fn handle_folding_range(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4262,7 +4358,7 @@ impl Server {
         ls.provide_folding_range(ctx, &params.text_document.uri)
     }
 
-    // Go: server.go:2083 handleVSOnAutoInsert
+    // Go: server.go:2123 handleVSOnAutoInsert
     pub fn handle_vs_on_auto_insert(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4272,7 +4368,7 @@ impl Server {
         ls.provide_on_auto_insert(ctx, params)
     }
 
-    // Go: server.go:2087 handleLinkedEditingRange
+    // Go: server.go:2127 handleLinkedEditingRange
     pub fn handle_linked_editing_range(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4282,7 +4378,7 @@ impl Server {
         ls.provide_linked_editing_range(ctx, params)
     }
 
-    // Go: server.go:2091 handleDefinition
+    // Go: server.go:2131 handleDefinition
     pub fn handle_definition(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4292,7 +4388,7 @@ impl Server {
         ls.provide_definition(ctx, &params.text_document.uri, params.position)
     }
 
-    // Go: server.go:2095 handleSourceDefinition
+    // Go: server.go:2135 handleSourceDefinition
     pub fn handle_source_definition(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4303,7 +4399,7 @@ impl Server {
         Ok(Some(resp))
     }
 
-    // Go: server.go:2103 handleTypeDefinition
+    // Go: server.go:2143 handleTypeDefinition
     pub fn handle_type_definition(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4313,7 +4409,7 @@ impl Server {
         ls.provide_type_definition(ctx, &params.text_document.uri, params.position)
     }
 
-    // Go: server.go:2107 handleCompletion
+    // Go: server.go:2147 handleCompletion
     pub fn handle_completion(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4328,7 +4424,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2116 handleCompletionItemResolve
+    // Go: server.go:2156 handleCompletionItemResolve
     pub fn handle_completion_item_resolve(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4339,21 +4435,41 @@ impl Server {
         let Some(data) = params.data.clone() else {
             return Err(errors::new("completion item data is nil"));
         };
-        let language_service = self
-            .session_ref()
-            .get_language_service(ctx, &lsconv::file_name_to_document_uri(&data.file_name))?;
+        // ts#64544: the file name must be absolute, and a dynamic one must
+        // decode to a URI (server.go:2161). ts#64159: it is rooted and
+        // normalized first (TryRootedFilePathFromAbsolute), and
+        // ResolveCompletionItem finds the file by the normalized name
+        // (server.go:2178).
+        let Some(file_name) = lsproto::try_rooted_path_from_absolute(&data.file_name) else {
+            return Err(errors::new(
+                "completion item data fileName must be absolute",
+            ));
+        };
+        let uri = if tspath::is_dynamic_file_name(&file_name) {
+            match lsproto::try_dynamic_file_name_to_document_uri(&file_name) {
+                Some(uri) => uri,
+                None => {
+                    return Err(errors::new(
+                        "completion item data fileName must be a valid dynamic path",
+                    ));
+                }
+            }
+        } else {
+            lsconv::file_name_to_document_uri(&file_name)
+        };
+        let language_service = self.session_ref().get_language_service(ctx, &uri)?;
         self.recover_guard(
             req_msg,
             || Ok(None),
             || {
                 language_service
-                    .resolve_completion_item(ctx, params.clone(), Some(data))
+                    .resolve_completion_item(ctx, params.clone(), Some(data), &file_name)
                     .map(Some)
             },
         )
     }
 
-    // Go: server.go:2129 handleDocumentFormat
+    // Go: server.go:2182 handleDocumentFormat
     pub fn handle_document_format(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4370,7 +4486,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2137 handleDocumentRangeFormat
+    // Go: server.go:2190 handleDocumentRangeFormat
     pub fn handle_document_range_format(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4388,7 +4504,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2146 handleDocumentOnTypeFormat
+    // Go: server.go:2199 handleDocumentOnTypeFormat
     pub fn handle_document_on_type_format(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4407,7 +4523,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2156 handleWorkspaceSymbol
+    // Go: server.go:2209 handleWorkspaceSymbol
     pub fn handle_workspace_symbol(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4488,7 +4604,7 @@ impl Server {
         }
     }
 
-    // Go: server.go:2184 handleDocumentSymbol
+    // Go: server.go:2237 handleDocumentSymbol
     pub fn handle_document_symbol(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4498,7 +4614,7 @@ impl Server {
         ls.provide_document_symbols(ctx, &params.text_document.uri)
     }
 
-    // Go: server.go:2188 handleDocumentHighlight
+    // Go: server.go:2241 handleDocumentHighlight
     pub fn handle_document_highlight(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4508,7 +4624,7 @@ impl Server {
         ls.provide_document_highlights(ctx, &params.text_document.uri, params.position)
     }
 
-    // Go: server.go:2192 handleMultiDocumentHighlight
+    // Go: server.go:2245 handleMultiDocumentHighlight
     pub fn handle_multi_document_highlight(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4523,7 +4639,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2196 handleSelectionRange
+    // Go: server.go:2249 handleSelectionRange
     pub fn handle_selection_range(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4533,7 +4649,7 @@ impl Server {
         ls.provide_selection_ranges(ctx, params)
     }
 
-    // Go: server.go:2200 handleCodeAction
+    // Go: server.go:2253 handleCodeAction
     pub fn handle_code_action(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4543,7 +4659,7 @@ impl Server {
         ls.provide_code_actions(ctx, params)
     }
 
-    // Go: server.go:2204 handleInlayHint
+    // Go: server.go:2257 handleInlayHint
     pub fn handle_inlay_hint(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4553,7 +4669,7 @@ impl Server {
         language_service.provide_inlay_hint(ctx, params)
     }
 
-    // Go: server.go:2212 handleCodeLens
+    // Go: server.go:2265 handleCodeLens
     pub fn handle_code_lens(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4563,7 +4679,7 @@ impl Server {
         ls.provide_code_lenses(ctx, &params.text_document.uri)
     }
 
-    // Go: server.go:2216 handleCodeLensResolve
+    // Go: server.go:2269 handleCodeLensResolve
     pub fn handle_code_lens_resolve(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4616,7 +4732,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2240 handlePrepareCallHierarchy
+    // Go: server.go:2293 handlePrepareCallHierarchy
     pub fn handle_prepare_call_hierarchy(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4630,7 +4746,7 @@ impl Server {
         )
     }
 
-    // Go: server.go:2248 handleCallHierarchyIncomingCalls
+    // Go: server.go:2301 handleCallHierarchyIncomingCalls
     pub fn handle_call_hierarchy_incoming_calls(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4647,7 +4763,7 @@ impl Server {
         default_ls.provide_call_hierarchy_incoming_calls(ctx, item, Some(&orchestrator))
     }
 
-    // Go: server.go:2260 handleCallHierarchyOutgoingCalls
+    // Go: server.go:2313 handleCallHierarchyOutgoingCalls
     pub fn handle_call_hierarchy_outgoing_calls(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4663,7 +4779,7 @@ impl Server {
         language_service.provide_call_hierarchy_outgoing_calls(ctx, item)
     }
 
-    // Go: server.go:2272 handleSemanticTokensFull
+    // Go: server.go:2325 handleSemanticTokensFull
     pub fn handle_semantic_tokens_full(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4673,7 +4789,7 @@ impl Server {
         ls.provide_semantic_tokens(ctx, &params.text_document.uri)
     }
 
-    // Go: server.go:2276 handleSemanticTokensRange
+    // Go: server.go:2329 handleSemanticTokensRange
     pub fn handle_semantic_tokens_range(
         self: &Rc<Self>,
         ctx: &Context,
@@ -4683,7 +4799,7 @@ impl Server {
         ls.provide_semantic_tokens_range(ctx, &params.text_document.uri, params.range)
     }
 
-    // Go: server.go:2280 handleInitializeAPISession
+    // Go: server.go:2333 handleInitializeAPISession
     // PORT: `apiSessionsMu` is dropped (dispatch thread).
     pub fn handle_initialize_api_session(
         self: &Rc<Self>,
@@ -4715,6 +4831,23 @@ impl Server {
             }
         };
 
+        // ts#64544: the session's state is stored before its goroutine starts.
+        let (api_ctx, api_cancel) = context::with_cancel(&self.shared.background_ctx());
+        let state = Rc::new(ApiSessionState {
+            session: api_session.clone(),
+            cancel: api_cancel,
+            api_ctx,
+            connection: RefCell::new(None),
+            stopped: Cell::new(false),
+            ended: Cell::new(false),
+            conn_state: RefCell::new(None),
+        });
+        self.api_sessions
+            .borrow_mut()
+            .as_mut()
+            .expect("created above")
+            .insert(api_session.id(), state);
+
         // Start accepting connections in the background
         // PORT: `transport.Accept()` runs on its own thread. The connection
         // reads the project session, which lives on the dispatch thread, so
@@ -4745,12 +4878,6 @@ impl Server {
                 });
         }
 
-        self.api_sessions
-            .borrow_mut()
-            .as_mut()
-            .expect("created above")
-            .insert(api_session.id(), api_session.clone());
-
         Ok(Some(lsproto::InitializeAPISessionResult {
             session_id: api_session.id(),
             pipe: pipe_path,
@@ -4762,21 +4889,30 @@ impl Server {
     /// dispatch thread. It returns when the connection ends. Meanwhile the
     /// connection runs the dispatch loop whenever it waits for a message
     /// (`ApiConnProtocol`), so LSP messages are served as in Go.
+    /// ts#64544: a session that `close_api_sessions` stopped is gone from
+    /// `api_sessions`, so a connection that its accept thread still gave is
+    /// closed (Go `attachConnection` returns false).
     fn serve_api_connection(self: &Rc<Self>, accepted: ApiAccepted) {
-        let api_session = self
+        let state = self
             .api_sessions
             .borrow()
             .as_ref()
             .and_then(|api_sessions| api_sessions.get(&accepted.session_id).cloned());
-        let Some(api_session) = api_session else {
+        let Some(state) = state else {
             if let Some(rwc) = accepted.rwc {
                 let _ = rwc.close();
             }
             return;
         };
+        let api_session = state.session.clone();
         let lsp_panic = match accepted.rwc {
-            Some(rwc) => self.run_api_connection(&api_session, rwc),
-            None => None,
+            Some(rwc) if state.attach_connection(rwc.clone()) => {
+                let lsp_panic = self.run_api_connection(&state, rwc.clone());
+                // Go: defer rwc.Close() (ts#64544)
+                let _ = rwc.close();
+                lsp_panic
+            }
+            _ => None,
         };
         // PORT: when the server ends while the connection waits, Go's
         // process exits and this defer never runs (the project session may
@@ -4785,6 +4921,12 @@ impl Server {
             // Go: defer { apiSession.Close(); s.removeAPISession(apiSession.ID()) }
             api_session.close();
             self.remove_api_session(&api_session.id());
+        }
+        // Go: defer apiCancel(); defer close(state.done)
+        (state.cancel)();
+        state.ended.set(true);
+        if !self.dispatch_ended() {
+            self.close_session_after_api_sessions();
         }
         if let Some(payload) = lsp_panic {
             std::panic::resume_unwind(payload);
@@ -4806,12 +4948,15 @@ impl Server {
     /// again after the cleanup.
     fn run_api_connection(
         self: &Rc<Self>,
-        api_session: &Rc<api::Session>,
+        session_state: &ApiSessionState,
         rwc: Arc<dyn ipc::ReadWriteCloser>,
     ) -> Option<Box<dyn Any + Send>> {
-        // Create a cancellable context for the API connection
-        let (api_ctx, api_cancel) = context::with_cancel(&self.shared.background_ctx());
+        // ts#64544: the context is the session state's.
+        let api_session = &session_state.session;
+        let api_ctx = &session_state.api_ctx;
+        let api_cancel = &session_state.cancel;
         let state = Rc::new(ApiConnState::default());
+        *session_state.conn_state.borrow_mut() = Some(state.clone());
         let lsp_panic = Rc::new(RefCell::new(None));
 
         // Run the connection with panic recovery
@@ -4836,7 +4981,7 @@ impl Server {
             // PORT: when the dispatch loop ended while the connection
             // waited (stdin EOF while a call to the client waits), Go's
             // process exits before this goroutine logs the error.
-            if let Err(api_err) = conn.run(&api_ctx)
+            if let Err(api_err) = conn.run(api_ctx)
                 && !self.dispatch_ended()
             {
                 self.logger.errorf(&format!(
@@ -4859,12 +5004,10 @@ impl Server {
             // Close the underlying connection
             let _ = rwc.close();
         }
-        // Go: defer apiCancel()
-        api_cancel();
         lsp_panic.take()
     }
 
-    // Go: server.go:2349 generateAPIPipePath
+    // Go: server.go:2410 generateAPIPipePath
     // PORT: Go `rand.Uint64()`; the port has no rand crate and takes 64
     // random bits from std's randomly keyed hasher.
     pub fn generate_api_pipe_path(&self) -> String {
@@ -4880,14 +5023,50 @@ impl Server {
         ipc::generate_pipe_path(&format!("tsgo-api-{now:x}-{rnd:x}"))
     }
 
-    // Go: server.go:2356 removeAPISession
+    // Go: server.go:2417 removeAPISession
     pub fn remove_api_session(&self, id: &str) {
         if let Some(api_sessions) = self.api_sessions.borrow_mut().as_mut() {
             api_sessions.remove(id);
         }
     }
 
-    // Go: server.go:2363 SetCompilerOptionsForInferredProjects
+    // Go: server.go:2423 closeAPISessions (ts#64544)
+    // PORT: Go ranges over the map (random order); the port stops the
+    // sessions in ID order.
+    pub fn close_api_sessions(&self) {
+        let mut api_sessions: Vec<(String, Rc<ApiSessionState>)> = self
+            .api_sessions
+            .borrow_mut()
+            .as_mut()
+            .map(|api_sessions| api_sessions.drain().collect())
+            .unwrap_or_default();
+        api_sessions.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (_, state) in api_sessions {
+            state.stop();
+            if !state.ended.get() {
+                self.stopping_api_sessions.borrow_mut().push(state);
+            }
+        }
+    }
+
+    /// PORT: the rest of Go's Shutdown after `closeAPISessions` waited for
+    /// the API sessions: closes the project session when Shutdown left it
+    /// open and no stopped API connection runs any more.
+    fn close_session_after_api_sessions(&self) {
+        if !self.close_session_after_api_sessions.get() {
+            return;
+        }
+        self.stopping_api_sessions
+            .borrow_mut()
+            .retain(|state| !state.ended.get());
+        if self.stopping_api_sessions.borrow().is_empty() {
+            self.close_session_after_api_sessions.set(false);
+            self.session_ref().close();
+        }
+    }
+
+    // Go: server.go:2438 SetCompilerOptionsForInferredProjects
     // !!! temporary; remove when we have `handleDidChangeConfiguration`/implicit project config support
     pub fn set_compiler_options_for_inferred_projects(
         &self,
@@ -5130,13 +5309,13 @@ impl ipc::Conn for ApiSessionConn {
 }
 
 impl ata::NpmExecutor for Server {
-    // Go: server.go:2371 NpmInstall
+    // Go: server.go:2446 NpmInstall
     // NpmInstall implements ata.NpmExecutor
-    fn npm_install(&self, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
+    fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
         (self
             .npm_install
             .as_ref()
-            .unwrap_or_else(|| crate::core::go_nil_dereference()))(cwd, args)
+            .unwrap_or_else(|| crate::core::go_nil_dereference()))(ctx, cwd, args)
     }
 
     // PORT: see `ata::NpmExecutor::npm_install_func`.
@@ -5146,7 +5325,7 @@ impl ata::NpmExecutor for Server {
 }
 
 impl Server {
-    // Go: server.go:2377 contentMapperSpawner (tsgo#4712)
+    // Go: server.go:2452 contentMapperSpawner (tsgo#4712)
     // contentMapperSpawner adapts the server's spawn callback to a content mapper spawner, or returns nil when
     // the server cannot spawn processes.
     pub fn content_mapper_spawner(&self) -> Option<Rc<dyn contentmapper::Spawner>> {
@@ -5158,7 +5337,7 @@ impl Server {
         ))))
     }
 
-    // Go: server.go:2384 contentMapperLogger (tsgo#4712)
+    // Go: server.go:2459 contentMapperLogger (tsgo#4712)
     pub fn content_mapper_logger(&self) -> contentmapper::Logger {
         let logger = self.logger.clone();
         Arc::new(move |message: &str| {
@@ -5172,7 +5351,7 @@ impl Server {
 // Developer/debugging command handlers
 
 impl Server {
-    // Go: server.go:2394 handleRunGC
+    // Go: server.go:2469 handleRunGC
     pub fn handle_run_gc(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -5184,7 +5363,7 @@ impl Server {
         Ok(lsproto::Null)
     }
 
-    // Go: server.go:2400 handleSaveHeapProfile
+    // Go: server.go:2475 handleSaveHeapProfile
     pub fn handle_save_heap_profile(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -5201,7 +5380,7 @@ impl Server {
         Ok(Some(lsproto::ProfileResult { file: file_path }))
     }
 
-    // Go: server.go:2409 handleSaveAllocProfile
+    // Go: server.go:2484 handleSaveAllocProfile
     pub fn handle_save_alloc_profile(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -5218,7 +5397,7 @@ impl Server {
         Ok(Some(lsproto::ProfileResult { file: file_path }))
     }
 
-    // Go: server.go:2418 handleStartCPUProfile
+    // Go: server.go:2493 handleStartCPUProfile
     pub fn handle_start_cpu_profile(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -5234,7 +5413,7 @@ impl Server {
         Ok(lsproto::Null)
     }
 
-    // Go: server.go:2427 handleStopCPUProfile
+    // Go: server.go:2502 handleStopCPUProfile
     pub fn handle_stop_cpu_profile(
         self: &Rc<Self>,
         _ctx: &Context,
@@ -5247,7 +5426,7 @@ impl Server {
         Ok(Some(lsproto::ProfileResult { file: file_path }))
     }
 
-    // Go: server.go:2436 handleProjectInfo
+    // Go: server.go:2511 handleProjectInfo
     pub fn handle_project_info(
         self: &Rc<Self>,
         ctx: &Context,
@@ -5269,7 +5448,7 @@ impl Server {
         Ok(Some(lsproto::ProjectInfoResult { config_file_path }))
     }
 
-    // Go: server.go:2451 handleSetContentMapperContributions (tsgo#4712)
+    // Go: server.go:2526 handleSetContentMapperContributions (tsgo#4712)
     pub fn handle_set_content_mapper_contributions(
         self: &Rc<Self>,
         ctx: &Context,
@@ -5289,7 +5468,7 @@ impl Server {
     }
 }
 
-// Go: server.go:2461 parseContentMapperContributions (tsgo#4712)
+// Go: server.go:2536 parseContentMapperContributions (tsgo#4712)
 // PORT: Go `json.Marshal` of the options map (`LSPObject`) writes the keys in Go map
 // order (random); `IndexMap` writes them in the order the client sent them.
 pub fn parse_content_mapper_contributions(
@@ -5392,7 +5571,9 @@ pub fn parse_content_mapper_contributions(
                     gostd::strconv::quote(&identity)
                 )));
             }
-            mapper.package_directory = cwd.clone();
+            // ts#64159: the directory is rooted and normalized
+            // (RootedDirectoryPathFromAbsolute, server.go:2591).
+            mapper.package_directory = lsproto::rooted_path_from_absolute(cwd);
         }
         result.mappers.push(Rc::new(mapper));
     }
@@ -5400,7 +5581,7 @@ pub fn parse_content_mapper_contributions(
     Ok(result)
 }
 
-// Go: server.go:2524 isValidContributedContentMapperExtension (tsgo#4712)
+// Go: server.go:2599 isValidContributedContentMapperExtension (tsgo#4712)
 pub fn is_valid_contributed_content_mapper_extension(extension: &str) -> bool {
     if extension.len() <= 1
         || !extension.starts_with('.')

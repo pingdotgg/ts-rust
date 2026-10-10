@@ -18,13 +18,13 @@ use ts_goport::gostd::GoError;
 use ts_goport::lsp::lsproto;
 use ts_goport::options::Tristate;
 use ts_goport::project::{
-    APICreateProgramRequest, APISnapshotRequest, ConfiguredProjectID, ContentMappedParseCache,
-    ContentMappedParseCacheKey, FileChangeSummary, FileHandle, HashedSourceFile, ParseCache,
-    ParseCacheKey, ProgramUpdateKind, RefCountCacheEntry, RefCountCacheOptions, ResourceRequest,
-    Session, SnapshotChange, UpdateReason, acquire_bound,
+    APICreateProgramRequest, APIReconfigureProgramRequest, APISnapshotRequest, ConfiguredProjectID,
+    ContentMappedParseCache, ContentMappedParseCacheKey, FileChangeSummary, FileHandle,
+    HashedSourceFile, ParseCache, ParseCacheKey, ProgramUpdateKind, RefCountCacheEntry,
+    RefCountCacheOptions, ResourceRequest, Session, SnapshotChange, UpdateReason, acquire_bound,
     content_mapped_parse_cache_key_for_duplicate, content_mapped_parse_cache_key_for_file,
-    new_content_mapped_parse_cache, new_overlay, new_parse_cache, new_parse_cache_key,
-    set_source_file_hash,
+    new_cached_file_handle, new_content_mapped_parse_cache, new_overlay, new_parse_cache,
+    new_parse_cache_key, new_ref_count_cache, new_synthetic_project_id, set_source_file_hash,
 };
 
 use super::projecttestutil::{FileMap, files};
@@ -168,6 +168,144 @@ fn test_parse_cache_binds_before_publishing() {
             .is_some()
     );
     ParseCache::deref(&cache, &key);
+}
+
+// Go: refcountcache_test.go:92 TestParseCacheAcquireExistingUsesFullKey (ts#64518)
+// PORT: Go `cache.Acquire` binds; the port's `acquire` does not (see
+// `test_parse_cache_binds_before_publishing`). The test checks only the
+// identity of the cached file. Go runs the mismatch subtests in parallel.
+#[test]
+fn test_parse_cache_acquire_existing_uses_full_key() {
+    const FILE_NAME: &str = "/index.ts";
+    let file_handle = new_cached_file_handle(FILE_NAME, "export {};");
+    let key = new_parse_cache_key(
+        &SourceFileParseOptions {
+            file_name: FILE_NAME.to_string(),
+            path: Path(FILE_NAME.to_string()),
+            ..Default::default()
+        },
+        file_handle.hash(),
+        ScriptKind::TS,
+    );
+    let cache = new_parse_cache(RefCountCacheOptions::default());
+    let file = cache.acquire(key.clone(), file_handle);
+
+    let acquired = cache.acquire_existing(&key).expect("assert.Assert(t, ok)");
+    assert!(Rc::ptr_eq(&acquired.file, &file.file));
+    ParseCache::deref(&cache, &key);
+
+    let mismatches = [
+        (
+            "file name",
+            ParseCacheKey {
+                file_name: "/INDEX.ts".to_string(),
+                ..key.clone()
+            },
+        ),
+        (
+            "path",
+            ParseCacheKey {
+                path: Path("/INDEX.ts".to_string()),
+                ..key.clone()
+            },
+        ),
+        (
+            "hash",
+            ParseCacheKey {
+                hash: xxhash_rust::xxh3::xxh3_128(b"different"),
+                ..key.clone()
+            },
+        ),
+        (
+            "script kind",
+            ParseCacheKey {
+                script_kind: ScriptKind::TSX,
+                ..key.clone()
+            },
+        ),
+        (
+            "jsx parse option",
+            ParseCacheKey {
+                jsx: true,
+                ..key.clone()
+            },
+        ),
+        (
+            "force parse option",
+            ParseCacheKey {
+                force: true,
+                ..key.clone()
+            },
+        ),
+    ];
+    for (name, mismatch) in &mismatches {
+        assert!(cache.acquire_existing(mismatch).is_none(), "{name}");
+        assert!(!cache.has(mismatch), "{name}");
+    }
+
+    ParseCache::deref(&cache, &key);
+    assert!(!cache.has(&key));
+}
+
+// Go: refcountcache_test.go:166 TestRefCountCacheAcquireExisting (ts#64518)
+#[test]
+fn test_ref_count_cache_acquire_existing() {
+    let parse_count = Rc::new(std::cell::Cell::new(0));
+    let cache = {
+        let parse_count = parse_count.clone();
+        new_ref_count_cache(
+            RefCountCacheOptions::default(),
+            move |_key: &String, value: i32| {
+                parse_count.set(parse_count.get() + 1);
+                value
+            },
+        )
+    };
+
+    assert_eq!(cache.acquire_existing(&"missing".to_string()), None);
+    assert_eq!(parse_count.get(), 0);
+
+    assert_eq!(cache.acquire("key".to_string(), 1), 1);
+    assert_eq!(cache.acquire_existing(&"key".to_string()), Some(1));
+    assert_eq!(parse_count.get(), 1);
+
+    cache.deref(&"key".to_string());
+    assert!(cache.has(&"key".to_string()));
+    cache.deref(&"key".to_string());
+    assert!(!cache.has(&"key".to_string()));
+
+    assert_eq!(cache.acquire_existing(&"key".to_string()), None);
+    assert_eq!(parse_count.get(), 1);
+}
+
+// Go: refcountcache_test.go:197 TestRefCountCacheAcquireExistingRacesFinalRelease (ts#64518)
+// PORT: one thread (see `project/refcountcache.rs`), so the goroutine race
+// is the two orders it can take, each checked once: AcquireExisting before
+// the final Deref, and after it.
+#[test]
+fn test_ref_count_cache_acquire_existing_races_final_release() {
+    for acquire_first in [true, false] {
+        let cache = new_ref_count_cache(
+            RefCountCacheOptions::default(),
+            |_key: &String, value: Rc<i32>| value,
+        );
+        let value = Rc::new(1);
+        cache.acquire("key".to_string(), value);
+
+        let mut acquired = false;
+        if acquire_first {
+            acquired = cache.acquire_existing(&"key".to_string()).is_some();
+        }
+        cache.deref(&"key".to_string());
+        if !acquire_first {
+            acquired = cache.acquire_existing(&"key".to_string()).is_some();
+        }
+        assert_eq!(acquired, acquire_first);
+        if acquired {
+            cache.deref(&"key".to_string());
+        }
+        assert!(!cache.has(&"key".to_string()));
+    }
 }
 
 // Go: refcountcache_test.go:23 setup
@@ -674,6 +812,11 @@ child_test! {
                 FileChangeSummary::default(),
                 Some(&APISnapshotRequest {
                     open_projects: Some(FxHashSet::from_iter([APP_CONFIG_PATH.to_string()])),
+                    // ts#64159: the open does not build the program.
+                    ensure_programs: Some(FxHashSet::from_iter([ConfiguredProjectID(
+                        (session.to_path)(APP_CONFIG_PATH),
+                    )
+                    .as_id()])),
                     ..Default::default()
                 }),
             )
@@ -774,5 +917,79 @@ child_test! {
         program_snapshot.deref();
         base_snapshot.deref();
         session.close();
+    }
+}
+
+child_test! {
+    // Go: refcountcache_test.go:705 TestRefCountingCaches/failed API update preserves API references (ts#64544)
+    fn failed_api_update_preserves_api_references() {
+        const CONFIG_FILE_NAME: &str = "/project/tsconfig.json";
+        let session = setup(files(&[
+            (CONFIG_FILE_NAME, r#"{"compilerOptions":{"noLib":true},"files":["index.ts"]}"#),
+            ("/project/index.ts", "export const value = 1;"),
+        ]));
+
+        let ctx = bg();
+        let snapshot = session
+            .api_update(
+                &ctx,
+                FileChangeSummary::default(),
+                Some(&APISnapshotRequest {
+                    open_projects: Some(FxHashSet::from_iter([CONFIG_FILE_NAME.to_string()])),
+                    ..Default::default()
+                }),
+            )
+            .unwrap_or_else(|err| panic!("APIUpdate: {}", err.error()));
+        snapshot.deref();
+
+        let config_path = (session.to_path)(CONFIG_FILE_NAME);
+
+        let failed = session.api_update(
+            &ctx,
+            FileChangeSummary::default(),
+            Some(&APISnapshotRequest {
+                close_projects: Some(FxHashSet::from_iter([config_path.clone()])),
+                reconfigure_programs: vec![APIReconfigureProgramRequest {
+                    program_id: new_synthetic_project_id(999),
+                    api_create_program_request: Default::default(),
+                }],
+                ..Default::default()
+            }),
+        );
+        let err = match failed {
+            Ok(_) => panic!("the API update did not fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.error().contains("synthetic program not found for reconfiguration"),
+            "{}",
+            err.error()
+        );
+
+        let snapshot = session.snapshot();
+        let api_state = &snapshot.project_collection.api_state;
+        assert_eq!(api_state.open_projects.get(&config_path).copied(), Some(1));
+
+        // Go: defer session.Close()
+        session.close();
+    }
+}
+
+child_test! {
+    // Go: refcountcache_test.go:737 TestRefCountingCaches/session close releases the current snapshot (ts#64544)
+    fn session_close_releases_the_current_snapshot() {
+        const FILE_NAME: &str = "/project/index.ts";
+        let session = setup(files(&[(FILE_NAME, "export const value = 1;")]));
+        open(&session, &format!("file://{FILE_NAME}"), "export const value = 1;");
+
+        let program = inferred_program(&session);
+        let source_file = program.get_source_file(FILE_NAME).expect("source file");
+        let key = key(&source_file);
+        assert!(session.parse_cache.has(&key));
+
+        session.close();
+
+        assert!(!session.parse_cache.has(&key));
+        assert_eq!(session.program_counter.len(), 0);
     }
 }

@@ -333,7 +333,7 @@ pub struct NpmInstallCall {
     pub args: Vec<String>,
 }
 
-pub type NpmInstallFunc = Box<dyn Fn(&str, &[String]) -> (Vec<u8>, Option<GoError>)>;
+pub type NpmInstallFunc = Box<dyn Fn(&Context, &str, &[String]) -> (Vec<u8>, Option<GoError>)>;
 
 // Go: npmexecutormock_generated.go:28 NpmExecutorMock
 #[derive(Default)]
@@ -352,14 +352,17 @@ impl NpmExecutorMock {
     }
 }
 
+// ts#64544: NpmInstall takes a ctx.
+// PORT: Go records the ctx of each call too; no test reads it, and the port
+// keeps `NpmInstallCall` comparable, so it is not recorded.
 impl ata::NpmExecutor for NpmExecutorMock {
-    fn npm_install(&self, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
+    fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
         self.npm_install.borrow_mut().push(NpmInstallCall {
             cwd: cwd.to_string(),
             args: args.to_vec(),
         });
         match &*self.npm_install_func.borrow() {
-            Some(f) => f(cwd, args),
+            Some(f) => f(ctx, cwd, args),
             None => (Vec::new(), None),
         }
     }
@@ -415,7 +418,10 @@ impl SessionUtils {
         };
         let fs = self.fs.clone();
         *self.npm_executor.npm_install_func.borrow_mut() = Some(Box::new(
-            move |cwd: &str, package_names: &[String]| -> (Vec<u8>, Option<GoError>) {
+            move |_ctx: &Context,
+                  cwd: &str,
+                  package_names: &[String]|
+                  -> (Vec<u8>, Option<GoError>) {
                 // packageNames is actually npmInstallArgs due to interface misnaming
                 let npm_install_args = package_names;
                 let len_npm_install_args = npm_install_args.len();

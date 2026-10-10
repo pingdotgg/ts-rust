@@ -20,9 +20,11 @@ use super::util::{edit, open, program};
 
 const INDEX_URI: &str = "file:///home/projects/TS/p1/index.ts";
 const INDEX_TEXT: &str = "import { a } from './a';\nexport const x = a + 1;";
-/// The config file of the project, as its path (the test file system is case
-/// insensitive, so the path is in lower case).
-const CONFIG_URI: &str = "file:///home/projects/ts/p1/tsconfig.json";
+/// The config file of the project. ts#64159: Go N' publishes the config
+/// diagnostics under the config file name (project/session.go:1978,
+/// `publishProjectDiagnostics(ctx, project.ConfigFileName(), ...)`), not its
+/// path, which is in lower case on this case-insensitive test file system.
+const CONFIG_URI: &str = "file:///home/projects/TS/p1/tsconfig.json";
 
 /// A session with push diagnostics and index.ts open, after two program
 /// changes and no wait for the background tasks: the program of index.ts,

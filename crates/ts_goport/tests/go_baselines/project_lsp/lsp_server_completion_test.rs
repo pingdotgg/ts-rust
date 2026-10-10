@@ -719,3 +719,129 @@ child_test! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Go `internal/lsp/server_completion_internal_test.go` (ts#64544, ts#64159)
+// PORT: Go tests package `lsp` from inside with `&Server{}`. The port makes
+// a server that never runs (`lsp::new_server`) and calls the handler, which
+// is `pub`. The tests are here so that no new test module is needed.
+// ---------------------------------------------------------------------------
+
+mod completion_internal {
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use ts_goport::frontend::bundled;
+    use ts_goport::gostd::{GoError, context, errors};
+    use ts_goport::lsp::{self, lsproto};
+
+    use crate::support::vfstest::{MapFile, MapFs};
+
+    /// A reader at end of input (the server never runs).
+    struct NoInput;
+
+    impl lsp::Reader for NoInput {
+        fn read(&mut self) -> (Option<lsproto::Message>, Option<GoError>) {
+            (None, Some(errors::EOF.clone()))
+        }
+    }
+
+    /// A writer that drops every message (the server never runs).
+    struct NoOutput;
+
+    impl lsp::Writer for NoOutput {
+        fn write(&mut self, _msg: &lsproto::Message) -> Result<(), GoError> {
+            Ok(())
+        }
+    }
+
+    /// Go `server := &Server{}`; `server.handleCompletionItemResolve(ctx,
+    /// &lsproto.CompletionItem{Data: &lsproto.CompletionItemData{FileName:
+    /// fileName}}, nil)` gives an error with `message`.
+    pub(super) fn assert_resolve_error(file_name: &str, message: &str) {
+        let server = lsp::new_server(lsp::ServerOptions {
+            in_: Box::new(NoInput),
+            out: Box::new(NoOutput),
+            err: Box::new(std::io::sink()),
+            cwd: "/".to_string(),
+            fs: bundled::wrap_fs(MapFs::from_map(Vec::<(String, MapFile)>::new(), false).fs()),
+            default_library_path: bundled::lib_path(),
+            typings_location: String::new(),
+            parse_cache: None,
+            npm_install: None,
+            spawn: None,
+            progress_delay: Duration::ZERO,
+            set_parent_process_id: None,
+        });
+        let item = lsproto::CompletionItem {
+            data: Some(lsproto::CompletionItemData {
+                file_name: file_name.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let req = Rc::new(lsproto::RequestMessage::default());
+        match server.handle_completion_item_resolve(&context::background(), Some(&item), &req) {
+            Ok(_) => panic!("{file_name}: no error"),
+            Err(err) => assert_eq!(err.error(), message, "{file_name}"),
+        }
+    }
+}
+
+child_test! {
+    // Go: server_completion_internal_test.go:11 TestCompletionItemResolveRejectsRelativeFileName (ts#64159)
+    fn completion_item_resolve_rejects_relative_file_name() {
+        completion_internal::assert_resolve_error(
+            "relative.ts",
+            "completion item data fileName must be absolute",
+        );
+    }
+}
+
+child_test! {
+    // Go: server_completion_internal_test.go:21 TestCompletionItemResolveRejectsMalformedDynamicFileName (ts#64159)
+    fn completion_item_resolve_rejects_malformed_dynamic_file_name() {
+        for file_name in ["^/invalid", "^/~ts-uri~/scheme/authority/~ts-uri-escape~zz~"] {
+            completion_internal::assert_resolve_error(
+                file_name,
+                "completion item data fileName must be a valid dynamic path",
+            );
+        }
+    }
+}
+
+child_test! {
+    // Server skeptic probe srvskp/resolve-more-names (bump D round 2). Go N'
+    // handleCompletionItemResolve passes the rooted, normalized file name to
+    // ResolveCompletionItem (server.go:2178), which finds the file by it
+    // (completions.go:5498), so a `data.fileName` with a trailing separator
+    // or extra segments still resolves. Go answers the item, not "file not
+    // found".
+    fn completion_item_resolve_finds_the_file_by_its_normalized_name() {
+        const A: &str = "export const alpha = 1;\nalp\n";
+        let client = init_completion_client(
+            "/home/projects",
+            &[("/home/projects/tsconfig.json", TSCONFIG), ("/home/projects/a.ts", A)],
+        );
+        let a_uri = lsconv::file_name_to_document_uri("/home/projects/a.ts");
+        open(&client, &a_uri, A);
+        let (msg, resp) =
+            client.send_request(&lsproto::TEXT_DOCUMENT_COMPLETION_INFO, completion_params(&a_uri, 1, 3));
+        assert!(msg.error.is_none(), "{:?}", msg.error);
+        let items = completion_items(resp);
+        let item = find_completion_item(&items, "alpha").expect("alpha");
+
+        for file_name in [
+            "/home/projects/a.ts/",
+            "/home/projects//a.ts",
+            "/home/projects/sub//../a.ts",
+        ] {
+            let mut item = item.clone();
+            item.data.as_mut().expect("item.Data").file_name = file_name.to_string();
+            let (msg, resp) = client.send_request(&lsproto::COMPLETION_ITEM_RESOLVE_INFO, item);
+            assert!(msg.error.is_none(), "{file_name}: {:?}", msg.error);
+            let label = resp.flatten().map(|item| item.label);
+            assert_eq!(label.as_deref(), Some("alpha"), "{file_name}");
+        }
+    }
+}

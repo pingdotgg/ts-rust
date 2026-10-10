@@ -20,11 +20,18 @@ use std::marker::PhantomData;
 pub struct DocumentUri(pub String); // !!!
 
 impl DocumentUri {
-    // Go: lsp.go:19 FileName
+    // Go: lsp.go:19 Path (ts#64159: N's FileName; FileName at :77 is the
+    // same text with file intent)
+    // ts#64159: a bundled or file URI gives a rooted, normalized path
+    // (`RootedPathFromAbsolute`; a relative path panics), so "/a/../b.ts"
+    // is "/b.ts" and a trailing separator goes.
+    // PORT: Go also validates the dynamic name with
+    // `RootedPathFromNormalized`; the encoding above never gives one that
+    // fails it.
     pub fn file_name(&self) -> String {
         let uri = self.0.as_str();
         if is_bundled(uri) {
-            return uri.to_string();
+            return rooted_path_from_absolute(uri);
         }
         if uri.starts_with("file://") {
             let parsed = match gostd::url::parse(uri) {
@@ -32,37 +39,168 @@ impl DocumentUri {
                 Err(_) => crate::core::go_panic(format!("invalid file URI: {uri}")),
             };
             if !parsed.host.is_empty() {
-                return format!("//{}{}", parsed.host, parsed.path);
+                return rooted_path_from_absolute(&format!("//{}{}", parsed.host, parsed.path));
             }
-            return fix_windows_uri_path(&parsed.path);
+            return rooted_path_from_absolute(&fix_windows_uri_path(&parsed.path));
         }
 
         // Leave all other URIs escaped so we can round-trip them.
 
-        let Some((scheme, mut path)) = uri.split_once(':') else {
+        let Some((scheme, path)) = uri.split_once(':') else {
             crate::core::go_panic(format!("invalid URI: {uri}"));
         };
 
+        // ts#64544: a query or fragment is encoded with the last segment.
+        let (mut path, suffix) = match path.find(['?', '#']) {
+            Some(suffix_start) => (&path[..suffix_start], &path[suffix_start..]),
+            None => (path, ""),
+        };
+
         let mut authority = "ts-nul-authority";
+        let mut has_authority = false;
+        let mut has_path = true;
         if let Some(rest) = path.strip_prefix("//") {
-            let Some((a, p)) = rest.split_once('/') else {
-                crate::core::go_panic(format!("invalid URI: {uri}"));
-            };
-            authority = a;
-            path = p;
+            has_authority = true;
+            match rest.split_once('/') {
+                Some((a, p)) => {
+                    authority = a;
+                    path = p;
+                }
+                None => {
+                    authority = rest;
+                    path = "";
+                    has_path = false;
+                }
+            }
         }
 
-        format!("^/{scheme}/{authority}/{path}")
+        let encoded_authority = if !has_authority {
+            authority.to_string()
+        } else if authority == "ts-nul-authority" {
+            tspath::force_encode_dynamic_uri_path_segment(authority, false)
+        } else {
+            tspath::encode_dynamic_uri_path(authority)
+        };
+        let encoded_path = if has_path {
+            tspath::encode_dynamic_uri_path_with_suffix(path, suffix)
+        } else {
+            tspath::encode_dynamic_uri_no_path(suffix)
+        };
+
+        format!(
+            "{}{scheme}/{encoded_authority}/{encoded_path}",
+            tspath::DYNAMIC_URI_FILE_NAME_PREFIX
+        )
     }
 
-    // Go: lsp.go:52 Path
+    // Go: lsp.go:19 Path (at 673a5f17d713; ts#64159 renames it PathKey,
+    // lsp.go:81)
+    // ts#64544: an encoded dynamic file name keeps its case, and its bare
+    // root ends with "/" (Go `canonicalDynamicFileName`, removed by ts#64159;
+    // `tspath::to_path` gives the same key).
     pub fn path(&self, use_case_sensitive_file_names: bool) -> tspath::Path {
         let file_name = self.file_name();
         tspath::to_path(&file_name, "", use_case_sensitive_file_names)
     }
 }
 
-// Go: lsp.go:57 fixWindowsURIPath
+// Go: lsp.go:85 DynamicFileNameToDocumentUri (ts#64544)
+#[must_use]
+pub fn dynamic_file_name_to_document_uri(file_name: &str) -> DocumentUri {
+    match dynamic_file_name_to_document_uri_worker(file_name, false) {
+        Some(uri) => uri,
+        None => crate::core::go_panic(format!("invalid file name: {file_name}")),
+    }
+}
+
+// Go: lsp.go:93 TryDynamicFileNameToDocumentUri (ts#64544)
+// `None` is Go's `ok == false`: the name is not a valid dynamic file name.
+#[must_use]
+pub fn try_dynamic_file_name_to_document_uri(file_name: &str) -> Option<DocumentUri> {
+    dynamic_file_name_to_document_uri_worker(file_name, true)
+}
+
+// Go: lsp.go:97 dynamicFileNameToDocumentUri (ts#64544)
+// It decodes the encoded names (`^/~ts-uri~/...`) and takes the literal
+// names (`^/<scheme>/...`) as they are.
+fn dynamic_file_name_to_document_uri_worker(file_name: &str, strict: bool) -> Option<DocumentUri> {
+    let encoded = tspath::is_encoded_dynamic_file_name(file_name);
+    let start = if encoded {
+        tspath::DYNAMIC_URI_FILE_NAME_PREFIX.len()
+    } else {
+        2
+    };
+    let (scheme, rest) = file_name[start..].split_once('/')?;
+    if strict && scheme.is_empty() {
+        return None;
+    }
+    let (authority, uri_path) = rest.split_once('/')?;
+    let has_authority = authority != "ts-nul-authority";
+    let authority: Cow<'_, str> = if !encoded {
+        Cow::Borrowed(authority)
+    } else if strict {
+        Cow::Owned(tspath::try_decode_dynamic_uri_path_segment(authority)?)
+    } else {
+        Cow::Owned(tspath::decode_dynamic_uri_path_segment(authority))
+    };
+    if encoded
+        && has_authority
+        && let Some(suffix) = tspath::decode_dynamic_uri_no_path(uri_path)
+    {
+        return Some(DocumentUri(format!("{scheme}://{authority}{suffix}")));
+    }
+    let uri_path: Cow<'_, str> = if !encoded {
+        Cow::Borrowed(uri_path)
+    } else if strict {
+        Cow::Owned(tspath::try_decode_dynamic_uri_path(uri_path)?)
+    } else {
+        Cow::Owned(tspath::decode_dynamic_uri_path(uri_path))
+    };
+    if !has_authority {
+        return Some(DocumentUri(format!("{scheme}:{uri_path}")));
+    }
+    Some(DocumentUri(format!("{scheme}://{authority}/{uri_path}")))
+}
+
+// Go: tspath/rooted_path.go:48 RootedPathFromAbsolute (ts#64159)
+// The rooted, normalized form of an absolute path; a relative path, or a
+// URL path with a query or fragment, is a Go panic.
+// PORT: the port keeps string paths (bump D plan section 3, behavior only),
+// and the Rust tspath (program lane) has no typed path helpers, so the
+// server files share this copy.
+pub fn rooted_path_from_absolute(path: &str) -> String {
+    match try_rooted_path_from_absolute(path) {
+        Some(path) => path,
+        None => crate::core::go_panic("path must be absolute".to_string()),
+    }
+}
+
+// Go: tspath/rooted_path.go:58 TryRootedPathFromAbsolute (ts#64159)
+pub fn try_rooted_path_from_absolute(path: &str) -> Option<String> {
+    if has_rooted_url_suffix(path) || !tspath::path_is_absolute(path) {
+        return None;
+    }
+    let mut normalized = tspath::get_normalized_absolute_path(path, "");
+    // Go: tspath/rooted_path.go:65 ensureRootedPathRootSeparator
+    if tspath::get_root_length(&normalized) == normalized.len()
+        && !tspath::has_trailing_directory_separator(&normalized)
+    {
+        normalized.push('/');
+    }
+    Some(normalized)
+}
+
+// Go: tspath/rooted_path.go:106 hasRootedURLSuffix (ts#64159)
+fn has_rooted_url_suffix(path: &str) -> bool {
+    // Go: tspath/rooted_path.go:114 hasURLRoot
+    if !(tspath::get_encoded_root_length(path) < 0 && path.contains("://")) {
+        return false;
+    }
+    let after_scheme = path.split_once("://").map_or("", |(_, rest)| rest);
+    after_scheme.contains(['?', '#'])
+}
+
+// Go: lsp.go:144 fixWindowsURIPath
 pub fn fix_windows_uri_path(path: &str) -> String {
     if let Some(rest) = path.strip_prefix('/') {
         let bytes = rest.as_bytes();
@@ -73,31 +211,31 @@ pub fn fix_windows_uri_path(path: &str) -> String {
     path.to_string()
 }
 
-// Go: lsp.go:66 HasTextDocumentURI
+// Go: lsp.go:153 HasTextDocumentURI
 pub trait HasTextDocumentURI {
     fn text_document_uri(&self) -> DocumentUri;
 }
 
-// Go: lsp.go:70 HasTextDocumentPosition
+// Go: lsp.go:157 HasTextDocumentPosition
 pub trait HasTextDocumentPosition: HasTextDocumentURI {
     fn text_document_position(&self) -> Position;
 }
 
-// Go: lsp.go:75 HasLocations
+// Go: lsp.go:162 HasLocations
 pub trait HasLocations {
     fn get_locations(&self) -> Option<&Vec<Location>>;
 }
 
-// Go: lsp.go:79 HasLocation
+// Go: lsp.go:166 HasLocation
 pub trait HasLocation {
     fn get_location(&self) -> Location;
 }
 
-// Go: lsp.go:83 URI
+// Go: lsp.go:170 URI
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct URI(pub String); // !!!
 
-// Go: lsp.go:85 Method
+// Go: lsp.go:172 Method
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Method(pub Cow<'static, str>);
 
@@ -289,7 +427,7 @@ fn json_kind_string(k: u8) -> String {
     }
 }
 
-// Go: lsp.go:87 errNotObject
+// Go: lsp.go:174 errNotObject
 // Generated methods return it before they read the value.
 pub fn err_not_object(k: u8) -> JsonError {
     SemanticError::method(
@@ -301,7 +439,7 @@ pub fn err_not_object(k: u8) -> JsonError {
     )
 }
 
-// Go: lsp.go:91 errNull
+// Go: lsp.go:178 errNull
 // Generated methods return it after the member name.
 pub fn err_null(field: &str) -> JsonError {
     SemanticError::method(
@@ -313,7 +451,7 @@ pub fn err_null(field: &str) -> JsonError {
     )
 }
 
-// Go: lsp.go:95 errMissing
+// Go: lsp.go:182 errMissing
 // Generated methods return it after the closing `}`.
 pub fn err_missing<I, S>(props: I) -> JsonError
 where
@@ -327,7 +465,7 @@ where
     )
 }
 
-// Go: lsp.go:99 errInvalidKind
+// Go: lsp.go:186 errInvalidKind
 // Generated methods return it after a peek, before they read the value.
 pub fn err_invalid_kind(type_name: &str, got: u8) -> JsonError {
     SemanticError::method(
@@ -336,7 +474,7 @@ pub fn err_invalid_kind(type_name: &str, got: u8) -> JsonError {
     )
 }
 
-// Go: lsp.go:103 errInvalidValue
+// Go: lsp.go:190 errInvalidValue
 // Generated methods return it after they read the value.
 pub fn err_invalid_value(type_name: &str, data: impl AsRef<[u8]>) -> JsonError {
     SemanticError::method(
@@ -349,7 +487,7 @@ pub fn err_invalid_value(type_name: &str, data: impl AsRef<[u8]>) -> JsonError {
     )
 }
 
-// Go: lsp.go:107 errLiteralMismatch
+// Go: lsp.go:194 errLiteralMismatch
 // Generated methods return it after they read the value.
 pub fn err_literal_mismatch(type_name: &str, expected: &str, got: impl AsRef<[u8]>) -> JsonError {
     SemanticError::method(
@@ -363,27 +501,27 @@ pub fn err_literal_mismatch(type_name: &str, expected: &str, got: impl AsRef<[u8
     )
 }
 
-// Go: lsp.go:111 assertOnlyOne
+// Go: lsp.go:198 assertOnlyOne
 pub fn assert_only_one(message: &str, count: i32) {
     if count != 1 {
         crate::core::go_panic(message.to_string());
     }
 }
 
-// Go: lsp.go:117 assertAtMostOne
+// Go: lsp.go:204 assertAtMostOne
 pub fn assert_at_most_one(message: &str, count: i32) {
     if count > 1 {
         crate::core::go_panic(message.to_string());
     }
 }
 
-// Go: lsp.go:124 jsonKeyCheck
+// Go: lsp.go:211 jsonKeyCheck
 // jsonKeyCheck compares a raw JSON key token (including quotes) against a Go string.
 pub fn json_key_check(name: &[u8], key: &str) -> bool {
     name.len() == key.len() + 2 && name[0] == b'"' && &name[1..name.len() - 1] == key.as_bytes()
 }
 
-// Go: lsp.go:131 jsonObjectRawField
+// Go: lsp.go:218 jsonObjectRawField
 // jsonObjectRawField scans the top-level keys of a JSON object looking for the
 // given field name, and returns its raw JSON value (e.g. `"full"` with quotes).
 // Returns nil if the field is not found.
@@ -535,7 +673,7 @@ pub fn unmarshal_discriminated_arm<T: UnmarshalerFrom + Default>(
     Ok(target)
 }
 
-// Go: lsp.go:161 jsonObjectHasKey
+// Go: lsp.go:248 jsonObjectHasKey
 // jsonObjectHasKey scans the top-level keys of a JSON object looking for any of the
 // given keys. Returns the index of the first key found, or -1 if none match.
 // Bails early on first match without decoding any values.
@@ -565,7 +703,7 @@ pub fn json_object_has_key(data: &[u8], keys: &[&str]) -> i32 {
 
 // Inspired by https://www.youtube.com/watch?v=dab3I-HcTVk
 
-// Go: lsp.go:188 RequestInfo
+// Go: lsp.go:275 RequestInfo
 // PORT: Go `_ [0]Params` / `_ [0]Resp` are `PhantomData`. Go builds the
 // value with a struct literal; `new` is the const constructor the
 // generated `*_INFO` consts use.
@@ -586,7 +724,7 @@ impl<P, R> RequestInfo<P, R> {
 }
 
 impl<P, R: UnmarshalerFrom + Default> RequestInfo<P, R> {
-    // Go: lsp.go:194 UnmarshalResult
+    // Go: lsp.go:281 UnmarshalResult
     // PORT: Go type assertion on `any`. `None` is a nil `any`. `%T` in the
     // error prints the Rust debug value.
     pub fn unmarshal_result(&self, result: Option<Box<dyn AnyValue>>) -> Result<R, GoError> {
@@ -608,7 +746,7 @@ impl<P, R: UnmarshalerFrom + Default> RequestInfo<P, R> {
 }
 
 impl<P: AnyValue, R> RequestInfo<P, R> {
-    // Go: lsp.go:207 NewRequestMessage
+    // Go: lsp.go:294 NewRequestMessage
     pub fn new_request_message(&self, id: Option<crate::jsonrpc::ID>, params: P) -> RequestMessage {
         RequestMessage {
             id,
@@ -633,7 +771,7 @@ impl<P, R> std::fmt::Debug for RequestInfo<P, R> {
     }
 }
 
-// Go: lsp.go:215 NotificationInfo
+// Go: lsp.go:302 NotificationInfo
 pub struct NotificationInfo<P> {
     _params: PhantomData<fn() -> P>,
     pub method: Method,
@@ -649,7 +787,7 @@ impl<P> NotificationInfo<P> {
 }
 
 impl<P: AnyValue> NotificationInfo<P> {
-    // Go: lsp.go:220 NewNotificationMessage
+    // Go: lsp.go:307 NewNotificationMessage
     pub fn new_notification_message(&self, params: P) -> RequestMessage {
         RequestMessage {
             method: self.method.clone(),
@@ -673,11 +811,11 @@ impl<P> std::fmt::Debug for NotificationInfo<P> {
     }
 }
 
-// Go: lsp.go:266 Null
+// Go: lsp.go:353 Null
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Null;
 
-// Go: lsp.go:271 (Null) UnmarshalJSONFrom
+// Go: lsp.go:355 (Null) UnmarshalJSONFrom
 impl UnmarshalerFrom for Null {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         let data = dec.read_value()?;
@@ -691,7 +829,7 @@ impl UnmarshalerFrom for Null {
     }
 }
 
-// Go: lsp.go:282 (Null) MarshalJSONTo
+// Go: lsp.go:366 (Null) MarshalJSONTo
 impl MarshalerTo for Null {
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         enc.push_str("null");
@@ -706,7 +844,7 @@ impl IsZero for Null {
     }
 }
 
-// Go: lsp.go:235 UnmarshalParams
+// Go: lsp.go:322 UnmarshalParams
 // UnmarshalParams decodes the params of an inbound request or notification
 // message into the requested type. Inbound messages store their params as a
 // raw [json.Value] (see [Message.UnmarshalJSON]); decoding is deferred to the
@@ -770,11 +908,11 @@ pub fn unmarshal_params<T: UnmarshalerFrom + Default + 'static>(
     Ok(params)
 }
 
-// Go: lsp.go:283 NoParams
+// Go: lsp.go:370 NoParams
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NoParams;
 
-// Go: lsp.go:288 (NoParams) IsZero
+// Go: lsp.go:372 (NoParams) IsZero
 impl IsZero for NoParams {
     fn is_zero(&self) -> bool {
         true
@@ -799,18 +937,18 @@ impl UnmarshalerFrom for NoParams {
     }
 }
 
-// Go: lsp.go:287 clientCapabilitiesKey
+// Go: lsp.go:374 clientCapabilitiesKey
 static CLIENT_CAPABILITIES_KEY: gostd::context::ContextKey<Arc<ResolvedClientCapabilities>> =
     gostd::context::ContextKey::new("clientCapabilitiesKey");
 
-// Go: lsp.go:289 WithClientCapabilities
+// Go: lsp.go:376 WithClientCapabilities
 // PORT: Go stores the `*ResolvedClientCapabilities` pointer; the context
 // holds an `Arc` to it.
 pub fn with_client_capabilities(ctx: &Context, caps: Arc<ResolvedClientCapabilities>) -> Context {
     gostd::context::with_value(ctx, &CLIENT_CAPABILITIES_KEY, caps)
 }
 
-// Go: lsp.go:293 GetClientCapabilities
+// Go: lsp.go:380 GetClientCapabilities
 pub fn get_client_capabilities(ctx: &Context) -> Arc<ResolvedClientCapabilities> {
     if let Some(caps) = ctx.value(&CLIENT_CAPABILITIES_KEY) {
         return (*caps).clone();
@@ -818,7 +956,7 @@ pub fn get_client_capabilities(ctx: &Context) -> Arc<ResolvedClientCapabilities>
     Arc::new(ResolvedClientCapabilities::default())
 }
 
-// Go: lsp.go:302 PreferredMarkupKind
+// Go: lsp.go:389 PreferredMarkupKind
 // PreferredMarkupKind returns the first (most preferred) markup kind from the given formats,
 // or MarkupKindPlainText if the slice is empty.
 pub fn preferred_markup_kind(formats: &[MarkupKind]) -> MarkupKind {
@@ -829,7 +967,7 @@ pub fn preferred_markup_kind(formats: &[MarkupKind]) -> MarkupKind {
 }
 
 impl CodeActionKind {
-    // Go: lsp.go:310 (CodeActionKind).Contains
+    // Go: lsp.go:397 (CodeActionKind).Contains
     // Contains reports whether other is this code action kind or one of its children.
     #[must_use]
     pub fn contains(&self, other: &CodeActionKind) -> bool {

@@ -96,8 +96,8 @@ pub struct TypingsInstallerOptions {
 pub trait NpmExecutor {
     // PORT: Go returns `([]byte, error)` and reads the output when the error
     // is non-nil (installWorker logs it), so the result is a pair, not a
-    // `Result`. `None` is Go's nil error.
-    fn npm_install(&self, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>);
+    // `Result`. `None` is Go's nil error. ts#64544 adds `ctx`.
+    fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>);
 
     /// PORT: no Go counterpart. A `Send` form of `npm_install` that ATA runs
     /// on a helper thread (`TypingsInstaller::npm_install`), or `None` to run
@@ -108,7 +108,8 @@ pub trait NpmExecutor {
 }
 
 /// PORT: the `Send` form of `NpmExecutor::npm_install`.
-pub type NpmInstallFunc = Arc<dyn Fn(&str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>;
+pub type NpmInstallFunc =
+    Arc<dyn Fn(&Context, &str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>;
 
 /// PORT: Go `sync.Once` of `TypingsInstaller.initOnce`. `Running` while the
 /// first `init` waits for npm; Go blocks the other callers of `Do` until the
@@ -120,7 +121,7 @@ pub enum OnceState {
     Done,
 }
 
-// Go: project/ata/ata.go:47 TypingsInstallerHost
+// Go: project/ata/ata.go:47 TypingsInstallerHost (at 673a5f17d713; removed by ts#64159)
 // PORT: Go interfaces are structural, so every type that implements both
 // traits is a host (blanket impl). `Rc<dyn TypingsInstallerHost>` upcasts to
 // `Rc<dyn module::ResolutionHost>` for `module::new_resolver`.
@@ -128,7 +129,7 @@ pub trait TypingsInstallerHost: NpmExecutor + module::ResolutionHost {}
 
 impl<T: NpmExecutor + module::ResolutionHost> TypingsInstallerHost for T {}
 
-// Go: project/ata/ata.go:52 TypingsInstaller
+// Go: project/ata/ata.go:47 TypingsInstaller
 // PORT: `packageNameToTypingLocation` is ranged in DiscoverTypings, so it is
 // an `IndexMap` (insertion order; Go map order is random). A
 // `typesRegistry` entry is `Option`: Go keeps a JSON `null` entry as a nil
@@ -154,7 +155,41 @@ pub struct TypingsInstaller {
     pub semaphore_waiters: SemaphoreWaiters,
 }
 
-// Go: project/ata/ata.go:67 NewTypingsInstaller
+// Go: project/ata/ata.go:63 resolutionHost (ts#64159)
+// The module resolution host of ATA: the installer's file system, with the
+// typings location as the current directory. N resolved with the session as
+// the host, whose current directory is the workspace's.
+// PORT: Go `TypingsInstaller` keeps `fs` and `npmExecutor` instead of the
+// host (ts#64159 drops `TypingsInstallerHost`); the port keeps the host for
+// both and gives the resolver this host.
+struct ResolutionHost {
+    host: Rc<dyn TypingsInstallerHost>,
+    current_directory: String,
+}
+
+impl module::ResolutionHost for ResolutionHost {
+    // Go: project/ata/ata.go:68 resolutionHost.FS
+    fn fs(&self) -> &dyn vfs::Fs {
+        self.host.fs()
+    }
+
+    // Go: project/ata/ata.go:72 resolutionHost.GetCurrentDirectory
+    fn get_current_directory(&self) -> &str {
+        &self.current_directory
+    }
+}
+
+impl TypingsInstaller {
+    /// Go `&resolutionHost{fs: ti.fs, currentDirectory: ti.typingsLocation}`.
+    fn resolution_host(&self) -> Rc<dyn module::ResolutionHost> {
+        Rc::new(ResolutionHost {
+            host: self.host.clone(),
+            current_directory: self.typings_location.clone(),
+        })
+    }
+}
+
+// Go: project/ata/ata.go:76 NewTypingsInstaller
 pub fn new_typings_installer(
     options: &TypingsInstallerOptions,
     host: Rc<dyn TypingsInstallerHost>,
@@ -173,14 +208,14 @@ pub fn new_typings_installer(
     })
 }
 
-// Go: project/ata/ata.go:75 ProjectID (ts#64319)
+// Go: project/ata/ata.go:85 ProjectID (ts#64319)
 // PORT: Go `interface { fmt.Stringer }`.
 pub trait ProjectID {
     fn string(&self) -> String;
 }
 
 impl TypingsInstaller {
-    // Go: project/ata/ata.go:79 IsKnownTypesPackageName
+    // Go: project/ata/ata.go:89 IsKnownTypesPackageName
     pub fn is_known_types_package_name(
         &self,
         project_id: &dyn ProjectID,
@@ -197,16 +232,21 @@ impl TypingsInstaller {
         // PORT: no Go caller at pin N. Go blocks in `initOnce.Do` while an
         // ATA request runs init; `block_on` runs the dispatch thread's ready
         // work until that request is done.
-        block_on(self.init(&project_id.string(), fs, logger));
+        block_on(self.init(
+            &gostd::context::background(),
+            &project_id.string(),
+            fs,
+            logger,
+        ));
         self.types_registry.borrow().contains_key(name)
     }
 }
 
-// Go: project/ata/ata.go:92 tsVersionToUse
+// Go: project/ata/ata.go:102 tsVersionToUse
 // !!! sheetal currently we use latest instead of core.VersionMajorMinor()
 pub const TS_VERSION_TO_USE: &str = "latest";
 
-// Go: project/ata/ata.go:94 TypingsInstallRequest
+// Go: project/ata/ata.go:104 TypingsInstallRequest
 // PORT: Go `TypingsInfo *TypingsInfo` is never nil (the session passes the
 // address of a local), so it is an `Rc`. `GetScriptKind` is a stored func.
 #[derive(Clone)]
@@ -223,7 +263,7 @@ pub struct TypingsInstallRequest {
     pub logger: Option<Rc<dyn logging::Logger>>,
 }
 
-// Go: project/ata/ata.go:106 TypingsInstallResult
+// Go: project/ata/ata.go:113 TypingsInstallResult
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TypingsInstallResult {
     pub typings_files: Vec<String>,
@@ -231,7 +271,7 @@ pub struct TypingsInstallResult {
 }
 
 impl TypingsInstaller {
-    // Go: project/ata/ata.go:111 InstallTypings
+    // Go: project/ata/ata.go:118 InstallTypings
     // PORT: Go also has the unexported `installTypings` on this type, so the
     // exported Go `InstallTypings` is `install_typings_exported` (PORTING
     // "Names"). Go returns `(*TypingsInstallResult, error)` with a nil
@@ -239,9 +279,10 @@ impl TypingsInstaller {
     // file comment).
     pub async fn install_typings_exported(
         &self,
+        ctx: &Context,
         request: &TypingsInstallRequest,
     ) -> Result<TypingsInstallResult, GoError> {
-        let mut result = self.discover_and_install_typings(request).await;
+        let mut result = self.discover_and_install_typings(ctx, request).await;
         if let Ok(result) = &mut result {
             result.typings_files.sort();
             result.files_to_watch.sort();
@@ -253,13 +294,19 @@ impl TypingsInstaller {
         result
     }
 
-    // Go: project/ata/ata.go:121 discoverAndInstallTypings
+    // Go: project/ata/ata.go:128 discoverAndInstallTypings
     pub async fn discover_and_install_typings(
         &self,
+        ctx: &Context,
         request: &TypingsInstallRequest,
     ) -> Result<TypingsInstallResult, GoError> {
-        self.init(&request.project_id.string(), &*request.fs, &request.logger)
-            .await;
+        self.init(
+            ctx,
+            &request.project_id.string(),
+            &*request.fs,
+            &request.logger,
+        )
+        .await;
 
         let (cached_typing_paths, new_typing_names, files_to_watch) = discover_typings(
             &*request.fs,
@@ -279,6 +326,7 @@ impl TypingsInstaller {
             if !filtered_typings.is_empty() {
                 let typings_files = self
                     .install_typings(
+                        ctx,
                         request_id,
                         &cached_typing_paths,
                         &filtered_typings,
@@ -307,10 +355,11 @@ impl TypingsInstaller {
         // this.event(response, "setTypings");
     }
 
-    // Go: project/ata/ata.go:161 installTypings
+    // Go: project/ata/ata.go:168 installTypings
     // ts#64319: no project ID or typings info parameters.
     pub async fn install_typings(
         &self,
+        ctx: &Context,
         request_id: i32,
         currently_cached_typings: &[String],
         filtered_typings: &[String],
@@ -338,13 +387,14 @@ impl TypingsInstaller {
         }
 
         let (package_names, ok) = self
-            .install_worker(request_id, &scoped_typings, logger)
+            .install_worker(ctx, request_id, &scoped_typings, logger)
             .await;
         if ok {
             // PORT: Go `%v` of a slice; log text is not compared.
             logger.log(&format!("ATA:: Installed typings {package_names:?}"));
             let mut installed_typing_files: Vec<String> = Vec::new();
-            let host: Rc<dyn module::ResolutionHost> = self.host.clone();
+            // ts#64159
+            let host = self.resolution_host();
             // ts#64299
             let resolver = module::new_resolver(module::ResolverOptions {
                 host: Some(host),
@@ -448,10 +498,11 @@ impl TypingsInstaller {
         // this.event(body, eventName);
     }
 
-    // Go: project/ata/ata.go:261 installWorker
+    // Go: project/ata/ata.go:268 installWorker
     // ts#64319: no project ID parameter.
     pub async fn install_worker(
         &self,
+        ctx: &Context,
         request_id: i32,
         package_names: &[String],
         logger: &dyn logging::Logger,
@@ -461,9 +512,8 @@ impl TypingsInstaller {
             "ATA:: #{request_id} with cwd: {} arguments: {package_names:?}",
             self.typings_location
         ));
-        let ctx = gostd::context::background();
         let err = install_npm_packages_async(
-            &ctx,
+            ctx,
             package_names,
             &self.concurrency_semaphore,
             &self.semaphore_waiters,
@@ -475,7 +525,9 @@ impl TypingsInstaller {
                     "--save-dev".to_string(),
                     format!("--user-agent=\"typesInstaller/{}\"", crate::core::version()),
                 ]);
-                let (output, err) = self.npm_install(&self.typings_location, &npm_args).await;
+                let (output, err) = self
+                    .npm_install(ctx, &self.typings_location, &npm_args)
+                    .await;
                 if let Some(err) = err {
                     // PORT: Go `%s` of a `[]byte`.
                     logger.log(&format!(
@@ -497,9 +549,9 @@ impl TypingsInstaller {
     /// blocks in `exec.Cmd.Output`). When npm ends, the thread posts the
     /// result to this thread once, and the post wakes the request. Without
     /// it, npm runs in the first poll.
-    async fn npm_install(&self, cwd: &str, args: &[String]) -> NpmResult {
+    async fn npm_install(&self, ctx: &Context, cwd: &str, args: &[String]) -> NpmResult {
         let Some(npm_install) = self.host.npm_install_func() else {
-            return self.host.npm_install(cwd, args);
+            return self.host.npm_install(ctx, cwd, args);
         };
         // The result, and the waker of the request while it waits.
         let state: Rc<RefCell<(Option<NpmResult>, Option<Waker>)>> = Rc::default();
@@ -524,11 +576,11 @@ impl TypingsInstaller {
                 }
             }))
         };
-        let (cwd, args) = (cwd.to_string(), args.to_vec());
+        let (ctx, cwd, args) = (ctx.clone(), cwd.to_string(), args.to_vec());
         crate::core::GoThread::new()
             .name("ata-npm".to_string())
             .spawn(move || {
-                let _ = tx.send(npm_install(&cwd, &args));
+                let _ = tx.send(npm_install(&ctx, &cwd, &args));
                 post.post();
             });
         poll_fn(|cx| {
@@ -548,7 +600,7 @@ impl TypingsInstaller {
 /// PORT: the result of `NpmExecutor::npm_install`.
 type NpmResult = (Vec<u8>, Option<GoError>);
 
-// Go: project/ata/ata.go:284 installNpmPackages
+// Go: project/ata/ata.go:291 installNpmPackages
 // PORT: the Go test entry; it runs `install_npm_packages_async` to its end
 // with `install_packages` as each body.
 pub fn install_npm_packages(
@@ -566,7 +618,7 @@ pub fn install_npm_packages(
     ))
 }
 
-// Go: project/ata/ata.go:284 installNpmPackages
+// Go: project/ata/ata.go:291 installNpmPackages
 // PORT: each `tg.Go` body is a future. The bodies run at the same time, each
 // while it holds a semaphore slot, and the result is the first error, as
 // `tg.Wait()` gives.
@@ -800,7 +852,7 @@ pub fn block_on<T>(fut: impl Future<Output = T>) -> T {
 }
 
 impl TypingsInstaller {
-    // Go: project/ata/ata.go:322 filterTypings
+    // Go: project/ata/ata.go:329 filterTypings
     // ts#64319: no project ID parameter.
     pub fn filter_typings(
         &self,
@@ -858,13 +910,19 @@ impl TypingsInstaller {
         result
     }
 
-    // Go: project/ata/ata.go:354 init
+    // Go: project/ata/ata.go:361 init
     // PORT: `initOnce.Do` is the `OnceState` cell. A caller that comes while
     // another request's body waits for npm waits in `init_waiters` until it
     // is `Done`, as Go's `Do` blocks. The body sets `Done` and wakes the
     // waiters, oldest first, when it ends, also on a panic (Go marks the
     // Once done even if the body panics).
-    pub async fn init(&self, project_id: &str, fs: &dyn vfs::Fs, logger: &dyn logging::Logger) {
+    pub async fn init(
+        &self,
+        ctx: &Context,
+        project_id: &str,
+        fs: &dyn vfs::Fs,
+        logger: &dyn logging::Logger,
+    ) {
         match self.init_once.get() {
             OnceState::Done => return,
             OnceState::Running => {
@@ -917,6 +975,7 @@ impl TypingsInstaller {
         logger.log("ATA:: Updating types-registry@latest npm package...");
         let (_, err) = self
             .npm_install(
+                ctx,
                 &self.typings_location,
                 &[
                     "install".to_string(),
@@ -954,7 +1013,7 @@ impl TypingsInstaller {
     }
 }
 
-// Go: project/ata/ata.go:395 npmConfig
+// Go: project/ata/ata.go:402 npmConfig
 // PORT: Go `map[string]any` is `IndexMap<String, LspAny>` (PORTING "JSON");
 // nil is `None`. processCacheLocation ranges over it: insertion order, where
 // Go map order is random.
@@ -963,13 +1022,13 @@ pub struct NpmConfig {
     pub dev_dependencies: Option<IndexMap<String, LspAny>>,
 }
 
-// Go: project/ata/ata.go:399 npmDependecyEntry
+// Go: project/ata/ata.go:406 npmDependecyEntry
 #[derive(Clone, Debug, Default)]
 pub struct NpmDependecyEntry {
     pub version: String,
 }
 
-// Go: project/ata/ata.go:402 npmLock
+// Go: project/ata/ata.go:409 npmLock
 // PORT: nil maps are `None` (processCacheLocation tests them for nil).
 #[derive(Clone, Debug, Default)]
 pub struct NpmLock {
@@ -1033,7 +1092,7 @@ impl UnmarshalerFrom for NpmLock {
 }
 
 impl TypingsInstaller {
-    // Go: project/ata/ata.go:407 processCacheLocation
+    // Go: project/ata/ata.go:414 processCacheLocation
     pub fn process_cache_location(
         &self,
         project_id: &str,
@@ -1066,7 +1125,8 @@ impl TypingsInstaller {
             ));
 
             // !!! sheetal strada uses Node10
-            let host: Rc<dyn module::ResolutionHost> = self.host.clone();
+            // ts#64159
+            let host = self.resolution_host();
             // ts#64299
             let resolver = module::new_resolver(module::ResolverOptions {
                 host: Some(host),
@@ -1145,7 +1205,7 @@ impl TypingsInstaller {
     }
 }
 
-// Go: project/ata/ata.go:466 parseNpmConfigOrLock
+// Go: project/ata/ata.go:473 parseNpmConfigOrLock
 // PORT: Go `[T npmConfig | npmLock]` is any `UnmarshalerFrom`. Like Go, a
 // read or decode error is ignored and a partly decoded `config` is kept.
 pub fn parse_npm_config_or_lock<T: UnmarshalerFrom>(
@@ -1162,7 +1222,7 @@ pub fn parse_npm_config_or_lock<T: UnmarshalerFrom>(
 }
 
 impl TypingsInstaller {
-    // Go: project/ata/ata.go:472 ensureTypingsLocationExists
+    // Go: project/ata/ata.go:479 ensureTypingsLocationExists
     pub fn ensure_typings_location_exists(&self, fs: &dyn vfs::Fs, logger: &dyn logging::Logger) {
         let npm_config_path = tspath::combine_paths(&self.typings_location, &["package.json"]);
         logger.log(&format!("ATA:: Npm config file: {npm_config_path}"));
@@ -1181,7 +1241,7 @@ impl TypingsInstaller {
         }
     }
 
-    // Go: project/ata/ata.go:485 typingToFileName (ts#64299: `*module.DefaultResolver`)
+    // Go: project/ata/ata.go:492 typingToFileName (ts#64299: `*module.DefaultResolver`)
     pub fn typing_to_file_name(
         &self,
         resolver: &module::DefaultResolver,
@@ -1196,7 +1256,7 @@ impl TypingsInstaller {
         result.resolved_file_name.clone()
     }
 
-    // Go: project/ata/ata.go:490 loadTypesRegistryFile
+    // Go: project/ata/ata.go:498 loadTypesRegistryFile
     pub fn load_types_registry_file(
         &self,
         fs: &dyn vfs::Fs,
@@ -1253,24 +1313,32 @@ mod npm_thread_tests {
     }
 
     impl NpmExecutor for GatedNpm {
-        fn npm_install(&self, _cwd: &str, _args: &[String]) -> (Vec<u8>, Option<GoError>) {
+        fn npm_install(
+            &self,
+            _ctx: &Context,
+            _cwd: &str,
+            _args: &[String],
+        ) -> (Vec<u8>, Option<GoError>) {
             panic!("npm ran on the dispatch thread");
         }
 
         fn npm_install_func(&self) -> Option<NpmInstallFunc> {
             let (calls, gate) = (self.calls.clone(), self.gate.clone());
-            Some(Arc::new(move |cwd: &str, args: &[String]| {
-                calls.lock().unwrap().push(args.join(" "));
-                let (open, cond) = &*gate;
-                drop(
-                    cond.wait_while(open.lock().unwrap(), |open| !*open)
-                        .unwrap(),
-                );
-                let dir = std::path::Path::new(cwd).join("node_modules/types-registry");
-                std::fs::create_dir_all(&dir).unwrap();
-                std::fs::write(dir.join("index.json"), r#"{"entries":{"left-pad":{}}}"#).unwrap();
-                (Vec::new(), None)
-            }))
+            Some(Arc::new(
+                move |_ctx: &Context, cwd: &str, args: &[String]| {
+                    calls.lock().unwrap().push(args.join(" "));
+                    let (open, cond) = &*gate;
+                    drop(
+                        cond.wait_while(open.lock().unwrap(), |open| !*open)
+                            .unwrap(),
+                    );
+                    let dir = std::path::Path::new(cwd).join("node_modules/types-registry");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("index.json"), r#"{"entries":{"left-pad":{}}}"#)
+                        .unwrap();
+                    (Vec::new(), None)
+                },
+            ))
         }
     }
 
@@ -1342,7 +1410,13 @@ mod npm_thread_tests {
         for polls in &polls {
             let (ti, fs, done) = (ti.clone(), host.fs.clone(), done.clone());
             run_task(counted(polls.clone(), async move {
-                ti.init("p", &*fs, &None::<Rc<dyn logging::Logger>>).await;
+                ti.init(
+                    &gostd::context::background(),
+                    "p",
+                    &*fs,
+                    &None::<Rc<dyn logging::Logger>>,
+                )
+                .await;
                 assert_eq!(ti.init_once.get(), OnceState::Done);
                 done.set(done.get() + 1);
             }));
@@ -1378,7 +1452,8 @@ mod npm_thread_tests {
             let (ti, cwd, done) = (ti.clone(), cwd.clone(), done.clone());
             run_task(counted(polls.clone(), async move {
                 let args = [format!("t{i}")];
-                let npm = ti.npm_install(&cwd, &args);
+                let ctx = gostd::context::background();
+                let npm = ti.npm_install(&ctx, &cwd, &args);
                 let (_, err) =
                     throttled(&ti.concurrency_semaphore, &ti.semaphore_waiters, npm).await;
                 assert!(err.is_none());

@@ -253,6 +253,7 @@ fn observe_project(session: &Rc<Session>, root: &str, config: &str) -> Observed 
             })
             .collect(),
         resolutions,
+        // ts#64544: the seen files map each path to its file name.
         seen: paths(
             &host
                 .source_fs
@@ -260,7 +261,10 @@ fn observe_project(session: &Rc<Session>, root: &str, config: &str) -> Observed 
                 .borrow()
                 .as_ref()
                 .unwrap()
-                .borrow(),
+                .borrow()
+                .keys()
+                .cloned()
+                .collect(),
         ),
         missing_directories: paths(
             &host

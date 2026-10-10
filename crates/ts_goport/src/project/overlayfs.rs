@@ -581,7 +581,8 @@ impl FsLayer for OverlayFS {
 
 // Go: project/overlayfs.go:217 `_ vfs.FS = (*overlayFS)(nil)`
 impl vfs::Fs for OverlayFS {
-    // Go: project/overlayfs.go:269 overlayFS.UseCaseSensitiveFileNames
+    // Go: project/overlayfs.go:269 overlayFS.UseCaseSensitiveFileNames (at 673a5f17d713;
+    // ts#64159 renames it CaseSensitivity, overlayfs.go:269)
     fn use_case_sensitive_file_names(&self) -> bool {
         self.host.use_case_sensitive_file_names()
     }
@@ -607,17 +608,17 @@ impl vfs::Fs for OverlayFS {
         self.host.write_file(path, data)
     }
 
-    // Go: project/overlayfs.go:289 overlayFS.AppendFile
+    // Go: project/overlayfs.go:291 overlayFS.AppendFile
     fn append_file(&self, path: &str, data: &str) -> Result<(), vfs::FsError> {
         self.host.append_file(path, data)
     }
 
-    // Go: project/overlayfs.go:292 overlayFS.Remove
+    // Go: project/overlayfs.go:294 overlayFS.Remove
     fn remove(&self, path: &str) -> Result<(), vfs::FsError> {
         self.host.remove(path)
     }
 
-    // Go: project/overlayfs.go:293 overlayFS.Chtimes
+    // Go: project/overlayfs.go:295 overlayFS.Chtimes
     fn chtimes(
         &self,
         path: &str,
@@ -627,7 +628,7 @@ impl vfs::Fs for OverlayFS {
         self.host.chtimes(path, a_time, m_time)
     }
 
-    // Go: project/overlayfs.go:297 overlayFS.DirectoryExists
+    // Go: project/overlayfs.go:299 overlayFS.DirectoryExists
     fn directory_exists(&self, directory_name: &str) -> bool {
         let path = (self.to_path)(directory_name);
         let file = self.overlays.borrow().contains_key(&path);
@@ -635,7 +636,7 @@ impl vfs::Fs for OverlayFS {
         directory || !file && self.host.directory_exists(directory_name)
     }
 
-    // Go: project/overlayfs.go:306 overlayFS.GetAccessibleEntries
+    // Go: project/overlayfs.go:308 overlayFS.GetAccessibleEntries
     // PORT: Go ranges over the directory map (random order); insertion order
     // here (`OverlayDirectories`).
     fn get_accessible_entries(&self, directory_name: &str) -> vfs::Entries {
@@ -674,7 +675,7 @@ impl vfs::Fs for OverlayFS {
         entries
     }
 
-    // Go: project/overlayfs.go:345 overlayFS.Stat
+    // Go: project/overlayfs.go:347 overlayFS.Stat
     fn stat(&self, path: &str) -> Option<vfs::FileInfo> {
         let canonical_path = (self.to_path)(path);
         let overlay = self.overlays.borrow().get(&canonical_path).cloned();
@@ -691,7 +692,7 @@ impl vfs::Fs for OverlayFS {
         self.host.stat(path)
     }
 
-    // Go: project/overlayfs.go:360 overlayFS.Realpath
+    // Go: project/overlayfs.go:362 overlayFS.Realpath
     fn realpath(&self, path: &str) -> String {
         self.host.realpath(path)
     }
@@ -702,7 +703,7 @@ impl vfs::Fs for OverlayFS {
     }
 }
 
-// Go: project/overlayfs.go:362 overlayFileInfo (ts#64291)
+// Go: project/overlayfs.go:366 overlayFileInfo (ts#64291)
 // PORT: Go `vfs.FileInfo` is the `vfs::FileInfo` value of the Go methods:
 // Name, Size, Mode 0o444, zero ModTime.
 pub fn overlay_file_info(overlay: &Overlay) -> vfs::FileInfo {
@@ -714,7 +715,7 @@ pub fn overlay_file_info(overlay: &Overlay) -> vfs::FileInfo {
     }
 }
 
-// Go: project/overlayfs.go:373 overlayDirectoryInfo (ts#64291)
+// Go: project/overlayfs.go:377 overlayDirectoryInfo (ts#64291)
 // PORT: Mode is `ModeDir | 0o555`, zero ModTime.
 pub fn overlay_directory_info(name: String) -> vfs::FileInfo {
     vfs::FileInfo {
@@ -725,7 +726,7 @@ pub fn overlay_directory_info(name: String) -> vfs::FileInfo {
     }
 }
 
-// Go: project/overlayfs.go:384 createOverlayDirectories (ts#64291)
+// Go: project/overlayfs.go:388 createOverlayDirectories (ts#64291)
 // PORT: Go ranges over the overlay map (random order); the IndexMap order
 // here. It is the insertion order of each directory map
 // (`OverlayDirectories`), so a directory lists its open files in the order
@@ -758,7 +759,7 @@ pub fn create_overlay_directories(
 }
 
 impl OverlayFS {
-    // Go: project/overlayfs.go:407 overlayFS.processChanges
+    // Go: project/overlayfs.go:411 overlayFS.processChanges
     // PORT: Go takes the slice; here a borrowed slice. The per-file events
     // keep references into it where Go keeps pointers to copies. Go ranges
     // over `fileEventMap` (random order); the port keeps the order in which
