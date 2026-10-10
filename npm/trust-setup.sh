@@ -2,8 +2,8 @@
 # One-time setup of npm trusted publishing for the tsc-rs packages. Run it by hand, logged in to
 # npm as an owner of tsc-rs and the @tsc-rs org, with 2FA on (npm asks for a code once).
 #
-# For each package (tsc-rs, @tsc-rs/linux-x64, @tsc-rs/linux-arm64,
-# @tsc-rs/darwin-arm64) it:
+# For each package (tsc-rs, @tsc-rs/linux-x64, @tsc-rs/linux-arm64, @tsc-rs/darwin-arm64,
+# @tsc-rs/darwin-x64, @tsc-rs/win32-x64, @tsc-rs/win32-arm64) it:
 #   1. publishes a 0.0.0-placeholder version when the package is not on npm yet: npm can only
 #      trust a workflow for a package that exists. The release workflow refuses 0.0.x tags, so a
 #      release never collides with a placeholder (tsc-rs has a 0.0.1 placeholder).
@@ -21,7 +21,8 @@ set -euo pipefail
 relink=0
 [[ ${1:-} != --relink ]] || relink=1
 repo=pingdotgg/ts-rust
-packages=(tsc-rs @tsc-rs/linux-x64 @tsc-rs/linux-arm64 @tsc-rs/darwin-arm64)
+packages=(tsc-rs @tsc-rs/linux-x64 @tsc-rs/linux-arm64 @tsc-rs/darwin-arm64 @tsc-rs/darwin-x64
+  @tsc-rs/win32-x64 @tsc-rs/win32-arm64)
 
 npm_version=$(npm --version)
 [[ $(printf '%s\n' 11.15.0 "$npm_version" | sort -V | head -1) == 11.15.0 ]] ||

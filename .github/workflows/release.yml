@@ -1,11 +1,12 @@
 # Builds, packs and tests the tsc-rs release: the npm packages tsc-rs, @tsc-rs/linux-x64,
-# @tsc-rs/linux-arm64 and @tsc-rs/darwin-arm64, and one standalone archive per platform (tsc and
-# the lib files).
+# @tsc-rs/linux-arm64, @tsc-rs/darwin-arm64, @tsc-rs/darwin-x64, @tsc-rs/win32-x64 and
+# @tsc-rs/win32-arm64, and one standalone archive per platform (tsc and the lib files; a .zip with
+# tsc.exe for Windows).
 #
 # A tag v<version> also publishes the npm packages and creates a GitHub release. A stable version
 # (v0.1.0) goes to the dist-tag `latest` and a normal release. A prerelease version (v0.2.0-beta.1)
 # goes to `next` and a GitHub prerelease. npm trusted publishing (OIDC) authenticates the
-# publish: no npm token. Each of the 4 packages trusts this workflow file and the environment `npm`
+# publish: no npm token. Each of the 7 packages trusts this workflow file and the environment `npm`
 # (npm/README.md, "Trusted publishing"). Pull requests that change the release files, and a manual
 # run, do everything but the release and the publish.
 #
@@ -14,9 +15,15 @@
 # projects at fixed commits). The job also builds the plain tsc, and fails unless the PGO tsc gives
 # the same stdout, stderr, exit code and emitted files as the plain tsc on that set. No BOLT
 # (build-release.sh has it): BOLT refuses the static Linux bin (build-bolt.sh), its Mach-O support
-# is experimental, and macOS has no perf branch sampling for its profile.
+# is experimental, macOS has no perf branch sampling for its profile, and BOLT has no PE support.
 # Linux is static musl and non-PIE, so it starts on any x86-64 or arm64 Linux, Alpine too
 # (npm/README.md, "Linux libc"). Each Linux tsc builds natively on a Blacksmith runner of its arch.
+# Windows (x86_64-pc-windows-msvc, aarch64-pc-windows-msvc) builds in Git Bash, with the C runtime
+# linked in (+crt-static), so tsc.exe needs no Visual C++ redistributable. jemalloc does not build
+# there: it uses the system allocator. Each tsc builds natively, so the PGO training runs on its
+# own platform: Blacksmith has no Intel Mac and no arm64 Windows runner, so darwin-x64 builds on
+# GitHub's macos-15-intel (4 vCPU) and
+# win32-arm64 on GitHub's windows-11-arm (4 vCPU).
 name: Release
 
 on:
@@ -87,9 +94,29 @@ jobs:
           - platform: darwin-arm64
             target: aarch64-apple-darwin
             runner: blacksmith-12vcpu-macos-26
+          - platform: darwin-x64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - platform: win32-x64
+            target: x86_64-pc-windows-msvc
+            runner: blacksmith-16vcpu-windows-2025
+            exe: .exe
+          - platform: win32-arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            exe: .exe
+            linker: rust-lld
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    # The 4 vCPU GitHub-hosted runners (darwin-x64, win32-arm64) build slower.
+    timeout-minutes: 180
+    # Git Bash on Windows.
+    defaults:
+      run:
+        shell: bash
     steps:
+      # LF in the working tree, as on the other hosts (README.md, "Develop on Windows").
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -97,6 +124,20 @@ jobs:
       - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }} --component llvm-tools
       - if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -yq musl-tools
+      # win32-arm64 links with rust-lld (lld-link), all three builds. On arm64, link.exe aligns each
+      # section contribution to 4 bytes, also the 1-byte start markers of the LLVM profile sections
+      # (IMAGE_SCN_ALIGN_1BYTES). The instrumented tsc then wrote 3 zero bytes before the names, and
+      # llvm-profdata rejected each profile ("symbol name is empty"). lld-link keeps the 1-byte
+      # alignment, as link.exe does on x64.
+      - name: Linker
+        if: matrix.linker == 'rust-lld'
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          lld="$(cygpath -u "$(rustc --print sysroot)")/lib/rustlib/$host/bin/rust-lld.exe"
+          [[ -x $lld ]] || { echo "::error::no $lld"; exit 1; }
+          target=${{ matrix.target }}
+          target=${target^^}
+          echo "CARGO_TARGET_${target//-/_}_LINKER=$(cygpath -m "$lld")" | tee -a "$GITHUB_ENV"
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -119,17 +160,22 @@ jobs:
           # jemalloc stops at start when the kernel page is bigger than its build page. arm64 kernels
           # use 4, 16 or 64 KiB pages; 2^16 covers all three.
           [[ $target != aarch64-* ]] || echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
-      # The plain tsc: the reference of the PGO check below.
+      # The plain tsc: the reference of the PGO check below. PGO_LINK is the link mode of both builds
+      # (build-pgo.sh): static on Linux, crt-static on Windows.
       - name: Build
         run: |
-          [[ $RUNNER_OS != Linux ]] || export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static"
+          case $RUNNER_OS in
+            Linux) export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static" PGO_LINK=static ;;
+            Windows) export RUSTFLAGS="-C target-feature=+crt-static" PGO_LINK=crt-static ;;
+          esac
+          echo "PGO_LINK=${PGO_LINK:-}" >> "$GITHUB_ENV"
           cargo build --profile goport --locked -p ts_goport --bin tsgo --features noembed --target ${{ matrix.target }}
           mkdir -p "$RUNNER_TEMP/plain"
-          cp "target/${{ matrix.target }}/goport/tsgo" "$RUNNER_TEMP/plain/tsc"
+          cp "target/${{ matrix.target }}/goport/tsgo${{ matrix.exe }}" "$RUNNER_TEMP/plain/tsc${{ matrix.exe }}"
       - name: PGO training set
         run: scripts/goport/pgo-train.sh setup "$RUNNER_TEMP/train"
-      # The same build with -Cprofile-generate, the training set, then -Cprofile-use. PGO_LINK=static
-      # gives the RUSTFLAGS of the plain Linux build. Separate target dirs (not cached).
+      # The same build with -Cprofile-generate, the training set, then -Cprofile-use. PGO_LINK (from
+      # the Build step) gives the RUSTFLAGS of the plain build. Separate target dirs (not cached).
       - name: PGO build
         env:
           PGO_TARGET: ${{ matrix.target }}
@@ -137,24 +183,28 @@ jobs:
           PGO_CARGO: cargo
           CARGO_FEATURES: --features noembed
         run: |
-          [[ $RUNNER_OS != Linux ]] || export PGO_LINK=static
           PGO_TRAIN="scripts/goport/pgo-train.sh run $RUNNER_TEMP/train" crates/ts_goport/scripts/build-pgo.sh "$RUNNER_TEMP/pgo"
           mkdir -p "$RUNNER_TEMP/out"
-          cp "$RUNNER_TEMP/pgo/target-use/goport/tsgo" "$RUNNER_TEMP/out/tsc"
+          cp "$RUNNER_TEMP/pgo/target-use/goport/tsgo${{ matrix.exe }}" "$RUNNER_TEMP/out/tsc${{ matrix.exe }}"
       - name: Check the PGO tsc against the plain tsc
-        run: scripts/goport/pgo-train.sh compare "$RUNNER_TEMP/train" "$RUNNER_TEMP/plain/tsc" "$RUNNER_TEMP/out/tsc"
+        run: scripts/goport/pgo-train.sh compare "$RUNNER_TEMP/train" "$RUNNER_TEMP/plain/tsc${{ matrix.exe }}" "$RUNNER_TEMP/out/tsc${{ matrix.exe }}"
       - name: Check the tsc
+        env:
+          EXE: ${{ matrix.exe }}
         run: |
           out="$RUNNER_TEMP/out"
           dir="$RUNNER_TEMP/check"
           crates/ts_goport/scripts/copy-libs.sh "$dir"
-          cp "$out/tsc" "$dir/tsc"
-          [[ $("$dir/tsc" --version) == "Version 7."* ]]
+          cp "$out/tsc$EXE" "$dir/tsc$EXE"
+          [[ $("$dir/tsc$EXE" --version) == "Version 7."* ]]
+          # The tsc prints C:/... paths on Windows.
+          listed=$dir/lib.es5.d.ts
+          [[ $RUNNER_OS != Windows ]] || listed=$(cygpath -m "$listed")
           cd "$RUNNER_TEMP"
           echo 'const x: number = "a";' > a.ts
-          "$dir/tsc" --listFilesOnly --lib es5 a.ts | grep -qx "$dir/lib.es5.d.ts"
+          "$dir/tsc$EXE" --listFilesOnly --lib es5 a.ts | grep -qx "$listed"
           set +e
-          "$dir/tsc" --noEmit a.ts > check.txt
+          "$dir/tsc$EXE" --noEmit a.ts > check.txt
           rc=$?
           set -e
           cat check.txt
@@ -164,10 +214,15 @@ jobs:
             # Static: it starts on musl (Alpine) too.
             docker run --rm -v "$dir:/t:ro" alpine:3 /t/tsc --version
           fi
+          # +crt-static: no import of the Visual C++ runtime DLL.
+          if [[ $RUNNER_OS == Windows ]] && grep -qai 'vcruntime140' "$dir/tsc.exe"; then
+            echo "::error::tsc.exe imports the Visual C++ runtime (vcruntime140.dll)"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: tsc-${{ matrix.platform }}
-          path: ${{ runner.temp }}/out/tsc
+          path: ${{ runner.temp }}/out/tsc${{ matrix.exe }}
           if-no-files-found: error
 
   package:
@@ -214,24 +269,30 @@ jobs:
           NPM_PACK_GO_DIR: ${{ github.workspace }}/go-pin/${{ steps.pin.outputs.subdir }}
         run: |
           bins="$RUNNER_TEMP/bins"
-          chmod +x "$bins"/tsc-*/tsc
+          chmod +x "$bins"/tsc-*/tsc "$bins"/tsc-*/tsc.exe
           scripts/goport/npm-pack.sh --name tsc-rs --package-version "$VERSION" \
             --also "linux-arm64=$bins/tsc-linux-arm64/tsc" --also "darwin-arm64=$bins/tsc-darwin-arm64/tsc" \
+            --also "darwin-x64=$bins/tsc-darwin-x64/tsc" \
+            --also "win32-x64=$bins/tsc-win32-x64/tsc.exe" --also "win32-arm64=$bins/tsc-win32-arm64/tsc.exe" \
             "$RUNNER_TEMP/pkg" "$bins/tsc-linux-x64/tsc"
       # One archive per platform: the platform package's lib dir (tsc and the lib files, which a
-      # noembed tsc reads next to it), LICENSE and NOTICE.txt.
+      # noembed tsc reads next to it), LICENSE and NOTICE.txt. A .tar.gz, and a .zip for Windows.
       - name: Archives
         run: |
           pkg="$RUNNER_TEMP/pkg" dist="$RUNNER_TEMP/dist"
           mkdir -p "$dist"
-          for platform in linux-x64 linux-arm64 darwin-arm64; do
+          for platform in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64 win32-arm64; do
             name="tsc-rs-$VERSION-$platform"
             mkdir -p "$RUNNER_TEMP/archive/$name"
             cp -r "$pkg/tsc-rs-$platform/lib/." "$pkg/tsc-rs-$platform/LICENSE" "$pkg/tsc-rs-$platform/NOTICE.txt" "$RUNNER_TEMP/archive/$name/"
-            tar -C "$RUNNER_TEMP/archive" -czf "$dist/$name.tar.gz" "$name"
+            if [[ $platform == win32-* ]]; then
+              (cd "$RUNNER_TEMP/archive" && python3 -m zipfile -c "$dist/$name.zip" "$name")
+            else
+              tar -C "$RUNNER_TEMP/archive" -czf "$dist/$name.tar.gz" "$name"
+            fi
           done
           cp "$pkg"/*.tgz "$dist/"
-          (cd "$dist" && sha256sum -- *.tgz *.tar.gz > SHA256SUMS)
+          (cd "$dist" && sha256sum -- *.tgz *.tar.gz *.zip > SHA256SUMS)
           cat "$dist/SHA256SUMS"
       - uses: actions/upload-artifact@v4
         with:
@@ -240,8 +301,9 @@ jobs:
           if-no-files-found: error
 
   # Installs the npm packages in a fresh project on each platform, as a user would. These are
-  # GitHub-hosted runners, so the check runs on another host than the build. ubuntu-24.04-arm is
-  # GitHub's arm64 standard runner (2 vCPU in a private repo, 4 in a public one).
+  # GitHub-hosted runners, so the check runs on another host than the build (for darwin-x64 and
+  # win32-arm64, another VM of the build's runner image). ubuntu-24.04-arm is GitHub's arm64
+  # standard runner (2 vCPU in a private repo, 4 in a public one).
   verify:
     name: verify (${{ matrix.platform }})
     needs: [version, package]
@@ -255,8 +317,18 @@ jobs:
             runner: ubuntu-24.04-arm
           - platform: darwin-arm64
             runner: macos-latest
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: win32-x64
+            runner: windows-latest
+          - platform: win32-arm64
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    # Git Bash on Windows.
+    defaults:
+      run:
+        shell: bash
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -270,6 +342,11 @@ jobs:
       - name: npm install and check
         run: |
           dist="$RUNNER_TEMP/dist"
+          [[ $RUNNER_OS != Windows ]] || dist=$(cygpath -m "$dist")
+          # Node of the runner's own arch: getExePath.js picks the package of process.arch.
+          node_platform=$(node -p 'process.platform + "-" + process.arch')
+          echo "node $node_platform"
+          [[ $node_platform == "${{ matrix.platform }}" ]]
           mkdir proj && cd proj
           echo '{"name":"smoke","private":true}' > package.json
           # The other platform's package is not on npm yet: --offline skips that optional dependency.
@@ -284,11 +361,24 @@ jobs:
           set -e
           cat check.txt
           [[ $rc == 2 ]] && grep -q "error TS2322" check.txt
+          # Emit.
+          npx tsc-rs --outDir out --declaration ok.ts
+          cat out/ok.js out/ok.d.ts
+          grep -q "export const x = 1;" out/ok.js
       - name: Archive check
+        if: runner.os != 'Windows'
         run: |
           dist="$RUNNER_TEMP/dist"
           tar -xzf "$dist/tsc-rs-$VERSION-${{ matrix.platform }}.tar.gz" -C "$RUNNER_TEMP"
           "$RUNNER_TEMP/tsc-rs-$VERSION-${{ matrix.platform }}/tsc" --version
+      - name: Archive check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "tsc-rs-$env:VERSION-${{ matrix.platform }}"
+          Expand-Archive "$env:RUNNER_TEMP\dist\$name.zip" $env:RUNNER_TEMP
+          & "$env:RUNNER_TEMP\$name\tsc.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
   release:
     if: needs.version.outputs.release == 'true'
@@ -323,7 +413,8 @@ jobs:
           [[ $VERSION != *-* ]] || tag=next
           echo "dist-tag $tag"
           for pkg in @tsc-rs/linux-x64:tsc-rs-linux-x64 @tsc-rs/linux-arm64:tsc-rs-linux-arm64 \
-            @tsc-rs/darwin-arm64:tsc-rs-darwin-arm64 tsc-rs:tsc-rs; do
+            @tsc-rs/darwin-arm64:tsc-rs-darwin-arm64 @tsc-rs/darwin-x64:tsc-rs-darwin-x64 \
+            @tsc-rs/win32-x64:tsc-rs-win32-x64 @tsc-rs/win32-arm64:tsc-rs-win32-arm64 tsc-rs:tsc-rs; do
             name=${pkg%%:*} file=./dist/${pkg#*:}-$VERSION.tgz
             [[ -f $file ]] || { echo "::error::missing package $file"; exit 1; }
             if npm view "$name@$VERSION" version > /dev/null 2>&1; then

@@ -681,16 +681,16 @@ thread_local! {
 /// (`BuildTask::compile_and_emit_start`; `build_all_tasks` gives the
 /// order).
 pub(crate) fn buffer_early_emit_writes(start: impl FnOnce()) {
-    /// Ends the buffering also when `start` panics (`tsc -b` keeps a task's
-    /// panic and goes on).
-    struct Reset;
+    /// Puts back the flag of the caller when `start` ends, also when it
+    /// panics (`tsc -b` keeps a task's panic and goes on). So a nested call
+    /// does not end the buffering of the call around it.
+    struct Reset(bool);
     impl Drop for Reset {
         fn drop(&mut self) {
-            BUFFER_EARLY_EMIT_WRITES.set(false);
+            BUFFER_EARLY_EMIT_WRITES.set(self.0);
         }
     }
-    BUFFER_EARLY_EMIT_WRITES.set(true);
-    let _reset = Reset;
+    let _reset = Reset(BUFFER_EARLY_EMIT_WRITES.replace(true));
     start();
 }
 
@@ -988,6 +988,33 @@ mod tests {
         assert!(
             !BUFFER_EARLY_EMIT_WRITES.get(),
             "the buffering ended with the panic"
+        );
+    }
+
+    /// followups39: a nested call puts back the flag of the call around it,
+    /// also when the nested start panics, so the outer start still buffers.
+    #[test]
+    fn buffer_early_emit_writes_keeps_the_outer_buffering() {
+        buffer_early_emit_writes(|| {
+            buffer_early_emit_writes(|| {
+                assert!(BUFFER_EARLY_EMIT_WRITES.get(), "the inner start buffers");
+            });
+            assert!(
+                BUFFER_EARLY_EMIT_WRITES.get(),
+                "the outer start buffers after the inner call"
+            );
+            let result = std::panic::catch_unwind(|| {
+                buffer_early_emit_writes(|| panic!("the inner start panics"));
+            });
+            assert!(result.is_err(), "the panic reaches the outer start");
+            assert!(
+                BUFFER_EARLY_EMIT_WRITES.get(),
+                "the outer start buffers after the inner panic"
+            );
+        });
+        assert!(
+            !BUFFER_EARLY_EMIT_WRITES.get(),
+            "the buffering ended with the outer call"
         );
     }
 }

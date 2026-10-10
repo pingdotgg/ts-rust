@@ -15,3 +15,5 @@ crates/ts_goport/src/binder/lib_bind.bin merge=lib-blob
 # changes.
 *.rs text eol=lf
 crates/ts_goport/libs/*.d.ts text eol=lf
+# Bash stops at a CRLF line (`$'\r': command not found`). Git Bash runs these scripts on Windows.
+*.sh text eol=lf

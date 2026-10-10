@@ -1983,11 +1983,16 @@ child_test! {
     // only after an attempt that took less than the cap in all (a bound on
     // its clone), and takes a new session until an attempt does: at least
     // 20, and more for up to 60 s, so a loaded host gets a short attempt.
+    // Each attempt keeps about 30 MB (followups36 skeptic), so at most 40
+    // attempts run (about 1.2 GB when every attempt is long).
     fn a_short_auto_import_warm_clone_clears_the_slow_mark() {
         use ts_goport::gostd::local;
+        const MAX_ATTEMPTS: usize = 40;
         let mut attempts = Vec::new();
         let first = Instant::now();
-        while attempts.len() < 20 || first.elapsed() < Duration::from_secs(60) {
+        while attempts.len() < 20
+            || (attempts.len() < MAX_ATTEMPTS && first.elapsed() < Duration::from_secs(60))
+        {
             let (session, _, reads) = session_with_pending_warm();
             session.warm_auto_import_slow.set(true);
             local::run_pending();

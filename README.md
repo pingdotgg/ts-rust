@@ -62,8 +62,8 @@ npx tsc-rs -p tsconfig.json
 with the `typescript` package. Each [release](https://github.com/pingdotgg/ts-rust/releases) also
 has a standalone archive per platform: the `tsc` binary with the lib files next to it.
 
-Platforms: Linux x64 and arm64 (static, any distribution) and macOS arm64. Windows is not
-available yet.
+Platforms: Linux x64 and arm64 (static, any distribution), macOS arm64, and (from the first
+release after 0.2.0) macOS x64, Windows x64 and Windows arm64.
 
 To use it in VS Code, see the [npm package README](npm/tsc-rs-readme.md#vs-code).
 
@@ -273,6 +273,27 @@ run with
   [accountability rules](docs/typechecker-accountability.md) and the
   [saved state](docs/typechecker-state/current.json)
 - How the project started: [docs/history.md](docs/history.md)
+
+### Develop on Windows
+
+CI builds and tests `x86_64-pc-windows-msvc` (the Windows job of
+[ci.yml](.github/workflows/ci.yml)).
+
+- Install Rust with the MSVC toolchain (rustup's default on Windows) and the Visual Studio Build
+  Tools (C++ workload).
+- Clone with LF line endings: `git clone -c core.autocrlf=false ...`. `.gitattributes` forces LF
+  for `*.rs`, `*.sh` and the bundled libs (the lib snapshot tests hash their bytes), but the test
+  fixtures need LF too.
+- Use `cargo` directly. `scripts/run-cargo-capped.sh` needs `systemd-run`.
+- Run the tests with `RUST_TEST_THREADS=1`, as CI and `goport-tests.sh` do. The Go baseline tests
+  need `TS_GO_REPO` and Node, as on Linux (see the CI job for the setup).
+- Two `fswatch_watcher` tests (`test_subscribe_symlink_create` and `_delete`) make file symlinks,
+  which need Developer Mode (Settings, System, For developers) or an elevated shell. Without
+  either they fail with OS error 1314.
+- The scripts are bash. The release scripts (`crates/ts_goport/scripts/build-pgo.sh`,
+  `copy-libs.sh`, `scripts/goport/pgo-train.sh`) and `scripts/goport/win-go-compare.sh` run in
+  Git Bash. The other tools in `scripts/` (the revision pipeline, the gate, `remote.sh`) are for
+  the Linux hosts only.
 
 ## Releases
 

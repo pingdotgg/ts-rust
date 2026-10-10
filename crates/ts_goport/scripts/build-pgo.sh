@@ -56,7 +56,8 @@
 #   PGO_TRAIN         training command, in place of the default training
 #                     (which needs the project inputs and the corpus of
 #                     GOPORT_DATA_ROOT). The script runs `$PGO_TRAIN <dir>`,
-#                     where <dir> holds the instrumented bins. Example:
+#                     where <dir> holds the instrumented bins, with
+#                     PGO_PROFILE_DIR set to the profile dir. Example:
 #                     "scripts/goport/pgo-train.sh run <train-dir>".
 #   PGO_CARGO         cargo command of both builds. Default:
 #                     scripts/run-cargo-capped.sh when present, else cargo.
@@ -68,6 +69,9 @@
 #                     static  nopie and -C target-feature=+crt-static: a
 #                             static non-PIE executable (EXEC, no INTERP),
 #                             like Go tsgo.
+#                     crt-static  only -C target-feature=+crt-static. On
+#                             Windows (MSVC) it links the C runtime in, so
+#                             the exe needs no Visual C++ redistributable.
 #                     Why: one exec of the 32 MB dynamic PIE costs about
 #                     3.3 ms on cup2 (350 to 430 page faults; 146 are ld.so
 #                     copy-on-write faults for 28,002 relative relocations),
@@ -93,7 +97,9 @@
 # goport_emit writes to a temp --outDir and tsgo writes its .tsbuildinfo to
 # a temp file.
 #
-# Written for bash 3.2 (macOS), except the default training.
+# Written for bash 3.2 (macOS), except the default training. On Windows it runs
+# in Git Bash: the bins are .exe files, and the paths that cargo, rustc and
+# llvm-profdata get are C:/... paths (cygpath -m).
 set -euo pipefail
 
 # `help` (or -h, --help) prints this header. Without this, the word became the
@@ -122,8 +128,11 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.95.0}"
 # launcher exits, the parent death signal can kill the worker before it has
 # written its profile.
 export GOPORT_LAUNCH=0
+exe=""
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) exe=.exe ;; esac
 mkdir -p "$out"
 out="$(cd -- "$out" && pwd)"
+[[ -z $exe ]] || out="$(cygpath -m "$out")"
 # Run rustc and cargo from the repository. RUSTUP_TOOLCHAIN overrides any
 # toolchain file there.
 cd "$repo"
@@ -136,8 +145,8 @@ host="$(rustc -vV | sed -n 's/^host: //p')"
 rustc_llvm="$(rustc -vV | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p')"
 profdata="${LLVM_PROFDATA:-}"
 if [[ -z "$profdata" ]]; then
-  if [[ -x "$sysroot/lib/rustlib/$host/bin/llvm-profdata" ]]; then
-    profdata="$sysroot/lib/rustlib/$host/bin/llvm-profdata"
+  if [[ -x "$sysroot/lib/rustlib/$host/bin/llvm-profdata$exe" ]]; then
+    profdata="$sysroot/lib/rustlib/$host/bin/llvm-profdata$exe"
   else
     profdata="$(command -v llvm-profdata)"
   fi
@@ -169,7 +178,8 @@ case "$link" in
   "") link_flags="" ;;
   nopie) link_flags="-Crelocation-model=static" ;;
   static) link_flags="-Crelocation-model=static -Ctarget-feature=+crt-static" ;;
-  *) echo "error: PGO_LINK must be empty, nopie or static (got '$link')" >&2; exit 1 ;;
+  crt-static) link_flags="-Ctarget-feature=+crt-static" ;;
+  *) echo "error: PGO_LINK must be empty, nopie, static or crt-static (got '$link')" >&2; exit 1 ;;
 esac
 # With --target, RUSTFLAGS apply only to the target crates, not to build
 # scripts and proc macros (a proc macro cannot be +crt-static).
@@ -198,7 +208,7 @@ build() { # build <target-subdir> <rustflags>
 
 # check_link <bin>: stops when the ELF type or INTERP does not match PGO_LINK.
 check_link() {
-  [[ -n "$link" ]] || return 0
+  [[ -n "$link" && $link != crt-static ]] || return 0
   local type interp=no want
   type="$(readelf -h "$1" | sed -n 's/^ *Type: *\([A-Z]*\).*/\1/p')"
   [[ "$(readelf -lW "$1")" == *" INTERP "* ]] && interp=yes
@@ -265,10 +275,12 @@ default_train() {
 unset GLIBC_TUNABLES _RJEM_MALLOC_CONF
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+[[ -z $exe ]] || tmp="$(cygpath -m "$tmp")"
 if [[ -n $train_cmd ]]; then
   echo "== train: $train_cmd $gen"
+  # pgo-train.sh gives each run its own profile file in PGO_PROFILE_DIR (see its `one`).
   # shellcheck disable=SC2086 # a command with its args
-  $train_cmd "$gen"
+  PGO_PROFILE_DIR="$profiles" $train_cmd "$gen"
 else
   default_train
 fi
