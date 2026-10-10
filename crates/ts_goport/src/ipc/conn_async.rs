@@ -231,7 +231,7 @@ impl AsyncConn {
     /// thread ended and no message is left, and returns what Go's `Run`
     /// returned (or resumes the panic of its read).
     fn run_loop_on_reader(&self, reader: &RunReader) -> Result<(), GoError> {
-        while let Some(msg) = reader.inbox.wait(None) {
+        while let Some(msg) = reader.inbox.next_for_run() {
             self.dispatch(&reader.handler_ctx, msg);
         }
         self.end_read_loop(reader);
@@ -587,10 +587,9 @@ impl AsyncConn {
     /// The `select` of Go `Call` (:289-303) when `run` reads on its thread:
     /// the call waits until its response comes, its channel closes or
     /// `ctx` is done, and dispatches the messages that come meanwhile (file
-    /// header). The order of the checks is the case that wakes Go's
-    /// `select`: a response or a close (the dispatch thread runs them
-    /// before it looks at `ctx` again), then `ctx`. A call made when `ctx`
-    /// is already done returns `ctx.Err()` right after its write.
+    /// header). It returns what wakes Go's `select` first
+    /// (`Inbox::next_for_call`). A call made when `ctx` is already done
+    /// returns `ctx.Err()` right after its write.
     fn wait_on_reader(
         &self,
         ctx: &Context,
@@ -605,15 +604,21 @@ impl AsyncConn {
                 return response_result(resp);
             }
             if !self.pending.borrow().contains_key(id) {
+                // Go: a channel that closes after `ctx` is done loses to
+                // `ctx.Done()`. This happens when a nested call ends the read
+                // loop after a signal, or after a request error.
+                if let Some(err) = ctx.err()
+                    && !reader.inbox.ended_before_cancel()
+                {
+                    return Err(err);
+                }
                 let terminal = self.terminal.borrow().clone();
                 return Err(terminal.expect("closePendingCalls sets terminal"));
             }
-            if let Some(err) = ctx.err() {
-                return Err(err);
-            }
-            match reader.inbox.wait(Some(ctx)) {
-                Some(msg) => self.dispatch(&reader.handler_ctx, msg),
-                None => self.end_read_loop(reader),
+            match reader.inbox.next_for_call(ctx) {
+                CallStep::Message(msg) => self.dispatch(&reader.handler_ctx, msg),
+                CallStep::Canceled(err) => return Err(err),
+                CallStep::Ended => self.end_read_loop(reader),
             }
         }
     }
@@ -695,9 +700,16 @@ struct Inbox {
 
 #[derive(Default)]
 struct InboxState {
+    /// The messages read before `ctx` was done, in order.
     messages: VecDeque<Message>,
+    /// The message read after `ctx` was done (the 1 read after a signal).
+    /// `run` dispatches it after `messages`.
+    after_cancel: Option<Message>,
     /// True once the thread ended (Go's `Run` returned).
     ended: bool,
+    /// True when the loop ended at its check of `ctx` (after a signal), not
+    /// at a read (EOF, a read error or a panic).
+    ended_at_ctx: bool,
     /// How the loop ended, until `end_read_loop` takes it.
     end: Option<ReadEnd>,
 }
@@ -708,18 +720,28 @@ enum ReadEnd {
     Panicked(Box<dyn Any + Send>),
 }
 
+/// What a waiting `call` does next (`Inbox::next_for_call`).
+enum CallStep {
+    /// Dispatch this message.
+    Message(Message),
+    /// Return this error of the call's `ctx`.
+    Canceled(GoError),
+    /// The read loop ended: run `end_read_loop`, which closes the call.
+    Ended,
+}
+
 impl Inbox {
-    /// The next message, waiting as needed. It returns `None` once the
-    /// thread ended and no message is left, and, with `call_ctx` (a
-    /// `call`), once `call_ctx` is done: then the messages left are for
-    /// `run` (Go's `Run` already started their goroutines).
-    fn wait(&self, call_ctx: Option<&Context>) -> Option<Message> {
+    /// The next message for `run`, waiting as needed: `messages` in order,
+    /// then `after_cancel`. `None` once the thread ended and no message is
+    /// left.
+    fn next_for_run(&self) -> Option<Message> {
         let mut state = lock(&self.state);
         loop {
-            if call_ctx.is_some_and(|ctx| ctx.err().is_some()) {
-                return None;
-            }
-            if let Some(msg) = state.messages.pop_front() {
+            if let Some(msg) = state
+                .messages
+                .pop_front()
+                .or_else(|| state.after_cancel.take())
+            {
                 return Some(msg);
             }
             if state.ended {
@@ -730,6 +752,50 @@ impl Inbox {
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+    }
+
+    /// The next step of a `call` that waits, in the order in which the
+    /// cases wake Go's `select`, waiting as needed:
+    /// - A message read before `ctx` was done. Go's `Run` handed a response
+    ///   to its call before `ctx.Done()`. When `ctx` is done, only the
+    ///   responses are taken: Go's goroutines run the requests, here `run`
+    ///   does.
+    /// - The end of a loop that ended before `ctx` was done (EOF, a read
+    ///   error): Go's `closePendingCalls` runs before `cancelHandlers`.
+    /// - `ctx` done. After a signal the loop ends only after 1 more
+    ///   message, so `ctx.Done()` comes first.
+    fn next_for_call(&self, ctx: &Context) -> CallStep {
+        let mut state = lock(&self.state);
+        loop {
+            let canceled = ctx.err();
+            let next = state
+                .messages
+                .iter()
+                .position(|msg| canceled.is_none() || msg.is_response());
+            if let Some(msg) = next.and_then(|i| state.messages.remove(i)) {
+                return CallStep::Message(msg);
+            }
+            if state.ended && !state.ended_at_ctx {
+                return CallStep::Ended;
+            }
+            if let Some(err) = canceled {
+                return CallStep::Canceled(err);
+            }
+            if state.ended {
+                return CallStep::Ended;
+            }
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// Whether the loop ended before `ctx` was done (not at its check of
+    /// `ctx`).
+    fn ended_before_cancel(&self) -> bool {
+        let state = lock(&self.state);
+        state.ended && !state.ended_at_ctx
     }
 
     /// Wakes `wait` when `ctx` is done, until the result drops.
@@ -745,13 +811,19 @@ impl Inbox {
         DoneWaker(id.map(|id| (done, id)))
     }
 
-    fn push(&self, msg: Option<Message>, end: Option<ReadEnd>) {
+    fn push(&self, msg: Message) {
+        lock(&self.state).messages.push_back(msg);
+        self.ready.notify_all();
+    }
+
+    /// The end of the loop, with the message read after `ctx` was done
+    /// when there is one. `at_ctx`: the loop ended at its check of `ctx`.
+    fn end(&self, after_cancel: Option<Message>, end: ReadEnd, at_ctx: bool) {
         let mut state = lock(&self.state);
-        state.messages.extend(msg);
-        if end.is_some() {
-            state.ended = true;
-            state.end = end;
-        }
+        state.after_cancel = after_cancel;
+        state.ended = true;
+        state.ended_at_ctx = at_ctx;
+        state.end = Some(end);
         self.ready.notify_all();
     }
 }
@@ -788,27 +860,27 @@ fn start_reader(
         .name("ipc-reader".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn(move || {
-            let (last, end) = loop {
+            let (after_cancel, end, at_ctx) = loop {
                 // Go: ipc/conn_async.go:83
                 if let Some(err) = ctx.err() {
-                    break (None, ReadEnd::Returned(Err(err)));
+                    break (None, ReadEnd::Returned(Err(err)), true);
                 }
                 // Go: ipc/conn_async.go:87. A panic here is a panic in Go's
                 // `Run`: the dispatch thread resumes it (`run_loop_on_reader`).
                 let msg = match catch_unwind(AssertUnwindSafe(|| protocol.read_message())) {
                     Ok(Ok(msg)) => msg,
-                    Ok(Err(err)) => break (None, ReadEnd::Returned(read_loop_result(err))),
-                    Err(payload) => break (None, ReadEnd::Panicked(payload)),
+                    Ok(Err(err)) => break (None, ReadEnd::Returned(read_loop_result(err)), false),
+                    Err(payload) => break (None, ReadEnd::Panicked(payload), false),
                 };
                 // Go dispatches the message, then checks `ctx` (:83). The
                 // check is here, so the dispatch thread finds the end of the
-                // loop with the message read after a signal (`end_read_loop`).
+                // loop with the message read after a signal.
                 if let Some(err) = ctx.err() {
-                    break (Some(msg), ReadEnd::Returned(Err(err)));
+                    break (Some(msg), ReadEnd::Returned(Err(err)), true);
                 }
-                thread_inbox.push(Some(msg), None);
+                thread_inbox.push(msg);
             };
-            thread_inbox.push(last, Some(end));
+            thread_inbox.end(after_cancel, end, at_ctx);
             // Go: the deferred `cancelHandlers` (:73), at once, also while a
             // handler runs. Go runs `closePendingCalls` first; here the
             // dispatch thread runs it when it finds the end (`end_read_loop`),
@@ -1982,11 +2054,46 @@ pub(crate) mod tests {
     #[test]
     fn test_async_conn_reader_call_takes_messages_before_the_end() {
         let inbox = Inbox::default();
-        let reply = message(Some(jsonrpc::new_id_string("api1")), "");
-        inbox.push(Some(reply), Some(ReadEnd::Returned(Ok(()))));
+        inbox.push(message(Some(jsonrpc::new_id_string("api1")), ""));
+        inbox.end(None, ReadEnd::Returned(Ok(())), false);
         let ctx = context::background();
-        assert!(inbox.wait(Some(&ctx)).is_some(), "the call got no reply");
-        assert!(inbox.wait(Some(&ctx)).is_none(), "the end is lost");
+        let step = inbox.next_for_call(&ctx);
+        assert!(
+            matches!(step, CallStep::Message(_)),
+            "the call got no reply"
+        );
+        let step = inbox.next_for_call(&ctx);
+        assert!(matches!(step, CallStep::Ended), "the end is lost");
+    }
+
+    // PORT: no Go test; Go `Run` and `Call` (ipc/conn_async.go:83-110,
+    // :289-303). After a signal, a waiting call still gets a response that
+    // `Run` read before the signal, and then returns `context canceled`.
+    // A request read before the signal stays for `run`, and a response read
+    // after it (the 1 read after a signal) is too late.
+    #[test]
+    fn test_async_conn_reader_call_after_cancel_takes_only_earlier_responses() {
+        let inbox = Inbox::default();
+        inbox.push(message(Some(jsonrpc::new_id_string("n1")), "nested"));
+        inbox.push(message(Some(jsonrpc::new_id_string("api1")), ""));
+        let (ctx, cancel) = context::with_cancel(&context::background());
+        cancel();
+        let late = message(Some(jsonrpc::new_id_string("api2")), "");
+        let err = ctx.err().expect("ctx is done");
+        inbox.end(Some(late), ReadEnd::Returned(Err(err)), true);
+        let step = inbox.next_for_call(&ctx);
+        assert!(
+            matches!(&step, CallStep::Message(msg) if msg.is_response()),
+            "the earlier response is lost"
+        );
+        let step = inbox.next_for_call(&ctx);
+        assert!(matches!(step, CallStep::Canceled(_)), "no context error");
+        assert!(!inbox.ended_before_cancel());
+        // `run` gets the request, then the late response.
+        let responses: Vec<bool> = std::iter::from_fn(|| inbox.next_for_run())
+            .map(|msg| msg.is_response())
+            .collect();
+        assert_eq!(responses, [false, true]);
     }
 
     // PORT: no Go test; Go `Run` (ipc/conn_async.go:73, :89-90). EOF while
