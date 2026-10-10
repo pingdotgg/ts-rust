@@ -1155,8 +1155,10 @@ impl BuildTask {
                     testing_m_times_cache: Some(&*host.m_times),
                 })
             };
-            // PORT: the buffered writes of the early emit go through this
-            // thread when only it reaches the file system (`DeferredWrites`).
+            // PORT: when only this thread reaches the file system
+            // (`DeferredWrites`), the emit keeps its writes, early or not,
+            // and this thread makes them (`flush_writes_on_this_thread`), so
+            // a failed write is in its file's result, as in Go.
             let emitted = if deferred_writes.is_some() {
                 flush_writes_on_this_thread(emit)
             } else {
@@ -1186,7 +1188,8 @@ impl BuildTask {
             task_result.program = Some(incremental_program);
         }
         // PORT: see `DeferredWrites`. Go's emitter reports a failed write as
-        // TS5033; here the waiting writes fail after the emit.
+        // TS5033; here a write that waited fails after the emit. The emit
+        // makes its writes on this thread, so none is known to wait.
         let failed = deferred_writes.map_or_else(Vec::new, |deferred| {
             std::mem::take(
                 &mut deferred
@@ -2377,12 +2380,14 @@ fn new_task_write_file(
 /// the orchestrator thread can reach (`System::emit_writes_through_osvfs`,
 /// the API build orchestrator). Go's `writeFile` writes through
 /// `orchestrator.host.FS()` from the emit goroutines. Here a write on the
-/// orchestrator thread (the build info, and the early emit's writes that
-/// `finish_emit_files` flushes there) goes to that file system at once, after
-/// the waiting ones. A write on another thread (a checker thread) waits in
-/// `writes`, and the next write on the orchestrator thread, or the end of the
-/// task's emit, makes it. A waiting write that fails is kept in `failed` for
-/// Go's TS5033 after the emit (`compile_and_emit_finish`).
+/// orchestrator thread goes to that file system at once, after the waiting
+/// ones. That is the build info, and every source output: the emit keeps
+/// them and makes them on that thread (`flush_writes_on_this_thread`), so a
+/// failed write gets Go's TS5033 in its file's result. A write on another
+/// thread (a checker thread) waits in `writes`, and the next write on the
+/// orchestrator thread, or the end of the task's emit, makes it. A waiting
+/// write that fails is kept in `failed` for a TS5033 after the emit
+/// (`compile_and_emit_finish`).
 #[derive(Default)]
 struct PendingWrites {
     writes: Vec<(String, String)>,
