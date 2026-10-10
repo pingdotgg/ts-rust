@@ -309,3 +309,37 @@ impl<'c> TypeParser<'c> {
         self.checker.effect_links.get_or_insert_with(Box::default)
     }
 }
+
+// PORT: no Go counterpart. The small cache slots of `EffectLinks` keep Go's
+// `Cached` meaning: a nil result is cached, and an absent key is not.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_cache_slots_keep_cached_nil() {
+        let file_node = Node((3 << 32) | 70);
+        let synthetic_node = Node((u64::from(u32::MAX) << 32) | 5);
+
+        assert_eq!(CachedId::default().get(), 0);
+        assert_eq!(CachedId::new(7).get(), 7);
+        assert_eq!(CachedNode::default().get(), Node::NIL);
+        assert_eq!(CachedNode::new(file_node).get(), file_node);
+
+        let mut ids: LinkStore<Node, CachedId> = LinkStore::default();
+        for node in [file_node, synthetic_node] {
+            assert!(ids.try_get(node).is_none());
+            *ids.get(node) = CachedId::new(TypeId::NIL.0);
+            assert_eq!(ids.try_get(node).map(|id| id.get()), Some(0));
+        }
+
+        let mut opt: NodeOptCache<u32> = NodeOptCache::default();
+        for node in [file_node, synthetic_node] {
+            assert_eq!(opt.get(node), None);
+            opt.insert(node, Some(Rc::new(1)));
+            assert_eq!(opt.get(node), Some(Some(Rc::new(1))));
+            opt.insert(node, None);
+            assert_eq!(opt.get(node), Some(None));
+        }
+    }
+}
