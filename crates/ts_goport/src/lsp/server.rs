@@ -144,9 +144,10 @@ fn write_lock<T>(m: &RwLock<T>, value: T) {
 // Go: server.go:42 ServerOptions
 // PORT: Go `In`, `Out` and `Err` move to the reader, writer and logging
 // threads, so they are `Send`. `NpmInstall` and `SetParentProcessID` are
-// nil-able Go funcs (`None`). `NpmInstall` returns Go's `([]byte, error)`
-// pair, as `ata::NpmExecutor` does, and is `Send`: ATA runs it on a helper
-// thread (`ata::NpmExecutor::npm_install_func`).
+// nil-able Go funcs (`None`). `NpmInstall` is `ata::NpmInstallFunc`: it takes
+// the ctx (ts#64544), returns Go's `([]byte, error)` pair, as
+// `ata::NpmExecutor` does, and is `Send`: ATA runs it on a helper thread
+// (`ata::NpmExecutor::npm_install_func`).
 pub struct ServerOptions {
     pub in_: Box<dyn Reader + Send>,
     pub out: Box<dyn Writer + Send>,
@@ -157,8 +158,7 @@ pub struct ServerOptions {
     pub default_library_path: String,
     pub typings_location: String,
     pub parse_cache: Option<Rc<project::ParseCache>>,
-    pub npm_install:
-        Option<Box<dyn Fn(&str, &[String]) -> (Vec<u8>, Option<GoError>) + Send + Sync>>,
+    pub npm_install: Option<ata::NpmInstallFunc>,
     // Spawn launches a child process, returning its stdio as an io.ReadWriteCloser (Read is its stdout,
     // Write is its stdin). It is nil when the host cannot spawn processes. Currently used for content mappers.
     // PORT: tsgo#4712. The Go func returns an `io.ReadWriteCloser`; the
@@ -240,13 +240,7 @@ pub fn new_server(opts: ServerOptions) -> Rc<Server> {
         init_complete: Cell::new(false),
         compiler_options_for_inferred_projects: RefCell::new(None),
         parse_cache,
-        // PORT: ts#64544 gives Go `NpmInstall` a ctx, which cmd/tsc/lsp.go
-        // passes to `exec.CommandContext` (npm is killed when the session
-        // closes). `ServerOptions.npm_install` (set by cmd/tsgo/lsp.rs, a
-        // build lane file) does not take it yet, so it is dropped here.
-        npm_install: npm_install.map(|npm_install| -> ata::NpmInstallFunc {
-            Arc::new(move |_ctx: &Context, cwd: &str, args: &[String]| npm_install(cwd, args))
-        }),
+        npm_install,
         spawn,
         content_mapper_extensions_registered: Cell::new(false),
         cpu_profiler: crate::pprof::CpuProfiler::default(),

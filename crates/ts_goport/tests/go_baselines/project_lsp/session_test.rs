@@ -2258,3 +2258,37 @@ child_test! {
         assert!(session.idle_cache_clean_timer.borrow().is_none());
     }
 }
+
+child_test! {
+    // Bump D round 2 (server skeptic problem 4). Go N' Close waits for the
+    // background queue (ts#64544, queue.go:51), and a pending debounced
+    // snapshot update or diagnostics refresh returns at once when its context
+    // is cancelled (`select` on `ctx.Done()`, session.go:538 and :602), so
+    // Close does not wait for the debounce delay.
+    fn session_close_does_not_wait_for_a_pending_debounce() {
+        const INDEX: &str = "/home/projects/TS/p1/src/index.ts";
+        let (session, _) = projecttestutil::setup_with_options(
+            files(&[
+                ("/home/projects/TS/p1/tsconfig.json", "{}"),
+                (INDEX, "export const x = 1;"),
+            ]),
+            SessionOptions {
+                debounce_delay: Duration::from_secs(60),
+                ..projecttestutil::default_session_options()
+            },
+        );
+        session.schedule_snapshot_update(project::UpdateReason::DID_CLOSE_FILE);
+        session.schedule_diagnostics_refresh(Duration::from_secs(60));
+        // The tasks start and wait out their debounce, as after an LSP
+        // message (the dispatch loop runs the queued work).
+        ts_goport::gostd::local::run_pending();
+
+        let start = Instant::now();
+        session.close();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "Close took {elapsed:?}, want well under the 60 s debounce delay"
+        );
+    }
+}

@@ -11,7 +11,8 @@
 //! enqueue order. Debounce sleeps, the idle cache clean timer and the
 //! telemetry ticker are `gostd::local::after_func` timers, so their
 //! functions run on the dispatch thread; a debounced task keeps a
-//! `background::TaskHold` until its timer has run. `WaitForBackgroundTasks`
+//! `background::TaskHold` until its timer has run or its context is done
+//! (`after_delay_or_done`). `WaitForBackgroundTasks`
 //! drains `gostd::local` through `Queue::wait`. The one exception is the
 //! clone of the auto-import warm, which is `gostd::local` idle work: the
 //! LSP server runs it only when no message waits, and the reader thread can
@@ -724,12 +725,12 @@ impl Session {
     // content-mapped file) where the debounce would make dependent-file diagnostics feel sluggish.
     // PORT: Go sleeps inside the background task with
     // `select { case <-time.After(delay): case <-ctx.Done(): }`. Here the
-    // task arms a `gostd::local::after_func` timer for the delay, and the
-    // rest of the task runs when it fires; a cancelled context makes it
-    // return then (Go returns at once; nothing else differs). The task
-    // keeps a `background::TaskHold` until then, so `Queue::wait` (Go
-    // `WaitForBackgroundTasks`) waits for the refresh, as Go's does. A zero
-    // delay runs the rest of the task at once, as Go does.
+    // rest of the task runs after the delay or as soon as the context is
+    // done, whichever comes first (`after_delay_or_done`). The task keeps a
+    // `background::TaskHold` until then, so `Queue::wait` (Go
+    // `WaitForBackgroundTasks`) waits for the refresh, as Go's does, and a
+    // cancelled refresh does not hold Close. A zero delay runs the rest of
+    // the task at once, as Go does.
     pub fn schedule_diagnostics_refresh(self: &Rc<Self>, delay: Duration) {
         // Cancel any existing scheduled diagnostics refresh
         let existing_cancel = self.diagnostics_refresh_cancel.borrow().clone();
@@ -751,8 +752,9 @@ impl Session {
         let s = self.clone();
         self.background_queue.enqueue(&debounce_ctx, move |ctx| {
             let ctx = ctx.clone();
+            let wait_ctx = ctx.clone();
             let hold = s.background_queue.hold();
-            let mut task = Some(move || {
+            let task = move || {
                 let run = || {
                     // Wait out the debounce window; a newer event cancels this one.
                     if ctx.err().is_some() {
@@ -787,17 +789,10 @@ impl Session {
                 // Go: defer cancel()
                 cancel();
                 drop(hold);
-            });
+            };
             if delay > Duration::ZERO {
-                gostd::local::after_func(
-                    delay,
-                    Box::new(move || {
-                        if let Some(task) = task.take() {
-                            task();
-                        }
-                    }),
-                );
-            } else if let Some(task) = task.take() {
+                after_delay_or_done(&wait_ctx, delay, task);
+            } else {
                 task();
             }
         });
@@ -816,9 +811,9 @@ impl Session {
     }
 
     // Go: project/session.go:575 ScheduleSnapshotUpdate
-    // PORT: the debounce sleep is a `gostd::local::after_func` timer, and
-    // the task keeps a `background::TaskHold` until the update has run, as
-    // in `schedule_diagnostics_refresh`.
+    // PORT: the debounce sleep ends after the delay or when the context is
+    // done (`after_delay_or_done`), and the task keeps a
+    // `background::TaskHold` until then, as in `schedule_diagnostics_refresh`.
     pub fn schedule_snapshot_update(self: &Rc<Self>, reason: UpdateReason) {
         // Cancel any existing scheduled snapshot update
         let existing_cancel = self.scheduled_snapshot_update_cancel.borrow().clone();
@@ -842,9 +837,10 @@ impl Session {
         let s = self.clone();
         self.background_queue.enqueue(&debounce_ctx, move |ctx| {
             let ctx = ctx.clone();
+            let wait_ctx = ctx.clone();
             let delay = s.options.debounce_delay;
             let hold = s.background_queue.hold();
-            let mut task = Some(move || {
+            let task = move || {
                 let run = || {
                     // Sleep for the debounce delay
                     if ctx.err().is_some() {
@@ -885,15 +881,8 @@ impl Session {
                 // Go: defer cancel()
                 cancel();
                 drop(hold);
-            });
-            gostd::local::after_func(
-                delay,
-                Box::new(move || {
-                    if let Some(task) = task.take() {
-                        task();
-                    }
-                }),
-            );
+            };
+            after_delay_or_done(&wait_ctx, delay, task);
         });
     }
 
@@ -926,6 +915,52 @@ impl Session {
             pending => *self.warm_auto_import_pending.borrow_mut() = pending,
         }
     }
+}
+
+/// PORT: Go `select { case <-time.After(delay): case <-ctx.Done(): }` in a
+/// background task, then the rest of the task (`rest`, on the dispatch
+/// thread). `rest` runs once: when a `gostd::local::after_func` timer for
+/// `delay` fires, or as soon as `ctx` is done (a `Done` waker posts it), as
+/// Go's `select` returns at once then. So a debounce that a newer event or
+/// Close cancels releases its `background::TaskHold` at once (ts#64544: Go
+/// Close waits for the background queue).
+fn after_delay_or_done(ctx: &Context, delay: Duration, rest: impl FnOnce() + 'static) {
+    let rest: Rc<Cell<Option<Box<dyn FnOnce()>>>> = Rc::new(Cell::new(Some(Box::new(rest))));
+    let run = move || {
+        if let Some(rest) = rest.take() {
+            rest();
+        }
+    };
+    let Some(done) = ctx.done() else {
+        gostd::local::after_func(delay, Box::new(run));
+        return;
+    };
+    // The early run, which the waker posts when ctx is done.
+    let timer: Rc<Cell<Option<gostd::local::LocalTimer>>> = Rc::default();
+    let early = gostd::local::post_later(Box::new({
+        let (run, timer) = (run.clone(), timer.clone());
+        move || {
+            if let Some(timer) = timer.take() {
+                timer.stop();
+            }
+            run();
+        }
+    }));
+    // The first side drops the post (a drop posts it), so no post waits
+    // while `rest` runs. A job posted after the timer finds `rest` gone.
+    let early = Arc::new(Mutex::new(Some(early)));
+    let release = move || drop(early.lock().unwrap_or_else(|e| e.into_inner()).take());
+    if done.register_waker(release.clone()).is_none() {
+        release();
+        return;
+    }
+    timer.set(Some(gostd::local::after_func(
+        delay,
+        Box::new(move || {
+            release();
+            run();
+        }),
+    )));
 }
 
 /// PORT: the state that Go's `warmAutoImportCache` keeps for its clone,

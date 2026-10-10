@@ -15,6 +15,7 @@ use crate::frontend::vfs::osvfs;
 use crate::gostd::context::{self, CancelFunc};
 use crate::gostd::errors;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 // Go: cmd/tsc/lsp.go:20 runLSP
@@ -76,35 +77,7 @@ pub fn run_lsp(args: &[String]) -> i32 {
         default_library_path,
         typings_location,
         parse_cache: None,
-        npm_install: Some(Box::new(|cwd: &str, args: &[String]| {
-            // Go: cmd := exec.Command("npm", args...); cmd.Dir = cwd; return cmd.Output()
-            // PORT: Go error texts are approximated (ATA only logs them).
-            // `Output` reads stdin from the null device and keeps stdout and
-            // stderr; `rlimit::spawn` gives npm the open-file limit as Go
-            // does.
-            let mut npm = std::process::Command::new("npm");
-            npm.args(args)
-                .current_dir(cwd)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            match crate::gostd::rlimit::spawn(&mut npm)
-                .and_then(std::process::Child::wait_with_output)
-            {
-                Ok(output) => {
-                    if output.status.success() {
-                        (output.stdout, None)
-                    } else {
-                        let message = match output.status.code() {
-                            Some(code) => format!("exit status {code}"),
-                            None => output.status.to_string(),
-                        };
-                        (output.stdout, Some(errors::new(message)))
-                    }
-                }
-                Err(err) => (Vec::new(), Some(errors::new(err.to_string()))),
-            }
-        })),
+        npm_install: Some(Arc::new(npm_install)),
         // Go: Spawn: spawnProcess (tsgo#4712; Go cmd/tsc/sys.go spawnProcess is
         // ported in `execute::tsc::compile`).
         spawn: Some(Rc::new(spawn_process)),
@@ -120,6 +93,106 @@ pub fn run_lsp(args: &[String]) -> i32 {
         return 1;
     }
     0
+}
+
+// Go: cmd/tsc/lsp.go:61 the NpmInstall func of runLSP (ts#64544)
+//     cmd := exec.CommandContext(ctx, "npm", args...)
+//     cmd.Dir = cwd
+//     return cmd.Output()
+// Also the NpmInstall of lsp TestReplay (replay_test.go:62).
+pub fn npm_install(ctx: &Context, cwd: &str, args: &[String]) -> (Vec<u8>, Option<GoError>) {
+    command_context_output(ctx, "npm", cwd, args)
+}
+
+/// How often `command_context_output` looks for the end of the command
+/// while it waits for ctx.
+const COMMAND_WAIT_STEP: Duration = Duration::from_millis(20);
+
+// Go `exec.CommandContext(ctx, name, args...)` with `cmd.Dir = cwd`, then
+// `cmd.Output()`.
+// PORT: Go error texts are approximated (ATA only logs them). `Output`
+// reads stdin from the null device and keeps stdout and stderr (stderr only
+// for the `ExitError`, which no caller reads, so it is read and dropped).
+// `rlimit::spawn` gives the command the open-file limit as Go does. Go kills
+// the command when ctx is done (`watchCtx`; `Cmd.Cancel` is `Process.Kill`).
+// std cannot kill a child while another thread waits for it, so this thread
+// looks for the end of the command every `COMMAND_WAIT_STEP` while it waits
+// for ctx, and helper threads read the pipes.
+fn command_context_output(
+    ctx: &Context,
+    name: &str,
+    cwd: &str,
+    args: &[String],
+) -> (Vec<u8>, Option<GoError>) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    // Go `Start`: a done ctx gives its error, and the command does not start.
+    if let Some(err) = ctx.err() {
+        return (Vec::new(), Some(err));
+    }
+    let mut cmd = Command::new(name);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match crate::gostd::rlimit::spawn(&mut cmd) {
+        Ok(child) => child,
+        Err(err) => return (Vec::new(), Some(errors::new(err.to_string()))),
+    };
+    let stdout = child.stdout.take().map(|mut pipe| {
+        crate::core::GoThread::new()
+            .name("npm-stdout".to_string())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let _ = pipe.read_to_end(&mut output);
+                output
+            })
+    });
+    let stderr = child.stderr.take().map(|mut pipe| {
+        crate::core::GoThread::new()
+            .name("npm-stderr".to_string())
+            .spawn(move || {
+                let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+            })
+    });
+
+    // Go `watchCtx`: a done ctx kills the command. `canceled` is a Cancel
+    // that succeeded; then a clean exit gives `ctx.Err()`, as in Go.
+    let mut canceled = false;
+    let waited = match ctx.done() {
+        None => child.wait(),
+        Some(done) => loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {}
+                Err(err) => break Err(err),
+            }
+            if done.wait_timeout(COMMAND_WAIT_STEP) {
+                canceled = child.kill().is_ok();
+                break child.wait();
+            }
+        },
+    };
+    // Go `Wait` waits for the pipe copies after the process.
+    let output = stdout
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    if let Some(reader) = stderr {
+        let _ = reader.join();
+    }
+    match waited {
+        Ok(status) if status.success() => (output, if canceled { ctx.err() } else { None }),
+        Ok(status) => {
+            let message = match status.code() {
+                Some(code) => format!("exit status {code}"),
+                None => status.to_string(),
+            };
+            (output, Some(errors::new(message)))
+        }
+        Err(err) => (output, Some(errors::new(err.to_string()))),
+    }
 }
 
 // Go: cmd/tsc/lsp.go:79 newParentProcessWatchdog
@@ -249,4 +322,48 @@ fn temp_dir() -> String {
         }
     }
     dir
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    // ts#64544 (cmd/tsc/lsp.go:61): `exec.CommandContext` kills the command
+    // when ctx is done, so Session.Close does not wait for a running npm.
+    #[test]
+    fn command_context_output_kills_the_command_when_ctx_is_done() {
+        let (ctx, cancel) = context::with_cancel(&context::background());
+        let canceler = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            cancel();
+        });
+        let start = Instant::now();
+        let (_, err) = command_context_output(&ctx, "sleep", "/", &["30".to_string()]);
+        let elapsed = start.elapsed();
+        canceler.join().expect("canceler");
+        assert!(err.is_some(), "a killed command is an error");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the command ran {elapsed:?} after ctx was done"
+        );
+    }
+
+    // Go `Cmd.Start` returns ctx.Err() for a done ctx and starts nothing;
+    // with a live ctx `Output` gives stdout.
+    #[test]
+    fn command_context_output_with_a_done_ctx_does_not_start() {
+        let (ctx, cancel) = context::with_cancel(&context::background());
+        let args = ["-c".to_string(), "echo out; echo err >&2".to_string()];
+        let (output, err) = command_context_output(&ctx, "sh", "/", &args);
+        assert_eq!(
+            (output.as_slice(), err.map(|e| e.error())),
+            (&b"out\n"[..], None)
+        );
+
+        cancel();
+        let (output, err) = command_context_output(&ctx, "sh", "/", &args);
+        assert!(output.is_empty());
+        assert_eq!(err.map(|e| e.error()), Some("context canceled".to_string()));
+    }
 }
