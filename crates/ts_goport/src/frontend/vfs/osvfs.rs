@@ -580,7 +580,10 @@ pub struct DirFs {
 impl DirFs {
     // Go: os/file.go dirFS.join
     // PORT: Go `filepathlite.Localize` on Unix is `fs.ValidPath` plus a
-    // NUL byte check.
+    // NUL byte check. On Windows it also refuses the names that
+    // `windows_localize` refuses, and Go writes the name with `\`. The port
+    // keeps `/`, which Windows reads as `\` in a path without the `\\?\`
+    // prefix.
     fn join(&self, name: &str) -> Result<String, FsError> {
         if self.dir.is_empty() {
             return Err(FsError::Other("os: DirFS with empty root".to_string()));
@@ -588,11 +591,65 @@ impl DirFs {
         if !io_fs_valid_path(name) || name.contains('\0') {
             return Err(FsError::Invalid);
         }
+        #[cfg(windows)]
+        if !windows_localize(name) {
+            return Err(FsError::Invalid);
+        }
         if self.dir.ends_with('/') {
             return Ok(format!("{}{}", self.dir, name));
         }
         Ok(format!("{}/{}", self.dir, name))
     }
+}
+
+// Go: internal/filepathlite/path_windows.go:56 localize
+// PORT: only its checks: false where Go returns `errInvalidPath`. A rooted
+// path that is not a drive root keeps its drive in the name, for example
+// `C:/a` under the root `//?/` of `\\?\C:\a`, so Go cannot open it.
+#[cfg(windows)]
+fn windows_localize(path: &str) -> bool {
+    !path.contains([':', '\\', '\0']) && !path.split('/').any(is_reserved_name)
+}
+
+// Go: internal/filepathlite/path_windows.go:98 isReservedName
+// PORT: Go asks `RtlIsDosDeviceName_U` whether a reserved name with an
+// extension is reserved on this Windows (since Windows 11 `CON.txt` is not).
+// The port asks `GetFullPathNameW` (`std::path::absolute`), which gives a
+// `\\.\` device path for such a name.
+#[cfg(windows)]
+fn is_reserved_name(name: &str) -> bool {
+    // Device names can have arbitrary trailing characters following a dot or colon.
+    let base = &name[..name.find([':', '.']).unwrap_or(name.len())];
+    // Trailing spaces in the last path element are ignored.
+    let base = base.trim_end_matches(' ');
+    if !is_reserved_base_name(base) {
+        return false;
+    }
+    if base.len() == name.len() {
+        return true;
+    }
+    std::path::absolute(name).is_ok_and(|p| p.to_string_lossy().starts_with(r"\\.\"))
+}
+
+// Go: internal/filepathlite/path_windows.go:128 isReservedBaseName
+#[cfg(windows)]
+fn is_reserved_base_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.len() >= 3 {
+        let upper = bytes[..3].to_ascii_uppercase();
+        if bytes.len() == 3 && matches!(&upper[..], b"CON" | b"PRN" | b"AUX" | b"NUL") {
+            return true;
+        }
+        if bytes.len() >= 4 && matches!(&upper[..], b"COM" | b"LPT") {
+            if bytes.len() == 4 && (b'1'..=b'9').contains(&bytes[3]) {
+                return true;
+            }
+            // Superscript ¹, ², and ³ are considered numbers as well.
+            return matches!(&name[3..], "\u{b2}" | "\u{b3}" | "\u{b9}");
+        }
+    }
+    // Passing CONIN$ or CONOUT$ to CreateFile opens a console handle.
+    name.eq_ignore_ascii_case("CONIN$") || name.eq_ignore_ascii_case("CONOUT$")
 }
 
 impl IoFs for DirFs {
@@ -1238,6 +1295,33 @@ fn win_unc_len(path: &[u8], prefix_len: usize) -> usize {
 fn win_cut_path(path: &[u8]) -> Option<(&[u8], &[u8])> {
     let i = path.iter().position(|&c| win_is_path_separator(c))?;
     Some((&path[..i], &path[i + 1..]))
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::{is_reserved_name, windows_localize};
+
+    // Go: internal/filepathlite/path_windows.go localize and isReservedName
+    #[test]
+    fn localize_refuses_what_go_refuses() {
+        for name in [
+            "C:/a",
+            "a/b:c",
+            "a\\b",
+            "con",
+            "a/AUX/b",
+            "lpt1",
+            "COM\u{b9}",
+            "conin$",
+        ] {
+            assert!(!windows_localize(name), "{name}");
+        }
+        for name in ["a/b.ts", "console.ts", "com0", "lpt10/x", "auxiliary"] {
+            assert!(windows_localize(name), "{name}");
+        }
+        assert!(is_reserved_name("NUL"));
+        assert!(!is_reserved_name("NULL"));
+    }
 }
 
 #[cfg(all(test, unix))]

@@ -236,10 +236,12 @@ with `tsc-rs` 0.1.0 and R179 on Linux.
   this by timing, so its own result changes between runs. `tsc-rs` gives the same result in every
   run (the result of TypeScript 6).
 - In `tsc -b`, when one project imports the output of another project without a project reference,
-  `tsc-rs` can still read the old or missing output (TS2305 or TS2307) where `tsc` reads the new
-  one, in a few cases: `noEmitOnError` projects, non-incremental `noCheck` projects, several large
-  projects that only need to write their outputs with the default builders, or when the reading
-  project references another project that builds before the writer. Add the reference to fix it.
+  the two projects can build at the same time. Then `tsc` reads each output file before or after the
+  other project writes it. This is timing, so the result of `tsc` changes between runs, file by
+  file. `tsc-rs` makes the programs one at a time and writes the outputs of a project together when
+  that project ends. So it can read old or missing output where `tsc` reads new output, or the
+  reverse. Often the only difference is the file hashes in the reading project's `.tsbuildinfo`.
+  Sometimes it is an error, such as TS2305, TS2307 or TS2322. Add the reference to fix it.
 - In the editor, memory grows slowly during long edit sessions (about 20 MiB per 1,000 edits). It
   starts 12 to 24% above `tsc`'s, and from about edit 20 it stays below `tsc`'s in the sessions we
   measured (up to 2,190 edits).

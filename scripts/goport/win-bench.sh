@@ -15,6 +15,7 @@ declare -A cfg=(
   [query]=packages/query-core/tsconfig.prod.json
   [hono]=tsconfig.build.json
   [zod]=packages/zod/tsconfig.json
+  [effect-noplugin]=packages/effect/tsconfig.json
 )
 one() { # one <exe> <project> <mode> -> "real user sys rc"
   local exe=$1 p=$2 mode=$3 args
@@ -25,7 +26,7 @@ one() { # one <exe> <project> <mode> -> "real user sys rc"
   { time (cd "$train/projects/$p" && MSYS_NO_PATHCONV=1 "$exe" "${args[@]}" > /dev/null 2>&1; echo $? > "$tmp/rc"); } 2> "$tmp/time"
   echo "$(cat "$tmp/time") rc=$(cat "$tmp/rc")"
 }
-for p in query hono zod; do
+for p in query hono zod effect-noplugin; do
   for mode in check emit; do
     for i in "${!exes[@]}"; do one "${exes[$i]}" "$p" "$mode" > /dev/null || true; done
     declare -A reals=()
