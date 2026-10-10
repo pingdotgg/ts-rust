@@ -492,11 +492,20 @@ impl Checker {
         let t = self.get_reduced_apparent_type(t);
         let flags = self.ty(t).flags;
         if flags.intersects(TypeFlags::OBJECT) {
-            // Go (#64475): getMemberOfStructuredType. A resolved type reads
-            // its members here; else the lazy table or a full resolve.
+            // Go (#64475) reads the member with getMemberOfStructuredType and
+            // the signatures with getSignaturesOfStructuredType. A resolved
+            // type reads its members here. With the switch on, an unresolved
+            // type takes that path out of line (lazy_members.rs).
             let ty = self.ty(t);
             let mut symbol = if ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
                 self.symbols.get_key(ty.as_structured_type().members, name)
+            } else if self.lazy_members {
+                return self.get_property_of_unresolved_object_type_lazy(
+                    t,
+                    name,
+                    skip_object_function_property_augment,
+                    include_type_only_members,
+                );
             } else {
                 self.get_member_of_unresolved_structured_type(t, name)
             };
@@ -539,7 +548,9 @@ impl Checker {
                     return SymbolId::NIL;
                 }
             }
-            let (call_count, construct_count) = self.signature_counts_of_looked_up_type(t);
+            let resolved = self.ty(t).as_structured_type();
+            let call_count = resolved.call_signatures().len();
+            let construct_count = resolved.construct_signatures().len();
             let function_type = if t == self.any_function_type {
                 self.global_function_type
             } else if call_count != 0 {
@@ -590,7 +601,7 @@ impl Checker {
     /// not resolved: the lookups then run and resolve it, as in Go. No Go
     /// counterpart.
     #[inline]
-    fn augment_lookups_miss(&mut self, t: TypeId, name: &Name) -> bool {
+    pub(crate) fn augment_lookups_miss(&mut self, t: TypeId, name: &Name) -> bool {
         let bits = augment_filter_bits(name);
         match self.augment_filters.all {
             Some(all) => !augment_filter_has(&all, bits),
@@ -758,13 +769,41 @@ impl Checker {
         t: TypeId,
         kind: SignatureKind,
     ) -> SharedList<SignatureId> {
-        if !self.ty(t).flags.intersects(TypeFlags::STRUCTURED_TYPE) {
+        let ty = self.ty(t);
+        if !ty.flags.intersects(TypeFlags::STRUCTURED_TYPE) {
             return SharedList::default();
         }
+        // PERF: Go reads a ready lazy member table first (#64475). A type
+        // with one is not resolved, so a resolved type reads its members
+        // here and the rest is out of line.
+        if !ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+            return self.get_signatures_of_unresolved_structured_type(t, kind);
+        }
+        Self::signatures_of_resolved(ty.as_structured_type(), kind)
+    }
+
+    /// `get_signatures_of_structured_type` of a type whose members are not
+    /// resolved: its lazy member table, else its resolved members.
+    #[inline(never)]
+    fn get_signatures_of_unresolved_structured_type(
+        &mut self,
+        t: TypeId,
+        kind: SignatureKind,
+    ) -> SharedList<SignatureId> {
         if let Some(signatures) = self.lazy_signatures_of_structured_type(t, kind) {
             return signatures;
         }
-        let Some(d) = &self.resolve_structured_type_members(t).signatures_data else {
+        let resolved = self.resolve_structured_type_members(t);
+        Self::signatures_of_resolved(resolved, kind)
+    }
+
+    /// The signatures of `kind` of resolved members.
+    #[inline]
+    fn signatures_of_resolved(
+        resolved: &StructuredType,
+        kind: SignatureKind,
+    ) -> SharedList<SignatureId> {
+        let Some(d) = &resolved.signatures_data else {
             return SharedList::default();
         };
         let call_count = d.call_signature_count as usize;
@@ -810,13 +849,28 @@ impl Checker {
 
     // Go: checker/checker.go:19318 getIndexInfosOfStructuredType
     pub fn get_index_infos_of_structured_type(&mut self, t: TypeId) -> SharedList<IndexInfoId> {
-        if self.ty(t).flags.intersects(TypeFlags::STRUCTURED_TYPE) {
-            if let Some(index_infos) = self.lazy_index_infos_of_structured_type(t) {
-                return index_infos;
+        let ty = self.ty(t);
+        if ty.flags.intersects(TypeFlags::STRUCTURED_TYPE) {
+            // PERF: as in `get_signatures_of_structured_type`.
+            if !ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+                return self.get_index_infos_of_unresolved_structured_type(t);
             }
-            return self.resolve_structured_type_members(t).index_infos_list();
+            return ty.as_structured_type().index_infos_list();
         }
         SharedList::default()
+    }
+
+    /// `get_index_infos_of_structured_type` of a type whose members are not
+    /// resolved: its lazy member table, else its resolved members.
+    #[inline(never)]
+    fn get_index_infos_of_unresolved_structured_type(
+        &mut self,
+        t: TypeId,
+    ) -> SharedList<IndexInfoId> {
+        if let Some(index_infos) = self.lazy_index_infos_of_structured_type(t) {
+            return index_infos;
+        }
+        self.resolve_structured_type_members(t).index_infos_list()
     }
 
     // Go: checker/checker.go:19327 getIndexInfoOfType
@@ -995,20 +1049,31 @@ impl Checker {
 
     // Go: checker/checker.go:19435 resolveTypeReferenceMembers
     pub fn resolve_type_reference_members(&mut self, t: TypeId) {
+        // Go (#64475): a ready lazy member table gives the full table.
         if self.lazy_members {
-            if let Some(lm) = self
-                .lazy_member_tables
-                .get(&t)
-                .filter(|lm| lm.is_ready())
-                .cloned()
-            {
+            if let Some(lm) = self.lazy_member_tables.ready(t) {
                 self.resolve_lazy_members(t, &lm);
                 return;
             }
         }
         let source = self.ty(t).target();
-        let (type_parameters, padded_type_arguments) =
-            self.get_reference_member_type_arguments(t, source);
+        let type_parameters = self
+            .ty(source)
+            .as_interface_type()
+            .all_type_parameters
+            .clone();
+        // One exact-size allocation: the arguments, then `t` as the `this`
+        // argument when only that one is missing.
+        let padded_type_arguments = {
+            let type_arguments = self.type_arguments_of(t);
+            let pad = type_arguments.len() == type_parameters.len().wrapping_sub(1);
+            let mut padded = Vec::with_capacity(type_arguments.len() + usize::from(pad));
+            padded.extend_from_slice(&type_arguments);
+            if pad {
+                padded.push(t);
+            }
+            padded
+        };
         self.resolve_object_type_members(t, source, &type_parameters, &padded_type_arguments);
     }
 
@@ -1095,13 +1160,29 @@ impl Checker {
                 }
                 let base_properties = self.get_properties_of_type(instantiated_base_type);
                 members = self.add_inherited_members(members, &base_properties);
-                (call_signatures, construct_signatures, index_infos) = self
-                    .append_inherited_signatures_and_index_infos(
-                        call_signatures,
-                        construct_signatures,
-                        index_infos,
-                        instantiated_base_type,
-                    );
+                call_signatures = SharedList::concat(
+                    call_signatures,
+                    self.get_signatures_of_type(instantiated_base_type, SignatureKind::CALL),
+                );
+                construct_signatures = SharedList::concat(
+                    construct_signatures,
+                    self.get_signatures_of_type(instantiated_base_type, SignatureKind::CONSTRUCT),
+                );
+                let inherited_index_infos: SharedList<IndexInfoId> =
+                    if instantiated_base_type != self.any_type {
+                        self.get_index_infos_of_type(instantiated_base_type)
+                    } else {
+                        SharedList::from(&[self.any_base_type_index_info][..])
+                    };
+                let filtered: Vec<IndexInfoId> = inherited_index_infos
+                    .iter()
+                    .copied()
+                    .filter(|&info| {
+                        let key_type = self.index_info(info).key_type;
+                        self.find_index_info(&index_infos, key_type).is_nil()
+                    })
+                    .collect();
+                index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
             }
             let call_signature_count = call_signatures.len();
             self.set_structured_type_members_ex(
@@ -1125,45 +1206,6 @@ impl Checker {
             index_infos,
         );
         self.augment_members_set(t);
-    }
-
-    // Go: appendInheritedSignaturesAndIndexInfos (#64475): the end of the
-    // base loop body of resolveObjectTypeMembers, moved out with no change.
-    #[inline]
-    pub(crate) fn append_inherited_signatures_and_index_infos(
-        &mut self,
-        call_signatures: SharedList<SignatureId>,
-        construct_signatures: SharedList<SignatureId>,
-        index_infos: SharedList<IndexInfoId>,
-        base_type: TypeId,
-    ) -> (
-        SharedList<SignatureId>,
-        SharedList<SignatureId>,
-        SharedList<IndexInfoId>,
-    ) {
-        let call_signatures = SharedList::concat(
-            call_signatures,
-            self.get_signatures_of_type(base_type, SignatureKind::CALL),
-        );
-        let construct_signatures = SharedList::concat(
-            construct_signatures,
-            self.get_signatures_of_type(base_type, SignatureKind::CONSTRUCT),
-        );
-        let inherited_index_infos: SharedList<IndexInfoId> = if base_type != self.any_type {
-            self.get_index_infos_of_type(base_type)
-        } else {
-            SharedList::from(&[self.any_base_type_index_info][..])
-        };
-        let filtered: Vec<IndexInfoId> = inherited_index_infos
-            .iter()
-            .copied()
-            .filter(|&info| {
-                let key_type = self.index_info(info).key_type;
-                self.find_index_info(&index_infos, key_type).is_nil()
-            })
-            .collect();
-        let index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
-        (call_signatures, construct_signatures, index_infos)
     }
 
     /// Go `instantiateList` on a shared list. When no element changes, the
@@ -1613,25 +1655,57 @@ impl Checker {
         kind: SignatureKind,
         allow_members: bool,
     ) -> SignatureId {
-        if self.ty(t).flags.intersects(TypeFlags::OBJECT) {
-            if self.lazy_members {
-                return self.get_single_signature_lazy(t, kind, allow_members);
+        let ty = self.ty(t);
+        if ty.flags.intersects(TypeFlags::OBJECT) {
+            // PERF: a resolved type reads its members here; the rest is out
+            // of line (with the switch on, the Go body of #64475).
+            if !ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+                return self.get_single_signature_of_unresolved(t, kind, allow_members);
             }
-            let resolved = self.resolve_structured_type_members(t);
-            if allow_members || resolved.properties.is_empty() && resolved.index_infos().is_empty()
+            return Self::single_signature_of_resolved(
+                ty.as_structured_type(),
+                kind,
+                allow_members,
+            );
+        }
+        SignatureId::NIL
+    }
+
+    /// `get_single_signature` of an object type whose members are not
+    /// resolved.
+    #[inline(never)]
+    fn get_single_signature_of_unresolved(
+        &mut self,
+        t: TypeId,
+        kind: SignatureKind,
+        allow_members: bool,
+    ) -> SignatureId {
+        if self.lazy_members {
+            return self.get_single_signature_lazy(t, kind, allow_members);
+        }
+        let resolved = self.resolve_structured_type_members(t);
+        Self::single_signature_of_resolved(resolved, kind, allow_members)
+    }
+
+    /// The object type case of `get_single_signature` on resolved members.
+    #[inline]
+    fn single_signature_of_resolved(
+        resolved: &StructuredType,
+        kind: SignatureKind,
+        allow_members: bool,
+    ) -> SignatureId {
+        if allow_members || resolved.properties.is_empty() && resolved.index_infos().is_empty() {
+            if kind == SignatureKind::CALL
+                && resolved.call_signatures().len() == 1
+                && resolved.construct_signatures().is_empty()
             {
-                if kind == SignatureKind::CALL
-                    && resolved.call_signatures().len() == 1
-                    && resolved.construct_signatures().is_empty()
-                {
-                    return resolved.call_signatures()[0];
-                }
-                if kind == SignatureKind::CONSTRUCT
-                    && resolved.construct_signatures().len() == 1
-                    && resolved.call_signatures().is_empty()
-                {
-                    return resolved.construct_signatures()[0];
-                }
+                return resolved.call_signatures()[0];
+            }
+            if kind == SignatureKind::CONSTRUCT
+                && resolved.construct_signatures().len() == 1
+                && resolved.call_signatures().is_empty()
+            {
+                return resolved.construct_signatures()[0];
             }
         }
         SignatureId::NIL

@@ -573,14 +573,12 @@ impl Checker {
     }
 
     // Go: checker/checker.go:21090 instantiateSymbol
-    // PORT: #64475 splits Go's body into isSymbolUnaffectedByInstantiation
-    // and newInstantiatedSymbol (lazy_members.rs), each with its own links
-    // read. Both reads are of `symbol`, so the first one gives the id. Here
-    // the links are read once and both halves take them.
     pub fn instantiate_symbol(&mut self, symbol: SymbolId, m: MapperId) -> SymbolId {
         if symbol.is_nil() {
             return SymbolId::NIL;
         }
+        let mut symbol = symbol;
+        let mut m = m;
         let (links_resolved_type, links_write_type, links_target, links_mapper, links_name_type) = {
             let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             (
@@ -591,58 +589,21 @@ impl Checker {
                 links.name_type,
             )
         };
-        if self.is_symbol_unaffected_by_instantiation_with(
-            symbol,
-            m,
-            links_resolved_type,
-            links_write_type,
-        ) {
-            return symbol;
-        }
-        self.new_instantiated_symbol_with(symbol, m, links_target, links_mapper, links_name_type)
-    }
-
-    /// Go `isSymbolUnaffectedByInstantiation` (#64475) after its links read:
-    /// `resolved_type` and `write_type` are the links of `symbol`.
-    #[inline]
-    pub(crate) fn is_symbol_unaffected_by_instantiation_with(
-        &mut self,
-        symbol: SymbolId,
-        m: MapperId,
-        links_resolved_type: TypeId,
-        links_write_type: TypeId,
-    ) -> bool {
         if m.is_some() && self.mapper(m).maps_this_only() && self.is_thisless(symbol) {
-            return true;
+            return symbol;
         }
         // If the type of the symbol is already resolved, and if that type could not possibly
         // be affected by instantiation, simply return the symbol itself.
         if links_resolved_type.is_some() && !self.could_contain_type_variables(links_resolved_type)
         {
             if !self.sym(symbol).flags.intersects(SymbolFlags::SET_ACCESSOR) {
-                return true;
+                return symbol;
             }
             // If we're a setter, check writeType.
             if links_write_type.is_some() && !self.could_contain_type_variables(links_write_type) {
-                return true;
+                return symbol;
             }
         }
-        false
-    }
-
-    /// Go `newInstantiatedSymbol` (#64475) after its links read: `links_*`
-    /// are the links of `symbol`.
-    #[inline]
-    pub(crate) fn new_instantiated_symbol_with(
-        &mut self,
-        symbol: SymbolId,
-        m: MapperId,
-        links_target: SymbolId,
-        links_mapper: MapperId,
-        links_name_type: TypeId,
-    ) -> SymbolId {
-        let mut symbol = symbol;
-        let mut m = m;
         if self
             .sym(symbol)
             .check_flags

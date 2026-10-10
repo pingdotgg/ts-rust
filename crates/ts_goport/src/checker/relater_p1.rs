@@ -1802,20 +1802,14 @@ impl Checker {
     // A type is 'weak' if it is an object type with at least one optional property
     // and no required properties, call/construct signatures or index signatures
     pub fn is_weak_type(&mut self, t: TypeId) -> bool {
-        if self.ty(t).flags.intersects(TypeFlags::OBJECT) {
-            if self.lazy_members {
-                return self.is_weak_object_type_lazy(t);
+        let ty = self.ty(t);
+        if ty.flags.intersects(TypeFlags::OBJECT) {
+            // PERF: a resolved type reads its members here; the rest is out
+            // of line (with the switch on, the Go body of #64475).
+            if !ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+                return self.is_weak_unresolved_object_type(t);
             }
-            // PORT: the resolved members are read in place, not copied.
-            self.resolve_structured_type_members(t);
-            let resolved = self.ty(t).as_structured_type();
-            return resolved.signatures().is_empty()
-                && resolved.index_infos().is_empty()
-                && !resolved.properties.is_empty()
-                && resolved
-                    .properties
-                    .iter()
-                    .all(|&p| self.sym(p).flags.intersects(SymbolFlags::OPTIONAL));
+            return self.is_weak_resolved_object_type(t);
         }
         if self.ty(t).flags.intersects(TypeFlags::SUBSTITUTION) {
             let base_type = self.ty(t).as_substitution_type().base_type;
@@ -1830,6 +1824,30 @@ impl Checker {
             return true;
         }
         false
+    }
+
+    /// `is_weak_type` of an object type whose members are not resolved.
+    #[inline(never)]
+    fn is_weak_unresolved_object_type(&mut self, t: TypeId) -> bool {
+        if self.lazy_members {
+            return self.is_weak_object_type_lazy(t);
+        }
+        self.resolve_structured_type_members(t);
+        self.is_weak_resolved_object_type(t)
+    }
+
+    /// `is_weak_type` of a resolved object type.
+    // PORT: the resolved members are read in place, not copied.
+    #[inline]
+    fn is_weak_resolved_object_type(&self, t: TypeId) -> bool {
+        let resolved = self.ty(t).as_structured_type();
+        resolved.signatures().is_empty()
+            && resolved.index_infos().is_empty()
+            && !resolved.properties.is_empty()
+            && resolved
+                .properties
+                .iter()
+                .all(|&p| self.sym(p).flags.intersects(SymbolFlags::OPTIONAL))
     }
 
     // Go: checker/relater.go:695 hasCommonProperties

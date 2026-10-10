@@ -33,6 +33,61 @@ pub fn lazy_members_from_env() -> bool {
     *ON.get_or_init(|| std::env::var("GOPORT_LAZY_MEMBERS").as_deref() == Ok("1"))
 }
 
+// Go: Checker.lazyMemberTables (#64475)
+/// The lazy member tables of a checker, by type.
+#[derive(Default)]
+pub struct LazyMemberTables {
+    map: FxHashMap<TypeId, Rc<LazyMemberTable>>,
+    /// PERF: not in Go. The last ready table that
+    /// `get_ready_lazy_member_table` gave: a shape query reads 3 to 5
+    /// accessors of one type in a row. A table leaves the map only when its
+    /// type is resolved, and a resolved type never reads it.
+    last: Option<(TypeId, Rc<LazyMemberTable>)>,
+}
+
+impl LazyMemberTables {
+    fn get(&self, t: TypeId) -> Option<&Rc<LazyMemberTable>> {
+        self.map.get(&t)
+    }
+
+    #[inline]
+    fn last_for(&self, t: TypeId) -> Option<Rc<LazyMemberTable>> {
+        match &self.last {
+            Some((last, lm)) if *last == t => Some(Rc::clone(lm)),
+            _ => None,
+        }
+    }
+
+    fn insert(&mut self, t: TypeId, lm: Rc<LazyMemberTable>) {
+        self.map.insert(t, lm);
+    }
+
+    fn remove(&mut self, t: TypeId) {
+        self.map.remove(&t);
+        if self.last.as_ref().is_some_and(|(last, _)| *last == t) {
+            self.last = None;
+        }
+    }
+
+    /// The ready table of `t` for `resolve_type_reference_members` (Go
+    /// `lm != nil && lm.ready`).
+    pub(crate) fn ready(&self, t: TypeId) -> Option<Rc<LazyMemberTable>> {
+        self.map.get(&t).filter(|lm| lm.is_ready()).cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn contains_key(&self, t: &TypeId) -> bool {
+        self.map.contains_key(t)
+    }
+}
+
 // Go: lazyMemberTable (#64475)
 /// The lazy member table of one instantiated reference
 /// (`Checker::lazy_member_tables`).
@@ -98,7 +153,9 @@ impl Checker {
     // Go: getReferenceMemberTypeArguments (#64475)
     /// The type parameters of `source` and the type arguments of `t`, with
     /// `t` as the `this` argument when only that one is missing.
-    pub(crate) fn get_reference_member_type_arguments(
+    // PORT: `resolve_type_reference_members` keeps its own copy; keep the
+    // two in step.
+    fn get_reference_member_type_arguments(
         &mut self,
         t: TypeId,
         source: TypeId,
@@ -132,6 +189,9 @@ impl Checker {
         if !self.lazy_members || !may_have_lazy_members(self.ty(t)) {
             return None;
         }
+        if let Some(lm) = self.lazy_member_tables.last_for(t) {
+            return Some(lm);
+        }
         self.get_ready_lazy_member_table_worker(t)
     }
 
@@ -154,7 +214,7 @@ impl Checker {
         {
             return None;
         }
-        let lm = match self.lazy_member_tables.get(&t) {
+        let lm = match self.lazy_member_tables.get(t) {
             Some(lm) => Rc::clone(lm),
             None => {
                 let (type_parameters, type_arguments) =
@@ -181,6 +241,7 @@ impl Checker {
         {
             return None;
         }
+        self.lazy_member_tables.last = Some((t, Rc::clone(&lm)));
         Some(lm)
     }
 
@@ -328,7 +389,7 @@ impl Checker {
             index_infos,
         );
         self.augment_members_set(t);
-        self.lazy_member_tables.remove(&t);
+        self.lazy_member_tables.remove(t);
     }
 
     // Go: getLazyDeclaredMember (#64475)
@@ -409,6 +470,73 @@ impl Checker {
         result
     }
 
+    /// The object type case of `get_property_of_type_ex` (Go with #64475)
+    /// for a type whose members are not resolved, with the switch on.
+    #[inline(never)]
+    pub(crate) fn get_property_of_unresolved_object_type_lazy(
+        &mut self,
+        t: TypeId,
+        name: TableKey<'_>,
+        skip_object_function_property_augment: bool,
+        include_type_only_members: bool,
+    ) -> SymbolId {
+        // PORT: the object type case of `get_property_of_type_ex`, with the
+        // member and the signature counts read through the accessors. Keep
+        // the two in step.
+        let mut symbol = self.get_member_of_unresolved_structured_type(t, name);
+        if symbol.is_some() {
+            let t_symbol = self.ty(t).symbol;
+            if !include_type_only_members
+                && t_symbol.is_some()
+                && self
+                    .sym(t_symbol)
+                    .flags
+                    .intersects(SymbolFlags::VALUE_MODULE)
+                && self
+                    .module_symbol_links
+                    .get(t_symbol)
+                    .type_only_export_star_map
+                    .get(name.text())
+                    .is_some_and(|n| n.is_some())
+            {
+                // If this is the type of a module, `resolved.members.get(name)` might have effectively skipped over
+                // an `export type * from './foo'`, leaving `symbolIsValue` unable to see that the symbol is being
+                // viewed through a type-only export.
+                return SymbolId::NIL;
+            }
+            if self.symbol_is_value_ex(symbol, include_type_only_members) {
+                return symbol;
+            }
+        }
+        if skip_object_function_property_augment {
+            return SymbolId::NIL;
+        }
+        // PERF (propfilt1): see `get_property_of_type_ex`.
+        if let TableKey::Name(key) = name {
+            if self.augment_lookups_miss(t, key) {
+                return SymbolId::NIL;
+            }
+        }
+        let (call_count, construct_count) = self.lazy_signature_counts(t);
+        let function_type = if t == self.any_function_type {
+            self.global_function_type
+        } else if call_count != 0 {
+            self.global_callable_function_type
+        } else if construct_count != 0 {
+            self.global_newable_function_type
+        } else {
+            TypeId::NIL
+        };
+        if function_type.is_some() {
+            symbol = self.get_property_of_object_type_key(function_type, name);
+            if symbol.is_some() {
+                return symbol;
+            }
+        }
+        let global_object_type = self.global_object_type;
+        self.get_property_of_object_type_key(global_object_type, name)
+    }
+
     /// The call and construct signature counts of the object type `t` after
     /// `get_property_of_type_ex` read its member: Go
     /// `len(getSignaturesOfStructuredType(t, kind))` with #64475
@@ -417,7 +545,7 @@ impl Checker {
     #[inline]
     pub(crate) fn signature_counts_of_looked_up_type(&mut self, t: TypeId) -> (usize, usize) {
         let ty = self.ty(t);
-        if !self.lazy_members || ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+        if ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) || !self.lazy_members {
             let resolved = ty.as_structured_type();
             return (
                 resolved.call_signatures().len(),
@@ -427,6 +555,7 @@ impl Checker {
         self.lazy_signature_counts(t)
     }
 
+    /// Go `len(getSignaturesOfStructuredType(t, kind))` of both kinds.
     #[inline(never)]
     fn lazy_signature_counts(&mut self, t: TypeId) -> (usize, usize) {
         let call_count = self
@@ -498,11 +627,37 @@ impl Checker {
         let declared_members = self.resolve_declared_members(source).declared_members;
         // PORT: Go loops over a map (random order); this is table order. The
         // answer is the same: `f` reads only flags.
-        let entries: SmallVec<[(Name, SymbolId); 16]> =
-            self.symbols.iter_names(declared_members).collect();
-        for (id, symbol) in entries {
-            if self.is_named_member(symbol, &id) && seen.insert(id.id()) && !f(self.sym(symbol)) {
+        // PERF: `is_named_member` only reads a member that is not an alias,
+        // so the loop runs in place up to the first alias, and goes on over
+        // a snapshot of the rest from there.
+        let mut alias_at = None;
+        for (position, (id, symbol)) in self.symbols.iter_names(declared_members).enumerate() {
+            let flags = self.sym(symbol).flags;
+            let named = if id.is_internal() && is_reserved_member_name(id.as_str()) {
+                false
+            } else if flags.intersects(SymbolFlags::VALUE) {
+                true
+            } else if flags.intersects(SymbolFlags::ALIAS) {
+                alias_at = Some(position);
+                break;
+            } else {
+                false
+            };
+            if named && seen.insert(id.id()) && !f(self.sym(symbol)) {
                 return false;
+            }
+        }
+        if let Some(position) = alias_at {
+            let entries: SmallVec<[(Name, SymbolId); 16]> = self
+                .symbols
+                .iter_names(declared_members)
+                .skip(position)
+                .collect();
+            for (id, symbol) in entries {
+                if self.is_named_member(symbol, &id) && seen.insert(id.id()) && !f(self.sym(symbol))
+                {
+                    return false;
+                }
             }
         }
         let base_types = lm.ready().base_types.clone();
@@ -530,26 +685,129 @@ impl Checker {
     // Go: isSymbolUnaffectedByInstantiation (#64475)
     /// Can change from false to true once the type of the symbol is
     /// resolved.
+    // PORT: the first half of `instantiate_symbol` (#64475 splits Go's
+    // instantiateSymbol in two). `instantiate_symbol` keeps its one body, so
+    // keep the two in step.
     pub(crate) fn is_symbol_unaffected_by_instantiation(
         &mut self,
         symbol: SymbolId,
         m: MapperId,
     ) -> bool {
         // The links read gives the symbol its id first, as Go's `Get`.
-        let (resolved_type, write_type) = {
+        let (links_resolved_type, links_write_type) = {
             let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             (links.resolved_type, links.write_type)
         };
-        self.is_symbol_unaffected_by_instantiation_with(symbol, m, resolved_type, write_type)
+        if m.is_some() && self.mapper(m).maps_this_only() && self.is_thisless(symbol) {
+            return true;
+        }
+        // If the type of the symbol is already resolved, and if that type could not possibly
+        // be affected by instantiation, simply return the symbol itself.
+        if links_resolved_type.is_some() && !self.could_contain_type_variables(links_resolved_type)
+        {
+            if !self.sym(symbol).flags.intersects(SymbolFlags::SET_ACCESSOR) {
+                return true;
+            }
+            // If we're a setter, check writeType.
+            if links_write_type.is_some() && !self.could_contain_type_variables(links_write_type) {
+                return true;
+            }
+        }
+        false
     }
 
     // Go: newInstantiatedSymbol (#64475)
+    // PORT: the second half of `instantiate_symbol`; keep the two in step.
     pub(crate) fn new_instantiated_symbol(&mut self, symbol: SymbolId, m: MapperId) -> SymbolId {
-        let (target, mapper, name_type) = {
+        let (links_target, links_mapper, links_name_type) = {
             let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             (links.target, links.mapper, links.name_type)
         };
-        self.new_instantiated_symbol_with(symbol, m, target, mapper, name_type)
+        let mut symbol = symbol;
+        let mut m = m;
+        if self
+            .sym(symbol)
+            .check_flags
+            .intersects(CheckFlags::INSTANTIATED)
+        {
+            // If symbol being instantiated is itself a instantiation, fetch the original target and combine the
+            // type mappers. This ensures that original type identities are properly preserved and that aliases
+            // always reference a non-aliases.
+            symbol = links_target;
+            m = self.combine_type_mappers(links_mapper, m);
+        }
+        // Keep the flags from the symbol we're instantiating.  Mark that is instantiated, and
+        // also transient so that we can just store data on it directly.
+        // PORT: as in `instantiate_symbol`, the full symbol is pushed once.
+        let full = {
+            let s = self.sym(symbol);
+            Symbol {
+                flags: s.flags | SymbolFlags::TRANSIENT,
+                name: s.name.clone(),
+                check_flags: CheckFlags::INSTANTIATED
+                    | s.check_flags
+                        & (CheckFlags::READONLY
+                            | CheckFlags::LATE
+                            | CheckFlags::OPTIONAL_PARAMETER
+                            | CheckFlags::REST_PARAMETER),
+                declarations: s.declarations.clone(),
+                parent: s.parent,
+                value_declaration: s.value_declaration,
+                ..Symbol::default()
+            }
+        };
+        self.symbol_count += 1;
+        let result = self.symbols.push_symbol(full);
+        self.value_symbol_links.insert_new_by_id(
+            &self.symbols,
+            result,
+            ValueSymbolLinks {
+                target: symbol,
+                mapper: m,
+                name_type: links_name_type,
+                ..ValueSymbolLinks::default()
+            },
+        );
+        result
+    }
+
+    // Go: appendInheritedSignaturesAndIndexInfos (#64475)
+    // PORT: the end of the base loop body of `resolve_object_type_members`,
+    // which keeps its own copy; keep the two in step.
+    fn append_inherited_signatures_and_index_infos(
+        &mut self,
+        call_signatures: SharedList<SignatureId>,
+        construct_signatures: SharedList<SignatureId>,
+        index_infos: SharedList<IndexInfoId>,
+        base_type: TypeId,
+    ) -> (
+        SharedList<SignatureId>,
+        SharedList<SignatureId>,
+        SharedList<IndexInfoId>,
+    ) {
+        let call_signatures = SharedList::concat(
+            call_signatures,
+            self.get_signatures_of_type(base_type, SignatureKind::CALL),
+        );
+        let construct_signatures = SharedList::concat(
+            construct_signatures,
+            self.get_signatures_of_type(base_type, SignatureKind::CONSTRUCT),
+        );
+        let inherited_index_infos: SharedList<IndexInfoId> = if base_type != self.any_type {
+            self.get_index_infos_of_type(base_type)
+        } else {
+            SharedList::from(&[self.any_base_type_index_info][..])
+        };
+        let filtered: Vec<IndexInfoId> = inherited_index_infos
+            .iter()
+            .copied()
+            .filter(|&info| {
+                let key_type = self.index_info(info).key_type;
+                self.find_index_info(&index_infos, key_type).is_nil()
+            })
+            .collect();
+        let index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
+        (call_signatures, construct_signatures, index_infos)
     }
 
     // The 4 shape queries of #64475. Their callers run these bodies when
