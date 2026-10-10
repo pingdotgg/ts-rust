@@ -125,7 +125,17 @@ fn build_watch_keeps_the_first_json_parse_of_a_cycle() {
 #[test]
 fn build_watch_parses_a_written_dts_again_in_the_next_cycle() {
     use std::time::Duration;
-    let root = scratch_dir("coarse-mtime");
+    // Go `CanWatchDirectory` watches no directory 3 or fewer levels below
+    // `/`, so no watch covers `/tmp/<dir>/out`. A TMPDIR can be deeper (the
+    // macOS-like runner's is `/private/var/folders/x/T`), so the test uses
+    // `/tmp`, and it is skipped where `/tmp` is not a directory one level
+    // below `/`.
+    let tmp = Path::new("/tmp");
+    if fs::canonicalize(tmp).ok().as_deref() != Some(tmp) {
+        eprintln!("skipped: the case needs /tmp, one level below /");
+        return;
+    }
+    let root = scratch_dir_in(tmp, "coarse-mtime");
     // As in the first test, the project is one level deeper. `lib` writes
     // to `<root>/out`, outside the project.
     let project = root.join("work").join("project");
@@ -343,11 +353,16 @@ fn normalize_watch_output(output: &str) -> String {
 /// for paths under it. A Windows real path is verbatim (`\\?\C:\...`),
 /// which a program does not take as a cwd, so it stays as made there.
 fn scratch_dir(test: &str) -> PathBuf {
+    scratch_dir_in(&std::env::temp_dir(), test)
+}
+
+/// `scratch_dir` under `base`.
+fn scratch_dir_in(base: &Path, test: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock after 1970")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = base.join(format!(
         "goport-build-watch-{test}-{}-{nanos}",
         std::process::id()
     ));
