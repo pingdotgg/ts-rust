@@ -542,6 +542,9 @@ impl Checker {
         {
             return false;
         }
+        if self.lazy_members {
+            return self.is_function_object_type_lazy(t);
+        }
         // We do a quick check for a "bind" property before performing the more expensive subtype
         // check. This gives us a quicker out in the common case where an object type is not a function.
         let resolved = self.resolve_structured_type_members(t);

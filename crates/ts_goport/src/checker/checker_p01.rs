@@ -925,6 +925,13 @@ pub struct Checker {
     pub symbol_container_links: LinkStore<SymbolId, Box<ContainingSymbolLinks>>,
     pub source_file_links: LinkStore<Node, Box<SourceFileLinks>>,
     pub pattern_for_type: FxHashMap<TypeId, Node>,
+    /// Go `lazyMemberTables` (microsoft/TypeScript#64475, not in the pin;
+    /// lazy_members.rs). Empty unless `lazy_members` is on.
+    pub(crate) lazy_member_tables:
+        FxHashMap<TypeId, Rc<crate::checker::lazy_members::LazyMemberTable>>,
+    /// lazymem1: `GOPORT_LAZY_MEMBERS=1` (lazy_members.rs). Not in Go. Set
+    /// once at creation; off, no lazy member table is made.
+    pub lazy_members: bool,
     pub context_free_types: FxHashMap<Node, TypeId>,
     pub any_type: TypeId,
     pub auto_type: TypeId,
@@ -1442,6 +1449,8 @@ impl Checker {
             symbol_container_links: LinkStore::default(),
             source_file_links: LinkStore::default(),
             pattern_for_type: FxHashMap::default(),
+            lazy_member_tables: FxHashMap::default(),
+            lazy_members: crate::checker::lazy_members::lazy_members_from_env(),
             context_free_types: FxHashMap::default(),
             any_type: TypeId::NIL,
             auto_type: TypeId::NIL,

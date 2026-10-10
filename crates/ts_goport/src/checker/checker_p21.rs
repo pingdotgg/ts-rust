@@ -492,8 +492,14 @@ impl Checker {
         let t = self.get_reduced_apparent_type(t);
         let flags = self.ty(t).flags;
         if flags.intersects(TypeFlags::OBJECT) {
-            let members = self.resolve_structured_type_members(t).members;
-            let mut symbol = self.symbols.get_key(members, name);
+            // Go (#64475): getMemberOfStructuredType. A resolved type reads
+            // its members here; else the lazy table or a full resolve.
+            let ty = self.ty(t);
+            let mut symbol = if ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+                self.symbols.get_key(ty.as_structured_type().members, name)
+            } else {
+                self.get_member_of_unresolved_structured_type(t, name)
+            };
             if symbol.is_some() {
                 let t_symbol = self.ty(t).symbol;
                 if !include_type_only_members
@@ -533,9 +539,7 @@ impl Checker {
                     return SymbolId::NIL;
                 }
             }
-            let resolved = self.ty(t).as_structured_type();
-            let call_count = resolved.call_signatures().len();
-            let construct_count = resolved.construct_signatures().len();
+            let (call_count, construct_count) = self.signature_counts_of_looked_up_type(t);
             let function_type = if t == self.any_function_type {
                 self.global_function_type
             } else if call_count != 0 {
@@ -599,12 +603,12 @@ impl Checker {
     #[inline(never)]
     fn augment_lookups_miss_partial(&mut self, t: TypeId, bits: (usize, usize)) -> bool {
         // The function type of checker.go:19262-19268.
-        let resolved = self.ty(t).as_structured_type();
+        let (call_count, construct_count) = self.signature_counts_of_looked_up_type(t);
         let function_slot = if t == self.any_function_type {
             Some(AUGMENT_FUNCTION)
-        } else if !resolved.call_signatures().is_empty() {
+        } else if call_count != 0 {
             Some(AUGMENT_CALLABLE)
-        } else if !resolved.construct_signatures().is_empty() {
+        } else if construct_count != 0 {
             Some(AUGMENT_NEWABLE)
         } else {
             None
@@ -651,7 +655,7 @@ impl Checker {
     /// needs `t`) sets members that the outer one then replaces, so each
     /// set builds again.
     #[inline]
-    fn augment_members_set(&mut self, t: TypeId) {
+    pub(crate) fn augment_members_set(&mut self, t: TypeId) {
         if self.augment_globals().contains(&t) {
             self.build_augment_filter(t);
         }
@@ -757,6 +761,9 @@ impl Checker {
         if !self.ty(t).flags.intersects(TypeFlags::STRUCTURED_TYPE) {
             return SharedList::default();
         }
+        if let Some(signatures) = self.lazy_signatures_of_structured_type(t, kind) {
+            return signatures;
+        }
         let Some(d) = &self.resolve_structured_type_members(t).signatures_data else {
             return SharedList::default();
         };
@@ -804,6 +811,9 @@ impl Checker {
     // Go: checker/checker.go:19318 getIndexInfosOfStructuredType
     pub fn get_index_infos_of_structured_type(&mut self, t: TypeId) -> SharedList<IndexInfoId> {
         if self.ty(t).flags.intersects(TypeFlags::STRUCTURED_TYPE) {
+            if let Some(index_infos) = self.lazy_index_infos_of_structured_type(t) {
+                return index_infos;
+            }
             return self.resolve_structured_type_members(t).index_infos_list();
         }
         SharedList::default()
@@ -985,24 +995,20 @@ impl Checker {
 
     // Go: checker/checker.go:19435 resolveTypeReferenceMembers
     pub fn resolve_type_reference_members(&mut self, t: TypeId) {
-        let source = self.ty(t).target();
-        let type_parameters = self
-            .ty(source)
-            .as_interface_type()
-            .all_type_parameters
-            .clone();
-        // One exact-size allocation: the arguments, then `t` as the `this`
-        // argument when only that one is missing.
-        let padded_type_arguments = {
-            let type_arguments = self.type_arguments_of(t);
-            let pad = type_arguments.len() == type_parameters.len().wrapping_sub(1);
-            let mut padded = Vec::with_capacity(type_arguments.len() + usize::from(pad));
-            padded.extend_from_slice(&type_arguments);
-            if pad {
-                padded.push(t);
+        if self.lazy_members {
+            if let Some(lm) = self
+                .lazy_member_tables
+                .get(&t)
+                .filter(|lm| lm.is_ready())
+                .cloned()
+            {
+                self.resolve_lazy_members(t, &lm);
+                return;
             }
-            padded
-        };
+        }
+        let source = self.ty(t).target();
+        let (type_parameters, padded_type_arguments) =
+            self.get_reference_member_type_arguments(t, source);
         self.resolve_object_type_members(t, source, &type_parameters, &padded_type_arguments);
     }
 
@@ -1089,29 +1095,13 @@ impl Checker {
                 }
                 let base_properties = self.get_properties_of_type(instantiated_base_type);
                 members = self.add_inherited_members(members, &base_properties);
-                call_signatures = SharedList::concat(
-                    call_signatures,
-                    self.get_signatures_of_type(instantiated_base_type, SignatureKind::CALL),
-                );
-                construct_signatures = SharedList::concat(
-                    construct_signatures,
-                    self.get_signatures_of_type(instantiated_base_type, SignatureKind::CONSTRUCT),
-                );
-                let inherited_index_infos: SharedList<IndexInfoId> =
-                    if instantiated_base_type != self.any_type {
-                        self.get_index_infos_of_type(instantiated_base_type)
-                    } else {
-                        SharedList::from(&[self.any_base_type_index_info][..])
-                    };
-                let filtered: Vec<IndexInfoId> = inherited_index_infos
-                    .iter()
-                    .copied()
-                    .filter(|&info| {
-                        let key_type = self.index_info(info).key_type;
-                        self.find_index_info(&index_infos, key_type).is_nil()
-                    })
-                    .collect();
-                index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
+                (call_signatures, construct_signatures, index_infos) = self
+                    .append_inherited_signatures_and_index_infos(
+                        call_signatures,
+                        construct_signatures,
+                        index_infos,
+                        instantiated_base_type,
+                    );
             }
             let call_signature_count = call_signatures.len();
             self.set_structured_type_members_ex(
@@ -1137,9 +1127,48 @@ impl Checker {
         self.augment_members_set(t);
     }
 
+    // Go: appendInheritedSignaturesAndIndexInfos (#64475): the end of the
+    // base loop body of resolveObjectTypeMembers, moved out with no change.
+    #[inline]
+    pub(crate) fn append_inherited_signatures_and_index_infos(
+        &mut self,
+        call_signatures: SharedList<SignatureId>,
+        construct_signatures: SharedList<SignatureId>,
+        index_infos: SharedList<IndexInfoId>,
+        base_type: TypeId,
+    ) -> (
+        SharedList<SignatureId>,
+        SharedList<SignatureId>,
+        SharedList<IndexInfoId>,
+    ) {
+        let call_signatures = SharedList::concat(
+            call_signatures,
+            self.get_signatures_of_type(base_type, SignatureKind::CALL),
+        );
+        let construct_signatures = SharedList::concat(
+            construct_signatures,
+            self.get_signatures_of_type(base_type, SignatureKind::CONSTRUCT),
+        );
+        let inherited_index_infos: SharedList<IndexInfoId> = if base_type != self.any_type {
+            self.get_index_infos_of_type(base_type)
+        } else {
+            SharedList::from(&[self.any_base_type_index_info][..])
+        };
+        let filtered: Vec<IndexInfoId> = inherited_index_infos
+            .iter()
+            .copied()
+            .filter(|&info| {
+                let key_type = self.index_info(info).key_type;
+                self.find_index_info(&index_infos, key_type).is_nil()
+            })
+            .collect();
+        let index_infos = SharedList::concat(index_infos, SharedList::from(filtered));
+        (call_signatures, construct_signatures, index_infos)
+    }
+
     /// Go `instantiateList` on a shared list. When no element changes, the
     /// result is `values` itself, as Go returns the input slice.
-    fn instantiate_shared_list<T: Copy + Default + PartialEq>(
+    pub(crate) fn instantiate_shared_list<T: Copy + Default + PartialEq>(
         &mut self,
         values: SharedList<T>,
         m: MapperId,
@@ -1585,6 +1614,9 @@ impl Checker {
         allow_members: bool,
     ) -> SignatureId {
         if self.ty(t).flags.intersects(TypeFlags::OBJECT) {
+            if self.lazy_members {
+                return self.get_single_signature_lazy(t, kind, allow_members);
+            }
             let resolved = self.resolve_structured_type_members(t);
             if allow_members || resolved.properties.is_empty() && resolved.index_infos().is_empty()
             {

@@ -1803,6 +1803,9 @@ impl Checker {
     // and no required properties, call/construct signatures or index signatures
     pub fn is_weak_type(&mut self, t: TypeId) -> bool {
         if self.ty(t).flags.intersects(TypeFlags::OBJECT) {
+            if self.lazy_members {
+                return self.is_weak_object_type_lazy(t);
+            }
             // PORT: the resolved members are read in place, not copied.
             self.resolve_structured_type_members(t);
             let resolved = self.ty(t).as_structured_type();
