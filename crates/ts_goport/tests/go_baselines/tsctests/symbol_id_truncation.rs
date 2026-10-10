@@ -5,10 +5,10 @@
 //! `valueSymbolLinks` (checker/links.go:33) and of a few node builder maps.
 //! The checkers of a pool share one counter, and each `NewChecker` gives 4
 //! checker symbols their ids before the first check
-//! (checker/checker.go:1355 initializeChecker). The property name of a
-//! unique symbol holds its id (`<prefix>@k4@<id>`, checker/checker.go:23402
+//! (checker/checker.go:1358 initializeChecker). The property name of a
+//! unique symbol holds its id (`<prefix>@k4@<id>`, checker/checker.go:23470
 //! getESSymbolLikeTypeForNode), and the node builder counts the length of
-//! that name toward truncation (checker/nodebuilderimpl.go:2614
+//! that name toward truncation (checker/nodebuilderimpl.go:2617
 //! addPropertyToElementList). So the digits of the id move where
 //! `... N more ...` starts (`SymbolArenaLinks`, `program::new_pool_checker`).
 //!
@@ -170,7 +170,7 @@ fn pool_checkers_skip_only_the_ids_of_their_own_symbols() {
 #[test]
 fn merge_error_texts_give_ids_with_one_checker() {
     // The node builder gives `d0` to `d25` their ids as it writes their
-    // names in the merge errors (nodebuilderimpl.go:974
+    // names in the merge errors (nodebuilderimpl.go:975
     // getNameOfSymbolAsWritten), before `NewChecker` gives its 4 ids. So
     // with one checker k4 gets id 35, not 9, and w14 goes.
     let files = [

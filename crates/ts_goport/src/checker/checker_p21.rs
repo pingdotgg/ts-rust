@@ -2450,7 +2450,7 @@ type T2 = new () => {};
 
     /// The union waits for all 4 types (R183 reviewer item 2).
     /// `initialize_checker` sets Object before Function, CallableFunction
-    /// and NewableFunction (Go checker.go:1361-1364). A filter of Object
+    /// and NewableFunction (Go checker.go:1364-1367). A filter of Object
     /// built between them must not make a union of Object's names alone:
     /// once Function is set, the lookups of its names would skip it.
     #[test]

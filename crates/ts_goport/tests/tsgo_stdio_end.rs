@@ -3,7 +3,7 @@
 //! `signal.NotifyContext`).
 //!
 //! - `-w`: the watch loop selects on `ctx.Done()` (Go
-//!   execute/watchmanager/watchmanager.go:354), so a signal ends the run at
+//!   execute/watchmanager/watchmanager.go:382), so a signal ends the run at
 //!   once with exit code 0. The port waited on the cycle channel with a
 //!   50 ms timeout and ended up to 50 ms later.
 //! - `--api`: the sync API (`ipc/conn_sync.go:55`) runs a request inline
@@ -16,7 +16,7 @@
 //! right after the answer: PORTING.md, "Not ported (plan level)", "The end
 //! on SIGINT or SIGTERM in `--api --async`".
 //!
-//! `--lsp` is not here. Go's `Run` (lsp/server.go:859) does not wait for
+//! `--lsp` is not here. Go's `Run` (lsp/server.go:895) does not wait for
 //! the work that Go runs on goroutines (the async part of a request, an API
 //! session), and the port waits for it: PORTING.md, "Not ported (plan
 //! level)", "The end of a run".

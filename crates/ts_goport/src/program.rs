@@ -3511,7 +3511,7 @@ fn create_checkers() -> CheckerPool {
     start_checkers(count)
 }
 
-// Go: compiler/checkerpool.go:365 createCheckers (one `checker.NewChecker`)
+// Go: compiler/checkerpool.go:367 createCheckers (one `checker.NewChecker`)
 /// Makes checker `index` of a pool of `count` on this thread.
 // PORT: Go makes every checker of the pool before the first check, and the
 // checkers share one symbol id counter (`ast.GetSymbolId`). So the first

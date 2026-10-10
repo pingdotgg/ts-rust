@@ -16,7 +16,7 @@ use super::resolveahead_test::{os_session, write};
 use super::util::{edit, open, open_kind};
 
 /// The `file:` URI of `name` in `root`. A Windows root (`C:/a/b`) has no
-/// leading slash, so the URI needs the third one (Go lsp.go:57
+/// leading slash, so the URI needs the third one (Go lsproto/lsp.go:144
 /// fixWindowsURIPath strips it).
 fn file_uri(root: &str, name: &str) -> String {
     let slash = if root.starts_with('/') { "" } else { "/" };

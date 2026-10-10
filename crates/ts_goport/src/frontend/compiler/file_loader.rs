@@ -3942,7 +3942,7 @@ export const a: T | Dep | number = x + (h as never);
     // the plain files, also on a loaded host where the loader would reach
     // them first. The parallel load still runs again, at most 10 times,
     // until a worker sent the transform of the `@badmap` file. Go sends the
-    // transforms from its parse goroutines (fileloader.go:438
+    // transforms from its parse goroutines (fileloader.go:436
     // parseContentMappedFile), and parses only after the mapping check
     // (transform.go:48-58 ParseResult).
     #[cfg(unix)]
