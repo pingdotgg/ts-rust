@@ -14,16 +14,16 @@
 //! it did before. With it on, the output must equal Go at the pin with
 //! #64475 applied.
 //!
-//! PERF (lazymem1 round 2): each hook in the checker keeps its old body and
-//! adds one test before it: for a type whose members are not resolved, it
-//! tests the switch and calls one cold function here, through `opaque`. A resolved type does
-//! not test the switch (`is_string_index_signature_only_type_worker` tests
-//! it for every object type). This module calls no checker function that
+//! PERF (lazymem1 round 2): the hooks in the checker test
+//! `MEMBERS_RESOLVED` once, read a resolved type in place and take an
+//! unresolved type out of line, where they test the switch; only
+//! `is_string_index_signature_only_type_worker` tests the switch for every
+//! object type. They call this module through `opaque`, so it is not in the
+//! call graph cycle of the checker. This module calls no checker function that
 //! LLVM inlines at all its call sites: it has copies of those (see
-//! `resolve_declared_members_lazy`). Round 1 changed the bodies of the hooks
-//! and called those functions, and the PGO + BOLT release build then
-//! inlined differently on the member resolution path: multi-threaded wall
-//! time went up by 0.7 to 1.7% on mini-743d.
+//! `resolve_declared_members_lazy`). Round 1 called those functions and this
+//! module directly, and the PGO + BOLT release build then inlined
+//! differently on the member resolution and property access paths.
 //!
 //! PORT: Go keeps `*lazyMemberTable` in a map and a caller keeps its
 //! pointer after a nested `resolveLazyMembers` deletes the entry. Here the
@@ -460,6 +460,14 @@ impl Checker {
         self.lazy_member_tables.remove(t);
     }
 
+    /// Whether `t` has a ready lazy member table (`get_ready_lazy_member_table`),
+    /// for `resolve_structured_type_members_unless_lazy`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn has_ready_lazy_member_table(&mut self, t: TypeId) -> bool {
+        self.get_ready_lazy_member_table(t).is_some()
+    }
+
     /// The first test of Go `resolveTypeReferenceMembers` with #64475: a
     /// ready lazy member table of `t` gives its full members. True when it
     /// did. `resolve_type_reference_members` calls it with the switch on.
@@ -561,31 +569,10 @@ impl Checker {
     }
 
     /// The object type case of `get_property_of_type_ex` (Go with #64475)
-    /// for a type whose members are not resolved, with the switch on.
-    /// `None` when `t` has no ready lazy member table: the caller then
-    /// resolves `t`. The first read can prepare the table, and the prepare
-    /// step can resolve `t` (Go getMemberOfUnresolvedStructuredType calls
-    /// resolveStructuredTypeMembers).
+    /// for a type with a ready lazy member table, with the switch on.
     #[cold]
     #[inline(never)]
-    pub(crate) fn get_property_of_lazy_object_type(
-        &mut self,
-        t: TypeId,
-        name: TableKey<'_>,
-        skip_object_function_property_augment: bool,
-        include_type_only_members: bool,
-    ) -> Option<SymbolId> {
-        self.get_ready_lazy_member_table(t)?;
-        Some(self.get_property_of_unresolved_object_type_lazy(
-            t,
-            name,
-            skip_object_function_property_augment,
-            include_type_only_members,
-        ))
-    }
-
-    /// `get_property_of_lazy_object_type` of a type with a ready table.
-    fn get_property_of_unresolved_object_type_lazy(
+    pub(crate) fn get_property_of_unresolved_object_type_lazy(
         &mut self,
         t: TypeId,
         name: TableKey<'_>,
