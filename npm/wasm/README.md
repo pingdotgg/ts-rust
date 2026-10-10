@@ -64,8 +64,9 @@ To try the example, run `python3 -m http.server -d npm/wasm` and open
 ## Editor language service
 
 `createLanguageService` keeps an in-memory project in its own WebAssembly instance. In browsers,
-call it in a module Web Worker so requests do not block the page. It runs on the calling thread in
-Node too; use a worker when the host needs the main thread to remain responsive.
+call it in a module Web Worker so requests do not block the page. The Node entry owns a persistent
+worker with a 256 MB stack, configurable through `stackSizeMb`. The core entry runs on its caller's
+thread. Bun uses that calling-thread path because its workers ignore the stack-size setting.
 
 ```js
 import { createLanguageService } from "ts-rust-wasm";
@@ -91,6 +92,11 @@ URIs and positions count UTF-16 code units. Pass `capabilities` with the client'
 to select supported response shapes and the semantic-token legend. This is a callable language
 service API; it does not start the native `--lsp` transport or its file watchers.
 
+The Node entry accepts an explicit `wasm` source as a compiled module, bytes, a response or a URL,
+including a file URL. File inputs accept structural readonly maps and records. Setup errors carry
+TypeScript diagnostics in `error.data.diagnostics`. Request errors use JSON-RPC error codes.
+Nonnegative character positions beyond a line's content clamp to its end, as LSP specifies.
+
 Supported methods:
 
 - `textDocument/hover`, `textDocument/completion`, `textDocument/signatureHelp`
@@ -106,6 +112,9 @@ it, including its imports and configuration. Repeated reads share the current pr
 interface does not reuse the compiler program across changes, supply auto-import completions, or
 resolve completion/code-action items. Those operations need additional host integration.
 
+The position converters keep one line map per file for the current program. File changes release
+those maps together with the program, so token, symbol and reference results use the current text.
+
 `dispose` releases the instance, and repeated disposal is safe. Rejected parameters leave the
 service usable. A WebAssembly trap ends that service; dispose it and create a new service.
 Each service and each `tsc` run has an independent instance, even when they share a compiled module.
@@ -115,6 +124,11 @@ After building the module, `npm test` runs the compiler controls and the persist
 sequence. Serve `npm/wasm` and open `examples/language-service/` to run the same sequence in a
 browser worker, including compiler and DOM-library controls. The existing worker stack limits
 also apply to language-service requests.
+
+`node bench/language-service.mjs [wasm-source]` measures position-heavy requests on two synthetic
+file sizes, reporting result counts, request time and source-file reads. Compare the same fixtures
+and build profile on the same machine. The Node tests bound source reads independently of token
+count and verify that an edit refreshes positions.
 
 ## How it works
 

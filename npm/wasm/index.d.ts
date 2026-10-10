@@ -50,5 +50,5 @@ export function tsc(args: string[], options?: TscOptions): Promise<TscResult>;
 /** The compiled module. The browser entry takes where to load it from. */
 export function loadModule(source?: TscOptions["wasm"]): Promise<WasmModule>;
 
-/** Creates an in-memory editor service on the calling thread. Use a worker in browsers. */
-export function createLanguageService(options?: LanguageServiceOptions & { wasm?: TscOptions["wasm"] }): Promise<LanguageService>;
+/** Creates an editor service. Node owns a worker with `stackSizeMb`; use a worker in browsers. */
+export function createLanguageService(options?: LanguageServiceOptions & Pick<TscOptions, "wasm" | "stackSizeMb">): Promise<LanguageService>;

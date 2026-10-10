@@ -50,11 +50,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target wasm32-wasip1
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target wasm32-wasip1 --component clippy
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: scripts/wasm/build.sh
+      - run: cargo clippy --locked --target wasm32-wasip1 -p ts_wasm -- -D warnings
       - run: npm test --prefix npm/wasm
 
   lint:

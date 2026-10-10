@@ -15,6 +15,7 @@ crate-type = ["cdylib"]
 [dependencies]
 ts_goport = { path = "../ts_goport", default-features = false }
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 
 # Not the workspace lints: this crate is the wasm ABI, and its exports need
 # `#[unsafe(no_mangle)]` and its imports an `unsafe extern` block. All other

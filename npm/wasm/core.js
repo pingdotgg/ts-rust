@@ -3,6 +3,8 @@
 // It needs only WebAssembly, TextEncoder, TextDecoder, crypto and
 // performance, so it runs in Node, Deno, Bun and browsers.
 
+import { fileEntries } from "./file-map.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 // For file text: keeps a leading BOM (--emitBOM), which `decoder` drops.
@@ -295,8 +297,7 @@ export function runTsc(module, options) {
 export async function runTscAsync(module, options) {
     const run = prepareRun(module, options);
     const tsRun = run.start(await WebAssembly.instantiate(module, run.imports));
-    const jspi = typeof WebAssembly.promising === "function" && typeof document === "undefined";
-    const call = jspi ? WebAssembly.promising(tsRun) : tsRun;
+    const call = asyncWasmCall(tsRun);
     let exitCode;
     let error;
     try {
@@ -309,15 +310,11 @@ export async function runTscAsync(module, options) {
 
 /** A persistent, in-memory editor service. Run it in a worker in browsers. */
 export async function createLanguageService(module, options = {}) {
-    const files = options.files instanceof Map
-        ? new Map(options.files)
-        : new Map(Object.entries(options.files ?? {}));
+    const files = new Map(fileEntries(options.files));
     const fs = memoryFileSystem(files);
-    validateFiles(files);
     const run = prepareRun(module, { ...options, fs });
     let exports = run.attach(await WebAssembly.instantiate(module, run.imports));
-    const jspi = typeof WebAssembly.promising === "function" && typeof document === "undefined";
-    let invoke = jspi ? WebAssembly.promising(exports.ts_service) : exports.ts_service;
+    let invoke = asyncWasmCall(exports.ts_service);
     let queue = Promise.resolve();
     let disposal;
     let failure;
@@ -337,7 +334,7 @@ export async function createLanguageService(module, options = {}) {
             failure = Object.assign(error, { stderr: run.stderrText() });
             throw failure;
         }
-        if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code });
+        if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code, data: result.error.data });
         return result.result;
     }
 
@@ -354,8 +351,8 @@ export async function createLanguageService(module, options = {}) {
             return enqueue(() => call({ action: "request", method, params }));
         },
         updateFiles(changes) {
-            const entries = changes instanceof Map ? Array.from(changes) : Object.entries(changes);
-            try { validateFiles(entries); } catch (error) { return Promise.reject(error); }
+            let entries;
+            try { entries = fileEntries(changes); } catch (error) { return Promise.reject(error); }
             return enqueue(async () => {
                 await call({ action: "invalidate" });
                 for (const [path, text] of entries) files.set(path, text);
@@ -388,12 +385,9 @@ export async function createLanguageService(module, options = {}) {
     };
 }
 
-function validateFiles(entries) {
-    for (const [path, text] of entries) {
-        if (typeof path !== "string" || !path.startsWith("/") || typeof text !== "string") {
-            throw new TypeError("files must map absolute paths to text");
-        }
-    }
+function asyncWasmCall(fn) {
+    const useJspi = typeof WebAssembly.promising === "function" && typeof document === "undefined";
+    return useJspi ? WebAssembly.promising(fn) : fn;
 }
 
 /**

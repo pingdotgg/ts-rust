@@ -7,11 +7,14 @@ import { statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import { createLanguageService as createCoreLanguageService } from "./core.js";
+import { createWorkerLanguageService } from "./node-language-service.js";
 export { memoryFileSystem, runTsc, runTscAsync } from "./core.js";
 
-/** Creates a persistent, in-memory editor service on this thread. */
+/** Creates a persistent editor worker with a large stack. */
 export async function createLanguageService(options = {}) {
-    return createCoreLanguageService(await loadModule(), options);
+    const module = await loadModule(options.wasm);
+    if (process.versions.bun) return createCoreLanguageService(module, options);
+    return createWorkerLanguageService(module, options);
 }
 
 const wasmUrl = new URL("./ts_rust.wasm", import.meta.url);
@@ -22,9 +25,24 @@ const STACK_SIZE_MB = 256;
 let modulePromise;
 
 /** The compiled module, compiled on first use. */
-export function loadModule() {
+export function loadModule(source) {
+    if (source !== undefined) return compileModule(source);
     modulePromise ??= readFile(wasmUrl).then(bytes => WebAssembly.compile(bytes));
     return modulePromise;
+}
+
+async function compileModule(source) {
+    if (source instanceof WebAssembly.Module) return source;
+    if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) return WebAssembly.compile(source);
+    if (source instanceof Response) return compileResponse(source);
+    const url = new URL(source, wasmUrl);
+    if (url.protocol === "file:") return WebAssembly.compile(await readFile(url));
+    return compileResponse(await fetch(url));
+}
+
+async function compileResponse(response) {
+    if (!response.ok) throw new Error(`ts-rust: cannot load the wasm module: ${response.status} ${response.url}`);
+    return WebAssembly.compile(await response.arrayBuffer());
 }
 
 /**

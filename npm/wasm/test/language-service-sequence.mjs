@@ -124,6 +124,9 @@ export async function verifyLanguageService(create) {
 
         await rejects(() => service.request("textDocument/hover", { textDocument: { uri }, position: { line: -1, character: 0 } }), "negative position");
         await rejects(() => service.request("textDocument/hover", { textDocument: { uri }, position: { line: 900, character: 0 } }), "out-of-range position");
+        const end = { textDocument: { uri }, position: { line: 2, character: 12 } };
+        const clamped = { textDocument: { uri }, position: { line: 2, character: 1_000_000 } };
+        check(JSON.stringify(await service.request("textDocument/hover", end)) === JSON.stringify(await service.request("textDocument/hover", clamped)), "overlong columns must clamp to line end");
         await rejects(() => service.request("textDocument/hover", { textDocument: { uri: "bad%" }, position: { line: 0, character: 0 } }), "invalid URI");
         await rejects(() => service.request("textDocument/hover", {}), "missing document");
         await rejects(() => service.request("unsupported", { textDocument: { uri } }), "unsupported request");
@@ -149,9 +152,52 @@ export async function verifyLanguageService(create) {
         await answers(isolated, "number", 0, true);
         await rejects(() => create({ args: ["a.ts"], files: { "a.ts": "const n = 1;" } }), "relative creation path");
         await rejects(() => create({ args: ["/a.ts"], files: { "/a.ts": 123 } }), "non-text creation file");
+        await verifyResultShapes(create);
         return { updates: true, navigation: true, isolation: true, unicode: true, boundaries: true, disposal: true };
     } finally {
         await service.dispose();
         await isolated.dispose();
     }
+}
+
+async function verifyResultShapes(create) {
+    const a = 'export interface Person { name: string }\nexport class User implements Person { name = "Ada"; }\nexport function greet(person: Person, greeting: string): string { return greeting + person.name; }\nexport const unused = 1;\n';
+    const b = 'import { User } from "./a";\nimport { Person, greet, unused } from "./a";\nexport const person: Person = new User();\ngreet(person, "hello");\nperson;\n';
+    const options = project();
+    options.files["/p/a.ts"] = a;
+    options.files["/p/b.ts"] = b;
+    const service = await create(options);
+    try {
+        const types = await service.request("textDocument/typeDefinition", params(b, "person;", 2));
+        check(JSON.stringify(types).includes("file:///p/a.ts"), "type definition must locate the interface");
+        const implementations = await service.request("textDocument/implementation", params(a, "interface Person", 12, "file:///p/a.ts"));
+        check(JSON.stringify(implementations).includes('"line":1'), "implementation must locate the implementing class");
+        const signature = await service.request("textDocument/signatureHelp", params(b, 'greet(person, "hello")', 14));
+        check(signature.signatures.length > 0 && signature.activeParameter === 1, "signature help must identify the second parameter");
+        check(signature.signatures[0].parameters.length === 2, "signature help must return both parameters");
+        const actions = await service.request("textDocument/codeAction", {
+            textDocument: { uri }, range: { start: { line: 0, character: 0 }, end: { line: 4, character: 7 } },
+            context: { diagnostics: [], only: ["source.removeUnusedImports.ts"] },
+        });
+        const action = actions.find(action => action.edit);
+        check(action, "unused-import action must provide an edit");
+        const changes = action.edit.changes ?? {};
+        let updated = b;
+        if (changes[uri]) updated = applyEdits(b, changes[uri]);
+        for (const change of action.edit.documentChanges ?? []) {
+            if (change.textDocument?.uri === uri) updated = applyEdits(b, change.edits);
+        }
+        check(!updated.includes("unused"), "the action must remove the unused import");
+        await service.updateFiles({ "/p/b.ts": updated });
+        const diagnostics = await service.request("textDocument/diagnostic", { textDocument: { uri } });
+        check(!diagnostics.items.some(item => item.severity === 1), "the applied action must leave a valid program");
+        const compact = 'export const compact={a:1,b:2};\nexport const sentinel = 7;\n';
+        await service.updateFiles({ "/p/b.ts": compact });
+        const edits = await service.request("textDocument/rangeFormatting", {
+            textDocument: { uri }, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 30 } }, options: { tabSize: 2, insertSpaces: true },
+        });
+        check(edits.length > 0, "range formatting must return edits for compact source");
+        const formatted = applyEdits(compact, edits);
+        check(formatted.includes("compact =") && formatted.endsWith("export const sentinel = 7;\n"), "range formatting must change the target and preserve surrounding text");
+    } finally { await service.dispose(); }
 }
