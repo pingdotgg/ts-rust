@@ -13,6 +13,10 @@
 //!   request inline and checked the context after it. The sync API
 //!   (`ipc/conn_sync.go:55`) runs the request inline in Go too, so it ends
 //!   right after the answer.
+//! - `--api --async` while a request waits for a client callback: Go's
+//!   `Call` returns the context error at once, and the read loop ends after
+//!   the next message (the reply, or a new request). The port reads that
+//!   message in `call`, so it must take Go's check there too.
 //!
 //! `--lsp` is not here. Go's `Run` (lsp/server.go:859) does not wait for
 //! the work that Go runs on goroutines (the async part of a request, an API
@@ -114,11 +118,60 @@ fn api_signal_during_a_request() {
                 tsgo.wait_exit(Duration::from_millis(500)).is_none(),
                 "the async API ended after the answer; Go waits in the read"
             );
-            let eof = Instant::now();
-            tsgo.close_stdin();
-            (eof, "the async API at EOF")
+            // Go reads the next message, starts its handler and then
+            // checks the context, so it answers and ends.
+            let next = Instant::now();
+            tsgo.send(&frame(r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#));
+            tsgo.wait_stdout(r#"{"jsonrpc":"2.0","id":2,"result":"pong"}"#);
+            (next, "the async API after the next message")
         };
         tsgo.expect_end(since, what, 0, "");
+    }
+}
+
+#[test]
+fn api_async_signal_while_a_callback_waits() {
+    // (what the client sends after the signal, the text it waits for)
+    let next = [
+        // The reply to the callback.
+        (
+            r#"{"jsonrpc":"2.0","id":"api1","result":null}"#,
+            r#""id":1"#,
+        ),
+        // A new request before the reply.
+        (
+            r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"result":"pong"}"#,
+        ),
+    ];
+    for (message, answered) in next {
+        let dir = TempDir::new("callback");
+        dir.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"strict":true},"include":["src"]}"#,
+        );
+        dir.write("src/a.ts", "export const a: number = 1;\n");
+        let cwd = dir.0.to_str().unwrap();
+        let args = ["--api", "--async", "--callbacks", "readFile", "--cwd", cwd];
+        let mut tsgo = Tsgo::start(&args, &dir.0);
+        let config = dir.0.join("tsconfig.json");
+        tsgo.send(&frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"createSnapshot","params":{{"openProjects":["{}"]}}}}"#,
+            config.display()
+        )));
+        tsgo.wait_stdout(r#""id":"api1","method":"readFile""#);
+        tsgo.signal(Signal::INT);
+        assert!(
+            tsgo.wait_exit(Duration::from_millis(500)).is_none(),
+            "{message}: tsgo ended before the next message; Go waits in the read"
+        );
+        let since = Instant::now();
+        tsgo.send(&frame(message));
+        tsgo.wait_stdout(answered);
+        // Request 1 gets the error of the callback. Go answers it at once,
+        // the port after the next message (its read in `call` waits).
+        tsgo.wait_stdout("panic: context canceled");
+        tsgo.expect_end(since, message, 0, "");
     }
 }
 
@@ -126,7 +179,7 @@ fn api_signal_during_a_request() {
 /// threads into buffers. Drop kills a tsgo that still runs.
 struct Tsgo {
     child: Child,
-    stdin: Option<ChildStdin>,
+    stdin: ChildStdin,
     stdout: Arc<Mutex<Vec<u8>>>,
     stderr: Arc<Mutex<Vec<u8>>>,
     status: Option<ExitStatus>,
@@ -145,7 +198,7 @@ impl Tsgo {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().unwrap();
         let stdout = Arc::new(Mutex::new(Vec::new()));
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let mut readers = Vec::new();
@@ -197,13 +250,8 @@ impl Tsgo {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        let stdin = self.stdin.as_mut().expect("stdin is open");
-        stdin.write_all(bytes).unwrap();
-        stdin.flush().unwrap();
-    }
-
-    fn close_stdin(&mut self) {
-        self.stdin = None;
+        self.stdin.write_all(bytes).unwrap();
+        self.stdin.flush().unwrap();
     }
 
     fn signal(&self, signal: Signal) {
