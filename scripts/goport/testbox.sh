@@ -29,8 +29,10 @@ cmd="$1"
 shift
 case "$cmd" in
   warmup)
-    out="$(blacksmith testbox warmup testbox.yml --ref "${TESTBOX_REF:-main}" --idle-timeout "${TESTBOX_IDLE:-15}" 2>&1)"
+    rc=0
+    out="$(blacksmith testbox warmup testbox.yml --ref "${TESTBOX_REF:-main}" --idle-timeout "${TESTBOX_IDLE:-15}" 2>&1)" || rc=$?
     echo "$out"
+    ((rc == 0)) || exit "$rc"
     id="$(grep -oE 'tbx_[A-Za-z0-9_-]+' <<<"$out" | head -1)"
     [[ -n "$id" ]] || { echo "warmup printed no testbox ID" >&2; exit 1; }
     mkdir -p "$(dirname "$id_file")"
