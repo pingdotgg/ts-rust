@@ -69,6 +69,7 @@ mod api_session_effect_test;
 mod api_session_misuse_test;
 mod api_session_module_resolution_test;
 mod api_session_requestfilesystem_test;
+mod api_session_symbolresponse_test;
 mod ata_discovertypings_test;
 mod ata_installnpmpackages_test;
 mod ata_test;
