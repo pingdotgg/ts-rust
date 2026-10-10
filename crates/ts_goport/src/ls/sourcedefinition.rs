@@ -569,34 +569,22 @@ impl SourceDefResolver<'_> {
             }
         }
 
-        let Some(parts) = modulespecifiers::get_node_module_path_parts(dts_file_name) else {
+        // ts#64159: Go N' bails out when the file is not in node_modules
+        // (sourcedefinition.go:394), on `parts.HasNestedNodeModules` (:398)
+        // and on `parts.IsDirectNodeModulesFile` (:401).
+        let Some(NodeModulesPackageFile {
+            package_name: package_name_path_part,
+            package_relative_path: path_to_file_in_package,
+        }) = node_modules_package_file(dts_file_name)
+        else {
             return String::new();
         };
-
-        // ts#64159: Go N' bails out on `parts.HasNestedNodeModules`
-        // (sourcedefinition.go:398). N bailed out on any second
-        // `/node_modules/`, also when it was the package's own name.
-        if has_nested_node_modules(dts_file_name, &parts) {
-            return String::new();
-        }
-        // ts#64159: a file directly in node_modules (or in a scope directory)
-        // has no package root, so it has no implementation file (Go N'
-        // `parts.IsDirectNodeModulesFile`, sourcedefinition.go:401). N sliced
-        // with a package root index of -1 and panicked.
-        if parts.package_root_index == -1 {
-            return String::new();
-        }
-
-        let package_name_path_part = &dts_file_name
-            [(parts.top_level_package_name_index + 1) as usize..parts.package_root_index as usize];
         let package_name = module::get_package_name_from_types_package_name(
             &module::unmangle_scoped_package_name(package_name_path_part),
         );
         if package_name.is_empty() {
             return String::new();
         }
-
-        let path_to_file_in_package = &dts_file_name[(parts.package_root_index + 1) as usize..];
 
         // Try resolving as a package subpath first (e.g. "pkg/dist/utils"), then
         // fall back to the bare package name (e.g. "pkg"). This covers both main
@@ -1083,51 +1071,117 @@ pub fn find_closest_declaration_node(source_file: Node, pos: i32) -> Node {
     get_source_definition_entry_node(source_file)
 }
 
-// Go N' `NodeModulePathParts.HasNestedNodeModules` (modulespecifiers/util.go:315-318):
-// a `/node_modules/` segment after the first package root. The root comes after
-// the scope of a scoped package, so `node_modules/node_modules/x/a.d.ts` and
-// `node_modules/@s/node_modules/a.d.ts` (a package named `node_modules`) are not nested.
-// PORT: the port keeps the index form of `NodeModulePathParts`, whose
-// `package_root_index` is the root of the last package. This finds the first
-// root from `top_level_package_name_index`, as the Go parse states do (:301-314).
-fn has_nested_node_modules(file_name: &str, parts: &modulespecifiers::NodeModulePathParts) -> bool {
+// Go N' `NodeModulePathParts` (modulespecifiers/util.go:264): the fields that
+// findImplementationFileFromDtsFileName reads (sourcedefinition.go:405, :414).
+struct NodeModulesPackageFile<'a> {
+    package_name: &'a str,
+    package_relative_path: &'a str,
+}
+
+// Go N' `GetNodeModulePathParts` (modulespecifiers/util.go:283) as
+// findImplementationFileFromDtsFileName uses it (sourcedefinition.go:393-403):
+// the package of a file in the top-level node_modules. None where Go bails out:
+// - the path has no node_modules (no parts, :394);
+// - `IsDirectNodeModulesFile` (util.go:333-339, :401): the file has no package
+//   root, because it is directly in node_modules or in a scope directory
+//   (`node_modules/a.d.ts`, `node_modules/@a.d.ts`, `node_modules/@s/a.d.ts`);
+// - `HasNestedNodeModules` (util.go:315-318, :398): a `/node_modules/` segment
+//   after the package root. The root comes after the scope of a scoped package
+//   (util.go:305-314), so a package named `node_modules` is not nested.
+// PORT: the port keeps the index form of `NodeModulePathParts` (Go N). Its
+// `package_root_index` is the root of the last package, and it stays 0 when
+// the path ends in a scope (`node_modules/@a.d.ts`), where Go N' starts the
+// index at -1 (util.go:287). So this finds the first root from
+// `top_level_package_name_index`, as the Go parse states do.
+fn node_modules_package_file(file_name: &str) -> Option<NodeModulesPackageFile<'_>> {
+    let parts = modulespecifiers::get_node_module_path_parts(file_name)?;
     let name_start = (parts.top_level_package_name_index + 1) as usize;
     let next_slash = |from: usize| file_name[from..].find('/').map(|i| from + i);
     let mut root = next_slash(name_start);
     if file_name.as_bytes().get(name_start) == Some(&b'@') {
         root = root.and_then(|scope_end| next_slash(scope_end + 1));
     }
-    root.is_some_and(|root| file_name[root..].contains("/node_modules/"))
+    // Go checks HasNestedNodeModules first; both checks give no file, and a
+    // path with no root has no nested node_modules.
+    let root = root?;
+    if file_name[root..].contains("/node_modules/") {
+        return None;
+    }
+    Some(NodeModulesPackageFile {
+        package_name: &file_name[name_start..root],
+        package_relative_path: &file_name[root + 1..],
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::has_nested_node_modules;
-    use crate::modulespecifiers::get_node_module_path_parts;
+    use super::node_modules_package_file;
 
-    fn nested(file_name: &str) -> bool {
-        let parts = get_node_module_path_parts(file_name).expect("node_modules path");
-        has_nested_node_modules(file_name, &parts)
+    fn package_file(file_name: &str) -> Option<(&str, &str)> {
+        node_modules_package_file(file_name)
+            .map(|file| (file.package_name, file.package_relative_path))
     }
 
     // Go: modulespecifiers/specifiers_test.go:16 TestGetNodeModulePathParts (ts#64159),
-    // the `hasNestedNodeModules` values, and the ls skeptic's sourcedef2 probe paths.
+    // the `packageName`, `packageRelativePath` and `hasNestedNodeModules` values, and
+    // the ls skeptic's sourcedef2 and sourcedef-nested probe paths.
     #[test]
     fn test_has_nested_node_modules() {
-        assert!(!nested("/workspace/node_modules/pkg/lib/index.d.ts"));
-        assert!(!nested("/node_modules/@scope/pkg/index.d.ts"));
-        assert!(!nested("c:/node_modules/pkg/index.d.ts"));
-        assert!(nested(
-            "/workspace/node_modules/pkg/node_modules/@scope/dep/index.d.ts"
-        ));
-        assert!(nested("/p/node_modules/@s/a/node_modules/b/index.d.ts"));
+        assert_eq!(
+            package_file("/workspace/node_modules/pkg/lib/index.d.ts"),
+            Some(("pkg", "lib/index.d.ts"))
+        );
+        assert_eq!(
+            package_file("/node_modules/@scope/pkg/index.d.ts"),
+            Some(("@scope/pkg", "index.d.ts"))
+        );
+        assert_eq!(
+            package_file("c:/node_modules/pkg/index.d.ts"),
+            Some(("pkg", "index.d.ts"))
+        );
+        assert_eq!(
+            package_file("/workspace/node_modules/pkg/node_modules/@scope/dep/index.d.ts"),
+            None
+        );
+        assert_eq!(
+            package_file("/p/node_modules/@s/a/node_modules/b/index.d.ts"),
+            None
+        );
         // A package named `node_modules` (unscoped and scoped) is not nested.
-        assert!(!nested("/p/node_modules/node_modules/x/types/index.d.ts"));
-        assert!(!nested("/p/node_modules/@sc/node_modules/t/s.d.ts"));
-        assert!(nested("/p/node_modules/node_modules/node_modules/x/a.d.ts"));
-        // Files directly in node_modules or in a scope directory have no root.
-        assert!(!nested("/workspace/node_modules/pkg"));
-        assert!(!nested("/workspace/node_modules/@scope"));
-        assert!(!nested("/workspace/node_modules/@scope/a.d.ts"));
+        assert_eq!(
+            package_file("/p/node_modules/node_modules/x/types/index.d.ts"),
+            Some(("node_modules", "x/types/index.d.ts"))
+        );
+        assert_eq!(
+            package_file("/p/node_modules/@sc/node_modules/t/s.d.ts"),
+            Some(("@sc/node_modules", "t/s.d.ts"))
+        );
+        assert_eq!(
+            package_file("/p/node_modules/node_modules/node_modules/x/a.d.ts"),
+            None
+        );
+        assert_eq!(
+            package_file("/p/node_modules/@types/tp/sub.d.ts"),
+            Some(("@types/tp", "sub.d.ts"))
+        );
+    }
+
+    // Go: modulespecifiers/specifiers_test.go:16 TestGetNodeModulePathParts (ts#64159),
+    // the nil and `isDirectNodeModulesFile` cases, and the ls round 2 skeptic's
+    // sourcedef-direct probe paths: a file named `@x.d.ts` directly in node_modules has
+    // no package root (Go N' starts `packageRootIndex` at -1, util.go:287).
+    #[test]
+    fn test_direct_node_modules_file() {
+        assert_eq!(package_file("/workspace/src/index.ts"), None);
+        assert_eq!(package_file("/workspace/node_modules/pkg"), None);
+        assert_eq!(package_file("/workspace/node_modules/@scope"), None);
+        assert_eq!(package_file("/workspace/node_modules/@scope/a.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/plain.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@foo.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@at.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@bar.d.ts"), None);
+        assert_eq!(package_file("/p/node_modules/@scope/direct.d.ts"), None);
+        assert_eq!(package_file("/node_modules/@foo.d.ts"), None);
+        assert_eq!(package_file("c:/node_modules/@foo.d.ts"), None);
     }
 }
