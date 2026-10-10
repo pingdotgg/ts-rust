@@ -514,10 +514,10 @@ fn build_reports_a_failed_write_as_go() {
 #[cfg(unix)]
 #[test]
 fn failed_write_before_a_dts_signature_panics_as_go() {
+    const LINE: &str = "panic: runtime error: invalid memory address or nil pointer dereference";
     if rustix::process::geteuid().is_root() {
         return; // root writes a read-only file
     }
-    const LINE: &str = "panic: runtime error: invalid memory address or nil pointer dereference";
     for mode in ["-b", "-p"] {
         let project = write_failure_project(r#""composite": true"#);
         let output = Command::new(env!("CARGO_BIN_EXE_tsgo"))
@@ -719,7 +719,6 @@ fn api_build(root: &Path, first: bool, rest: bool) -> (Vec<String>, String) {
             )
         });
     };
-    drop(send);
     drop(stdin);
     child
         .wait()
