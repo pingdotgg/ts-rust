@@ -630,7 +630,13 @@ The batch that adds it is not accepted until Theo approves.
   write gives the flush's result with no write (`emit_files::Writes`), so
   the TS5033s, the emitted files, the d.ts signatures and the build info
   are Go's. The API build flushes on its orchestrator thread only
-  (`flush_writes_on_this_thread`). A task finishes
+  (`flush_writes_on_this_thread`). Only that thread reaches its file
+  system, so an API build emit with no early emit (noEmitOnError, F1 to
+  F4, `GOPORT_EARLY_EMIT=0`, or no incremental state) also keeps its
+  writes, and that thread flushes them when the emit ends, with the same
+  replay (`EmitFilesHandler::emit_with_writes_here`). So a TS5033 is in
+  its file's result, sorted and in `emitDiagnosticsPerFile`, as in Go.
+  `tsc -b` and `tsc -p` write at once there. A task finishes
   when its check and its early emit (when it has one) have ended (the
   barrier jobs behind them also
   wait for the d.ts twins and the emit pool,
