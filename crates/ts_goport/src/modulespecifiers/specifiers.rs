@@ -794,7 +794,7 @@ fn get_local_module_specifier(
             &nearest_source_package_json,
             &tspath::ComparePathsOptions {
                 use_case_sensitive_file_names: case,
-                current_directory: cwd.clone(),
+                current_directory: cwd,
             },
         ) {
             // 2. The importing and imported files are part of different packages.

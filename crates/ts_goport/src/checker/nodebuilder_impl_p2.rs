@@ -130,6 +130,9 @@ impl Checker {
     ) -> NodeList {
         debug_assert!(!chain.is_empty() && 0 <= index && (index as usize) < chain.len());
         let symbol = chain[index as usize];
+        // Go keys the list by `ast.GetSymbolId(symbol)`, which gives the
+        // symbol its id (`ValueSymbolLinkStore`).
+        get_symbol_id(&self.symbols, symbol);
         {
             let ctx = nb_ctx(b);
             let mut ctx = ctx.borrow_mut();
@@ -1748,7 +1751,9 @@ impl Checker {
             } else {
                 t
             };
-            self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = resolved_type;
             rest_params.push(symbol);
         }
         let mut result = sig_parameters[0..rest_index].to_vec();
@@ -1803,6 +1808,9 @@ impl Checker {
         let return_type;
         if declaration.is_some() && !node_is_synthesized(declaration) {
             let symbol = self.get_symbol_of_declaration(declaration);
+            // Go keys the map by `ast.GetSymbolId(symbol)`, which gives the
+            // symbol its id (`ValueSymbolLinkStore`).
+            get_symbol_id(&self.symbols, symbol);
             let cached = nb_ctx(b)
                 .borrow()
                 .enclosing_symbol_types

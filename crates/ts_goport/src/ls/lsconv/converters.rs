@@ -1373,7 +1373,7 @@ mod tests {
             ..Default::default()
         };
         let canonical = Rc::new(parse_source_file(&parse_options, " x", ScriptKind::TS));
-        let mut supplemental_options = parse_options.clone();
+        let mut supplemental_options = parse_options;
         supplemental_options.path = tspath::Path("/component.vue::supplemental".to_string());
         let supplemental = Rc::new(parse_source_file(
             &supplemental_options,

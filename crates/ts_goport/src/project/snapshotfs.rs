@@ -732,7 +732,7 @@ impl SnapshotFSBuilder {
                 file.borrow_mut().realpath_path = realpath_path.clone();
             });
             let (entry, _) = self.node_modules_realpath_aliases.load_or_store(
-                realpath_path.clone(),
+                realpath_path,
                 Rc::new(RefCell::new(RealpathAliasSet::default())),
             );
             entry

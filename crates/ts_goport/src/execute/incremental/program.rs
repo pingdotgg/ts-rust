@@ -454,8 +454,8 @@ impl Program {
     }
 
     /// PORT: not in Go (perf). After `start_check`: when the options allow
-    /// an early emit (`early_emit_options_allow`), Go emits (no
-    /// `--listFilesOnly`) and the check cannot see the outputs
+    /// an early emit (`early_emit_options_allow`; Go emits, so no `noEmit`
+    /// or `--listFilesOnly`) and the check cannot see the outputs
     /// (`check_cannot_see_outputs`), sends the rest of the checker work of
     /// `tsc.EmitFilesAndReportErrors` without a wait: the emit of the
     /// affected files with `options` (`start_emit_files`; since ts#64452 Go
@@ -495,7 +495,6 @@ impl Program {
         // The file rules read every program file: the checkers check
         // meanwhile (when a check started).
         if !early_emit_options_allow()
-            || self.options().list_files_only.is_true()
             || !self.snapshot.borrow().can_use_incremental_state()
             || !check_cannot_see_outputs()
         {

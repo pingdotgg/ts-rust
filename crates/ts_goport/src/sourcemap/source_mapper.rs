@@ -412,7 +412,7 @@ pub fn get_document_position_mapper(
 
     let mut possible_map_locations: Vec<String> = Vec::new();
     if !map_file_name.is_empty() {
-        possible_map_locations.push(map_file_name.clone());
+        possible_map_locations.push(map_file_name);
     }
     possible_map_locations.push(format!("{generated_file_name}.map"));
     let generated_directory = tspath::get_directory_path(generated_file_name);

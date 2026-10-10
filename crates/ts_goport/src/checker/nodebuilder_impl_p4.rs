@@ -912,7 +912,10 @@ impl Checker {
             }
 
             let mut params = self.get_type_parameters_of_class_or_interface(b, target_symbol);
-            let target_mapper = self.value_symbol_links.get(next_symbol).mapper;
+            let target_mapper = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, next_symbol)
+                .mapper;
             if target_mapper.is_some() {
                 params = params
                     .into_iter()
@@ -934,7 +937,9 @@ impl Checker {
         if self.should_write_type_parameters_in_qualified_name(b, chain, index) {
             let symbol = chain[index];
             // PORT: `typeParameterSymbolList` is keyed by `SymbolId` for Go
-            // `ast.GetSymbolId(symbol)`. The two are one to one.
+            // `ast.GetSymbolId(symbol)`. The two are one to one. The Go call
+            // gives the symbol its id, so it is made too (`ValueSymbolLinkStore`).
+            get_symbol_id(&self.symbols, symbol);
             let ctx = nb_ctx(b);
             if ctx.borrow().type_parameter_symbol_list.has(&symbol) {
                 return NodeList::NIL;

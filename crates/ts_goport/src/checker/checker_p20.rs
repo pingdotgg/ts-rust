@@ -387,9 +387,13 @@ impl Checker {
                     SymbolFlags::NONE
                 };
             let symbol = self.new_symbol(flags, &text);
+            // Go reads the links (and gives the id) before the right side.
+            self.value_symbol_links.get_by_id(&self.symbols, symbol);
             let resolved_type =
                 self.get_type_from_binding_element(e, include_pattern_in_type, report_errors);
-            self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = resolved_type;
             let symbol_name = self.sym(symbol).name.clone();
             self.symbols.set(members, symbol_name, symbol);
         }
@@ -1316,16 +1320,30 @@ impl Checker {
 
     // Go: checker/checker.go:18843 getTypeOfEnumMember
     pub fn get_type_of_enum_member(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
+        {
             let t = self.get_declared_type_of_enum_member(symbol);
-            self.value_symbol_links.get(symbol).resolved_type = t;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = t;
         }
-        self.value_symbol_links.get(symbol).resolved_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
     }
 
     // Go: checker/checker.go:18851 getTypeOfAccessors
     pub fn get_type_of_accessors(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
+        {
             if !self.push_type_resolution(
                 TypeSystemEntity::Symbol(symbol),
                 TypeSystemPropertyName::TYPE,
@@ -1423,17 +1441,24 @@ impl Checker {
                 }
                 t = self.any_type;
             }
-            let links = self.value_symbol_links.get(symbol);
+            let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             if links.resolved_type.is_nil() {
                 links.resolved_type = t;
             }
         }
-        self.value_symbol_links.get(symbol).resolved_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
     }
 
     // Go: checker/checker.go:18906 getWriteTypeOfAccessors
     pub fn get_write_type_of_accessors(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).write_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .write_type
+            .is_nil()
+        {
             if !self.push_type_resolution(
                 TypeSystemEntity::Symbol(symbol),
                 TypeSystemPropertyName::WRITE_TYPE,
@@ -1464,21 +1489,37 @@ impl Checker {
                 write_type = self.any_type;
             }
             // Absent an explicit setter type annotation we use the read type of the accessor.
-            if self.value_symbol_links.get(symbol).write_type.is_nil() {
+            if self
+                .value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .write_type
+                .is_nil()
+            {
                 if write_type.is_some() {
-                    self.value_symbol_links.get(symbol).write_type = write_type;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .write_type = write_type;
                 } else {
                     let read_type = self.get_type_of_accessors(symbol);
-                    self.value_symbol_links.get(symbol).write_type = read_type;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .write_type = read_type;
                 }
             }
         }
-        self.value_symbol_links.get(symbol).write_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .write_type
     }
 
     // Go: checker/checker.go:18938 getTypeOfAlias
     pub fn get_type_of_alias(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
+        {
             if !self.push_type_resolution(
                 TypeSystemEntity::Symbol(symbol),
                 TypeSystemPropertyName::TYPE,
@@ -1493,16 +1534,25 @@ impl Checker {
             // type symbol, call getDeclaredTypeOfSymbol.
             // This check is important because without it, a call to getTypeOfSymbol could end
             // up recursively calling getTypeOfAlias, causing a stack overflow.
-            if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+            if self
+                .value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type
+                .is_nil()
+            {
                 if self
                     .get_symbol_flags(target_symbol)
                     .intersects(SymbolFlags::VALUE)
                 {
                     let t = self.get_type_of_symbol(target_symbol);
-                    self.value_symbol_links.get(symbol).resolved_type = t;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .resolved_type = t;
                 } else {
                     let error_type = self.error_type;
-                    self.value_symbol_links.get(symbol).resolved_type = error_type;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .resolved_type = error_type;
                 }
             }
             if !self.pop_type_resolution() {
@@ -1511,13 +1561,25 @@ impl Checker {
                 } else {
                     symbol
                 });
-                if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+                if self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .resolved_type
+                    .is_nil()
+                {
                     let error_type = self.error_type;
-                    self.value_symbol_links.get(symbol).resolved_type = error_type;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .resolved_type = error_type;
                 }
-                return self.value_symbol_links.get(symbol).resolved_type;
+                return self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .resolved_type;
             }
         }
-        self.value_symbol_links.get(symbol).resolved_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
     }
 }

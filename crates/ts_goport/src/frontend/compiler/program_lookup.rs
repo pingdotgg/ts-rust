@@ -1031,7 +1031,7 @@ pub fn source_file_may_be_emitted(
             &output_path,
             &ComparePathsOptions {
                 use_case_sensitive_file_names: host.use_case_sensitive_file_names(),
-                current_directory: current_directory.clone(),
+                current_directory: current_directory,
             },
         ) == 0
         {

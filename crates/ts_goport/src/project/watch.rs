@@ -313,7 +313,7 @@ impl<T> WatchedFiles<T> {
                     .collect();
                 changed = true;
             }
-            let mut dirs_outside = result.directories_outside_workspace.clone();
+            let mut dirs_outside = result.directories_outside_workspace;
             dirs_outside.sort();
             dirs_outside.dedup();
             let same_outside_watchers = {

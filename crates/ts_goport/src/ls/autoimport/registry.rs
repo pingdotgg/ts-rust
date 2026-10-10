@@ -1395,7 +1395,7 @@ impl RegistryBuilder {
 
                     if needs_full_rebuild {
                         node_modules_tasks.push(NodeModulesBucketTask {
-                            entry: node_modules_bucket.clone(),
+                            entry: node_modules_bucket,
                             dependency_names: dependencies,
                             dir_name,
                             dir_path,
@@ -1408,12 +1408,12 @@ impl RegistryBuilder {
                         });
                     } else if can_do_granular_update {
                         node_modules_tasks.push(NodeModulesBucketTask {
-                            entry: node_modules_bucket.clone(),
+                            entry: node_modules_bucket,
                             dependency_names: dependencies,
                             dir_name,
                             dir_path,
                             is_update: true,
-                            existing_bucket: Some(bucket_value.clone()),
+                            existing_bucket: Some(bucket_value),
                             dirty_packages,
                             package_names: None,
                             directory_package_names: None,
@@ -1664,7 +1664,7 @@ impl RegistryBuilder {
                 }
             }
             if should_rebuild {
-                let entry = project.clone();
+                let entry = project;
                 let mut br = new_bucket_build_result(
                     Box::new(move |bucket: Rc<RegistryBucket>| entry.replace(bucket)),
                     (self.base.to_path)(

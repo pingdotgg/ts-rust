@@ -1172,7 +1172,7 @@ fn content_mapper_build_watch_reads_source_mtimes_after_a_mapper_error() {
                 std::env::temp_dir().join(format!("goport-mapper-mtimes-{}", std::process::id()));
             std::fs::create_dir_all(scratch.join("project")).expect("mkdir");
             // The watch paths are real paths (`getcwd`).
-            let root = scratch.join("project").canonicalize().expect("a real path");
+            let root = crate::support::eval_symlinks(scratch.join("project")).expect("a real path");
             let write = |name: &str, text: &str| {
                 let path = root.join(name);
                 std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
@@ -1200,7 +1200,8 @@ fn content_mapper_build_watch_reads_source_mtimes_after_a_mapper_error() {
             write("b/b.ts", "export const b = 1;\n");
             write(MANIFEST, &good_manifest);
             std::env::set_current_dir(&root).expect("chdir");
-            let root_name = root.to_string_lossy().into_owned();
+            // The watch events carry the compiler's form of the path.
+            let root_name = root.to_string_lossy().replace('\\', "/");
             let output = Rc::new(RefCell::new(Vec::<u8>::new()));
             let os = new_os_system()
                 .expect("an OS system")
@@ -1286,6 +1287,8 @@ fn content_mapper_build_watch_reads_source_mtimes_after_a_mapper_error() {
             );
             cancel();
             drop(w);
+            // Windows cannot remove the working directory.
+            std::env::set_current_dir(std::env::temp_dir()).expect("chdir out");
             std::fs::remove_dir_all(&scratch)
                 .unwrap_or_else(|e| panic!("remove {}: {e}", scratch.display()));
         },

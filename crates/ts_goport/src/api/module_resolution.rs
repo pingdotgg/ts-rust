@@ -718,7 +718,7 @@ impl Session {
                 registration: data.clone(),
                 conn: self.conn.borrow().clone(),
                 ctx: ctx.clone(),
-                current_directory: cwd.clone(),
+                current_directory: cwd,
                 snapshot: params.snapshot,
                 program_resolution_context_id: params.in_progress_snapshot,
                 fallback_resolver: resolver,

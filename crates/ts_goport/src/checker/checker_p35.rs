@@ -471,7 +471,9 @@ impl Checker {
                         s.parent = type_symbol;
                     }
                     let value_type = self.index_info(info).value_type;
-                    self.value_symbol_links.get(symbol).resolved_type = value_type;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .resolved_type = value_type;
                     self.index_info_mut(info).index_symbol = symbol;
                 }
             }

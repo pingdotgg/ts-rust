@@ -38,6 +38,11 @@ tikv-jemalloc-ctl = { version = "=0.7.0", optional = true }
 # through miow's safe `NamedPipe` API. execute/tsc/compile.rs: Go
 # `os.SameFile` in the Windows `LookPath`. No `unsafe` here (D-W1).
 [target.'cfg(windows)'.dependencies]
+# Go `time.Local` on Windows (time/zoneinfo_windows.go) asks the system for
+# its zone. jiff does the same with `tz-system`; Windows has no zoneinfo
+# files, so the zone data comes with the binary. See
+# execute/tsc/diagnostics.rs `init_local`.
+jiff = { version = "=0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform"] }
 miow = "=0.6.1"
 same-file = "=1.0.6"
 

@@ -411,11 +411,8 @@ impl Checker {
                         if is_private_identifier(name) {
                             let t_symbol = self.ty(t).symbol;
                             if t_symbol.is_some() {
-                                let prop_name = get_symbol_name_for_private_identifier(
-                                    &self.symbols,
-                                    t_symbol,
-                                    name.text(),
-                                );
+                                let prop_name =
+                                    self.private_identifier_symbol_name(t_symbol, name.text());
                                 prop = self.get_property_of_type(t, &prop_name);
                             }
                         } else {
@@ -921,7 +918,7 @@ impl Checker {
             let start = name.find('@').map_or(0, |i| i + 1);
             self.factory.new_private_identifier(&name[start..])
         } else {
-            self.factory.new_identifier(name.clone())
+            self.factory.new_identifier(name)
         };
         let this_keyword = self.factory.new_keyword_expression(SyntaxKind::ThisKeyword);
         let reference = self.factory.new_property_access_expression(
@@ -967,7 +964,7 @@ impl Checker {
             let start = name.find('@').map_or(0, |i| i + 1);
             self.factory.new_private_identifier(&name[start..])
         } else {
-            self.factory.new_identifier(name.clone())
+            self.factory.new_identifier(name)
         };
         for &static_block in static_blocks {
             let this_keyword = self.factory.new_keyword_expression(SyntaxKind::ThisKeyword);

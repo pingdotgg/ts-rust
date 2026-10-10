@@ -475,17 +475,11 @@ impl Checker {
                         .flags
                         .intersects(TypeFlags::UNION | TypeFlags::NEVER)
                 {
-                    let root_for_map = root.clone();
                     result = self.map_type_with_alias(
                         distribution_type,
                         &mut |c: &mut Checker, t: TypeId| -> TypeId {
                             let prepended = c.prepend_type_mapping(check_type, t, new_mapper);
-                            c.get_conditional_type(
-                                root_for_map.clone(),
-                                prepended,
-                                for_constraint,
-                                None,
-                            )
+                            c.get_conditional_type(root.clone(), prepended, for_constraint, None)
                         },
                         alias,
                     );

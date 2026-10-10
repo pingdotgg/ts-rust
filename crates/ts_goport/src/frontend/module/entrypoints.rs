@@ -395,7 +395,7 @@ impl ResolutionState<'_> {
                     entrypoints.push(self.resolver.create_resolved_entrypoint_handling_symlink(
                         &result.as_ref().unwrap().path,
                         &crate::frontend::tspath::resolve_path(package_name, &[subpath]),
-                        include_conditions.clone(),
+                        include_conditions,
                         exclude_conditions.clone(),
                         if exports_string.ends_with('*') {
                             Ending::EXTENSION_CHANGEABLE

@@ -776,7 +776,7 @@ impl ConfigFileRegistryBuilder {
         for path in &created_or_changed_or_deleted_files {
             if let (Some(entry), true) = self.configs.load(path) {
                 if has_excessive_changes {
-                    return self.invalidate_cache(logger.clone());
+                    return self.invalidate_cache(logger);
                 }
 
                 affected_projects = Some(copy_map_into(
@@ -837,7 +837,7 @@ impl ConfigFileRegistryBuilder {
         // Handle created/deleted files named "tsconfig.json" or "jsconfig.json"
         for path in &created_or_deleted_config_files {
             if has_excessive_changes {
-                return self.invalidate_cache(logger.clone());
+                return self.invalidate_cache(logger);
             }
             let directory_path = path.get_directory_path();
             self.config_file_names.range(&mut |entry: &Rc<
@@ -892,7 +892,7 @@ impl ConfigFileRegistryBuilder {
                 !should_invalidate_cache
             });
             if should_invalidate_cache {
-                return self.invalidate_cache(logger.clone());
+                return self.invalidate_cache(logger);
             }
         }
 
@@ -946,7 +946,7 @@ impl ConfigFileRegistryBuilder {
                 !should_invalidate_cache
             });
             if should_invalidate_cache {
-                return self.invalidate_cache(logger.clone());
+                return self.invalidate_cache(logger);
             }
         }
 

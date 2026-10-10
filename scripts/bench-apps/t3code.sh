@@ -2,8 +2,10 @@
 # Times the T3 Code projects without and with the Effect diagnostics (hyperfine, 1 warmup, RUNS
 # runs, default 5). Before the timing, one run per tool writes its exit code and diagnostic count.
 # usage: scripts/bench-apps/t3code.sh <work-dir> [sha]   (after setup.sh; default sha: the README's)
-# T3_PROJECTS and T3_MODES (noeffect, effect) limit a run, for example T3_MODES=noeffect.
+# T3_PROJECTS and T3_MODES (noeffect, effect) limit a run, for example T3_MODES=noeffect. TOOLS
+# limits the tools as in run.sh (TOOLS=tsc-rs).
 # Output: <work-dir>/results/t3-<project>-<mode>.json (hyperfine) and .diags, mode noeffect or effect.
+# With TOOLS, the files get the tools in their name (t3-<project>-<mode>.tsc-rs.json).
 #
 # Without Effect: each project config without its plugins, extending a copy of tsconfig.base.json
 # without plugins. A child "plugins": [] is not enough: tsc-rs 0.1.0 keeps the base plugins.
@@ -53,6 +55,9 @@ ETSGO=$t3/node_modules/.bin/effect-tsgo
 # --composite false: apps/web is composite, which needs incremental.
 F="--noEmit --incremental false --composite false"
 names=(tsc6 tsc7 tsc-rs bun)
+sel=()
+for i in "${!names[@]}"; do [[ " ${TOOLS:-${names[*]}} " == *" ${names[$i]} "* ]] && sel+=("$i"); done
+tag=${TOOLS:+.${TOOLS// /+}}
 mkdir -p "$work/results"
 
 for p in $PROJECTS; do
@@ -68,16 +73,16 @@ for p in $PROJECTS; do
       cmds=("$TS6E -p $c $F --pretty false" "$GOE -p $c $F --pretty false" "$RS -p $c $F --pretty false"
             "sh -c '$BUN check -p $c $F --no-pretty --all; $ETSGO diagnostics --project $PWD/$c --format text'")
     fi
-    out=$work/results/t3-$slug-$mode
+    out=$work/results/t3-$slug-$mode$tag
     : >"$out.diags"
-    for i in "${!names[@]}"; do
+    for i in "${sel[@]}"; do
       o=$(eval "${cmds[$i]}" 2>&1); rc=$?
       n=$(grep -cE '(error|warning|message|suggestion) (TS[0-9]+|effect\()' <<<"$o")
       echo "${names[$i]} rc=$rc diags=$n" >>"$out.diags"
     done
     echo "== $p $mode: $(tr '\n' ' ' <"$out.diags")"
     args=()
-    for i in "${!names[@]}"; do args+=(-n "${names[$i]}" "${cmds[$i]}"); done
+    for i in "${sel[@]}"; do args+=(-n "${names[$i]}" "${cmds[$i]}"); done
     hyperfine -N -i --warmup 1 --runs "${RUNS:-5}" --export-json "$out.json" "${args[@]}" >/dev/null
   done
 done

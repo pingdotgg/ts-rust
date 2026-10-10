@@ -17,7 +17,6 @@ use crate::execute::watchmanager::prelude::*;
 
 use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
 
 use crate::execute::tsc::{Writer, write_str};
 use crate::frontend::core_ls_ext;
@@ -157,8 +156,10 @@ struct DoCycleState {
     /// Values sent and not received yet: one handed to the waiting
     /// receiver and one in the buffer at most.
     pending: u8,
-    /// The receiver waits in `recv_timeout`.
+    /// The receiver waits in `recv`.
     waiting: bool,
+    /// The context of `run_loop` is done (`wake`): `recv` waits no more.
+    woken: bool,
 }
 
 impl DoCycleCh {
@@ -175,18 +176,42 @@ impl DoCycleCh {
         true
     }
 
-    /// Go `<-ch`, waiting at most `timeout`. True when a value came.
-    pub fn recv_timeout(&self, timeout: Duration) -> bool {
+    /// Go `select { case <-ctx.Done(): ...; case <-ch: ... }` of
+    /// `RunLoop`: waits for a value or for `wake` (the `ctx.Done()` case).
+    /// True when a value came.
+    pub fn recv(&self) -> bool {
         let mut state = self.state.lock().unwrap();
-        if state.pending == 0 {
+        if state.pending == 0 && !state.woken {
             state.waiting = true;
             state = self
                 .cond
-                .wait_timeout_while(state, timeout, |state| state.pending == 0)
-                .unwrap()
-                .0;
+                .wait_while(state, |state| state.pending == 0 && !state.woken)
+                .unwrap();
             state.waiting = false;
         }
+        if state.pending == 0 {
+            return false;
+        }
+        state.pending -= 1;
+        true
+    }
+
+    /// The `ctx.Done()` case of the `RunLoop` select: ends the wait in
+    /// `recv`, and each later one until `reset_wake`.
+    pub fn wake(&self) {
+        self.state.lock().unwrap().woken = true;
+        self.cond.notify_all();
+    }
+
+    /// A new `RunLoop`, with a new context.
+    fn reset_wake(&self) {
+        self.state.lock().unwrap().woken = false;
+    }
+
+    /// Go `select { case <-ch: return true; default: return false }`.
+    #[cfg(test)]
+    fn try_recv(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
         if state.pending == 0 {
             return false;
         }
@@ -544,21 +569,34 @@ impl WatchManager {
     }
 
     // Go: watchmanager.go:382 WatchManager.RunLoop
-    // PORT: Go selects on `ctx.Done()` and `doCycleCh`. The port waits on
-    // the channel with a timeout and checks `ctx.err()` (PORTING "Go
-    // runtime"). `doCycle` is the caller's DoCycle method value. After a
-    // signal, the cycle waits until the debouncer has delivered the fire
-    // that sent it (`fswatch::wait_for_fires`), as Go's does: otherwise it
-    // can drain a deleted directory's event before that fire's "watch
-    // terminated" overflow, and then build a second time.
+    // PORT: Go selects on `ctx.Done()` and `doCycleCh`. Here a waker on
+    // `ctx.Done()` ends the wait on the channel (`DoCycleCh::wake`), so a
+    // SIGINT or SIGTERM ends the loop at once, as in Go (a wait with a
+    // 50 ms timeout ended it up to 50 ms later). When both cases are ready
+    // Go picks one at random; the port takes the context. `doCycle` is the
+    // caller's DoCycle method value. After a signal, the cycle waits until
+    // the debouncer has delivered the fire that sent it
+    // (`fswatch::wait_for_fires`), as Go's does: otherwise it can drain a
+    // deleted directory's event before that fire's "watch terminated"
+    // overflow, and then build a second time.
     pub fn run_loop(&self, ctx: &Context, do_cycle: &mut dyn FnMut()) {
-        const CTX_POLL_INTERVAL: Duration = Duration::from_millis(50);
+        self.shared.do_cycle_ch.reset_wake();
+        let done = ctx.done();
+        // `None`: the context is never done (a nil channel), or it is done
+        // already, which the first check below sees.
+        let waker = done.as_ref().and_then(|done| {
+            let shared = self.shared.clone();
+            done.register_waker(move || shared.do_cycle_ch.wake())
+        });
         loop {
             if ctx.err().is_some() {
+                if let (Some(done), Some(id)) = (&done, waker) {
+                    done.unregister_waker(id);
+                }
                 self.close_all_watches();
                 return;
             }
-            if self.shared.do_cycle_ch.recv_timeout(CTX_POLL_INTERVAL) {
+            if self.shared.do_cycle_ch.recv() {
                 fswatch::wait_for_fires();
                 do_cycle();
             }
@@ -751,12 +789,12 @@ mod tests {
         let ch = Arc::new(DoCycleCh::default());
         assert!(ch.try_send());
         assert!(!ch.try_send());
-        assert!(ch.recv_timeout(Duration::ZERO));
-        assert!(!ch.recv_timeout(Duration::ZERO));
+        assert!(ch.try_recv());
+        assert!(!ch.try_recv());
 
         let receiver = {
             let ch = ch.clone();
-            std::thread::spawn(move || ch.recv_timeout(Duration::from_secs(60)))
+            std::thread::spawn(move || ch.recv())
         };
         while !ch.state.lock().unwrap().waiting {
             std::thread::yield_now();
@@ -765,7 +803,67 @@ mod tests {
         assert!(ch.try_send());
         assert!(!ch.try_send());
         assert!(receiver.join().unwrap());
-        assert!(ch.recv_timeout(Duration::ZERO));
-        assert!(!ch.recv_timeout(Duration::ZERO));
+        assert!(ch.try_recv());
+        assert!(!ch.try_recv());
+    }
+
+    // PORT: not in Go. `wake` is the `ctx.Done()` case of the `RunLoop`
+    // select: it ends a wait in `recv` with no value, and each later one.
+    #[test]
+    fn do_cycle_ch_wake_ends_the_wait() {
+        let ch = Arc::new(DoCycleCh::default());
+        let receiver = {
+            let ch = ch.clone();
+            std::thread::spawn(move || ch.recv())
+        };
+        while !ch.state.lock().unwrap().waiting {
+            std::thread::yield_now();
+        }
+        ch.wake();
+        assert!(!receiver.join().unwrap());
+        assert!(!ch.recv());
+        ch.reset_wake();
+        assert!(ch.try_send());
+        assert!(ch.recv());
+    }
+
+    // PORT: not in Go. A cancel ends a waiting `run_loop` at once, as Go's
+    // select does. The 50 ms wait that the loop had took 25 ms in the
+    // median; the bound on the median of 20 runs leaves room for a busy
+    // host.
+    #[test]
+    fn run_loop_ends_at_once_when_its_context_is_cancelled() {
+        use crate::gostd::context;
+        let wm = new_watch_manager(
+            std::rc::Rc::new(std::cell::RefCell::new(Vec::<u8>::new())),
+            Box::new(|_| false),
+        );
+        let mut took = Vec::new();
+        for _ in 0..20 {
+            let (ctx, cancel) = context::with_cancel(&context::background());
+            let canceller = {
+                let shared = wm.shared.clone();
+                std::thread::spawn(move || {
+                    while !shared.do_cycle_ch.state.lock().unwrap().waiting {
+                        std::thread::yield_now();
+                    }
+                    // Into the wait itself, past the `waiting` flag.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    cancel();
+                    std::time::Instant::now()
+                })
+            };
+            let mut cycles = 0;
+            wm.run_loop(&ctx, &mut || cycles += 1);
+            let ended = std::time::Instant::now();
+            took.push(ended.saturating_duration_since(canceller.join().unwrap()));
+            assert_eq!(cycles, 0);
+        }
+        took.sort();
+        assert!(
+            took[10] < std::time::Duration::from_millis(10),
+            "median {:?} from the cancel to the end of run_loop",
+            took[10]
+        );
     }
 }

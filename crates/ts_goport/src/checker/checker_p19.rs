@@ -72,11 +72,15 @@ impl Checker {
         for e in missing_elements {
             let name = self.get_property_name_from_binding_element(e);
             let symbol = self.new_symbol(SymbolFlags::PROPERTY | SymbolFlags::OPTIONAL, &name);
+            // Go reads the links (and gives the id) before the right side.
+            self.value_symbol_links.get_by_id(&self.symbols, symbol);
             let resolved_type = self.get_type_from_binding_element(
                 e, false, /*includePatternInType*/
                 true,  /*reportErrors*/
             );
-            self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = resolved_type;
             let symbol_name = self.sym(symbol).name.clone();
             self.symbols.set(members, symbol_name, symbol);
         }
@@ -176,13 +180,22 @@ impl Checker {
 
     // Go: checker/checker.go:17224 getTypeOfFuncClassEnumModule
     pub fn get_type_of_func_class_enum_module(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
+        {
             let t = self.get_type_of_func_class_enum_module_worker(symbol);
             // PORT: Go assigns through the links pointer taken before the
             // worker call; re-fetch the record here.
-            self.value_symbol_links.get(symbol).resolved_type = t;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = t;
         }
-        self.value_symbol_links.get(symbol).resolved_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
     }
 
     // Go: checker/checker.go:17232 getTypeOfFuncClassEnumModuleWorker
@@ -452,18 +465,21 @@ impl Checker {
     /// `ValueSymbolLinks::optional_parameter`. The record is the one
     /// `get_type_of_symbol` has just read. When it has no record (a symbol
     /// with an error type), the test runs with no memo, so no record is added
-    /// that `value_symbol_links.has` could see.
+    /// that `value_symbol_links.has` could see. Go reads no links here, so
+    /// the read gives no symbol id (`try_get_without_id`).
     fn parameter_declaration_is_optional(&mut self, symbol: SymbolId, declaration: Node) -> bool {
         let test =
             |d: Node| d.is_some() && (d.initializer().is_some() || is_optional_declaration(d));
         match self
             .value_symbol_links
-            .try_get(symbol)
+            .try_get_without_id(symbol)
             .map(|links| links.optional_parameter)
         {
             Some(Tristate::Unknown) => {
                 let optional = test(declaration);
-                self.value_symbol_links.get(symbol).optional_parameter = bool_to_tristate(optional);
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .optional_parameter = bool_to_tristate(optional);
                 optional
             }
             Some(memo) => {
@@ -2195,7 +2211,10 @@ impl Checker {
             // We can use a cached resolved type if no optionality was included in that type.
             let symbol = self.get_symbol_of_declaration(node);
             if symbol.is_some() {
-                let resolved_type = self.value_symbol_links.get(symbol).resolved_type;
+                let resolved_type = self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .resolved_type;
                 if resolved_type.is_some()
                     && !(self.strict_null_checks && is_optional_declaration(node))
                 {

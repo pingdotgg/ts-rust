@@ -12,7 +12,7 @@
 //! thread (Go `handlers.Go`), and the server timing requests get the answer
 //! of a connection that collects no timing.
 
-use crate::core::go_recover;
+use crate::core::{go_after_recover, go_recover, go_wait_group_goroutine};
 use crate::frontend::json_ext::{AnyValue, JsonValue};
 use crate::gostd::{Context, GoError, context, errors};
 use crate::ipc::{self, ERR_CONN_CLOSED, Message};
@@ -35,6 +35,9 @@ pub type ProtocolFactory = Arc<dyn Fn() -> Box<dyn ipc::Protocol> + Send + Sync>
 const CONTEXT_POLL: Duration = Duration::from_millis(20);
 
 pub struct MuxConn {
+    /// Go `rwc`: the transport, closed when a request fails
+    /// (`record_request_error`).
+    rwc: Option<Arc<dyn ipc::ReadWriteCloser>>,
     new_protocol: ProtocolFactory,
     handler: Arc<dyn ipc::Handler + Send + Sync>,
     /// Go `writeMu`: held for each whole message write.
@@ -88,12 +91,15 @@ fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl MuxConn {
     /// Starts the read loop of a connection to a started process (Go
-    /// `go conn.Run(ctx)`).
+    /// `go conn.Run(ctx)`) over the transport `rwc` (Go
+    /// `NewAsyncConnWithProtocol(rwc, protocol, handler)`).
     pub fn start(
+        rwc: Option<Arc<dyn ipc::ReadWriteCloser>>,
         new_protocol: ProtocolFactory,
         handler: Arc<dyn ipc::Handler + Send + Sync>,
     ) -> Arc<MuxConn> {
         let conn = Arc::new(MuxConn {
+            rwc,
             new_protocol,
             handler,
             write: Mutex::new(()),
@@ -135,11 +141,20 @@ impl MuxConn {
                 self.handle_response(msg);
             } else if msg.is_request() {
                 // Go `c.handlers.Go`: the read loop does not wait for the
-                // write of the answer.
+                // write of the answer. `handle_request` recovers a panic of
+                // the handler and of its answer, but not one of the panic
+                // answer. In Go that panic ends the process (`WaitGroup.Go`
+                // panics again with it): `go_wait_group_goroutine` ends it
+                // for a Go panic, and `go_crash` for any other.
                 let conn = self.clone();
                 std::thread::spawn(move || {
-                    if let Err(err) = conn.handle_request(&msg) {
-                        conn.record_request_error(err);
+                    let handled = catch_unwind(AssertUnwindSafe(|| {
+                        go_wait_group_goroutine(|| conn.handle_request(&msg))
+                    }));
+                    match handled {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => conn.record_request_error(err),
+                        Err(payload) => crate::lsp::server::go_crash(payload),
                     }
                 });
             } else if msg.is_notification() {
@@ -160,12 +175,20 @@ impl MuxConn {
     }
 
     // Go: ipc/conn_async.go:123 recordRequestError
-    // PORT: Go also closes the transport here. The calls end with the
-    // error, and `ProcessConn` closes the process when a call fails so.
+    // Then Go closes the transport (ipc/conn_async.go:99-105), which ends
+    // the read loop. For the mapper host the transport is the mapper
+    // process (contentmapper/hostimpl.go:516-521).
     fn record_request_error(&self, request_err: GoError) {
-        let mut calls = lock(&self.calls);
-        if calls.record_terminal_error(Some(request_err)) {
-            calls.close_pending_calls();
+        let recorded = {
+            let mut calls = lock(&self.calls);
+            let recorded = calls.record_terminal_error(Some(request_err));
+            if recorded {
+                calls.close_pending_calls();
+            }
+            recorded
+        };
+        if recorded && let Some(rwc) = &self.rwc {
+            let _ = rwc.close();
         }
     }
 
@@ -229,9 +252,11 @@ impl MuxConn {
         let r = ipc::recovered_value(payload.as_ref());
         let stack = std::backtrace::Backtrace::force_capture().to_string();
         let err = errors::new(format!("panic: {r}\n{stack}"));
-        let _write = lock(&self.write);
-        (self.new_protocol)()
-            .write_error(
+        // The panic answer runs in Go's deferred recover: a panic in it
+        // prints the recovered panic first.
+        go_after_recover(payload.as_ref(), || {
+            let _write = lock(&self.write);
+            (self.new_protocol)().write_error(
                 id,
                 &jsonrpc::ResponseError {
                     code: jsonrpc::CODE_INTERNAL_ERROR,
@@ -239,15 +264,16 @@ impl MuxConn {
                     data: None,
                 },
             )
-            .map_err(|write_err| {
-                errors::errorf(
-                    format!(
-                        "ipc: failed to write panic error response: {} (original panic: {r})",
-                        write_err.error()
-                    ),
-                    vec![write_err],
-                )
-            })
+        })
+        .map_err(|write_err| {
+            errors::errorf(
+                format!(
+                    "ipc: failed to write panic error response: {} (original panic: {r})",
+                    write_err.error()
+                ),
+                vec![write_err],
+            )
+        })
     }
 
     /// The payload of a panic of the read loop, once. The loading thread's
@@ -414,6 +440,7 @@ mod tests {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let client: Arc<dyn ReadWriteCloser> = Arc::new(End(client));
         let conn = MuxConn::start(
+            Some(client.clone()),
             Arc::new(move || {
                 Box::new(ipc::new_jsonrpc_protocol(client.clone())) as Box<dyn ipc::Protocol>
             }),
@@ -771,6 +798,7 @@ mod tests {
         let client: Arc<dyn ReadWriteCloser> = Arc::new(End(client));
         let panic_once = Arc::new(std::sync::atomic::AtomicBool::new(panic_once));
         let conn = MuxConn::start(
+            Some(client.clone()),
             Arc::new(move || {
                 Box::new(FaultyErrorAnswers {
                     inner: Box::new(ipc::new_jsonrpc_protocol(client.clone())),
@@ -862,6 +890,164 @@ mod tests {
         );
     }
 
+    // After a failed panic answer Go closes the transport at once
+    // (ipc/conn_async.go:99-105), with no call in flight: the peer reads
+    // EOF, and a later call fails with the request error.
+    #[test]
+    fn a_failed_panic_answer_closes_the_transport() {
+        let (conn, server) = connect_faulty(Arc::new(Panics), false, true);
+        server
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("read timeout");
+        write_framed(
+            &server,
+            r#"{"jsonrpc":"2.0","id":"m1","method":"readFile"}"#,
+        );
+        let mut byte = [0u8; 1];
+        let read = (&server).read(&mut byte).expect("EOF, not the timeout");
+        assert_eq!(read, 0, "the peer got a message");
+        let err = conn
+            .call(&context::background(), "transform", None)
+            .expect_err("a call after the close fails");
+        let text = err.error();
+        assert!(errors::is(&err, &ERR_CONN_CLOSED), "{text}");
+        assert!(
+            text.contains("ipc: failed to write panic error response: write refused"),
+            "{text}"
+        );
+    }
+
+    /// The JSON-RPC protocol with error answers that panic, with a Go
+    /// panic value (`go_panic`) or a plain Rust panic.
+    struct PanickingErrorAnswers {
+        inner: Box<dyn ipc::Protocol>,
+        go_value: bool,
+    }
+
+    impl ipc::Protocol for PanickingErrorAnswers {
+        fn read_message(&mut self) -> Result<Message, GoError> {
+            self.inner.read_message()
+        }
+
+        fn write_request(
+            &mut self,
+            id: Option<&jsonrpc::ID>,
+            method: &str,
+            params: Option<Box<dyn AnyValue>>,
+        ) -> Result<(), GoError> {
+            self.inner.write_request(id, method, params)
+        }
+
+        fn write_notification(
+            &mut self,
+            method: &str,
+            params: Option<Box<dyn AnyValue>>,
+        ) -> Result<(), GoError> {
+            self.inner.write_notification(method, params)
+        }
+
+        fn write_response(
+            &mut self,
+            id: Option<&jsonrpc::ID>,
+            result: Option<Box<dyn AnyValue>>,
+        ) -> Result<(), GoError> {
+            self.inner.write_response(id, result)
+        }
+
+        fn write_error(
+            &mut self,
+            _id: Option<&jsonrpc::ID>,
+            _err: &jsonrpc::ResponseError,
+        ) -> Result<(), GoError> {
+            if self.go_value {
+                crate::core::go_panic("write panic".to_string());
+            }
+            panic!("write panic");
+        }
+    }
+
+    /// Set in the child processes of `a_panic_in_the_panic_answer_ends_the_process`:
+    /// "go" or "rust", the kind of panic of the panic answer.
+    const CRASH_CHILD_ENV: &str = "GOPORT_MUXCONN_CRASH_CHILD";
+    const CRASH_CHILD_TEST: &str =
+        "contentmapper::muxconn::tests::a_panic_in_the_panic_answer_ends_the_process";
+
+    // Go recovers a panic of the handler, but a panic in the write of that
+    // panic answer (ipc/conn_async.go:207-221) is not recovered. It ends
+    // the process: `WaitGroup.Go` (go1.27.1 sync/waitgroup.go:236) panics
+    // again with it, and the runtime exits 2. Its stderr starts with the
+    // recovered handler panic (followups39, Go `go test -overlay` of this
+    // case):
+    //   panic: handler panic [recovered]
+    //   \tpanic: write panic [recovered, repanicked]
+    // A Go panic ends the port the same way; any other panic is a port gap
+    // and exits `EXIT_UNPORTED` (`lsp::server::go_crash`). Each case runs in
+    // a child process.
+    #[test]
+    fn a_panic_in_the_panic_answer_ends_the_process() {
+        if let Ok(kind) = std::env::var(CRASH_CHILD_ENV) {
+            let (client, server) = UnixStream::pair().expect("socket pair");
+            let client: Arc<dyn ReadWriteCloser> = Arc::new(End(client));
+            let go_value = kind == "go";
+            let conn = MuxConn::start(
+                Some(client.clone()),
+                Arc::new(move || {
+                    Box::new(PanickingErrorAnswers {
+                        inner: Box::new(ipc::new_jsonrpc_protocol(client.clone())),
+                        go_value,
+                    }) as Box<dyn ipc::Protocol>
+                }),
+                Arc::new(Panics),
+            );
+            write_framed(
+                &server,
+                r#"{"jsonrpc":"2.0","id":"m1","method":"readFile"}"#,
+            );
+            let (ctx, _cancel) =
+                context::with_timeout(&context::background(), Duration::from_secs(30));
+            let result = conn.call(&ctx, "transform", None);
+            panic!(
+                "the process did not end: {:?}",
+                result.map_err(|err| err.error())
+            );
+        }
+        // `/proc/self/exe` still names this binary when a build replaces it.
+        let proc_exe = std::path::Path::new("/proc/self/exe");
+        let exe = if proc_exe.exists() {
+            proc_exe.to_path_buf()
+        } else {
+            std::env::current_exe().expect("test binary")
+        };
+        for (kind, code, text) in [
+            (
+                "go",
+                2,
+                "\npanic: handler panic [recovered]\n\tpanic: write panic [recovered, repanicked]\n",
+            ),
+            ("rust", crate::execute::tsc::EXIT_UNPORTED, "write panic"),
+        ] {
+            let output = std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    CRASH_CHILD_TEST,
+                    "--nocapture",
+                    "--test-threads",
+                    "1",
+                ])
+                .env(CRASH_CHILD_ENV, kind)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("run the child test");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(code), "{kind}:\n{stderr}");
+            assert!(stderr.contains(text), "{kind}:\n{stderr}");
+            assert!(
+                !stderr.contains("the process did not end"),
+                "{kind}:\n{stderr}"
+            );
+        }
+    }
+
     // Go answers the server timing request before the handler.
     #[test]
     fn server_timing_request_is_answered() {
@@ -935,7 +1121,7 @@ mod tests {
     // the thread that resumes it.
     #[test]
     fn read_panic_ends_the_calls() {
-        let conn = MuxConn::start(Arc::new(|| Box::new(PanicOnRead)), Arc::new(Reject));
+        let conn = MuxConn::start(None, Arc::new(|| Box::new(PanicOnRead)), Arc::new(Reject));
         let err = conn
             .call(&context::background(), "transform", None)
             .expect_err("the call ends");

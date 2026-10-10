@@ -1395,7 +1395,9 @@ impl Checker {
                     if member_value_declaration.is_some() {
                         self.sym_mut(attribute_symbol).value_declaration = member_value_declaration;
                     }
-                    let links = self.value_symbol_links.get(attribute_symbol);
+                    let links = self
+                        .value_symbol_links
+                        .get_by_id(&self.symbols, attribute_symbol);
                     links.resolved_type = expr_type;
                     links.target = member;
                     let attribute_symbol_name = self.sym(attribute_symbol).name.clone();
@@ -1556,6 +1558,9 @@ impl Checker {
                 // If there are children in the body of JSX element, create dummy attribute "children" with the union of children types so that it will pass the attribute checking process
                 let children_prop_symbol =
                     self.new_symbol(SymbolFlags::PROPERTY, &jsx_children_property_name);
+                // Go `links := c.valueSymbolLinks.Get(childrenPropSymbol)` gives the id here.
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, children_prop_symbol);
                 let resolved_type;
                 if child_types.len() == 1 {
                     resolved_type = child_types[0];
@@ -1571,7 +1576,7 @@ impl Checker {
                     resolved_type = self.create_array_type(union);
                 }
                 self.value_symbol_links
-                    .get(children_prop_symbol)
+                    .get_by_id(&self.symbols, children_prop_symbol)
                     .resolved_type = resolved_type;
                 // Fake up a property declaration for the children
                 let children_name = self

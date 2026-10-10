@@ -98,7 +98,10 @@ impl Checker {
                 // SymbolTable.
                 let symbol = self.get_symbol_of_declaration(element);
                 let name = self.sym(symbol).name.clone();
-                let name_type = self.value_symbol_links.get(symbol).name_type;
+                let name_type = self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .name_type;
                 return self.get_type_of_property_of_contextual_type_ex(t, &name, name_type);
             }
             if has_dynamic_name(element) {
@@ -1267,7 +1270,10 @@ impl Checker {
     // Go: checker/checker.go:31147 isCircularMappedProperty
     pub fn is_circular_mapped_property(&mut self, symbol: SymbolId) -> bool {
         if self.sym(symbol).check_flags.intersects(CheckFlags::MAPPED) {
-            let resolved_type = self.value_symbol_links.get(symbol).resolved_type;
+            let resolved_type = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type;
             return resolved_type.is_nil()
                 && self.find_resolution_cycle_start_index(
                     TypeSystemEntity::Symbol(symbol),

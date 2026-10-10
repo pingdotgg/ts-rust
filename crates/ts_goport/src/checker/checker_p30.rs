@@ -1368,7 +1368,10 @@ impl Checker {
         }
         let mut target = prop;
         if check_flags.intersects(CheckFlags::INSTANTIATED) {
-            target = self.value_symbol_links.get(prop).target;
+            target = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, prop)
+                .target;
         }
         self.symbol_reference_links.get(target).reference_kinds |= SymbolFlags::ALL;
     }
@@ -1407,7 +1410,9 @@ impl Checker {
             } else {
                 t
             };
-            self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = resolved_type;
             expanded.push(symbol);
         }
         expanded

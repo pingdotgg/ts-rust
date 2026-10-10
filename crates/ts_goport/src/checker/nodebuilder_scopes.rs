@@ -78,7 +78,10 @@ impl Checker {
         t: TypeId,
     ) -> Box<dyn FnOnce()> {
         let ctx = scopes_ctx(b);
-        // PORT: the map is keyed by `SymbolId`, which stands for Go `ast.GetSymbolId(symbol)`.
+        // PORT: the map is keyed by `SymbolId`, which stands for Go
+        // `ast.GetSymbolId(symbol)`. That call gives the symbol its id, so it
+        // is made too (`ValueSymbolLinkStore`).
+        get_symbol_id(&self.symbols, symbol);
         let id = symbol;
         let old_type = ctx.borrow_mut().enclosing_symbol_types.insert(id, t);
         Box::new(move || {

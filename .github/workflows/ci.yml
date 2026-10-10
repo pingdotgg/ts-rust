@@ -1,7 +1,8 @@
 # Format, lint, build and test on every pull request and on each push to main that changes code.
 # The full protected set (TestLocal shards, gate, bound runs, LSP and API oracles, np-suite) stays in
 # the revision pipeline (scripts/goport/candidate.sh). This workflow is a fast check that the tree
-# builds and its own tests pass on Linux and macOS.
+# builds and its own tests pass on Linux (x64 and arm64), macOS and Windows (x64, MSVC), and that
+# the tsc compiles for Intel macOS.
 name: CI
 
 on:
@@ -57,14 +58,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Blacksmith runners (the pingdotgg org has the app), as T3 Code uses.
-        runner: [blacksmith-16vcpu-ubuntu-2404, blacksmith-12vcpu-macos-26]
+        # Blacksmith runners (the pingdotgg org has the app), as T3 Code uses. The Windows runner
+        # builds x86_64-pc-windows-msvc.
+        runner:
+          - blacksmith-16vcpu-ubuntu-2404
+          - blacksmith-16vcpu-ubuntu-2404-arm
+          - blacksmith-12vcpu-macos-26
+          - blacksmith-16vcpu-windows-2025
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    # Git Bash on Windows.
+    defaults:
+      run:
+        shell: bash
     env:
       # One test thread, as goport-tests.sh runs them.
       RUST_TEST_THREADS: 1
     steps:
+      # LF in the working tree, as on the other hosts: Git for Windows sets core.autocrlf=true, which
+      # gives the test fixtures and the scripts CRLF (README.md, "Develop on Windows").
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -74,7 +88,10 @@ jobs:
         id: pin
         run: |
           key=$(jq -r '.batch.upstreamPin.to // empty' docs/typechecker-state/current.json)
-          python3 scripts/upstream/pin.py show ${key:+"$key"} > "$RUNNER_TEMP/pin.json"
+          # Windows has python, not python3.
+          py=python3
+          [[ $RUNNER_OS != Windows ]] || py=python
+          "$py" scripts/upstream/pin.py show ${key:+"$key"} > "$RUNNER_TEMP/pin.json"
           jq -r '"repo=\(.repo)", "commit=\(.commit)", "subdir=\(.subdir // "")"' "$RUNNER_TEMP/pin.json" >> "$GITHUB_OUTPUT"
       - name: Check out the pinned Go source
         uses: actions/checkout@v5
@@ -84,12 +101,14 @@ jobs:
           path: go-pin
           sparse-checkout: ${{ steps.pin.outputs.subdir }}
           persist-credentials: false
-      # The go_baselines temp roots default to zbook paths on Linux (/tmp on macOS).
+      # The go_baselines temp roots default to zbook paths on Linux (/tmp on macOS). Windows gets
+      # native paths (C:\...), as the tests' own temp dirs are.
       - name: Set the test paths
         run: |
-          echo "TS_GO_REPO=$GITHUB_WORKSPACE/go-pin${SUBDIR:+/$SUBDIR}" >> "$GITHUB_ENV"
-          echo "TSCTEST_TMP=$RUNNER_TEMP/tsctest" >> "$GITHUB_ENV"
-          echo "COMPILER_RUNNER_TMP=$RUNNER_TEMP/compiler-runner" >> "$GITHUB_ENV"
+          native() { if [[ $RUNNER_OS == Windows ]]; then cygpath -w "$1"; else echo "$1"; fi; }
+          echo "TS_GO_REPO=$(native "$GITHUB_WORKSPACE/go-pin${SUBDIR:+/$SUBDIR}")" >> "$GITHUB_ENV"
+          echo "TSCTEST_TMP=$(native "$RUNNER_TEMP/tsctest")" >> "$GITHUB_ENV"
+          echo "COMPILER_RUNNER_TMP=$(native "$RUNNER_TEMP/compiler-runner")" >> "$GITHUB_ENV"
         env:
           SUBDIR: ${{ steps.pin.outputs.subdir }}
       # The astnav tests run the JS TypeScript of the Go repo's lockfile under Node (Go
@@ -112,8 +131,9 @@ jobs:
         run: cargo test --release --locked --workspace --no-fail-fast
       # go_baselines has `test = false`, so --workspace skips it. TestLocal (about 12,700 compiler
       # cases) runs in 4 shards in goport-tests.sh, in the revision pipeline; the rest of the default
-      # go_baselines set runs here.
+      # go_baselines set runs here, also after a failed unit test.
       - name: Go baselines
+        if: ${{ !cancelled() }}
         run: |
           skip=(--skip compiler_runner::test_local)
           # Open on macOS: the 10 tests of project_lsp/resolveahead_test.rs (resolveahead1, merged
@@ -121,3 +141,30 @@ jobs:
           # no configured project. They pass on Linux.
           [[ $RUNNER_OS != macOS ]] || skip+=(--skip project_lsp::resolveahead_test::)
           cargo test --release --locked --no-fail-fast -p ts_goport --test go_baselines -- "${skip[@]}"
+      # Windows: the tsc against Go's tsc on Windows path forms, CRLF sources and a junction
+      # (scripts/goport/win-go-compare.sh). Go's tsc builds from the pinned Go source with the pin's
+      # Go (oracle.go), as the oracle does; both embed the lib files.
+      - name: Go version
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        id: go
+        run: jq -r '"version=\(.oracle.go | ltrimstr("go"))"' "$RUNNER_TEMP/pin.json" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: false
+      - name: Compare with Go
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        env:
+          SUBDIR: ${{ steps.pin.outputs.subdir }}
+        run: |
+          (cd "go-pin${SUBDIR:+/$SUBDIR}" && GOWORK=off CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/go/tsc.exe" ./cmd/tsc)
+          cargo build --release --locked -p ts_goport --bin tsgo
+          scripts/goport/win-go-compare.sh target/release/tsgo.exe "$RUNNER_TEMP/go/tsc.exe" "$RUNNER_TEMP/win-go"
+      # Intel Macs: the release ships an x86_64-apple-darwin tsc (release.yml builds it on an Intel
+      # runner). A cross check of the tsc here finds compile errors in its cfg paths on each PR.
+      - name: Check x86_64-apple-darwin
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: |
+          rustup target add --toolchain "$RUSTUP_TOOLCHAIN" x86_64-apple-darwin
+          cargo check --locked -p ts_goport --bin tsgo --target x86_64-apple-darwin

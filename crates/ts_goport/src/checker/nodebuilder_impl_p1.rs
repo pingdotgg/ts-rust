@@ -975,8 +975,11 @@ impl Checker {
                     return name;
                 }
             }
-            if self.value_symbol_links.has(symbol) {
-                let name_type = self.value_symbol_links.get(symbol).name_type;
+            if self.value_symbol_links.has_by_id(&self.symbols, symbol) {
+                let name_type = self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .name_type;
                 if name_type.is_some()
                     && self
                         .ty(name_type)
@@ -1504,8 +1507,11 @@ impl Checker {
         b: &Rc<RefCell<NodeBuilderImpl>>,
         symbol: SymbolId,
     ) -> String {
-        if self.value_symbol_links.has(symbol) {
-            let name_type = self.value_symbol_links.get(symbol).name_type;
+        if self.value_symbol_links.has_by_id(&self.symbols, symbol) {
+            let name_type = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .name_type;
             if name_type.is_nil() {
                 return String::new();
             }
@@ -1553,6 +1559,9 @@ impl Checker {
         mut symbol: SymbolId,
     ) -> String {
         let ctx = p1_ctx(b);
+        // Go keys the map by `ast.GetSymbolId(symbol)`, which gives the symbol
+        // its id (`ValueSymbolLinkStore`).
+        get_symbol_id(&self.symbols, symbol);
         if let Some(&result) = ctx.borrow().remapped_symbol_references.get(&symbol) {
             symbol = result;
         }
@@ -1588,8 +1597,11 @@ impl Checker {
                 if is_computed_property_name(name)
                     && !self.sym(symbol).check_flags.intersects(CheckFlags::LATE)
                 {
-                    if self.value_symbol_links.has(symbol) {
-                        let name_type = self.value_symbol_links.get(symbol).name_type;
+                    if self.value_symbol_links.has_by_id(&self.symbols, symbol) {
+                        let name_type = self
+                            .value_symbol_links
+                            .get_by_id(&self.symbols, symbol)
+                            .name_type;
                         if name_type.is_some()
                             && self
                                 .ty(name_type)

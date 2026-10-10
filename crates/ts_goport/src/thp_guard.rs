@@ -2,14 +2,17 @@
 //! the kernel has little free memory in 2 MiB blocks. Not a Go port.
 //!
 //! jemalloc runs with `thp:always` (see `bin/goport.rs`
-//! `set_malloc_tunables`), so it marks its data `MADV_HUGEPAGE`. On clean
-//! memory that is 7% to 22% faster than 4 KiB pages (perf12 THP grid). When
-//! the free memory is in small blocks (for example after a file walk or a
-//! build fills the dentry and inode slab), each huge page fault of that
-//! memory waits in direct compaction, and a run takes 50% to 85% longer
-//! (perf12: 2,600 compaction stalls in one effect emit). With THP off
-//! (`prctl(PR_SET_THP_DISABLE)`), the faults take 4 KiB pages and do not
-//! wait, even where jemalloc asked for huge pages.
+//! `set_malloc_tunables`), so on a kernel in THP `madvise` mode it marks
+//! its data `MADV_HUGEPAGE`. In `always` mode it does not (jemalloc 5.3.1
+//! `pages_set_thp_state`): the kernel gives huge pages without it. On clean
+//! memory huge pages are 7% to 22% faster than 4 KiB pages (perf12 THP
+//! grid). When the free memory is in small blocks (for example after a file
+//! walk or a build fills the dentry and inode slab), each huge page fault
+//! that may compact waits in direct compaction, and a run takes 50% to 85%
+//! longer (perf12: 2,600 compaction stalls in one effect emit). With THP
+//! off (`prctl(PR_SET_THP_DISABLE)`), the faults take 4 KiB pages and do
+//! not wait, even where jemalloc asked for huge pages. Which faults may
+//! compact depends on `enabled` and `defrag` (`start_step`).
 //!
 //! The guard has two parts:
 //! - The start check turns THP off at once when less than the limit is free
@@ -23,6 +26,14 @@
 //!   watcher. Its polls cost CPU on every edit for up to `WATCH_FOR`
 //!   (dropin1 diag: 9 to 22 ms per edit window), and an LSP server builds
 //!   nothing until a request comes.
+//!
+//! The guard also tells `bin/tsgo.rs` `launch` whether the run ends on
+//! 4 KiB pages (`huge_pages`), so that it runs the work in a worker process
+//! and the caller does not wait for their unmap at exit: THP is off at the
+//! start, or `never`, or kept below the limit where no fault waits. A run
+//! whose watcher fires later also ends on 4 KiB pages, but it gets no
+//! worker: the start check cannot tell a small run from a large one, and
+//! for a small run a worker costs more than it saves (`huge_pages`).
 //!
 //! The limit is low (`DEFAULT_MIN_FREE_MIB`) because a run that finds
 //! enough free 2 MiB blocks is faster with THP. perf13 on dbook, with only
@@ -115,11 +126,12 @@ const PAGE_BYTES: u64 = 4096;
 /// A file that cannot be read keeps THP on and starts no watcher. The flag
 /// stays set for the whole process and its children.
 ///
-/// Returns false when the run will get 4 KiB pages: THP is off (the start
-/// check turned it off, or it was off already), THP is `never`, or the check
-/// kept THP on (its faults cannot wait for compaction) with less than the
-/// limit free in 2 MiB blocks. `bin/tsgo.rs` then runs the work in a worker
-/// process (`launch`). True otherwise, also when a file cannot be read.
+/// Returns false when the run will get 4 KiB pages (`huge_pages`): THP is
+/// off (the start check turned it off, or it was off already), THP is
+/// `never`, or the check kept THP on (its faults cannot wait for
+/// compaction) with less than the limit free in 2 MiB blocks. `bin/tsgo.rs`
+/// then runs the work in a worker process (`launch`). True otherwise, also
+/// when a file cannot be read.
 pub fn thp_guard() -> bool {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
@@ -175,10 +187,11 @@ pub fn thp_guard() -> bool {
         let no_watcher = step == Start::Watch && watcher && long_running();
         let watching =
             step == Start::Watch && watcher && !no_watcher && start_watcher(min_free, free, debug);
+        let huge = failed || huge_pages(step, enabled, free, min_free);
         say(
             debug,
             format_args!(
-                "THP {} (enabled {}, defrag {}, {} MiB free in 2 MiB blocks, limit {min_free_mib} MiB{}{}{})",
+                "THP {} (enabled {}, defrag {}, {} MiB free in 2 MiB blocks, limit {min_free_mib} MiB{}{}{}{})",
                 if step == Start::Off { "off" } else { "kept" },
                 selected_mode(enabled).unwrap_or("?"),
                 selected_mode(defrag).unwrap_or("?"),
@@ -190,13 +203,10 @@ pub fn thp_guard() -> bool {
                 } else {
                     ""
                 },
+                if huge { "" } else { ", 4 KiB pages" },
             ),
         );
-        match step {
-            Start::Off => failed,
-            Start::Watch => true,
-            Start::Keep => selected_mode(enabled) != Some("never") && free >= min_free,
-        }
+        huge
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     true
@@ -311,6 +321,17 @@ enum Start {
 /// takes a 4 KiB page when no 2 MiB block is free, so THP can stay on. When
 /// a fault can wait: `Off` when `free` (the bytes free in blocks of 2 MiB
 /// or more) is less than `min_free`, else `Watch`.
+///
+/// In `always` mode jemalloc marks nothing, so with `defrag` `madvise` or
+/// `defer+madvise` no fault of ours waits either (thpfault1: 0 compaction
+/// stalls in 250 runs on cup2). `Keep` there was slower all the same
+/// (thpguard2, release builds, 2 builds a side, 2 runs): cup2 wall +2.8%
+/// (geomean of 7 inputs as found and fragmented, query core +6%), and on
+/// zbook query core, hono and zod took 5% to 25% more page faults. The
+/// cause is the start of the watcher, not its reads: with the watcher's
+/// first allocations (the argument list, its 32 KiB buffer, the thread) and
+/// a thread that only sleeps, the faults were within 5% of the watcher's.
+/// So `always` mode counts as `madvise`.
 fn start_step(enabled: &str, defrag: &str, free: u64, min_free: u64) -> Start {
     let can_wait = matches!(selected_mode(enabled), Some("always" | "madvise"))
         && matches!(
@@ -322,6 +343,27 @@ fn start_step(enabled: &str, defrag: &str, free: u64, min_free: u64) -> Start {
         (true, true) => Start::Off,
         (true, false) => Start::Watch,
     }
+}
+
+/// Whether a run with the start decision `step` ends with its memory on
+/// huge pages, so `bin/tsgo.rs` `launch` needs no worker: THP is on (not
+/// `Off`, not `never`) and `free` (the bytes free in 2 MiB blocks at the
+/// start) is at least `min_free`. Below it only `Keep` gets here, and its
+/// faults soon fall back to 4 KiB pages.
+///
+/// A `Watch` run gets no worker, also when its watcher will fire soon.
+/// thpguard2 on mini timed a worker against none on the same binary. A
+/// worker is a second process start: 2.0 to 2.4 ms per run (tsgo --version
+/// 3.3 against 5.3 ms). Query core check (32 ms, 58 MiB of huge pages) paid
+/// for it in every memory state: +0.1 to +4.8 ms (up to +13%) with its
+/// watcher set to fire after 8 to 32 MiB of huge pages, +5% to +12% at 0.4
+/// to 1.8 GiB free. T3 Code server was 4% to 13% faster where its watcher
+/// fired, hono and T3 Code shared 5% to 9% with the watcher set to fire
+/// after 8 to 32 MiB, and zod 8% to 9% after 32 to 64 MiB. A worker from a
+/// free-memory limit above `min_free` makes small runs pay, so there is
+/// none.
+fn huge_pages(step: Start, enabled: &str, free: u64, min_free: u64) -> bool {
+    step != Start::Off && selected_mode(enabled) != Some("never") && free >= min_free
 }
 
 /// What the watcher does after one read.
@@ -459,26 +501,81 @@ Node 0, zone   Normal 616681 607866 455781 337376 229283 129647  50350  16747   
         assert_eq!(start_step(enabled, defrag, limit, limit), Start::Watch);
         // perf13 fragd1: query started with 290 to 314 MiB free.
         assert_eq!(start_step(enabled, defrag, 300 * MIB, limit), Start::Watch);
-        // No THP, or faults that do not wait for compaction: no watcher.
-        let never = "always madvise [never]\n";
-        assert_eq!(start_step(never, defrag, 0, limit), Start::Keep);
-        for defrag in [
-            "always [defer] madvise never",
-            "always defer madvise [never]",
-        ] {
-            assert_eq!(start_step(enabled, defrag, 0, limit), Start::Keep);
-        }
-        for defrag in [
-            "[always] defer madvise never",
-            "defer [defer+madvise] madvise",
-        ] {
-            assert_eq!(
-                start_step("[always] madvise never", defrag, 0, limit),
-                Start::Off
-            );
-        }
         // A text that does not parse keeps THP on.
         assert_eq!(start_step("madvise", defrag, 0, limit), Start::Keep);
+    }
+
+    /// Every `enabled` and `defrag` mode: `Off` below the limit and else
+    /// `Watch` with `always` or `madvise` and `always`, `madvise` or
+    /// `defer+madvise`. Else no watcher and THP stays on. `always` with
+    /// `madvise` (cup2) or `defer+madvise` (zbook) counts as `madvise`
+    /// (thpguard2: no watcher there was slower).
+    #[test]
+    fn start_step_watches_where_a_fault_can_wait() {
+        let limit = DEFAULT_MIN_FREE_MIB * MIB;
+        let enabled_texts = [
+            ("always", "[always] madvise never\n"),
+            ("madvise", "always [madvise] never\n"),
+            ("never", "always madvise [never]\n"),
+        ];
+        let defrag_texts = [
+            ("always", "[always] defer defer+madvise madvise never\n"),
+            ("defer", "always [defer] defer+madvise madvise never\n"),
+            (
+                "defer+madvise",
+                "always defer [defer+madvise] madvise never\n",
+            ),
+            ("madvise", "always defer defer+madvise [madvise] never\n"),
+            ("never", "always defer defer+madvise madvise [never]\n"),
+        ];
+        let can_wait = [
+            ("madvise", "always"),
+            ("madvise", "defer+madvise"),
+            ("madvise", "madvise"),
+            ("always", "always"),
+            ("always", "defer+madvise"),
+            ("always", "madvise"),
+        ];
+        for (e, enabled) in enabled_texts {
+            for (d, defrag) in defrag_texts {
+                let (low, high) = if can_wait.contains(&(e, d)) {
+                    (Start::Off, Start::Watch)
+                } else {
+                    (Start::Keep, Start::Keep)
+                };
+                assert_eq!(
+                    start_step(enabled, defrag, limit - 1, limit),
+                    low,
+                    "{e} {d}"
+                );
+                assert_eq!(start_step(enabled, defrag, limit, limit), high, "{e} {d}");
+            }
+        }
+    }
+
+    /// The worker rule: a worker (false) when THP is off or `never`, or
+    /// kept below the limit (`Keep`, where no fault waits). No worker while
+    /// the watcher runs, also just above the limit (thpguard2: small runs
+    /// pay for it there).
+    #[test]
+    fn huge_pages_is_false_only_where_the_run_starts_on_4_kib_pages() {
+        let limit = DEFAULT_MIN_FREE_MIB * MIB;
+        let madvise = "always [madvise] never\n";
+        let always = "[always] madvise never\n";
+        let never = "always madvise [never]\n";
+        for free in [0, limit, u64::MAX] {
+            assert!(!huge_pages(Start::Off, madvise, free, limit));
+            assert!(!huge_pages(Start::Keep, never, free, limit));
+        }
+        for free in [limit, limit + 10 * MIB, 1018 * MIB, u64::MAX] {
+            assert!(huge_pages(Start::Watch, madvise, free, limit));
+            assert!(huge_pages(Start::Keep, always, free, limit));
+        }
+        // Kept below the limit (`defrag` `defer` or `never`): a worker.
+        assert!(!huge_pages(Start::Keep, always, 20 * MIB, limit));
+        assert!(!huge_pages(Start::Keep, always, limit - 1, limit));
+        // A text that does not parse keeps THP on.
+        assert!(huge_pages(Start::Keep, "madvise", u64::MAX, limit));
     }
 
     #[test]

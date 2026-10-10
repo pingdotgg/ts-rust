@@ -480,7 +480,7 @@ impl Checker {
             // Return a deferred type for a check that is neither definitely true nor definitely false
             result = self.new_conditional_type(root.clone(), mapper, combined_mapper);
             if alias.is_some() {
-                self.ty_mut(result).alias = alias.clone();
+                self.ty_mut(result).alias = alias;
             } else {
                 let root_alias = root.borrow().alias.clone();
                 let instantiated_alias = self.instantiate_type_alias(root_alias, mapper);
@@ -933,7 +933,7 @@ impl Checker {
                 self.new_symbol_ex(SymbolFlags::PROPERTY, "meta", CheckFlags::READONLY);
             self.sym_mut(meta_property_symbol).parent = symbol;
             self.value_symbol_links
-                .get(meta_property_symbol)
+                .get_by_id(&self.symbols, meta_property_symbol)
                 .resolved_type = import_meta_type;
             let members = self.create_symbol_table(&[meta_property_symbol]);
             self.sym_mut(symbol).members = members;
@@ -1105,7 +1105,9 @@ impl Checker {
                         CheckFlags::NONE
                     };
                     let property = self.new_symbol_ex(symbol_flags, &i.to_string(), check_flags);
-                    self.value_symbol_links.get(property).resolved_type = type_parameter;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, property)
+                        .resolved_type = type_parameter;
                     // c.valueSymbolLinks.get(property).tupleLabelDeclaration = elementInfos[i].labeledDeclaration
                     let name = self.sym(property).name.clone();
                     self.symbols.set(members, name, property);
@@ -1124,14 +1126,18 @@ impl Checker {
         );
         if combined_flags.intersects(ElementFlags::VARIABLE) {
             let number_type = self.number_type;
-            self.value_symbol_links.get(length_symbol).resolved_type = number_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, length_symbol)
+                .resolved_type = number_type;
         } else {
             let mut literal_types: Vec<TypeId> = Vec::new();
             for i in min_length..=(arity as i32) {
                 literal_types.push(self.get_number_literal_type(Number(i as f64)));
             }
             let union = self.get_union_type(&literal_types);
-            self.value_symbol_links.get(length_symbol).resolved_type = union;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, length_symbol)
+                .resolved_type = union;
         }
         let length_name = self.sym(length_symbol).name.clone();
         self.symbols.set(members, length_name, length_symbol);

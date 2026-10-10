@@ -432,14 +432,16 @@ child_test! {
     // snapshot change starts the auto-import warm (Go warmAutoImportCache,
     // session.go:2046), which indexes other.ts while the program has it. Go
     // starts the warm on a goroutine before the diagnostic's answer. The
-    // next change removes the import 40 ms after the answer; Go's
+    // next change removes the import 1 s after the answer; Go's
     // registry keeps the exports of a file that left the program
     // (registry.go:1033-1040, :1137), so the last completion offers
-    // `widget`. The port started the warm only after 50 ms with no message,
-    // so the change cancelled it and the completion did not offer `widget`.
-    // The gap stays under `IDLE_QUIET_PERIOD` (50 ms), so the old rule
-    // still fails, and gives the small clone room under load.
+    // `widget`. The port started the warm only after `IDLE_QUIET_PERIOD`
+    // with no message, so the change cancelled it and the completion did
+    // not offer `widget`. This process waits 10 s for quiet
+    // (`set_idle_quiet_period`), so the gap stays under the quiet period
+    // and the old rule still fails, and the clone has 1 s on a loaded host.
     fn auto_import_warm_runs_before_the_next_change() {
+        ts_goport::lsp::set_idle_quiet_period(std::time::Duration::from_secs(10));
         let client = init_completion_client(
             "/home/projects",
             &[
@@ -472,7 +474,7 @@ child_test! {
             },
         );
         assert!(msg.error.is_none(), "{:?}", msg.error);
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        std::thread::sleep(std::time::Duration::from_secs(1));
         change(&client, &a_uri, 3, text);
 
         let (msg, resp) = client.send_request(
@@ -604,10 +606,11 @@ child_test! {
     // computes the groups in map order, so its answer varies. Go N
     // (tsgo-oracle-673a5f17d713, trace aispec1 augment-two, 2 sets of 40
     // runs) gives 3 answers: no "." in 28 and 31 runs, "." for the four
-    // exports of `a` in 5 and 7, and of `b` in 7 and 2. The test accepts
-    // each of them. goport always gives no ".": it merges the last Path in
-    // program order (`src/mw/b`) and computes augmentation groups last
-    // (autoimport/view.rs get_completions).
+    // exports of `a` in 5 and 7, and of `b` in 7 and 2. The first assert
+    // accepts each of them. goport always gives no ".": it merges the last
+    // Path in program order (`src/mw/b`) and computes augmentation groups
+    // last (autoimport/view.rs get_completions). The second assert keeps
+    // that fixed choice.
     fn single_completion_computes_the_augmentation_last() {
         let (client, main_uri) = augmentation_client(&[
             ("a", &["aOne", "aTwo", "aThree", "aFour"]),
@@ -631,6 +634,7 @@ child_test! {
         };
         let got = auto_import_specifiers(&client, &main_uri, 2, "", &labels);
         assert!(["", "a", "b"].map(answer).contains(&got), "{got:?}");
+        assert_eq!(got, answer(""), "goport computes augmentation groups last");
     }
 }
 

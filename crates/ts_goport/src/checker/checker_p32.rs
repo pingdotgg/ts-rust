@@ -1616,11 +1616,8 @@ impl Checker {
                         if is_private_identifier(name) {
                             let this_symbol = self.ty(this_type).symbol;
                             if this_symbol.is_some() {
-                                let private_name = get_symbol_name_for_private_identifier(
-                                    &self.symbols,
-                                    this_symbol,
-                                    name.text(),
-                                );
+                                let private_name =
+                                    self.private_identifier_symbol_name(this_symbol, name.text());
                                 symbol = self.get_property_of_type(this_type, &private_name);
                             }
                         } else {

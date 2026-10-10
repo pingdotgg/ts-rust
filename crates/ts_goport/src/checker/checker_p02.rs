@@ -449,19 +449,25 @@ impl Checker {
         self.add_undefined_to_globals_or_error_on_redeclaration();
         let undefined_symbol = self.undefined_symbol;
         let undefined_widening_type = self.undefined_widening_type;
-        self.value_symbol_links.get(undefined_symbol).resolved_type = undefined_widening_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, undefined_symbol)
+            .resolved_type = undefined_widening_type;
         let arguments_symbol = self.arguments_symbol;
         let iarguments_type =
             self.get_global_type("IArguments", 0 /*arity*/, true /*reportErrors*/);
-        self.value_symbol_links.get(arguments_symbol).resolved_type = iarguments_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, arguments_symbol)
+            .resolved_type = iarguments_type;
         let unknown_symbol = self.unknown_symbol;
         let error_type = self.error_type;
-        self.value_symbol_links.get(unknown_symbol).resolved_type = error_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, unknown_symbol)
+            .resolved_type = error_type;
         let global_this_symbol = self.global_this_symbol;
         let global_this_object_type =
             self.new_object_type(ObjectFlags::ANONYMOUS, global_this_symbol);
         self.value_symbol_links
-            .get(global_this_symbol)
+            .get_by_id(&self.symbols, global_this_symbol)
             .resolved_type = global_this_object_type;
         // Initialize special types
         self.global_array_type =

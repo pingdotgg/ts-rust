@@ -881,7 +881,7 @@ impl Checker {
             if is_error {
                 self.add_diagnostic(diagnostic);
             } else {
-                let mut suggestion = diagnostic.clone();
+                let mut suggestion = diagnostic;
                 suggestion.set_category(crate::diagnostics::Category::Suggestion);
                 self.add_suggestion_diagnostic(suggestion);
             }

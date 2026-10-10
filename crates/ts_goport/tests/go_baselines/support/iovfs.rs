@@ -20,7 +20,7 @@ use ts_goport::frontend::tspath::{
 };
 use ts_goport::frontend::vfs::{
     Common, DirEntry, Entries, FileInfo, FileMode, Fs, FsError, IoFs, file_info_to_dir_entry,
-    filepath_clean, io_fs_valid_path, root_length, split_path,
+    io_fs_valid_path, root_length, split_path,
 };
 use ts_goport::scanner_util::compare_go_strings;
 
@@ -252,6 +252,60 @@ pub fn is_not_exist(err: &FsError) -> bool {
 // Go standard library: path
 // ---------------------------------------------------------------------------
 
+// Go: path/path.go Clean
+// PORT: `/`-only on every host. The `frontend::vfs` `filepath_clean` is
+// the host `filepath.Clean`, which writes `\` on Windows.
+pub fn go_path_clean(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let p = path.as_bytes();
+    let rooted = p[0] == b'/';
+    let n = p.len();
+    let mut out: Vec<u8> = Vec::with_capacity(n);
+    let (mut r, mut dotdot) = (0usize, 0usize);
+    if rooted {
+        out.push(b'/');
+        r = 1;
+        dotdot = 1;
+    }
+    while r < n {
+        if p[r] == b'/' {
+            r += 1;
+        } else if p[r] == b'.' && (r + 1 == n || p[r + 1] == b'/') {
+            r += 1;
+        } else if p[r] == b'.' && p[r + 1] == b'.' && (r + 2 == n || p[r + 2] == b'/') {
+            r += 2;
+            if out.len() > dotdot {
+                let mut w = out.len() - 1;
+                while w > dotdot && out[w] != b'/' {
+                    w -= 1;
+                }
+                out.truncate(w);
+            } else if !rooted {
+                if !out.is_empty() {
+                    out.push(b'/');
+                }
+                out.extend_from_slice(b"..");
+                dotdot = out.len();
+            }
+        } else {
+            if (rooted && out.len() != 1) || (!rooted && !out.is_empty()) {
+                out.push(b'/');
+            }
+            while r < n && p[r] != b'/' {
+                out.push(p[r]);
+                r += 1;
+            }
+        }
+    }
+    if out.is_empty() {
+        return ".".to_string();
+    }
+    String::from_utf8(out)
+        .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned())
+}
+
 // Go: path/path.go Join
 pub fn go_path_join(elem: &[&str]) -> String {
     let size: usize = elem.iter().map(|e| e.len()).sum();
@@ -267,8 +321,7 @@ pub fn go_path_join(elem: &[&str]) -> String {
             buf.push_str(e);
         }
     }
-    // PORT: Go `path.Clean` is the Unix `filepath.Clean`.
-    filepath_clean(&buf)
+    go_path_clean(&buf)
 }
 
 // Go: path/path.go Dir
@@ -278,7 +331,7 @@ pub fn go_path_dir(path: &str) -> String {
         Some(i) => &path[..=i],
         None => "",
     };
-    filepath_clean(dir)
+    go_path_clean(dir)
 }
 
 // Go: path/path.go Base

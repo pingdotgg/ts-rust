@@ -200,7 +200,7 @@ impl LanguageService {
             let references_resp = self.provide_references_from_data(
                 ctx,
                 &lsproto::ReferenceParams {
-                    text_document: text_doc.clone(),
+                    text_document: text_doc,
                     position: code_lens.range.start,
                     context: Some(lsproto::ReferenceContext {
                         // Don't include the declaration in the references count.
@@ -234,7 +234,7 @@ impl LanguageService {
             let implementations = self.provide_implementations_from_data(
                 ctx,
                 &lsproto::ImplementationParams {
-                    text_document: text_doc.clone(),
+                    text_document: text_doc,
                     position: code_lens.range.start,
                     ..Default::default()
                 },

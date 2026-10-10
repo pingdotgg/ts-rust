@@ -111,7 +111,7 @@ impl Checker {
 
     // Go: checker/exports.go:84 GetNameTypeOfSymbol
     pub fn get_name_type_of_symbol(&self, symbol: SymbolId) -> TypeId {
-        if let Some(links) = self.value_symbol_links.try_get(symbol) {
+        if let Some(links) = self.value_symbol_links.try_get_by_id(&self.symbols, symbol) {
             return links.name_type;
         }
         TypeId::NIL

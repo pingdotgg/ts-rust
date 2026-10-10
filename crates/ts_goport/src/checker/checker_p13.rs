@@ -504,8 +504,10 @@ impl Checker {
     // `is_function_like_kind(n.kind())` for a node that is not nil.
     // PERF (cfcache1, not in Go): the answer depends only on the tree, so a
     // small table keeps recent answers (`control_flow_containers`). It
-    // keeps only a walk that stayed in one published store: the parents of
-    // those nodes never change. In the cfcache1 counts (11 projects), 91.6%
+    // keeps only a walk that stayed in one published store whose parents
+    // are all in that store (`StoreFacts::parents_local`): the walk and its
+    // immediately invoked function test then read only parents of that
+    // store, which never change. In the cfcache1 counts (11 projects), 91.6%
     // of the calls come from `check_identifier` (the declaration, then the
     // reference; 99.8% with its loop), and 63% of all calls (44% to 77% per
     // project) ask again for a node that was asked before.
@@ -531,7 +533,11 @@ impl Checker {
             .and_then(|parent| frozen_find_ancestor(parent, is_container))
         {
             Some(AncestorWalk::Found(container)) => {
-                self.control_flow_containers[slot] = (node, container);
+                // The test of a function-like node reads its parent, which
+                // can be outside the store when some parent of the store is.
+                if frozen_node_store_facts(node).is_some_and(|facts| facts.parents_local) {
+                    self.control_flow_containers[slot] = (node, container);
+                }
                 container
             }
             Some(AncestorWalk::Next(next)) => find_ancestor_with_kind(next, is_container),
@@ -588,6 +594,22 @@ impl Checker {
         is_call_or_new_expression(node.parent()) && node.parent().expression() == node
     }
 
+    /// Go `binder.GetSymbolNameForPrivateIdentifier` in the checker: the
+    /// symbol table key of private name `description` in class
+    /// `containing_class_symbol`. Go puts the id of the class in the key
+    /// (`ast.GetSymbolId`), so it gives the class its id here.
+    // PORT: the key holds the arena index of the class
+    // (`get_symbol_name_for_private_identifier`); the id is only given, as
+    // Go gives it. The binder gives no id (PORTING.md, Threads).
+    pub fn private_identifier_symbol_name(
+        &self,
+        containing_class_symbol: SymbolId,
+        description: &str,
+    ) -> String {
+        get_symbol_id(&self.symbols, containing_class_symbol);
+        get_symbol_name_for_private_identifier(&self.symbols, containing_class_symbol, description)
+    }
+
     // Go: checker/checker.go:11674 lookupSymbolForPrivateIdentifierDeclaration
     // Lookup the private identifier lexically.
     pub fn lookup_symbol_for_private_identifier_declaration(
@@ -598,7 +620,7 @@ impl Checker {
         let mut containing_class = get_containing_class_excluding_class_decorators(location);
         while containing_class.is_some() {
             let symbol = containing_class.symbol();
-            let name = get_symbol_name_for_private_identifier(&self.symbols, symbol, prop_name);
+            let name = self.private_identifier_symbol_name(symbol, prop_name);
             let members = self.sym(symbol).members;
             let prop = self.symbols.get(members, &name);
             if prop.is_some() {
@@ -646,7 +668,7 @@ impl Checker {
                 break;
             }
         }
-        let diag_name = declaration_name_to_string(right).to_string();
+        let diag_name = declaration_name_to_string(right);
         if property_on_type.is_some() {
             let type_value_decl = self.sym(property_on_type).value_declaration;
             let type_class = get_containing_class(type_value_decl);
@@ -734,7 +756,7 @@ impl Checker {
                         .get_applicable_index_info_for_name(subtype, prop_node.text())
                         .is_nil()
                 {
-                    let prop_name = declaration_name_to_string(prop_node).to_string();
+                    let prop_name = declaration_name_to_string(prop_node);
                     let type_string = self.type_to_string(subtype);
                     diagnostic = Some(new_diagnostic_chain_for_node(
                         diagnostic.take(),
@@ -747,7 +769,7 @@ impl Checker {
             }
         }
         if self.type_has_static_property(prop_node.text(), containing_type) {
-            let prop_name = declaration_name_to_string(prop_node).to_string();
+            let prop_name = declaration_name_to_string(prop_node);
             let type_name = self.type_to_string(containing_type);
             let static_name = format!("{type_name}.{prop_name}");
             diagnostic = Some(new_diagnostic_chain_for_node(
@@ -763,7 +785,7 @@ impl Checker {
                     .get_property_of_type(promised_type, prop_node.text())
                     .is_some()
             {
-                let prop_name = declaration_name_to_string(prop_node).to_string();
+                let prop_name = declaration_name_to_string(prop_node);
                 let type_string = self.type_to_string(containing_type);
                 let mut d = new_diagnostic_chain_for_node(
                     diagnostic.take(),
@@ -778,7 +800,7 @@ impl Checker {
                 )));
                 diagnostic = Some(d);
             } else {
-                let missing_property = declaration_name_to_string(prop_node).to_string();
+                let missing_property = declaration_name_to_string(prop_node);
                 let container = self.type_to_string(containing_type);
                 let lib_suggestion = self.get_suggested_lib_for_non_existent_property(
                     &missing_property,
@@ -1391,7 +1413,10 @@ impl Checker {
         if !self.sym(prop).check_flags.intersects(CheckFlags::SYNTHETIC) {
             return callback(self, prop);
         }
-        let containing_type = self.value_symbol_links.get(prop).containing_type;
+        let containing_type = self
+            .value_symbol_links
+            .get_by_id(&self.symbols, prop)
+            .containing_type;
         let types = self.ty(containing_type).types_list();
         let name = self.sym(prop).name.clone();
         for t in types {
@@ -1961,5 +1986,73 @@ module.exports.k = k;
             "the table kept {kept} of {} answers",
             total * 3
         );
+    }
+
+    // cfcache1 (R183 reviewer item 4): the table keeps an answer only from
+    // a store whose parents are all in that store (`parents_local`). The
+    // test of a function-like node reads its parent, which can be outside
+    // the store when some parent of the store is. Stores `a` and `c` each
+    // hold `x;` in a module block; in `a` the parent of that block is a
+    // node of store `b`. Both walks end at the block, but only the answer
+    // from `c` is kept. It publishes, so no other test may build or publish
+    // stores while it runs (the runner uses one thread).
+    #[test]
+    fn control_flow_container_memo_keeps_only_stores_with_local_parents() {
+        let a = new_file_store("/cfcache_local/a.ts", "x;");
+        let b = new_file_store("/cfcache_local/b.ts", "y;");
+        let c = new_file_store("/cfcache_local/c.ts", "x;");
+        let module_block_of_x = |file: usize| {
+            let f = NodeFactory::for_file(file);
+            let x = f.new_identifier("x");
+            let statement = f.new_expression_statement(x);
+            let block = f.new_module_block(f.new_node_list(&[statement]));
+            set_node_parent(x, statement);
+            set_node_parent(statement, block);
+            (x, block)
+        };
+        let (x_a, block_a) = module_block_of_x(a);
+        let (x_c, block_c) = module_block_of_x(c);
+        let y = NodeFactory::for_file(b).new_identifier("y");
+        set_node_parent(block_a, y);
+        for file in [a, b, c] {
+            freeze_file_store(file);
+        }
+        crate::program::publish_parsed_files("/");
+        let parents_local = |file| frozen_store_facts(file).map(|facts| facts.parents_local);
+        assert_eq!(parents_local(a), Some(false));
+        assert_eq!(parents_local(c), Some(true));
+        assert_eq!(go_control_flow_container(x_a), block_a);
+        assert_eq!(go_control_flow_container(x_c), block_c);
+
+        let dir =
+            std::env::temp_dir().join(format!("ts_goport_cfcache_local_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.ts"), "export {};\n").unwrap();
+        std::fs::write(
+            dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "types": [], "noEmit": true }, "files": ["main.ts"] }"#,
+        )
+        .unwrap();
+        let config = dir.join("tsconfig.json");
+        let program = crate::program::try_load_version(&config.to_string_lossy(), |_| {})
+            .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let scope = crate::core::enter_program(Some(program));
+        let root = program
+            .source_files()
+            .find(|file| file.info.file_name.ends_with("/main.ts"))
+            .expect("main.ts is not in the program")
+            .root;
+        let answers = crate::program::with_type_checker_for_file(root, move |checker| {
+            [x_a, x_c].map(|x| {
+                let got = checker.get_control_flow_container(x);
+                let kept =
+                    checker.control_flow_containers[control_flow_container_slot(x)] == (x, got);
+                (got, kept)
+            })
+        });
+        drop(scope);
+        crate::program::release_program(program);
+        assert_eq!(answers, [(block_a, false), (block_c, true)]);
     }
 }

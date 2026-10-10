@@ -438,7 +438,9 @@ impl Checker {
         // returnNode := typeSymbol && c.nodeBuilder.symbolToEntityName(typeSymbol, ast.SymbolFlagsType, node)
         // declaration := factory.createFunctionTypeNode(nil, []ParameterDeclaration{factory.createParameterDeclaration(nil, nil /*dotDotDotToken*/, "props", nil /*questionToken*/, c.nodeBuilder.typeToTypeNode(result, node))}, ifElse(returnNode != nil, factory.createTypeReferenceNode(returnNode, nil /*typeArguments*/), factory.createKeywordTypeNode(ast.KindAnyKeyword)))
         let parameter_symbol = self.new_symbol(SymbolFlags::FUNCTION_SCOPED_VARIABLE, "props");
-        self.value_symbol_links.get(parameter_symbol).resolved_type = result;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, parameter_symbol)
+            .resolved_type = result;
         self.new_signature(
             SignatureFlags::NONE,
             Node::NIL,

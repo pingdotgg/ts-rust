@@ -57,8 +57,28 @@ pub struct GoPanic {
     /// A Go `recover()` raised the value again with `panic(r)`
     /// (`go_repanic`). The runtime adds ` [recovered, repanicked]`.
     pub repanicked: bool,
+    /// The values (`GoPanic::value_text`) of the earlier panics that were
+    /// recovered while this one started: it came from the deferred
+    /// function that recovered them (Go `_panic.link`), oldest first. The
+    /// runtime prints a line `panic: <value> [recovered]` for each, before
+    /// the line of this panic (Go `printpanics`).
+    pub recovered_before: Vec<String>,
     /// The port site, for the stderr report.
     pub location: &'static std::panic::Location<'static>,
+}
+
+impl GoPanic {
+    /// The value as Go `printpanicval` prints it: a typed value is
+    /// `<type>("<message>")`, and each newline in the message is followed
+    /// by a tab (Go `printindented`).
+    #[must_use]
+    pub fn value_text(&self) -> String {
+        let message = self.message.replace('\n', "\n\t");
+        match self.go_type {
+            Some(go_type) => format!("{go_type}(\"{message}\")"),
+            None => message,
+        }
+    }
 }
 
 /// Go `panic(message)` at a site where the pinned Go panics on the same
@@ -73,6 +93,7 @@ pub fn go_panic(message: String) -> ! {
         message,
         go_type: None,
         repanicked: false,
+        recovered_before: Vec::new(),
         location: std::panic::Location::caller(),
     })
 }
@@ -87,6 +108,7 @@ pub fn go_panic_typed(go_type: &'static str, message: String) -> ! {
         message,
         go_type: Some(go_type),
         repanicked: false,
+        recovered_before: Vec::new(),
         location: std::panic::Location::caller(),
     })
 }
@@ -99,6 +121,33 @@ pub fn go_repanic(mut payload: Box<dyn std::any::Any + Send>) -> ! {
         panic.repanicked = true;
     }
     std::panic::resume_unwind(payload)
+}
+
+/// Runs `f` as the rest of a Go deferred function after its `recover()`
+/// took the panic `recovered` (`go_recover`), for a body that can panic
+/// again (the panic answer of an IPC request). A Go panic in `f` keeps the
+/// recovered value first in its chain (`GoPanic::recovered_before`), so
+/// the runtime prints `panic: <recovered> [recovered]` before its own line,
+/// as Go `printpanics` does. Any other payload continues as it is.
+pub fn go_after_recover<R>(recovered: &(dyn std::any::Any + Send), f: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(mut payload) => {
+            if let Some(panic) = payload.downcast_mut::<GoPanic>() {
+                let value = if let Some(earlier) = recovered.downcast_ref::<GoPanic>() {
+                    earlier.value_text()
+                } else if let Some(text) = recovered.downcast_ref::<&str>() {
+                    text.replace('\n', "\n\t")
+                } else if let Some(text) = recovered.downcast_ref::<String>() {
+                    text.replace('\n', "\n\t")
+                } else {
+                    String::new()
+                };
+                panic.recovered_before.insert(0, value);
+            }
+            std::panic::resume_unwind(payload)
+        }
+    }
 }
 
 /// Runs `f` as the goroutine of Go `sync.WaitGroup.Go(f)`. At go1.27.1 that
@@ -396,34 +445,42 @@ pub fn resume_go_panic(payload: Box<dyn std::any::Any + Send>) -> Box<dyn std::a
     payload
 }
 
-/// Prints a caught `go_panic` to stderr and returns true. The first line is
-/// the Go runtime one (`panic: <value>`, Go `printpanics`): a typed value
-/// is `<type>("<message>")`, each newline in the message is followed by a
-/// tab (Go `printindented`), and a value raised again after a recover ends
-/// with ` [recovered, repanicked]`. The port site takes the place of the
-/// goroutine trace. False for any other payload.
+/// Prints a caught `go_panic` to stderr and returns true. The first lines
+/// are the Go runtime ones (Go `printpanics`): `panic: <value> [recovered]`
+/// for each earlier panic in `recovered_before`, each next line after a
+/// tab, then `panic: <value>` (`GoPanic::value_text`), which ends with
+/// ` [recovered, repanicked]` for a value raised again after a recover.
+/// The port site takes the place of the goroutine trace. False for any
+/// other payload.
 pub fn print_go_panic(payload: &(dyn std::any::Any + Send)) -> bool {
     let Some(panic) = payload.downcast_ref::<GoPanic>() else {
         return false;
     };
-    let message = panic.message.replace('\n', "\n\t");
-    let value = match panic.go_type {
-        Some(go_type) => format!("{go_type}(\"{message}\")"),
-        None => message,
-    };
-    let suffix = if panic.repanicked {
-        " [recovered, repanicked]"
-    } else {
-        ""
-    };
     let text = format!(
-        "panic: {value}{suffix}\n\n\t{}:{}\n",
+        "{}\n\n\t{}:{}\n",
+        go_panic_lines(panic),
         panic.location.file(),
         panic.location.line()
     );
     use std::io::Write;
     let _ = std::io::stderr().write_all(&crate::scanner_util::go_string_bytes(&text));
     true
+}
+
+/// The `printpanics` lines of `panic`, without the last newline.
+fn go_panic_lines(panic: &GoPanic) -> String {
+    let suffix = if panic.repanicked {
+        " [recovered, repanicked]"
+    } else {
+        ""
+    };
+    let mut lines: Vec<String> = panic
+        .recovered_before
+        .iter()
+        .map(|value| format!("panic: {value} [recovered]"))
+        .collect();
+    lines.push(format!("panic: {}{suffix}", panic.value_text()));
+    lines.join("\n\t")
 }
 
 #[cfg(test)]
@@ -442,6 +499,46 @@ mod tests {
 
     // Go: runtime/retry.go:14 retryOnEAGAIN: 20 calls while the error is
     // EAGAIN, with a sleep of 1, 2, ... 20 ms after each, then EAGAIN.
+    /// The payload of `f`'s panic.
+    fn panic_of(f: impl FnOnce()) -> Box<dyn std::any::Any + Send> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).expect_err("no panic")
+    }
+
+    /// The `printpanics` lines of a `GoPanic` payload after Go's
+    /// `WaitGroup.Go` raised it again.
+    fn repanicked_lines(mut payload: Box<dyn std::any::Any + Send>) -> String {
+        let panic = payload.downcast_mut::<GoPanic>().expect("a GoPanic");
+        panic.repanicked = true;
+        go_panic_lines(panic)
+    }
+
+    // Go `printpanics` (go1.27.1 runtime/panic.go:734) for a panic in the
+    // deferred function that recovered another one, raised again by
+    // `WaitGroup.Go`. The texts are Go's stderr for ipc `AsyncConn` with a
+    // handler that panics and a panic answer that panics (followups39
+    // `go test -overlay`), with a handler value of one and of two lines.
+    #[test]
+    fn go_after_recover_prints_the_recovered_panic_first() {
+        let write_panic = || {
+            go_panic("write panic".to_string());
+        };
+        let payload = panic_of(|| go_after_recover(&"handler panic", write_panic));
+        assert_eq!(
+            repanicked_lines(payload),
+            "panic: handler panic [recovered]\n\tpanic: write panic [recovered, repanicked]"
+        );
+        let handler = panic_of(|| go_panic("handler\npanic".to_string()));
+        let payload = panic_of(|| go_after_recover(handler.as_ref(), write_panic));
+        assert_eq!(
+            repanicked_lines(payload),
+            "panic: handler\n\tpanic [recovered]\n\tpanic: write panic [recovered, repanicked]"
+        );
+        // No panic, and a plain Rust panic, pass through as they are.
+        assert_eq!(go_after_recover(&"handler panic", || 7), 7);
+        let payload = panic_of(|| go_after_recover(&"handler panic", || panic!("write panic")));
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"write panic"));
+    }
+
     #[test]
     fn retry_on_eagain_tries_20_times_with_growing_sleeps() {
         let mut calls = 0;

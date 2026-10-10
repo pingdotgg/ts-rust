@@ -1706,7 +1706,7 @@ impl BuildTask {
                     return UpToDateStatus::with_data(
                         UpToDateStatusType::InputFileNewer,
                         UpToDateStatusData::InputOutputName(InputOutputName {
-                            input: newest_input_file_and_time.file.clone(),
+                            input: newest_input_file_and_time.file,
                             output: output_file,
                         }),
                     );
@@ -1755,7 +1755,7 @@ impl BuildTask {
                         input: resolved.project_references()[upstream.ref_index]
                             .path
                             .clone(),
-                        output: oldest_output_file_and_time.file.clone(),
+                        output: oldest_output_file_and_time.file,
                     }),
                 );
             }
@@ -1780,7 +1780,7 @@ impl BuildTask {
                     input: resolved.project_references()[upstream.ref_index]
                         .path
                         .clone(),
-                    output: oldest_output_file_and_time.file.clone(),
+                    output: oldest_output_file_and_time.file,
                 }),
             );
         }

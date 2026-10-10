@@ -254,7 +254,7 @@ pub fn process_all_program_files(
         max_node_module_js_depth =
             i32::try_from(p).unwrap_or(if p < 0 { i32::MIN } else { i32::MAX });
     }
-    let current_directory = host.get_current_directory().to_string();
+    let current_directory = host.get_current_directory();
     let mut loader = FileLoader {
         default_library_path: get_normalized_absolute_path(
             &host.default_library_path(),
@@ -891,7 +891,7 @@ impl FileLoader {
         lib_file: Option<Rc<LibFile>>,
         include_reason: Rc<FileIncludeReason>,
     ) {
-        let curr_dir = self.host.get_current_directory().to_string();
+        let curr_dir = self.host.get_current_directory();
         let abs_path = get_normalized_absolute_path(file_name, &curr_dir);
         let (resolved_file, diagnostic) =
             self.get_source_file_from_reference(&abs_path, reference_text);
@@ -920,7 +920,7 @@ impl FileLoader {
         if !compiler_options.config_file_path.is_empty() {
             containing_directory = get_directory_path(&compiler_options.config_file_path);
         } else {
-            containing_directory = self.host.get_current_directory().to_string();
+            containing_directory = self.host.get_current_directory();
         }
         let containing_file_name =
             combine_paths(&containing_directory, &[INFERRED_TYPES_CONTAINING_FILE]);
@@ -3560,10 +3560,29 @@ export const a: T | Dep | number = x + (h as never);
         use crate::gostd::GoError;
         use crate::ipc::{self, Message, Protocol as _, ReadWriteCloser};
         use std::io::{Read, Write};
-        use std::os::unix::net::UnixStream;
         use std::sync::{Arc, Condvar, Mutex};
 
-        struct End(UnixStream);
+        #[cfg(unix)]
+        type Stream = std::os::unix::net::UnixStream;
+        // Windows has no socket pair in std: a connected loopback TCP pair
+        // gives the same two-ended byte stream.
+        #[cfg(windows)]
+        type Stream = std::net::TcpStream;
+
+        #[cfg(unix)]
+        fn stream_pair() -> std::io::Result<(Stream, Stream)> {
+            Stream::pair()
+        }
+
+        #[cfg(windows)]
+        fn stream_pair() -> std::io::Result<(Stream, Stream)> {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+            let client = Stream::connect(listener.local_addr()?)?;
+            let (server, _) = listener.accept()?;
+            Ok((client, server))
+        }
+
+        struct End(Stream);
 
         impl ReadWriteCloser for End {
             fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -3592,7 +3611,7 @@ export const a: T | Dep | number = x + (h as never);
             transforms: Arc<Mutex<Vec<String>>>,
             exit_after: Option<usize>,
         ) -> Arc<dyn ProcessExitState> {
-            let (client, server) = UnixStream::pair().expect("socket pair");
+            let (client, server) = stream_pair().expect("socket pair");
             let server: Arc<dyn ReadWriteCloser> = Arc::new(End(server));
             let write = Arc::new(Mutex::new(()));
             let queue: Queue = Arc::default();
@@ -3605,7 +3624,7 @@ export const a: T | Dep | number = x + (h as never);
                 }
             };
             {
-                let (server, write, queue) = (server.clone(), write.clone(), queue.clone());
+                let (server, write, queue) = (server.clone(), write, queue.clone());
                 std::thread::spawn(move || {
                     loop {
                         let msg = {
@@ -3743,10 +3762,7 @@ export const a: T | Dep | number = x + (h as never);
         exit_after: Option<usize>,
     ) -> (Vec<String>, Vec<String>, Vec<(String, bool)>, usize) {
         use crate::contentmapper::{self, HostOptions, ProjectSpec, SpawnerFunc};
-        let dir = std::env::temp_dir().join(format!(
-            "ts_goport_file_loader_{label}_{}",
-            std::process::id()
-        ));
+        let dir = std::path::PathBuf::from(mapped_dir(label));
         let _ = std::fs::remove_dir_all(&dir);
         let mapper_package = (
             "node_modules/fake-mapper/package.json".to_string(),
@@ -3870,6 +3886,18 @@ export const a: T | Dep | number = x + (h as never);
         (lines, transforms, taken, spawns.get())
     }
 
+    /// The temp dir of the `load_mapped` run `label`, as the loader names it.
+    #[cfg(unix)]
+    fn mapped_dir(label: &str) -> String {
+        std::env::temp_dir()
+            .join(format!(
+                "ts_goport_file_loader_{label}_{}",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
     #[cfg(unix)]
     const MAPPED_TSCONFIG: &str = r#"{ "compilerOptions": { "module": "preserve",
          "moduleResolution": "bundler", "types": [], "noEmit": true },
@@ -3908,15 +3936,19 @@ export const a: T | Dep | number = x + (h as never);
     // sends no second request for it) or a supplemental output, and
     // the program equals a load on one thread. The fake mapper answers the
     // newest request first, so answers come out of order when requests
-    // overlap. Which files the workers take varies, so the parallel load
-    // runs again, at most 10 times, until a worker sent the transform of
-    // the `@badmap` file. Go sends the transforms from its parse goroutines
-    // (fileloader.go:438 parseContentMappedFile), and parses only after the
-    // mapping check (transform.go:48-58 ParseResult).
+    // overlap. Which files the workers take varies, so the loader leaves
+    // the jobs of the `@badmap` file and of 3 plain files to the workers
+    // (`MAPPED_WAIT_FOR_WORKER`): a worker sends their transforms and parses
+    // the plain files, also on a loaded host where the loader would reach
+    // them first. The parallel load still runs again, at most 10 times,
+    // until a worker sent the transform of the `@badmap` file. Go sends the
+    // transforms from its parse goroutines (fileloader.go:438
+    // parseContentMappedFile), and parses only after the mapping check
+    // (transform.go:48-58 ParseResult).
     #[cfg(unix)]
     #[test]
     fn workers_send_the_content_mapper_transforms() {
-        use super::super::files_parser::parse_workers_enabled;
+        use super::super::files_parser::{MAPPED_WAIT_FOR_WORKER, parse_workers_enabled};
         let files = mapped_files(40, |i| match i {
             3 | 17 | 31 => "@diag",
             9 | 26 => "@fail",
@@ -3933,13 +3965,20 @@ export const a: T | Dep | number = x + (h as never);
         serial_transforms.sort();
         assert_eq!(serial_transforms, want);
         for attempt in 0..10 {
-            let (parallel, mut parallel_transforms, taken, _) = load_mapped(
-                &format!("mapped_parallel_{attempt}"),
-                MAPPED_TSCONFIG,
-                &files,
-                false,
-                None,
-            );
+            let label = format!("mapped_parallel_{attempt}");
+            let held: Vec<String> = [21, 5, 15, 30]
+                .iter()
+                .map(|i| format!("{}/src/C{i}.vue", mapped_dir(&label)))
+                .collect();
+            if parse_workers_enabled() {
+                MAPPED_WAIT_FOR_WORKER.lock().unwrap().extend(held.clone());
+            }
+            let (parallel, mut parallel_transforms, taken, _) =
+                load_mapped(&label, MAPPED_TSCONFIG, &files, false, None);
+            MAPPED_WAIT_FOR_WORKER
+                .lock()
+                .unwrap()
+                .retain(|name| !held.contains(name));
             parallel_transforms.sort();
             assert_eq!(parallel_transforms, want, "one transform per file");
             assert_eq!(parallel.join("\n"), serial.join("\n"));

@@ -2,7 +2,8 @@
 # One-time setup of npm trusted publishing for the tsc-rs packages. Run it by hand, logged in to
 # npm as an owner of tsc-rs and the @tsc-rs org, with 2FA on (npm asks for a code once).
 #
-# For each package (tsc-rs, @tsc-rs/linux-x64, @tsc-rs/darwin-arm64) it:
+# For each package (tsc-rs, @tsc-rs/linux-x64, @tsc-rs/linux-arm64, @tsc-rs/darwin-arm64,
+# @tsc-rs/darwin-x64, @tsc-rs/win32-x64, @tsc-rs/win32-arm64) it:
 #   1. publishes a 0.0.0-placeholder version when the package is not on npm yet: npm can only
 #      trust a workflow for a package that exists. The release workflow refuses 0.0.x tags, so a
 #      release never collides with a placeholder (tsc-rs has a 0.0.1 placeholder).
@@ -11,15 +12,17 @@
 #      revoke command (it does not revoke by itself).
 # npm drops a new trust that publishes nothing in 2 days. So run this shortly before the first tag.
 # The first publish binds a trust to the repo's GitHub ID, not only its name. After the repo is
-# recreated (as on 2026-10-07), run it with --relink: it revokes every trust of each package first.
+# recreated, run it with --relink: it revokes every trust of each package first. The 2026-10-07
+# recreation needs no relink: v0.1.0 already published from the new repo.
 #
 # usage: npm/trust-setup.sh [--relink]    needs npm 11.15.0 or later (npm trust)
 set -euo pipefail
-[[ ${1:-} != help ]] || { sed -n '2,16p' "$0" >&2; exit 2; }
+[[ ${1:-} != help ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
 relink=0
 [[ ${1:-} != --relink ]] || relink=1
 repo=pingdotgg/ts-rust
-packages=(tsc-rs @tsc-rs/linux-x64 @tsc-rs/darwin-arm64)
+packages=(tsc-rs @tsc-rs/linux-x64 @tsc-rs/linux-arm64 @tsc-rs/darwin-arm64 @tsc-rs/darwin-x64
+  @tsc-rs/win32-x64 @tsc-rs/win32-arm64)
 
 npm_version=$(npm --version)
 [[ $(printf '%s\n' 11.15.0 "$npm_version" | sort -V | head -1) == 11.15.0 ]] ||

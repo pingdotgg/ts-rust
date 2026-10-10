@@ -558,7 +558,7 @@ impl Checker {
                 signature_links.resolved_signature = SignatureId::NIL;
                 if is_function_expression_or_arrow_function(ancestor_node) {
                     let symbol = self.get_symbol_of_declaration(ancestor_node);
-                    let symbol_links = self.value_symbol_links.get(symbol);
+                    let symbol_links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
                     let resolved_type = symbol_links.resolved_type;
                     cached_types.insert(symbol, resolved_type);
                     symbol_links.resolved_type = TypeId::NIL;
@@ -573,7 +573,9 @@ impl Checker {
                 self.signature_links.get(links_node).resolved_signature = resolved_signature;
             }
             for (symbol, resolved_type) in cached_types {
-                self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, symbol)
+                    .resolved_type = resolved_type;
             }
             return result;
         }
@@ -606,7 +608,7 @@ impl Checker {
 
     // Go: checker/services.go:415 GetMappedTypeSymbolOfProperty
     pub fn get_mapped_type_symbol_of_property(&self, symbol: SymbolId) -> SymbolId {
-        if let Some(value_links) = self.value_symbol_links.try_get(symbol) {
+        if let Some(value_links) = self.value_symbol_links.try_get_by_id(&self.symbols, symbol) {
             return self.ty(value_links.containing_type).symbol;
         }
         SymbolId::NIL
@@ -619,7 +621,10 @@ impl Checker {
             .check_flags
             .intersects(CheckFlags::SYNTHETIC)
         {
-            let containing_type = self.value_symbol_links.get(symbol).containing_type;
+            let containing_type = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .containing_type;
             let types = self.ty(containing_type).types().to_vec();
             let name = self.sym(symbol).name.clone();
             // core.MapNonNil
@@ -659,8 +664,11 @@ impl Checker {
         let mut target = SymbolId::NIL;
         let mut next = symbol;
         loop {
-            if self.value_symbol_links.has(next) {
-                next = self.value_symbol_links.get(next).target;
+            if self.value_symbol_links.has_by_id(&self.symbols, next) {
+                next = self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, next)
+                    .target;
             } else if self.export_type_links.has(next) {
                 next = self.export_type_links.get(next).target;
             } else {

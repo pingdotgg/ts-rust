@@ -2,3 +2,18 @@
 # again once, after the last merge. The driver is in the repo config: git config merge.lib-blob.driver true
 crates/ts_goport/src/frontend/parser/lib_parse.bin merge=lib-blob
 crates/ts_goport/src/binder/lib_bind.bin merge=lib-blob
+
+# The lib snapshots (lib_bind.bin, lib_parse.bin) key their sections by a
+# compile-time hash of the bytes of their inputs: the bundled libs through
+# include_str!, and the parser/binder sources through include_bytes!
+# (SOURCES_HASH in frontend/parser/lib_parse_snapshot.rs and
+# binder/lib_snapshot.rs). Those bytes are the working-tree text, so a
+# checkout that rewrites them to CRLF (Windows core.autocrlf=true) makes every
+# key miss and fails snapshot_matches_live_bind and
+# snapshot_matches_live_parse. Force LF in the working tree on every platform.
+# The index already holds LF for all of these, so no committed content
+# changes.
+*.rs text eol=lf
+crates/ts_goport/libs/*.d.ts text eol=lf
+# Bash stops at a CRLF line (`$'\r': command not found`). Git Bash runs these scripts on Windows.
+*.sh text eol=lf

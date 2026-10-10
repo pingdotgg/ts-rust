@@ -780,11 +780,11 @@ impl Checker {
         // Only check the symbol once
         if !self
             .value_symbol_links
-            .get(symbol)
+            .get_by_id(&self.symbols, symbol)
             .function_or_constructor_checked
         {
             self.value_symbol_links
-                .get(symbol)
+                .get_by_id(&self.symbols, symbol)
                 .function_or_constructor_checked = true;
             self.check_function_or_constructor_symbol_worker(symbol);
         }

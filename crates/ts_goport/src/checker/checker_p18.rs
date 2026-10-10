@@ -402,7 +402,9 @@ impl Checker {
                     late_symbol =
                         self.new_symbol_ex(SymbolFlags::NONE, &member_name, CheckFlags::LATE);
                 }
-                self.value_symbol_links.get(late_symbol).name_type = t;
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, late_symbol)
+                    .name_type = t;
                 self.add_declaration_to_late_bound_symbol(late_symbol, decl, symbol_flags);
                 if self.sym(late_symbol).parent.is_nil() {
                     self.sym_mut(late_symbol).parent = parent;
@@ -978,7 +980,10 @@ impl Checker {
     pub fn get_type_of_symbol_with_deferred_type(&mut self, symbol: SymbolId) -> TypeId {
         // One link lookup on the cached hit. The miss returns the value it
         // just stored, as Go returns links.resolvedType.
-        let cached = self.value_symbol_links.get(symbol).resolved_type;
+        let cached = self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type;
         if cached.is_some() {
             return cached;
         }
@@ -995,13 +1000,20 @@ impl Checker {
         } else {
             self.get_intersection_type(&constituents)
         };
-        self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type = resolved_type;
         resolved_type
     }
 
     // Go: checker/checker.go:16733 getWriteTypeOfSymbolWithDeferredType
     pub fn get_write_type_of_symbol_with_deferred_type(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).write_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .write_type
+            .is_nil()
+        {
             let deferred = self.deferred_symbol_links.get(symbol);
             let parent = deferred.parent;
             let write_constituents = deferred.write_constituents.clone();
@@ -1014,9 +1026,13 @@ impl Checker {
             } else {
                 self.get_type_of_symbol_with_deferred_type(symbol)
             };
-            self.value_symbol_links.get(symbol).write_type = write_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .write_type = write_type;
         }
-        self.value_symbol_links.get(symbol).write_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .write_type
     }
 
     // Go: checker/checker.go:16753 getWriteTypeOfSymbol
@@ -1036,7 +1052,7 @@ impl Checker {
             if check_flags.intersects(CheckFlags::DEFERRED_TYPE) {
                 return self.get_write_type_of_symbol_with_deferred_type(symbol);
             }
-            let links = self.value_symbol_links.get(symbol);
+            let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             return if links.write_type.is_some() {
                 links.write_type
             } else {
@@ -1171,35 +1187,42 @@ impl Checker {
     pub fn get_type_of_instantiated_symbol(&mut self, symbol: SymbolId) -> TypeId {
         // One link lookup on the cached hit. The miss returns the value it
         // just stored, as Go returns links.resolvedType.
-        let links = self.value_symbol_links.get(symbol);
+        let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
         if links.resolved_type.is_some() {
             return links.resolved_type;
         }
         let (target, mapper) = (links.target, links.mapper);
         let t = self.get_type_of_symbol(target);
         let resolved_type = self.instantiate_type(t, mapper);
-        self.value_symbol_links.get(symbol).resolved_type = resolved_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type = resolved_type;
         resolved_type
     }
 
     // Go: checker/checker.go:16855 getWriteTypeOfInstantiatedSymbol
     pub fn get_write_type_of_instantiated_symbol(&mut self, symbol: SymbolId) -> TypeId {
         // One link lookup on the cached hit, as in get_type_of_instantiated_symbol.
-        let links = self.value_symbol_links.get(symbol);
+        let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
         if links.write_type.is_some() {
             return links.write_type;
         }
         let (target, mapper) = (links.target, links.mapper);
         let t = self.get_write_type_of_symbol(target);
         let write_type = self.instantiate_type(t, mapper);
-        self.value_symbol_links.get(symbol).write_type = write_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .write_type = write_type;
         write_type
     }
 
     // Go: checker/checker.go:16863 getTypeOfVariableOrParameterOrProperty
     pub fn get_type_of_variable_or_parameter_or_property(&mut self, symbol: SymbolId) -> TypeId {
         // One link lookup on the cached hit.
-        let cached = self.value_symbol_links.get(symbol).resolved_type;
+        let cached = self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type;
         if cached.is_some() {
             return cached;
         }
@@ -1213,10 +1236,16 @@ impl Checker {
         // be assigned until contextual typing is complete, so we need to defer in
         // cases where contextual typing may take place.
         // The worker can set resolved_type, so read the links again here.
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil()
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
             && !self.is_parameter_of_context_sensitive_signature(symbol)
         {
-            self.value_symbol_links.get(symbol).resolved_type = t;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = t;
         }
         t
     }

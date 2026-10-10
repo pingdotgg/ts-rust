@@ -246,9 +246,10 @@ impl Checker {
             _ => panic!("interface conversion: TypeSystemEntity is not *Type"),
         };
         match r.property_name {
+            // Go `Get` gives no id here: each push site read the symbol first.
             TypeSystemPropertyName::TYPE => self
                 .value_symbol_links
-                .get(as_symbol(r.target))
+                .get_noted(as_symbol(r.target))
                 .resolved_type
                 .is_some(),
             TypeSystemPropertyName::DECLARED_TYPE => self
@@ -292,9 +293,10 @@ impl Checker {
                     .intersects(NodeCheckFlags::INITIALIZER_IS_UNDEFINED_COMPUTED),
                 _ => panic!("interface conversion: TypeSystemEntity is not *ast.Node"),
             },
+            // Go `Get` gives no id here: each push site read the symbol first.
             TypeSystemPropertyName::WRITE_TYPE => self
                 .value_symbol_links
-                .get(as_symbol(r.target))
+                .get_noted(as_symbol(r.target))
                 .write_type
                 .is_some(),
             TypeSystemPropertyName::ALIAS_TARGET => self
@@ -674,8 +676,10 @@ impl Checker {
 
     /// Builds the filter of `g` from its members table, in each slot of
     /// `g` (with `strictBindCallApply` off, the 3 function slots are all
-    /// Function), and the union when all 4 slots are built. `g` is
-    /// resolved, or not an object type: then it has no table (Go
+    /// Function), and the union when all 4 types are set and their slots
+    /// are built. While `initialize_checker` has not set a type, its slot
+    /// is nil, and a union then would miss its names when it is set. `g`
+    /// is resolved, or not an object type: then it has no table (Go
     /// `getPropertyOfObjectType` gives nil for it), and its filter is
     /// empty.
     #[cold]
@@ -699,7 +703,7 @@ impl Checker {
             }
         }
         filters.all = None;
-        if filters.of == globals {
+        if globals.iter().all(|global| global.is_some()) && filters.of == globals {
             let mut all = [0u64; 4];
             for slot_bits in &filters.bits {
                 for (word, slot_word) in all.iter_mut().zip(slot_bits) {
@@ -2444,6 +2448,50 @@ type T2 = new () => {};
         });
     }
 
+    /// The union waits for all 4 types (R183 reviewer item 2).
+    /// `initialize_checker` sets Object before Function, CallableFunction
+    /// and NewableFunction (Go checker.go:1361-1364). A filter of Object
+    /// built between them must not make a union of Object's names alone:
+    /// once Function is set, the lookups of its names would skip it.
+    #[test]
+    fn union_waits_for_all_4_types() {
+        let a = r#"export {};
+type T0 = { a: number };
+type T1 = () => void;
+type T2 = new () => {};
+"#;
+        let (early_union, skipped) =
+            with_checked_a(&[("a.ts", a.to_string())], STRICT, |c, _, types| {
+                build_filter(c, &types);
+                let globals = c.augment_globals();
+                c.global_function_type = TypeId::NIL;
+                c.global_callable_function_type = TypeId::NIL;
+                c.global_newable_function_type = TypeId::NIL;
+                c.augment_filters = AugmentFilters::default();
+                c.build_augment_filter(globals[AUGMENT_OBJECT]);
+                let early_union = c.augment_filters.all.is_some();
+                c.global_function_type = globals[AUGMENT_FUNCTION];
+                c.global_callable_function_type = globals[AUGMENT_CALLABLE];
+                c.global_newable_function_type = globals[AUGMENT_NEWABLE];
+                let function = c.ty(globals[AUGMENT_FUNCTION]).as_structured_type().members;
+                let names: Vec<Name> = c
+                    .symbols
+                    .iter_names(function)
+                    .map(|(name, _)| name)
+                    .collect();
+                let any_function = c.any_function_type;
+                let skipped: Vec<String> = names
+                    .iter()
+                    .filter(|name| c.augment_lookups_miss(any_function, name))
+                    .map(|name| name.as_str().to_string())
+                    .collect();
+                assert_lookups_match_go(c, &types, &[]);
+                (early_union, skipped)
+            });
+        assert!(!early_union, "a union of Object's names alone");
+        assert_eq!(skipped, Vec::<String>::new());
+    }
+
     /// The source of 40 names `{prefix}0` to `{prefix}39` that a module
     /// augmentation adds to `iface`, and of an assignment of `value` to a
     /// type with each name, which needs the name on the apparent type of
@@ -2624,5 +2672,58 @@ declare const p2: {{ b: number }};
         // Go N gives only TS2671 for `./x`.
         assert_eq!(codes, [2671]);
         assert_eq!(of[AUGMENT_OBJECT], globals[AUGMENT_OBJECT]);
+    }
+
+    /// Skeptic program e25 (propfilt1-skeptic-c, R183 reviewer item 3).
+    /// The merge of `./x` resolves Object (its `export=` reads
+    /// `p.toString`), the merge of `./g` (`export = globalThis`) adds
+    /// `late1` and `late2` to the members of Object in place, and the merge
+    /// of `./y` then reads them. So the filter must be built again after
+    /// each merge, not once after the loop (mutant M2).
+    #[test]
+    fn filter_follows_each_module_augmentation_merge() {
+        let a = r#"import "./x";
+import "./y";
+import "./g";
+declare global { interface Object { a1: number } }
+declare module "./x" { interface Q {} }
+declare module "./g" { interface Object { late1: number; late2: number } }
+declare module "./y" { interface R {} }
+export {};
+"#;
+        let x = r#"declare const p: { a: number };
+const o = { s: p.toString };
+export = o.s;
+"#;
+        let y = r#"declare const q: { a: number };
+const o = { s: q["late1"], t: q satisfies { late2: number }, u: q["missingY"] };
+export = o.s;
+"#;
+        let files = [
+            ("a.ts", a.to_string()),
+            ("x.ts", x.to_string()),
+            ("y.ts", y.to_string()),
+            g_ts(),
+        ];
+        let options = format!(r#"{STRICT}, "module": "commonjs""#);
+        let (a_codes, y_codes) = with_checked_a(&files, &options, |c, codes, _| {
+            let y = c
+                .files
+                .iter()
+                .copied()
+                .find(|&file| source_file_file_name(file).ends_with("/y.ts"))
+                .expect("y.ts is not in the program");
+            let ctx = crate::gostd::context::background();
+            let y_codes: Vec<i32> = c
+                .get_diagnostics_exported(&ctx, y)
+                .iter()
+                .map(|d| d.code)
+                .collect();
+            (codes, y_codes)
+        });
+        // Go N (tsgo-oracle-673a5f17d713): TS2671 for `./x` and `./y`, and
+        // in `y.ts` only TS7053 for `missingY`.
+        assert_eq!(a_codes, [2671, 2671]);
+        assert_eq!(y_codes, [7053]);
     }
 }

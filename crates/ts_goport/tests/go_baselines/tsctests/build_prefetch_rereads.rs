@@ -23,7 +23,7 @@ impl TmpDir {
         let dir = std::env::temp_dir().join(format!("goport-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir {}: {e}", dir.display()));
-        TmpDir(dir.canonicalize().expect("a real path"))
+        TmpDir(crate::support::eval_symlinks(&dir).expect("a real path"))
     }
 
     fn write(&self, name: &str, text: &str) {

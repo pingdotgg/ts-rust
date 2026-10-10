@@ -42,14 +42,17 @@ allow it when VS Code asks:
 { "js/ts.tsdk.path": "node_modules/@tsc-rs/linux-x64/lib" }
 ```
 
-On macOS, use `@tsc-rs/darwin-arm64`.
+On Linux arm64, use `@tsc-rs/linux-arm64`. On macOS, use `@tsc-rs/darwin-arm64` (Apple silicon) or
+`@tsc-rs/darwin-x64` (Intel). On Windows, use `@tsc-rs/win32-x64` or `@tsc-rs/win32-arm64`.
 
 ## Platforms
 
 - Linux x64 (static, any distribution)
-- macOS arm64
-
-Windows and Linux arm64 are not available yet.
+- Linux arm64 (static, any distribution)
+- macOS arm64 (Apple silicon)
+- macOS x64 (Intel)
+- Windows x64
+- Windows arm64
 
 ## Known problems
 

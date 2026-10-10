@@ -291,8 +291,16 @@ impl Checker {
                 check_flags,
             );
             self.sym_mut(inferred_prop).declarations = prop_declarations;
-            let name_type = self.value_symbol_links.get(prop).name_type;
-            self.value_symbol_links.get(inferred_prop).name_type = name_type;
+            // Go reads the links of `inferredProp` (the left side) first.
+            self.value_symbol_links
+                .get_by_id(&self.symbols, inferred_prop);
+            let name_type = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, prop)
+                .name_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, inferred_prop)
+                .name_type = name_type;
             let property_type = self.get_type_of_symbol(prop);
             self.reverse_mapped_symbol_links
                 .get(inferred_prop)
@@ -342,7 +350,12 @@ impl Checker {
 
     // Go: checker/inference.go:1145 getTypeOfReverseMappedSymbol
     pub fn get_type_of_reverse_mapped_symbol(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
+        {
             let (property_type, mapped_type, constraint_type) = {
                 let reverse_links = self.reverse_mapped_symbol_links.get(symbol);
                 (
@@ -358,9 +371,13 @@ impl Checker {
             } else {
                 self.unknown_type
             };
-            self.value_symbol_links.get(symbol).resolved_type = resolved;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .resolved_type = resolved;
         }
-        self.value_symbol_links.get(symbol).resolved_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
     }
 
     // If the original mapped type had an intersection constraint we extract its components,
@@ -503,7 +520,9 @@ impl Checker {
             let name = self.get_string_literal_value(t);
             let literal_prop = self.new_symbol(SymbolFlags::PROPERTY, &name);
             let any_type = self.any_type;
-            self.value_symbol_links.get(literal_prop).resolved_type = any_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, literal_prop)
+                .resolved_type = any_type;
             let t_symbol = self.ty(t).symbol;
             if t_symbol.is_some() {
                 let (declarations, value_declaration) = {

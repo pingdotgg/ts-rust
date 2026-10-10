@@ -116,7 +116,8 @@ handles.
 Borrowing: arenas live in `Checker`. Copy what you need out of an arena entry
 before calling another `&mut self` method. Clone `Vec`s you iterate while
 calling `&mut self` methods. After a call, re-fetch links
-(`self.value_symbol_links.get(s)`) instead of holding a reference across it.
+(`self.value_symbol_links.get_by_id(&self.symbols, s)`) instead of holding a
+reference across it.
 
 ### Go `int` past the int32 range
 
@@ -175,10 +176,12 @@ Each arena has a dummy entry at index 0. New entries are pushed; ids are
 `TypeId(len as u32)` etc. Go `c.newType`, `c.newSignature`,
 `newIndexInfo`, `newTypePredicate`, mapper constructors push into these.
 Go `t.id` equals the arena index, so Go's per-checker `TypeId` counter order
-is kept. Link stores: `value_symbol_links: LinkStore<SymbolId, ValueSymbolLinks>`
-etc. with the Go field names. A store keeps its values in 64-key pages, so a
-value over 32 bytes (a compile-time check in `LinkStore`), or one that few
-keys have, goes in a `Box` (`type_node_links: LinkStore<Node, Box<TypeNodeLinks>>`).
+is kept. Link stores: `mapped_symbol_links: LinkStore<SymbolId, MappedSymbolLinks>`
+etc. with the Go field names (`value_symbol_links` is a
+`ValueSymbolLinkStore`, whose reads give symbol ids; see Threads). A store
+keeps its values in 64-key pages, so a value over 32 bytes (a compile-time
+check in `LinkStore`), or one that few keys have, goes in a `Box`
+(`type_node_links: LinkStore<Node, Box<TypeNodeLinks>>`).
 
 `checker/mapper.rs` defines `TypeMapper` (an enum over the Go mapper kinds)
 and its constructors. Go `m.Map(t)` -> `self.mapper_map(m, t)`,
@@ -621,12 +624,90 @@ The batch that adds it is not accepted until Theo approves.
   started projects work at the same time, like Go's goroutines. A
   project's emit starts behind its check when `Program::start_emit`
   allows it, and its writes wait in a buffer
-  (`buffer_early_emit_writes`) until the task finishes, so the projects
-  still write in build order. A project's emit runs on its own checker
-  threads and its own emit pool
+  (`buffer_early_emit_writes`) until the task finishes. A task finishes
+  when its check and its early emit (when it has one) have ended (the
+  barrier jobs behind them also
+  wait for the d.ts twins and the emit pool,
+  `program::send_checker_barrier`), in the order they end, or in build
+  order when the outputs of the tasks overlap. A project's emit
+  runs on its own checker threads and its own emit pool
   (see Threads): the emit resolver needs the file's checker, which lives
   on its worker thread, and synthetic nodes are thread-local
   (`ast/synthetic.rs`).
+
+  Known gaps (README "Known problems", K2). Go loads the programs of the
+  started tasks at the same time; here they load one at a time on one
+  thread. So a project that imports another project's output without a
+  reference can read it before or after Go's reader does:
+  - G1: the reader references a project that builds before the writer.
+  - G2 (the rest): several large projects with the default builders.
+    Their affected-file walks wait for the loading thread: for an
+    emit-only task, and for a checked task too
+    (`incremental::Program::start_check`; Go runs `collectAllAffectedFiles`
+    on the task's goroutine). k2redis1 repro: 3 checked projects.
+  - G3: a `noEmitOnError` project has no early emit. It finishes when its
+    check ends, then emits and writes; Go's builder writes when that emit
+    ends. Starting its emit when its check ends (k2gaps1 round 1) broke
+    small shapes where Go and the port agreed (state note
+    `k2gaps1-round2-2026-10-08`).
+  - G4: a project that is not `incremental` or `composite` has no
+    incremental state and no early emit. It finishes when its check ends,
+    then emits and writes on the loading thread; Go's builder emits the
+    whole program and writes when that emit ends. k2gaps1 rounds 1 and 2
+    gave it an early emit of the whole program with buffered writes. That
+    broke two things where Go and the port agreed (state note
+    `k2gaps1-round3-2026-10-08`):
+    - `--verbose` on a no-op build named another oldest output than Go:
+      the buffered writes fall within about a millisecond.
+    - Probe `inv_noeoe_noninc_m6` (`tsc -b p1 p2 p3 --builders 2`, none
+      `incremental`): p1 is a large `noEmitOnError` writer, p2 a checked
+      project, p3 reads p1's output without a reference. Go and the port
+      give TS2305: p2 finishes first. With G4 fixed and G3 not, p2 under
+      load finished after p1's check, so p3 read p1's new output. Fix G3
+      and G4 together.
+  - A large `noEmitOnError` project with a syntax error (k2gaps1 probes
+    `noeoe_syn_comp`, `noeoe_syn_inc`): it has no checker work, so it
+    finishes at once, in start order. This is G1's family.
+  - G5: the other projects with no early emit finish when their check
+    ends, then emit and write, as in G3; Go's builder writes when that
+    emit ends. These are the projects where `check_cannot_see_outputs`
+    fails (F1: node16 or nodenext with a checked relative module name
+    without an extension; F2: a program file inside `outDir` or
+    `declarationDir`; F3: a `node_modules` segment in either), and the
+    other `early_emit_options_allow` cases: `preserveSymlinks` (F4),
+    `outFile`, `--generateTrace`, and every project with
+    `GOPORT_EARLY_EMIT=0`. `--singleThreaded` is not a gap: Go's build
+    then runs one task at a time (execute/build/orchestrator.go:925
+    `rangeTasks`).
+  - C1 rate shift (int56; state note `int56-decision-2026-10-09`). C1
+    makes a task with early emit finish when its emit pool jobs and d.ts
+    twins end (`program::send_checker_barrier`), as Go's task finishes
+    when its emit ends. In probes `c1_fan_imp_b2` and `c1_fan_nc_k600_b2x`
+    a small project k (one big file) and a big emit project w build
+    together, and readers read w's output without a reference. On loaded
+    zbook the rare answer (rc 0) came from int56 in 13 of 90 runs, from
+    R184 in 1 of 90 and from Go in 2 of 90 (Fisher p about 0.001). The
+    answer stays in Go's set, and quiet hosts gave one answer. Cause: in
+    the full build the port's k finishes late (350 to 460 ms against Go's
+    140 to 180 ms), so k and w almost tie, and C1 moves k a little later.
+  - G6, partial writes: Go writes each output when the emit of its file
+    ends, so a task that loads during that emit reads some files old and
+    some new. The port keeps an early emit's writes until the task
+    finishes (`buffer_early_emit_writes`), so it reads all old or all new.
+    node-redis step 2: Go reads `commands/index.d.ts` old and
+    `AGGREGATE.d.ts` and `CREATE.d.ts` new in 6 of 6 runs; the port reads
+    all old (k2redis1). A Go clock for G1 alone does not fix this.
+  - G7, beside-sources build order: when up-to-date projects write their
+    outputs beside their sources, the port's build order rule
+    (state note tscb-order-decision-ext-2026-10-01) changes which d.ts
+    version a reader without a reference sees: in probe P3 Go reads all old
+    in 6 of 6 runs and the port all new (k2sched/go-model-check.md). The
+    rule changes output, not only speed.
+  - G8, status checks on one thread: with `--builders 2` a slow status
+    check on the loop thread delays the writer, so the reader reads old
+    output where Go reads new in 6 of 6 runs (probe q1b2,
+    k2sched/design-a-check.md). Go runs each status check on the builder
+    that takes the task.
 
 `program.rs` defines `SourceFileInfo`, `load`, `bind_all`, the Go
 `Program` methods as free functions with Go snake names (`get_resolved_module(file, name, mode)` ->
@@ -850,6 +931,42 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   caches) is per thread. A worker starts from a copy of the loading
   thread's state (`WorkerSeed`), so each checker's results depend only on
   its own files, not on thread timing.
+- Symbol ids: the port gives a symbol its id where Go calls
+  `ast.GetSymbolId` (every `valueSymbolLinks` read through
+  `ValueSymbolLinkStore`, and the node builder, symbol accessibility, enum
+  relation and emit resolver maps), so one checker counts ids as Go does.
+  The store is a type of its own, so a read that gives no id does not
+  compile; the 2 reads of a pushed type resolution (`get_noted`) and the
+  parameter memo (`try_get_without_id`) are the named exceptions.
+  Late-bound names hold ids (`__@k@<id>`), and the node builder counts their
+  length toward truncation. Go's checkers share one counter: a worker skips
+  the ids that the other checkers' `NewChecker` gave to their own symbols
+  (`program::new_pool_checker`). It does not skip the ids of binder
+  symbols that `NewChecker` gave (merge error texts): Go gives each of those
+  once in the pool. It also does not skip the ids that other checkers give
+  while they check, which race in Go. Go also gives each class with private
+  names an id at bind time; the port does not
+  (`get_symbol_name_for_private_identifier`), so such a class gets its id
+  later, at its first id site. The 4 check-time private name sites give the
+  class its id, as Go does (`Checker::private_identifier_symbol_name`).
+- Several programs in one process: Go's one counter runs on from one
+  program to the next, and a bound file keeps the ids of its symbols. With
+  `--singleThreaded` (one checker) the port hands the ids of a program's
+  checker to its loading thread, so the next program's checker starts from
+  them (`program::CheckerPool::carry_symbol_ids`): when the next pool is made
+  (watch makes the next program before it releases the last) or when the
+  program is released (`tsc -b`). So `tsc -b --singleThreaded` and the
+  watch cycles of `--singleThreaded` give Go's ids. Other cases do not
+  carry ids, and each program's checkers count from the loading thread's
+  ids: with more checkers (the default pool, `tsc -b` projects built at once)
+  Go's ids race, and per-thread counters cannot give Go's process count
+  without one shared counter. The language server's programs and its search
+  threads do not carry ids either. Go's ids are also fixed with
+  `--checkers 1` when the programs run one at a time (`tsc -b --builders 1
+  --checkers 1`, watch with `--checkers 1`), but the port does not carry
+  them there: `program.rs` cannot tell that the programs run one at a time,
+  and with more builders a carry would make one program wait for the
+  checker of another.
 - One thread can hold checkers of several programs (the language server's
   dispatch thread). Make a checker's program current while the checker runs
   (`core::enter_program`): the `program.rs` functions that checker code
@@ -1430,6 +1547,27 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   boundaries. Without an API session, the results of LSP requests are
   Go's and only order and timing differ. With an API session, the limits
   below also change which messages are answered and when.
+- The end of a run: when SIGINT, SIGTERM, the parent watchdog or the end
+  of stdin ends the context while the dispatch thread runs work that Go
+  runs on a goroutine (the async part of a request, an API session), Go's
+  `Run` (`lsp/server.go:859`) returns without that work and the process
+  ends at once. The port waits until that work ends, then ends with Go's
+  exit code and message. A request that the end cancels can also log
+  "error handling method" on stderr. Go and the port both wait for the
+  sync part of a handler (`server.go:1013`).
+  - A fix ends the run from a watcher thread while the dispatch thread is
+    in Go's goroutine work. So it tracks the phase of Go's dispatch
+    goroutine: in `requestQueue.Get`, in the sync part of a handler, or in
+    goroutine work.
+  - Every dispatch level must set the phase of its own turn, and give the
+    outer phase back when it returns. This includes the inner
+    `dispatch_next` that an API connection's read runs while it waits, and
+    the `dispatch_request` that it runs while an API request waits for a
+    client call (`ApiConnProtocol::read_message`).
+  - The apisig1 lane (branch `goport-apisig1`, `lsp/run_end.rs`) set the
+    phase only at the outermost level. With an API session connection
+    open, the sync part of an LSP message ran in `Work`, so a signal or
+    the end of stdin ended the run at once, where Go waits.
 - API sessions of the LSP server (`custom/initializeAPISession`) are
   served on the dispatch thread too (`lsp/server.rs` `ApiConnProtocol`).
   LSP messages and API requests do not run at the same time. These
@@ -1450,6 +1588,35 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
   - `--api --async` and the API sessions run requests one at a time
     (`ipc/conn_async.rs`). A pipelined request sees the result of the one
     before it. Go runs them at the same time.
+  - The async connection reads its next message only after the running
+    request. So the end of the input during a request does not cancel the
+    request's context: Go's read loop sees the end at once and returns
+    (`ipc/conn_async.go:89-91`), and its deferred `cancelHandlers` (`:73`)
+    cancels it, so a long check answers early with what it has. The port
+    answers in full and then ends, with Go's exit code.
+  - The end on SIGINT or SIGTERM in `--api --async` is an open Go
+    difference (state note `r187-repair-withdraw-2026-10-09`, lane
+    apisig4). Go's read loop checks the context at the top of each turn
+    (`ipc/conn_async.go:83`) and then waits in the read while a request
+    runs on its own goroutine (`:98`). The port runs the request inline
+    and checks the context after it (`run_loop`). The cases:
+    - A signal during a request: Go answers it, then ends after the next
+      message (it answers that message too) or at the end of the input.
+      The port ends right after the answer and reads no more.
+    - Pipelined requests: a signal during request 1 while request 2 is
+      already sent. Go answers both (2 first) and then waits for the next
+      message. The port answers request 1 and ends: request 2 gets no
+      answer.
+    - A signal while a request waits for a client callback: Go's `Call`
+      returns the context error at once (`:290`), so request 1 is answered
+      at the signal. The port's `call` waits in its read, so it answers
+      request 1 after the next message. Both end after that message.
+  - apisig2 (R187) moved the run's check before an inline request to
+    match the first case. The run then read until the end of the input in
+    the callback case. Its repair apisig3 closed the pending calls at the
+    signal, so the callbacks that a handler makes after the signal
+    (writeFile, removeFile) lost their requests. Both are withdrawn, and
+    `ipc/conn_async.rs` is R186's code.
 - Go runtime profiles (pprof) have no samples: the port writes Go's file
   names, errors and log lines and valid empty profiles. `runtime.GC` is a
   no-op. `runtime/metrics` reads as `KindBad`, so the Go runtime fields of

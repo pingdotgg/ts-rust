@@ -184,7 +184,7 @@ impl LanguageService {
                 include_symbols, /*includeSymbols*/
             ) {
                 Ok(result) => result,
-                Err(err) => crate::core::go_panic(err.error().to_string()),
+                Err(err) => crate::core::go_panic(err.error()),
             };
             let default_commit_characters =
                 get_default_commit_characters(completion.has_index_signature);
@@ -2279,7 +2279,7 @@ impl LanguageService {
                 &[&(normalized_prefix_base.clone() + &fragment_directory)],
             )
         } else {
-            normalized_prefix_directory.clone()
+            normalized_prefix_directory
         };
         // Need to normalize after combining: If we combinePaths("a", "../b"), we want "b" and not "a/../b".
         // ts#64159: `packageDirectory.ResolveDirectory(expandedPrefixDirectory)`

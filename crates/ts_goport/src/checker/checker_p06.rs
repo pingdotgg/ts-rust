@@ -1208,9 +1208,13 @@ impl Checker {
             let members = self.symbols.new_table();
             for attribute in import_attributes_list_p06(node) {
                 let member = self.new_symbol(SymbolFlags::PROPERTY, attribute.name().text());
+                // Go reads the links (and gives the id) before the right side.
+                self.value_symbol_links.get_by_id(&self.symbols, member);
                 let value_type = self.check_expression_cached(attribute.value());
                 let resolved_type = self.get_regular_type_of_literal_type(value_type);
-                self.value_symbol_links.get(member).resolved_type = resolved_type;
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, member)
+                    .resolved_type = resolved_type;
                 let member_name = self.sym(member).name.clone();
                 self.symbols.set(members, member_name, member);
             }

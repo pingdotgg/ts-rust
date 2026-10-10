@@ -580,7 +580,7 @@ impl Checker {
         let mut symbol = symbol;
         let mut m = m;
         let (links_resolved_type, links_write_type, links_target, links_mapper, links_name_type) = {
-            let links = self.value_symbol_links.get(symbol);
+            let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
             (
                 links.resolved_type,
                 links.write_type,
@@ -641,7 +641,8 @@ impl Checker {
         let result = self.symbols.push_symbol(full);
         // PERF: Go `Get` and then sets three fields. `result` is new, so its
         // record is added once with every field set.
-        self.value_symbol_links.insert_new(
+        self.value_symbol_links.insert_new_by_id(
+            &self.symbols,
             result,
             ValueSymbolLinks {
                 target: symbol,
@@ -893,11 +894,15 @@ impl Checker {
                         // property symbol's name type be the union of those enum member types.
                         let existing_prop = c.symbols.get(members, &prop_name);
                         if existing_prop.is_some() {
-                            let existing_name_type =
-                                c.value_symbol_links.get(existing_prop).name_type;
+                            let existing_name_type = c
+                                .value_symbol_links
+                                .get_by_id(&c.symbols, existing_prop)
+                                .name_type;
                             let name_type_union =
                                 c.get_union_type(&[existing_name_type, prop_name_type]);
-                            c.value_symbol_links.get(existing_prop).name_type = name_type_union;
+                            c.value_symbol_links
+                                .get_by_id(&c.symbols, existing_prop)
+                                .name_type = name_type_union;
                             let existing_key_type =
                                 c.mapped_symbol_links.get(existing_prop).key_type;
                             let key_type_union = c.get_union_type(&[existing_key_type, key_type]);
@@ -959,7 +964,8 @@ impl Checker {
                             // is new, so each record is added once with its
                             // fields set. A nil `modifiers_prop` is the
                             // default (nil) origin.
-                            c.value_symbol_links.insert_new(
+                            c.value_symbol_links.insert_new_by_id(
+                                &c.symbols,
                                 prop,
                                 ValueSymbolLinks {
                                     containing_type: t,
@@ -1043,8 +1049,16 @@ impl Checker {
 
     // Go: checker/checker.go:21321 getTypeOfMappedSymbol
     pub fn get_type_of_mapped_symbol(&mut self, symbol: SymbolId) -> TypeId {
-        if self.value_symbol_links.get(symbol).resolved_type.is_nil() {
-            let mapped_type = self.value_symbol_links.get(symbol).containing_type;
+        if self
+            .value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
+            .is_nil()
+        {
+            let mapped_type = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, symbol)
+                .containing_type;
             let pushed = self.push_type_resolution(
                 TypeSystemEntity::Symbol(symbol),
                 TypeSystemPropertyName::TYPE,
@@ -1086,13 +1100,13 @@ impl Checker {
                 prop_type = self.remove_missing_or_undefined_type(prop_type);
             }
             if self.pop_type_resolution() {
-                let links = self.value_symbol_links.get(symbol);
+                let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
                 if links.resolved_type.is_nil() {
                     links.resolved_type = prop_type;
                 }
             } else {
                 let error_type = self.error_type;
-                let links = self.value_symbol_links.get(symbol);
+                let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
                 if links.resolved_type.is_nil() {
                     links.resolved_type = error_type;
                 }
@@ -1106,7 +1120,9 @@ impl Checker {
                 );
             }
         }
-        self.value_symbol_links.get(symbol).resolved_type
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type
     }
 
     // Return the lower bound of the key type in a mapped type. Intuitively, the lower
@@ -1572,7 +1588,9 @@ impl Checker {
             } else {
                 combined_param_type
             };
-            self.value_symbol_links.get(param_symbol).resolved_type = resolved_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, param_symbol)
+                .resolved_type = resolved_type;
             params[i as usize] = param_symbol;
         }
         if needs_extra_rest_element {
@@ -1581,12 +1599,19 @@ impl Checker {
                 "args",
                 CheckFlags::REST_PARAMETER,
             );
+            // Go `links := c.valueSymbolLinks.Get(restParamSymbol)` gives the id here.
+            self.value_symbol_links
+                .get_by_id(&self.symbols, rest_param_symbol);
             let type_at_position = self.get_type_at_position(shorter, longest_count);
             let mut resolved_type = self.create_array_type(type_at_position);
-            self.value_symbol_links.get(rest_param_symbol).resolved_type = resolved_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, rest_param_symbol)
+                .resolved_type = resolved_type;
             if shorter == right {
                 resolved_type = self.instantiate_type(resolved_type, mapper);
-                self.value_symbol_links.get(rest_param_symbol).resolved_type = resolved_type;
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, rest_param_symbol)
+                    .resolved_type = resolved_type;
             }
             params[longest_count as usize] = rest_param_symbol;
         }

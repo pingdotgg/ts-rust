@@ -3015,7 +3015,7 @@ impl Session {
     ) -> SnapshotOpenState {
         let mut state = SnapshotOpenState {
             open_projects: base.open_projects.clone(),
-            open_files: base.open_files.clone(),
+            open_files: base.open_files,
         };
         if let Some(close_projects) = &mut api_request.close_projects {
             close_projects.retain(|path| state.open_projects.remove(path));
@@ -3070,7 +3070,7 @@ impl Session {
                 file_system,
                 ref_count: Cell::new(1),
                 open_projects: open_state.open_projects.clone(),
-                open_files: open_state.open_files.clone(),
+                open_files: open_state.open_files,
                 symbol_registry: RefCell::new(FxHashMap::default()),
                 symbol_canonical_projects: RefCell::new(FxHashMap::default()),
                 project_registries: RefCell::new(FxHashMap::default()),
@@ -5300,7 +5300,7 @@ impl Session {
         let view = autoimport::new_view(
             registry,
             source_file,
-            autoimport::ProjectID(project_id.0.clone()),
+            autoimport::ProjectID(project_id.0),
             program.clone(),
             user_preferences.module_specifier_preferences(),
         );

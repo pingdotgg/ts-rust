@@ -1165,7 +1165,10 @@ impl Checker {
                 .intersects(ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER)
         {
             let late_bound = self.get_late_bound_symbol(prop);
-            let mut t = self.value_symbol_links.get(late_bound).name_type;
+            let mut t = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, late_bound)
+                .name_type;
             if t.is_nil() {
                 if self.sym(prop).name == INTERNAL_SYMBOL_NAME_DEFAULT {
                     t = self.get_string_literal_type("default");

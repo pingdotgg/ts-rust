@@ -188,7 +188,7 @@ impl Checker {
     pub fn assign_parameter_type(&mut self, parameter: SymbolId, contextual_type: TypeId) {
         if self
             .value_symbol_links
-            .get(parameter)
+            .get_by_id(&self.symbols, parameter)
             .resolved_type
             .is_some()
         {
@@ -210,15 +210,27 @@ impl Checker {
             && declaration.initializer().is_nil()
             && is_optional_declaration(declaration);
         let resolved_type = self.add_optionality_ex(t, false, is_optional);
-        self.value_symbol_links.get(parameter).resolved_type = resolved_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, parameter)
+            .resolved_type = resolved_type;
         if declaration.is_some() && !is_identifier(declaration.name()) {
             // if inference didn't come up with anything but unknown, fall back to the binding pattern if present.
-            if self.value_symbol_links.get(parameter).resolved_type == self.unknown_type {
+            if self
+                .value_symbol_links
+                .get_by_id(&self.symbols, parameter)
+                .resolved_type
+                == self.unknown_type
+            {
                 let binding_pattern_type =
                     self.get_type_from_binding_pattern(declaration.name(), false, false);
-                self.value_symbol_links.get(parameter).resolved_type = binding_pattern_type;
+                self.value_symbol_links
+                    .get_by_id(&self.symbols, parameter)
+                    .resolved_type = binding_pattern_type;
             }
-            let resolved_type = self.value_symbol_links.get(parameter).resolved_type;
+            let resolved_type = self
+                .value_symbol_links
+                .get_by_id(&self.symbols, parameter)
+                .resolved_type;
             self.assign_binding_element_types(declaration.name(), resolved_type);
         }
     }
@@ -237,7 +249,9 @@ impl Checker {
                 );
                 if is_identifier(name) {
                     let symbol = self.get_symbol_of_declaration(element);
-                    self.value_symbol_links.get(symbol).resolved_type = t;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, symbol)
+                        .resolved_type = t;
                 } else {
                     self.assign_binding_element_types(name, t);
                 }

@@ -651,7 +651,7 @@ impl vfs::Fs for OverlayFS {
         let mut entries = vfs::Entries {
             files: host_entries.files.clone(),
             directories: host_entries.directories.clone(),
-            symlinks: host_entries.symlinks.clone(),
+            symlinks: host_entries.symlinks,
         };
         let use_case_sensitive_file_names = vfs::Fs::use_case_sensitive_file_names(self);
         let equal_name = |left: &str, right: &str| -> bool {

@@ -725,7 +725,7 @@ impl Binder {
             let (found, slot) = self.symbols.get_slot(symbol_table, &name);
             symbol = found;
             if symbol.is_nil() {
-                symbol = self.new_symbol(SymbolFlags::NONE, name.clone());
+                symbol = self.new_symbol(SymbolFlags::NONE, name);
                 self.symbols.set_slot(slot, symbol);
                 if is_replaceable_by_method {
                     self.sym_mut(symbol).flags |= SymbolFlags::REPLACEABLE_BY_METHOD;
@@ -744,7 +744,7 @@ impl Binder {
                     // Javascript constructor-declared symbols can be discarded in favor of
                     // prototype symbols like methods.
                     symbol = self.new_symbol(SymbolFlags::NONE, name.clone());
-                    self.symbols.set(symbol_table, name.clone(), symbol);
+                    self.symbols.set(symbol_table, name, symbol);
                 } else if !(includes.intersects(SymbolFlags::VARIABLE)
                     && symbol_flags.intersects(SymbolFlags::ASSIGNMENT)
                     || includes.intersects(SymbolFlags::ASSIGNMENT)
@@ -865,7 +865,7 @@ impl Binder {
                     {
                         self.sym_mut(symbol).flags |= SymbolFlags::ACCESSOR;
                     }
-                    symbol = self.new_symbol(SymbolFlags::NONE, name.clone());
+                    symbol = self.new_symbol(SymbolFlags::NONE, name);
                 }
             }
         }
@@ -980,7 +980,7 @@ impl Binder {
     pub fn get_display_name(&mut self, node: Node) -> String {
         let name_node = node.name();
         if name_node.is_some() {
-            return declaration_name_to_string(name_node).to_string();
+            return declaration_name_to_string(name_node);
         }
         let name = self.get_declaration_name(node);
         if name != INTERNAL_SYMBOL_NAME_MISSING {

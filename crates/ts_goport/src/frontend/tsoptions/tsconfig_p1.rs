@@ -963,7 +963,7 @@ pub fn get_extends_config_path(
         resolver_host,
     );
     if resolved.is_resolved() {
-        return (resolved.resolved_file_name.clone(), errors);
+        return (resolved.resolved_file_name, errors);
     }
     if extended_config.is_empty() {
         errors.push(

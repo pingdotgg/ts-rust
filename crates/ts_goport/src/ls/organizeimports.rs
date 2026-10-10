@@ -1103,7 +1103,7 @@ fn organize_exports_worker(
                 ..Default::default()
             };
 
-            let new_nodes: Vec<Node> = new_export_decls.clone();
+            let new_nodes: Vec<Node> = new_export_decls;
             change_tracker.replace_node_with_nodes(
                 source_file,
                 old_export_decls[0],

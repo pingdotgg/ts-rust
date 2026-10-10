@@ -312,9 +312,7 @@ if [[ $bolt == 1 ]]; then
 fi
 
 command -v qemu-x86_64 > /dev/null || { echo "error: qemu-x86_64 not found (package qemu-user); step 6 needs it" >&2; exit 1; }
-if [[ $bolt == 1 && -n $lsp_sessions ]]; then
-  command -v python3 > /dev/null || { echo "error: python3 not found; the editor sessions need it (or set RELEASE_LSP_SESSIONS=)" >&2; exit 1; }
-fi
+command -v python3 > /dev/null || { echo "error: python3 not found; check_np_config and the editor sessions need it" >&2; exit 1; }
 
 # floor_sysroot <dir>: makes the glibc 2.28 sysroot of the dynamic build in
 # <dir>, from Arch Linux packages of April 2019 (built for plain x86-64):
@@ -452,7 +450,8 @@ trap 'rm -rf "$tmp"' EXIT
 # a copy of the input's without the "plugins" lines (a trailing comma stays;
 # tsconfig allows it). Every other entry links to the input, and the paths stay
 # under <dir>, so the config finds the same files (${configDir}, type roots,
-# node_modules) and the editor sessions open them there.
+# node_modules) and the editor sessions open them there. The awk edit fits the
+# input's format only, so check_np_config checks the copy.
 effect_np() {
   local np=$1/effect/source src=$P/effect/source e
   mkdir -p "$np/packages/effect"
@@ -469,10 +468,41 @@ effect_np() {
   done
   awk '/"plugins": \[/ { skip = 1 } !skip { print } skip && /^    \}\]/ { skip = 0 }' \
     "$src/tsconfig.base.json" > "$np/tsconfig.base.json"
-  if grep -q language-service "$np/tsconfig.base.json" || ! grep -q '"jsx"' "$np/tsconfig.base.json"; then
-    echo "error: cannot drop the plugin entry of $src/tsconfig.base.json (its format changed?)" >&2
-    exit 1
-  fi
+  check_np_config "$src/tsconfig.base.json" "$np/tsconfig.base.json" || exit 1
+}
+
+# check_np_config <input> <copy> fails unless both parse as tsconfig JSON
+# (comments and trailing commas allowed), the input lists the
+# @effect/language-service plugin, and the copy equals the input without
+# compilerOptions.plugins. Else effectnp would train on a broken config (tsgo
+# reports it and checks less), or on the config of effect, with no error.
+check_np_config() {
+  python3 - "$1" "$2" << 'PY'
+import json, re, sys
+
+STRING = r'"(?:\\.|[^"\\])*"'
+
+
+def parse(path):
+    # Drop the comments, then the trailing commas, outside strings.
+    keep = lambda m: m.group(0) if m.group(0).startswith('"') else ""
+    text = open(path, encoding="utf-8").read()
+    text = re.sub(STRING + r"|//[^\n]*|/\*.*?\*/", keep, text, flags=re.S)
+    text = re.sub(STRING + r"|,(?=\s*[}\]])", keep, text)
+    try:
+        return json.loads(text)
+    except ValueError as err:
+        sys.exit(f"error: {path} does not parse as tsconfig JSON: {err}")
+
+
+src, copy = sys.argv[1], sys.argv[2]
+want, got = parse(src), parse(copy)
+plugins = want.get("compilerOptions", {}).pop("plugins", None) or []
+if not any(isinstance(p, dict) and p.get("name") == "@effect/language-service" for p in plugins):
+    sys.exit(f"error: {src} lists no @effect/language-service plugin")
+if got != want:
+    sys.exit(f"error: {copy} is not {src} without compilerOptions.plugins (its format changed?)")
+PY
 }
 effect_np "$tmp/np"
 projects[effectnp]="$tmp/np/effect/source/packages/effect/tsconfig.json"

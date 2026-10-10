@@ -881,9 +881,7 @@ impl Project {
             new_program = ls_program::new_program(
                 compiler::ProgramOptions {
                     host: host_rc,
-                    config: command_line
-                        .clone()
-                        .unwrap_or_else(|| crate::core::go_nil_dereference()),
+                    config: command_line.unwrap_or_else(|| crate::core::go_nil_dereference()),
                     use_source_of_project_reference: true,
                     single_threaded: Tristate::Unknown,
                     typings_location,

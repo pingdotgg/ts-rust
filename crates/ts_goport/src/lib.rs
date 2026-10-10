@@ -48,6 +48,9 @@ mod flags_macros {
 pub mod frontend;
 // Go `internal/ipc` (tsgo#4712).
 pub mod ipc;
+// The jemalloc arena layout at start: Linux only (THP).
+#[cfg(all(feature = "jemalloc", target_os = "linux"))]
+pub mod jemalloc_layout;
 pub use goport_util::jsnum;
 pub use goport_util::locale;
 pub mod modulespecifiers;

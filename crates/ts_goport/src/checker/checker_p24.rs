@@ -470,7 +470,9 @@ impl Checker {
                 .flags
                 .intersects(SymbolFlags::TRANSIENT)
             {
-                let links = self.value_symbol_links.get(single_prop);
+                let links = self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, single_prop);
                 single_prop_type = links.resolved_type;
                 single_prop_mapper = links.mapper;
             }
@@ -481,7 +483,7 @@ impl Checker {
                 self.sym_mut(clone).parent = parent;
             }
             let write_type = self.get_write_type_of_symbol(single_prop);
-            let links = self.value_symbol_links.get(clone);
+            let links = self.value_symbol_links.get_by_id(&self.symbols, clone);
             links.containing_type = containing_type;
             links.mapper = single_prop_mapper;
             links.write_type = write_type;
@@ -528,7 +530,10 @@ impl Checker {
             let t = self.get_type_of_symbol(prop);
             if first_type.is_nil() {
                 first_type = t;
-                name_type = self.value_symbol_links.get(prop).name_type;
+                name_type = self
+                    .value_symbol_links
+                    .get_by_id(&self.symbols, prop)
+                    .name_type;
             }
             let write_type = self.get_write_type_of_symbol(prop);
             if write_types.is_some() || write_type != t {
@@ -571,7 +576,7 @@ impl Checker {
             self.sym_mut(result).parent = parent;
         }
         {
-            let links = self.value_symbol_links.get(result);
+            let links = self.value_symbol_links.get_by_id(&self.symbols, result);
             links.containing_type = containing_type;
             links.name_type = name_type;
         }
@@ -589,14 +594,18 @@ impl Checker {
         } else {
             self.get_intersection_type(&prop_types)
         };
-        self.value_symbol_links.get(result).resolved_type = resolved_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, result)
+            .resolved_type = resolved_type;
         if let Some(write_types) = write_types {
             let write_type = if is_union {
                 self.get_union_type(&write_types)
             } else {
                 self.get_intersection_type(&write_types)
             };
-            self.value_symbol_links.get(result).write_type = write_type;
+            self.value_symbol_links
+                .get_by_id(&self.symbols, result)
+                .write_type = write_type;
         }
         result
     }
@@ -606,7 +615,7 @@ impl Checker {
         // if symbol is instantiated its flags are not copied from the 'target'
         // so we'll need to get back original 'target' symbol to work with correct set of flags
         if s.is_some() && self.sym(s).check_flags.intersects(CheckFlags::INSTANTIATED) {
-            return self.value_symbol_links.get(s).target;
+            return self.value_symbol_links.get_by_id(&self.symbols, s).target;
         }
         s
     }
@@ -666,11 +675,17 @@ impl Checker {
             s.parent = parent;
             s.value_declaration = value_declaration;
         }
-        let source_name_type = self.value_symbol_links.get(source).name_type;
-        let links = self.value_symbol_links.get(symbol);
+        // Go reads the links of `symbol` before those of `source`.
+        let links = self.value_symbol_links.get_by_id(&self.symbols, symbol);
         links.resolved_type = t;
         links.target = source;
-        links.name_type = source_name_type;
+        let source_name_type = self
+            .value_symbol_links
+            .get_by_id(&self.symbols, source)
+            .name_type;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .name_type = source_name_type;
         symbol
     }
 
@@ -2459,6 +2474,47 @@ type I = A & M;
                 );
             }
             assert_eq!(got.as_slice(), want.as_slice(), "len_hint {len_hint}");
+        }
+    }
+
+    /// `Node::NIL` added while the list is scanned, before the table takes
+    /// over (R183 reviewer item 7): the fill puts each other listed node in
+    /// the table, NIL stays listed once, and the later adds of NIL and of
+    /// listed nodes (the first 20 again) push nothing. NIL as the add that fills the table
+    /// (the 16th node) too. Go `core.AppendIfUnique` (core.go:380) lists a
+    /// nil element like any other.
+    #[test]
+    fn declaration_set_lists_nil_added_before_the_table() {
+        let node = |k: u64| Node(((k % 3 + 1) << 32) | k);
+        for nil_at in [0, 3, DeclarationSet::SCAN - 1] {
+            let mut nodes: Vec<Node> = (1..=100).map(node).collect();
+            nodes.insert(nil_at, Node::NIL);
+            nodes.extend([Node::NIL, node(50), Node::NIL, node(100)]);
+            nodes.extend((1..=20).map(node));
+            let mut want: Vec<Node> = Vec::new();
+            for &node in &nodes {
+                if !want.contains(&node) {
+                    want.push(node);
+                }
+            }
+            for len_hint in [0, 16, 200] {
+                let mut set = DeclarationSet::default();
+                let mut got: SmallVec<[Node; 4]> = SmallVec::new();
+                for (i, &node) in nodes.iter().enumerate() {
+                    set.add(&mut got, node, len_hint);
+                    if i == DeclarationSet::SCAN {
+                        assert!(!set.slots.is_empty(), "nil at {nil_at}: no table");
+                    }
+                }
+                assert_eq!(
+                    got.as_slice(),
+                    want.as_slice(),
+                    "nil at {nil_at}, len_hint {len_hint}"
+                );
+                let listed = got.iter().filter(|node| node.is_some()).count();
+                let used = set.slots.iter().filter(|slot| slot.is_some()).count();
+                assert_eq!(used, listed, "nil at {nil_at}, len_hint {len_hint}");
+            }
         }
     }
 }

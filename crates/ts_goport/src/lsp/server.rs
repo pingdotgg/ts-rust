@@ -1397,7 +1397,7 @@ impl project::Client for Server {
                 register_options: Some(lsproto::RegisterOptions {
                     text_document_prepare_call_hierarchy: Some(
                         lsproto::CallHierarchyRegistrationOptions {
-                            document_selector: selector.clone(),
+                            document_selector: selector,
                             ..Default::default()
                         },
                     ),
@@ -2277,7 +2277,7 @@ fn run_idle_work(
             Some(gostd::local::IdleStart::AtOnce) => Duration::ZERO,
             Some(gostd::local::IdleStart::AfterQuiet) => {
                 gostd::local::drop_garbage(&busy);
-                IDLE_QUIET_PERIOD
+                idle_quiet_period()
             }
             None => break,
         };
@@ -2298,6 +2298,37 @@ fn run_idle_work(
 /// message within about a millisecond of an answer (fast typing: didChange
 /// and a diagnostic pull), so the attempt starts only when they pause.
 pub const IDLE_QUIET_PERIOD: Duration = Duration::from_millis(50);
+
+/// The quiet period of a test process in microseconds
+/// (`set_idle_quiet_period`), 0 for `IDLE_QUIET_PERIOD`.
+static TEST_IDLE_QUIET_PERIOD_US: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Sets the quiet period that idle work waits for in this process, in
+/// place of `IDLE_QUIET_PERIOD`. Only tests call it: a longer period lets
+/// a test wait between its messages longer than `IDLE_QUIET_PERIOD`, so a
+/// loaded host can finish an idle job that starts at once before the next
+/// message, while one that waits for quiet still does not start.
+///
+/// It is public and in the release bins because its caller is the
+/// go_baselines integration test (`auto_import_warm_runs_before_the_next_change`),
+/// a separate crate: `cfg(test)` does not reach it, and a test feature
+/// would need `build-goport-tests.sh` (protected) to pass it. No bin calls
+/// it. Its cost is one relaxed atomic load per idle wait
+/// (`idle_quiet_period`).
+#[doc(hidden)]
+pub fn set_idle_quiet_period(period: Duration) {
+    let us = u64::try_from(period.as_micros()).unwrap_or(u64::MAX).max(1);
+    TEST_IDLE_QUIET_PERIOD_US.store(us, Ordering::Relaxed);
+}
+
+/// `IDLE_QUIET_PERIOD`, or the period of `set_idle_quiet_period`.
+fn idle_quiet_period() -> Duration {
+    match TEST_IDLE_QUIET_PERIOD_US.load(Ordering::Relaxed) {
+        0 => IDLE_QUIET_PERIOD,
+        us => Duration::from_micros(us),
+    }
+}
 
 impl ServerShared {
     // Go: server.go:1065 writeLoop
@@ -2957,7 +2988,7 @@ pub fn register_notification_handler<
     fn_: fn(&Rc<Server>, &Context, Option<&Req>) -> Result<(), GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -2994,7 +3025,7 @@ pub fn register_request_handler<
     ) -> Result<Resp, GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -3029,7 +3060,7 @@ pub fn register_language_service_document_request_handler<
     fn_: fn(&Rc<Server>, &Context, &ls::LanguageService, &Req) -> Result<Resp, GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -3076,7 +3107,7 @@ pub fn register_language_service_with_auto_imports_request_handler<
 ) {
     let method = info.method.clone();
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,
@@ -3151,7 +3182,7 @@ pub fn register_multi_project_reference_request_handler<
     ) -> Result<Resp, GoError>,
 ) {
     handlers.insert(
-        info.method.clone(),
+        info.method,
         Box::new(
             move |s: &Rc<Server>,
                   ctx: &Context,

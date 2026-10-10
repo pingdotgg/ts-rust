@@ -69,8 +69,15 @@ when the condition no longer holds.
   `getSymbolFromTypeReference` (checker.go:23538; TypeScript's JS `getTypeFromTypeReference` also
   writes it); the write-once `getResolvedSymbol` links (checker.go:14132); and the declarations of a
   resolved value symbol (check-time `mergeSymbol` clones a non-transient target before it appends,
-  checker.go:14387-14412). Check: `grep -n 'resolvedSymbol = ' internal/checker/*.go` and the walk
-  itself. If a new writer of `resolvedSymbol` can reach a TypeReference node (or the first
+  checker.go:14387-14412). A transient target is not cloned: `mergeSymbol` appends to its
+  declarations in place (checker.go:14412). The merges of `initializeChecker` (checker.go:1306-1395:
+  globals, pattern ambient modules, module augmentations) do that before any walk. At check time
+  only `combineSymbolTables` (checker.go:16293) merges, when a late-bound member or export of a
+  late-binding container has the name of an early one. The early symbol is transient only when an
+  init merge made it, and it is a value that name resolution returns only in a corner (a function
+  merged with a namespace across files, with a late-bound expando of the same name). That corner
+  is not checked. Check: `grep -n 'resolvedSymbol = ' internal/checker/*.go`, the callers of
+  `mergeSymbol` and `mergeSymbolTable`, and the walk itself. If a new writer of `resolvedSymbol` can reach a TypeReference node (or the first
   identifier of a `typeof` query), or the walk reads other state, drop the memo or clear it there.
 
 ## Pins in microsoft/TypeScript

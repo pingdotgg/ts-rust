@@ -75,7 +75,7 @@ impl Checker {
         if is_error {
             self.add_diagnostic(diagnostic);
         } else {
-            let mut suggestion = diagnostic.clone();
+            let mut suggestion = diagnostic;
             suggestion.set_category(crate::diagnostics::Category::Suggestion);
             self.add_suggestion_diagnostic(suggestion);
         }
@@ -204,14 +204,18 @@ impl Checker {
     // Go: checker/checker.go:14318 newParameter
     pub fn new_parameter(&mut self, name: &str, t: TypeId) -> SymbolId {
         let symbol = self.new_symbol(SymbolFlags::FUNCTION_SCOPED_VARIABLE, name);
-        self.value_symbol_links.get(symbol).resolved_type = t;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type = t;
         symbol
     }
 
     // Go: checker/checker.go:14324 newProperty
     pub fn new_property(&mut self, name: &str, t: TypeId) -> SymbolId {
         let symbol = self.new_symbol(SymbolFlags::PROPERTY, name);
-        self.value_symbol_links.get(symbol).resolved_type = t;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, symbol)
+            .resolved_type = t;
         symbol
     }
 

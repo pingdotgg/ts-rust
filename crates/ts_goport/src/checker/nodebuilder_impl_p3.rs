@@ -166,6 +166,9 @@ impl Checker {
                     t = self.error_type;
                 }
             } else {
+                // Go keys the map by `ast.GetSymbolId(symbol)`, which gives
+                // the symbol its id (`ValueSymbolLinkStore`).
+                get_symbol_id(&self.symbols, symbol);
                 t = nb_ctx(b, |c| c.enclosing_symbol_types.get(&symbol).copied())
                     .unwrap_or(TypeId::NIL);
                 if t.is_nil() {
@@ -587,12 +590,12 @@ impl Checker {
         string_named: bool,
         is_method: bool,
     ) -> Node {
-        if !self.value_symbol_links.has(symbol) {
+        if !self.value_symbol_links.has_by_id(&self.symbols, symbol) {
             return Node::NIL;
         }
         let name_type = self
             .value_symbol_links
-            .try_get(symbol)
+            .try_get_by_id(&self.symbols, symbol)
             .map_or(TypeId::NIL, |l| l.name_type);
         if name_type.is_nil() {
             return Node::NIL;
@@ -768,7 +771,10 @@ impl Checker {
                 let parent_is_class =
                     parent.is_some() && self.sym(parent).flags.intersects(SymbolFlags::CLASS);
                 if property_type != write_type || parent_is_class && prop_declaration.is_nil() {
-                    let symbol_mapper = self.value_symbol_links.get(property_symbol).mapper;
+                    let symbol_mapper = self
+                        .value_symbol_links
+                        .get_by_id(&self.symbols, property_symbol)
+                        .mapper;
                     let getter_declaration = get_declaration_of_kind(
                         &self.symbols,
                         property_symbol,
@@ -849,7 +855,9 @@ impl Checker {
 
                     let setter_param =
                         self.new_symbol(SymbolFlags::FUNCTION_SCOPED_VARIABLE, "arg");
-                    self.value_symbol_links.get(setter_param).resolved_type = write_type;
+                    self.value_symbol_links
+                        .get_by_id(&self.symbols, setter_param)
+                        .resolved_type = write_type;
                     let void_type = self.void_type;
                     let fake_setter_signature = self.new_signature(
                         SignatureFlags::NONE,

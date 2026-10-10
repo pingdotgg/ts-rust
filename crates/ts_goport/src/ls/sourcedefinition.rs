@@ -428,7 +428,7 @@ impl SourceDefResolver<'_> {
         if !source_file_info(ref_.file).is_declaration_file {
             return (
                 get_source_definition_entry_declarations(ref_.file),
-                ref_.reference.clone(),
+                ref_.reference,
             );
         }
 
@@ -448,7 +448,7 @@ impl SourceDefResolver<'_> {
         }
         (
             get_source_definition_entry_declarations(source_file),
-            ref_.reference.clone(),
+            ref_.reference,
         )
     }
 
@@ -768,7 +768,7 @@ impl SourceDefResolver<'_> {
             if has_concrete_source_declarations(&forwarded) {
                 return unique_declaration_nodes(&forwarded);
             }
-            let mut combined = declarations.clone();
+            let mut combined = declarations;
             combined.extend(forwarded);
             return unique_declaration_nodes(&combined);
         }

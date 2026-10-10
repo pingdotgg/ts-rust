@@ -460,7 +460,7 @@ impl Checker {
         let mut err = new_diagnostic_for_node(
             next_declaration_name,
             message,
-            args![decl_name.clone(), first_type_string, next_type_string],
+            args![decl_name, first_type_string, next_type_string],
         );
         if first_declaration.is_some() {
             err.add_related_info(Some(create_diagnostic_for_node(

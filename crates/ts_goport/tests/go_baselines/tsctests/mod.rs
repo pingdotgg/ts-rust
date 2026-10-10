@@ -12,6 +12,7 @@ mod never_intersection_order;
 mod removed_reference_config;
 mod showconfig;
 mod spelling_memo;
+mod symbol_id_truncation;
 mod tsbuild_a;
 mod tsbuild_b;
 mod tsbuild_contentmapper;

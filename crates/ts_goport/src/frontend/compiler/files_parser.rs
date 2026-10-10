@@ -1789,6 +1789,10 @@ struct PrefetchQueue {
     redirects: FxHashMap<String, (String, Path)>,
     next_job: usize,
     closed: bool,
+    /// True once the workers of `PrefetchPool::add_mapped_workers` start.
+    /// They wait on `ready` too (`PrefetchShared::wake`).
+    // PORT: not in Go (see `PrefetchJob::mapped`).
+    mapped_workers: bool,
 }
 
 impl PrefetchQueue {
@@ -2242,8 +2246,7 @@ impl PrefetchShared {
             return;
         }
         queue.rank = Some((jobs, count));
-        drop(queue);
-        self.ready.notify_all();
+        self.wake(&queue, 1);
     }
 
     /// Pushes the `count` largest of `jobs` that are still queued on top of
@@ -2281,8 +2284,7 @@ impl PrefetchShared {
         if !queue.is_first(&job) {
             queue.pending.push(job);
         }
-        drop(queue);
-        self.ready.notify_all();
+        self.wake(&queue, 1);
     }
 
     /// Queues the parses of one `FilesParser::start` batch: new jobs, and
@@ -2328,11 +2330,26 @@ impl PrefetchShared {
                 queue.push_pending(job);
             }
         }
-        drop(queue);
-        // The workers of content-mapped jobs wait on `ready` too, so a
-        // single wake could reach one that cannot take the job.
-        if woken > 0 {
-            self.ready.notify_all();
+        self.wake(&queue, woken);
+    }
+
+    /// Wakes the workers for `jobs` new jobs, with the queue lock held. Go
+    /// runs each queued task on a goroutine of its own
+    /// (core/workgroup.go:34 parallelWorkGroup.Queue), so a job wakes one
+    /// worker. Once the workers of content-mapped jobs started, they wait on
+    /// `ready` too, and one wake could reach a worker that cannot take the
+    /// job, so all wake. The lock keeps such a worker from starting to wait
+    /// between the check and the wake.
+    // PORT: not in Go (see `PrefetchJob::mapped`).
+    fn wake(&self, queue: &std::sync::MutexGuard<'_, PrefetchQueue>, jobs: usize) {
+        if queue.mapped_workers {
+            if jobs > 0 {
+                self.ready.notify_all();
+            }
+        } else {
+            for _ in 0..jobs {
+                self.ready.notify_one();
+            }
         }
     }
 
@@ -2476,6 +2493,7 @@ impl PrefetchPool {
     /// once as the parse goroutines of Go send.
     // PORT: not in Go (see `PrefetchJob::mapped`).
     fn add_mapped_workers(&mut self, workers: usize) {
+        lock(&self.shared.queue).mapped_workers = true;
         self.spawn_workers(workers, true);
     }
 
@@ -2759,6 +2777,13 @@ pub(crate) static PANIC_IN_JOB: Mutex<Option<String>> = Mutex::new(None);
 /// came with the transform.
 #[cfg(test)]
 pub(crate) static MAPPED_TAKEN: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+
+/// Content-mapped files whose worker job the loader does not claim, for
+/// the tests: `take_prefetched_mapped` waits up to 60 s for a worker to
+/// start it, so a worker sends its transform. Any thread's load sees it,
+/// so a test names files of its own temp dir.
+#[cfg(test)]
+pub(crate) static MAPPED_WAIT_FOR_WORKER: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// A parse worker: parses queued files, newest first (the loader's queue
 /// is a stack too), until the queue closes. After each parse it queues the
@@ -3759,6 +3784,18 @@ pub(crate) fn take_prefetched_mapped(
     let job = lock(&shared.queue).by_name.get(&opts.file_name).cloned()?;
     job.mapped.as_ref()?;
     let mut state = lock(&job.state);
+    #[cfg(test)]
+    if lock(&MAPPED_WAIT_FOR_WORKER).contains(&opts.file_name) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while matches!(*state, PrefetchState::Queued) && std::time::Instant::now() < deadline {
+            // A worker sets `Running` without a wake, so this polls.
+            state = job
+                .done
+                .wait_timeout(state, std::time::Duration::from_millis(5))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
     let mut waited: Option<std::time::Instant> = None;
     let result = loop {
         match std::mem::replace(&mut *state, PrefetchState::Claimed) {

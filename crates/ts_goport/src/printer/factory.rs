@@ -117,7 +117,7 @@ impl NodeFactory {
             id,
             flags: kind | options.flags.without(GeneratedIdentifierFlags::KIND_MASK),
             prefix: options.prefix.clone(),
-            suffix: options.suffix.clone(),
+            suffix: options.suffix,
             node,
         };
         // PORT: Go allocates the nil map here; the Rust map always exists.
@@ -243,7 +243,7 @@ impl NodeFactory {
             id,
             flags: kind | options.flags.without(GeneratedIdentifierFlags::KIND_MASK),
             prefix: options.prefix.clone(),
-            suffix: options.suffix.clone(),
+            suffix: options.suffix,
             node,
         };
         // PORT: Go allocates the nil map here; the Rust map always exists.

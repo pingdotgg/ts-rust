@@ -135,7 +135,7 @@ fn make_project(label: &str) -> String {
     for (name, text) in FILES {
         write(&root.to_string_lossy(), name, text);
     }
-    std::fs::canonicalize(&root)
+    crate::support::eval_symlinks(&root)
         .unwrap()
         .to_string_lossy()
         .replace('\\', "/")
@@ -1010,7 +1010,7 @@ os_child_test! {
         for (name, text) in SPEC_FILES {
             write(&root.to_string_lossy(), name, text);
         }
-        let root = std::fs::canonicalize(&root)
+        let root = crate::support::eval_symlinks(&root)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
@@ -1085,7 +1085,7 @@ os_child_test! {
             for (name, text) in files {
                 write(&dir.to_string_lossy(), name, text);
             }
-            let root = std::fs::canonicalize(&dir)
+            let root = crate::support::eval_symlinks(&dir)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
