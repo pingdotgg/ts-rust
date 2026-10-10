@@ -401,6 +401,11 @@ pub fn get_node_module_path_parts(full_path: &str) -> Option<NodeModulePathParts
                 }
             }
             NodeModules | Scope => {
+                // Go N' util.go:300-303: a path that ends in `/node_modules/`
+                // has no package name.
+                if state == NodeModules && (part_start + 1) as usize >= bytes.len() {
+                    return None;
+                }
                 if state == NodeModules && bytes[(part_start + 1) as usize] == b'@' {
                     state = Scope;
                 } else {
@@ -558,6 +563,21 @@ mod tests {
         ] {
             let parts = get_node_module_path_parts(path).unwrap();
             assert_eq!(parts.package_root_index, -1, "{path}");
+        }
+    }
+
+    // Go: modulespecifiers/util.go:300-303 (ts#64159): a path that ends in
+    // `/node_modules/` has no package name, so Go N' returns nil. The port
+    // read the byte after the end and panicked.
+    #[test]
+    fn get_node_module_path_parts_node_modules_end() {
+        for path in [
+            "/workspace/node_modules/",
+            "/node_modules/",
+            "/workspace/node_modules/pkg/node_modules/",
+            "/workspace/node_modules/@scope/pkg/node_modules/",
+        ] {
+            assert_eq!(get_node_module_path_parts(path), None, "{path}");
         }
     }
 }
