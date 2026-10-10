@@ -230,13 +230,10 @@ impl AsyncConn {
     /// thread ended and no message is left, and returns what Go's `Run`
     /// returned (or resumes the panic of its read).
     fn run_loop_on_reader(&self, reader: &RunReader) -> Result<(), GoError> {
-        loop {
-            let Some(msg) = reader.inbox.wait(None) else {
-                self.end_read_loop(reader);
-                break;
-            };
-            self.dispatch_read(reader, msg);
+        while let Some(msg) = reader.inbox.wait(None) {
+            self.dispatch(&reader.handler_ctx, msg);
         }
+        self.end_read_loop(reader);
         if let Some(payload) = self.read_panic.take() {
             resume_unwind(payload);
         }
@@ -246,28 +243,13 @@ impl AsyncConn {
             .expect("the reader thread ended")
     }
 
-    /// Dispatches a message that the reader thread read. Go's `Run` checks
-    /// `ctx` after the dispatch of a response (:95-96) and right after the
-    /// start of the goroutine of a request or notification (:97-110), so
-    /// when the thread ended after this message, Go's deferred function
-    /// sets `terminal` after `handleResponse`, and before the handler makes
-    /// a call (Go race 1, which the deferred function wins in practice).
-    fn dispatch_read(&self, reader: &RunReader, msg: Message) {
-        if msg.is_response() {
-            self.dispatch(&reader.handler_ctx, msg);
-            self.end_read_loop(reader);
-        } else {
-            self.end_read_loop(reader);
-            self.dispatch(&reader.handler_ctx, msg);
-        }
-    }
-
     /// PORT: when the reader thread ended (Go's `Run` returned), runs
     /// Go's deferred `closePendingCalls` with the result of the loop on the
-    /// dispatch thread, once (the thread runs `cancelHandlers`). The
-    /// dispatch thread calls this before it dispatches more messages and
-    /// before each `call` and `notify`, so the calls after the end of the
-    /// loop return `terminal`.
+    /// dispatch thread, once (the thread runs `cancelHandlers`). Each
+    /// `call` and `notify` runs this first, so they return `terminal` once
+    /// the thread ended. This holds also for the calls of a request read
+    /// with the end, which Go starts before its deferred function runs: Go
+    /// races them, and the deferred function wins in practice (race 1).
     fn end_read_loop(&self, reader: &RunReader) {
         let Some(end) = lock(&reader.inbox.state).end.take() else {
             return;
@@ -629,7 +611,7 @@ impl AsyncConn {
                 return Err(err);
             }
             match reader.inbox.wait(Some(ctx)) {
-                Some(msg) => self.dispatch_read(reader, msg),
+                Some(msg) => self.dispatch(&reader.handler_ctx, msg),
                 None => self.end_read_loop(reader),
             }
         }
@@ -726,17 +708,14 @@ enum ReadEnd {
 }
 
 impl Inbox {
-    /// The next message, waiting as needed. With `call_ctx` (a `call`) it
-    /// returns `None` once `call_ctx` is done or the thread ended, also
-    /// when messages are left: they are for `run` (Go's `Run` already
-    /// started their goroutines). Without it (`run`) it returns `None`
-    /// once the thread ended and no message is left.
+    /// The next message, waiting as needed. It returns `None` once the
+    /// thread ended and no message is left, and, with `call_ctx` (a
+    /// `call`), once `call_ctx` is done: then the messages left are for
+    /// `run` (Go's `Run` already started their goroutines).
     fn wait(&self, call_ctx: Option<&Context>) -> Option<Message> {
         let mut state = lock(&self.state);
         loop {
-            if let Some(ctx) = call_ctx
-                && (state.ended || ctx.err().is_some())
-            {
+            if call_ctx.is_some_and(|ctx| ctx.err().is_some()) {
                 return None;
             }
             if let Some(msg) = state.messages.pop_front() {
@@ -822,8 +801,7 @@ fn start_reader(
                 };
                 // Go dispatches the message, then checks `ctx` (:83). The
                 // check is here, so the dispatch thread finds the end of the
-                // loop with the message read after a signal
-                // (`dispatch_read`).
+                // loop with the message read after a signal (`end_read_loop`).
                 if let Some(err) = ctx.err() {
                     break (Some(msg), ReadEnd::Returned(Err(err)));
                 }
@@ -1995,6 +1973,19 @@ pub(crate) mod tests {
                 && answer.contains(r#""message":"ipc: connection closed""#),
             "{answer}"
         );
+    }
+
+    // PORT: no Go test; Go `Run` (ipc/conn_async.go:89-96). Go's `Run`
+    // hands a reply to its call before it reads EOF, so a call takes the
+    // messages that the reader thread read before its end, then the end.
+    #[test]
+    fn test_async_conn_reader_call_takes_messages_before_the_end() {
+        let inbox = Inbox::default();
+        let reply = message(Some(jsonrpc::new_id_string("api1")), "");
+        inbox.push(Some(reply), Some(ReadEnd::Returned(Ok(()))));
+        let ctx = context::background();
+        assert!(inbox.wait(Some(&ctx)).is_some(), "the call got no reply");
+        assert!(inbox.wait(Some(&ctx)).is_none(), "the end is lost");
     }
 
     // PORT: no Go test; Go `Run` (ipc/conn_async.go:73, :89-90). EOF while
