@@ -1625,7 +1625,7 @@ each message and after each wake-up. Go `WaitForBackgroundTasks` runs
 
 - All JSON uses `frontend/json.rs` (`MarshalerTo`, `UnmarshalerFrom`,
   `JsonDecoder`) and `frontend/json_ext.rs` (the Go JSON v2 default
-  arshalers for integers, floats, `Option`, `Box`, `Vec`, `[u32; 2]`,
+  marshalers for integers, floats, `Option`, `Box`, `Vec`, `[u32; 2]`,
   `IndexMap`, `LspAny`, `JsonValue`, one-line field helpers, and
   `marshal_indent`). No serde.
 - A hand-written Go struct with `json:"..."` tags (Go marshals it by
