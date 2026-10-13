@@ -1,0 +1,5 @@
+/lib/
+/native/*.node
+/.cache/
+/node_modules/
+/test/consumers/node_modules/

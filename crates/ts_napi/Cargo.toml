@@ -1,0 +1,40 @@
+# The Node-API addon of npm/typescript-api: tsc-rs's API server (the server
+# behind `tsgo --api`) in the Node process, on its own thread, and the tsc
+# command line (`runTsc`). npm/typescript-api/scripts/build-native.mjs builds
+# it and copies the library next to the package.
+[package]
+name = "ts_napi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Only a cdylib, as crates/ts_wasm. `test = false`: no Rust tests, so
+# scripts/goport/build-goport-tests.sh skips the crate. The JS tests are
+# npm/typescript-api/test/native.test.mjs.
+[lib]
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+# No jemalloc: the addon uses the allocator of the Node process.
+ts_goport = { path = "../ts_goport", default-features = false }
+# `dyn-symbols` (default) loads the Node-API symbols at run time, so the
+# build needs no Node headers or import library.
+napi = { version = "=3.14.2", default-features = false, features = ["napi4", "dyn-symbols"] }
+napi-derive = "=3.6.12"
+
+[build-dependencies]
+napi-build = "=2.6.0"
+
+# Not the workspace lints (`forbid`): the `#[napi]` expansions are unsafe
+# FFI glue. `deny` holds for every line written here; rustc does not apply it
+# to the expansions of an external proc macro.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+redundant_clone = "warn"

@@ -1,0 +1,60 @@
+{
+    "sources": {
+        "nest-cli": {
+            "repo": "https://github.com/nestjs/nest-cli.git",
+            "ref": "12.0.8",
+            "commit": "18649483169810a3485012aa1fccd11897d95f2c"
+        },
+        "nest": {
+            "repo": "https://github.com/nestjs/nest.git",
+            "ref": "v12.1.3",
+            "commit": "4514623279f6087808e3c8f08fbf9f37d3c17482",
+            "sparse": [
+                "sample/11-swagger",
+                "sample/23-graphql-code-first"
+            ]
+        }
+    },
+    "npmBefore": "2026-10-12T12:00:00Z",
+    "graphqlSampleExtraDependencies": {
+        "@as-integrations/express5": "1.1.2"
+    },
+    "swc": {
+        "@swc/cli": "0.8.1",
+        "@swc/core": "1.16.18"
+    },
+    "webpack": {
+        "webpack": "5.111.1",
+        "ts-loader": "9.6.2",
+        "fork-ts-checker-webpack-plugin": "9.1.0",
+        "tsconfig-paths-webpack-plugin": "4.2.0",
+        "webpack-node-externals": "3.0.0"
+    },
+    "nestNew": {
+        "@nestjs/cli": "12.0.8",
+        "@nestjs/schematics": "12.0.7",
+        "fixtures": {
+            "nest-new-app": {
+                "nestNew": [
+                    "--skip-git",
+                    "--skip-install",
+                    "--package-manager",
+                    "npm",
+                    "--no-observe",
+                    "--language",
+                    "ts"
+                ]
+            },
+            "nest-new-cjs": {
+                "schematic": [
+                    "--skip-git",
+                    "--strict",
+                    "--package-manager=npm",
+                    "--language=ts",
+                    "--format=false",
+                    "--type=cjs"
+                ]
+            }
+        }
+    }
+}

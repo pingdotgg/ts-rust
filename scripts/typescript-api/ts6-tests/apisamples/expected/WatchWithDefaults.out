@@ -1,0 +1,14 @@
+<time> - Starting compilation in watch mode...
+
+** We're about to create the program! **
+** We finished making the program! **
+src/b.ts(2,14): error TS2322: Type 'number' is not assignable to type 'string'.
+
+<time> - Found 1 error. Watching for file changes.
+<time> - File change detected. Starting incremental compilation...
+
+** We're about to create the program! **
+** We finished making the program! **
+
+<time> - Found 0 errors. Watching for file changes.
+exit=130

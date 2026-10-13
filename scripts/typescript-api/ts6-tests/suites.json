@@ -1,0 +1,14 @@
+{
+    "tier1": {
+        "description": "First-adoption selection of TS 6.0.3 unit and transpile tests",
+        "runners": ["unittest", "transpile"],
+        "grep": "^(unittests:: (regExpScannerRecovery|evaluation::|config:: (tsconfigParsing|convertCompilerOptionsFromJson|convertTypeAcquisitionFromJson|matchFiles|configurationExtension)|PrinterAPI|TransformAPI|customTransforms|Public APIs|programApi::|Program\\.|FactoryAPI|builder|jsonParserRecovery|moduleResolution::|services:: (Transpile|PreProcessFile|Colorization|DocumentRegistry|hostNewLineSupport|cancellableLanguageServiceOperations|languageService::))|comment parsing|transpile tests)",
+        "shardable": false
+    },
+    "compiler": {
+        "description": "compiler and conformance runners: the \"Correct errors for\" and \"Correct JS output for\" checks of every test case",
+        "runners": ["compiler"],
+        "grep": "Correct (errors|JS output) for ",
+        "shardable": true
+    }
+}

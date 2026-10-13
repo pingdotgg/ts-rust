@@ -343,7 +343,8 @@ files stay in `crates/ts_goport/src`. It uses the lib files in `crates/ts_goport
 `tools/ts_ast_codegen` generates `crates/ts_goport/src/astdata`, and
 `tools/ts_diagnostics_codegen` generates `crates/ts_goport/src/diagnostics/catalog.rs` and
 `crates/ts_goport/src/diag.rs`. `crates/ts_wasm` is the WebAssembly build
-([npm/wasm](npm/wasm/README.md)).
+([npm/wasm](npm/wasm/README.md)). `crates/ts_napi` is the Node-API addon behind the TypeScript 6.0
+JavaScript API ([npm/typescript-api](npm/typescript-api/README.md)).
 
 ```sh
 ./scripts/run-cargo-capped.sh build --release -p ts_goport --bins

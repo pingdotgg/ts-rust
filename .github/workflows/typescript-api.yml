@@ -1,0 +1,84 @@
+# Builds the Node-API addon (crates/ts_napi) and tests npm/typescript-api, the TypeScript 6.0
+# JavaScript API over tsc-rs, on Linux, macOS and Windows. On Linux it also runs TypeScript's own
+# TS7 API tests (microsoft/TypeScript at the pin, unmodified) with tsc-rs in-process.
+# cargo test --workspace does not build ts_napi ([lib] test = false keeps it out of the protected
+# goport test set), so this workflow is what notices when a ts_goport change breaks it.
+name: typescript-api
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "npm/typescript-api/**"
+      - "scripts/typescript-api/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/typescript-api.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "npm/typescript-api/**"
+      - "scripts/typescript-api/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/typescript-api.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-api-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -C debuginfo=0
+  RUSTUP_TOOLCHAIN: 1.95.0
+
+jobs:
+  test:
+    name: typescript-api (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - blacksmith-16vcpu-ubuntu-2404
+          - blacksmith-12vcpu-macos-26
+          - blacksmith-16vcpu-windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal -c clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: npm/typescript-api/test/consumers/package-lock.json
+      - run: cargo clippy --locked --release -p ts_napi -- -D warnings
+      - name: Build the addon and the package
+        run: |
+          node npm/typescript-api/scripts/build-native.mjs
+          node npm/typescript-api/scripts/build.mjs
+      - name: Install the tools that the package tests run (test/consumers)
+        working-directory: npm/typescript-api
+        run: npm run install:consumers
+      - name: Package tests
+        working-directory: npm/typescript-api
+        run: node --test test/*.test.mjs
+      - name: TypeScript's TS7 API tests, in-process
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked --release -p ts_goport --bin tsgo
+          scripts/typescript-api/ts7-api-tests.sh --no-systemd ci

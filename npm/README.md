@@ -7,6 +7,9 @@ published set `tsc-rs` (see "tsc-rs releases" below).
 - `@typescript/typescript-linux-x64`: `lib/tsc` (a noembed build) and the lib files next to it.
 - `wasm` (`ts-rust-wasm`): the WebAssembly build for Node, Deno, Bun and browsers. See
   [wasm/README.md](wasm/README.md).
+- `typescript-api`: the TypeScript 6.0 JavaScript API (`require("typescript")`) with tsc-rs as the
+  compiler, through a Node-API addon (`crates/ts_napi`). See
+  [typescript-api/README.md](typescript-api/README.md).
 
 The port adds one file to Go's layout: `install.js`, the postinstall (`lib/install.js`). On POSIX it
 rewrites `bin/tsc` as a sh and JS polyglot. sh runs it as an exec of the platform package's
