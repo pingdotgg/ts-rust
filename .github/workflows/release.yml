@@ -229,6 +229,11 @@ jobs:
     needs: [version, build]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
+    # The digest of the artifact listing, computed on this runner and passed as a job output. The
+    # release job checks the artifacts it downloads against it, so the bytes that reach npm are
+    # bound to this job's output and cannot be swapped while the artifact is in transit.
+    outputs:
+      sums: ${{ steps.sums.outputs.sha256 }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -278,6 +283,7 @@ jobs:
       # One archive per platform: the platform package's lib dir (tsc and the lib files, which a
       # noembed tsc reads next to it), LICENSE and NOTICE.txt. A .tar.gz, and a .zip for Windows.
       - name: Archives
+        id: sums
         run: |
           pkg="$RUNNER_TEMP/pkg" dist="$RUNNER_TEMP/dist"
           mkdir -p "$dist"
@@ -294,6 +300,8 @@ jobs:
           cp "$pkg"/*.tgz "$dist/"
           (cd "$dist" && sha256sum -- *.tgz *.tar.gz *.zip > SHA256SUMS)
           cat "$dist/SHA256SUMS"
+          # The digest of the listing, for the release job's cross-channel check (see there).
+          echo "sha256=$(sha256sum "$dist/SHA256SUMS" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: release
@@ -339,6 +347,17 @@ jobs:
         with:
           name: release
           path: ${{ runner.temp }}/dist
+      # The same check the release job runs before publishing (see there). It runs here on PRs so a
+      # change to this workflow or npm/** exercises it. Linux only: the macOS and Windows runners
+      # have no sha256sum.
+      - name: Verify the artifacts
+        if: runner.os == 'Linux'
+        env:
+          SUMS_SHA256: ${{ needs.package.outputs.sums }}
+        run: |
+          cd "$RUNNER_TEMP/dist"
+          echo "$SUMS_SHA256  SHA256SUMS" | sha256sum --check --strict -
+          sha256sum --check --strict SHA256SUMS
       - name: npm install and check
         run: |
           dist="$RUNNER_TEMP/dist"
@@ -382,7 +401,7 @@ jobs:
 
   release:
     if: needs.version.outputs.release == 'true'
-    needs: [version, verify]
+    needs: [version, verify, package]
     # Trusted publishing needs a GitHub-hosted runner. The environment is part of the trust: add
     # required reviewers to it in the repo settings to approve each publish.
     runs-on: ubuntu-latest
@@ -403,6 +422,17 @@ jobs:
         with:
           name: release
           path: dist
+      # The artifact could be swapped while it sits in the artifact store, so check it against the
+      # digest the package job produced. That digest is a job output, not a file in the artifact, so
+      # a swap that also rewrites SHA256SUMS cannot satisfy it. Then check each archive against the
+      # listing. Both must hold before anything is published.
+      - name: Verify the artifacts
+        env:
+          SUMS_SHA256: ${{ needs.package.outputs.sums }}
+        run: |
+          cd dist
+          echo "$SUMS_SHA256  SHA256SUMS" | sha256sum --check --strict -
+          sha256sum --check --strict SHA256SUMS
       # Platform packages first, then the main package that depends on them. A version that is
       # already on npm is skipped, so a failed run can run again. While the repo is private, npm
       # makes no provenance; from a public repo it adds it by itself.
