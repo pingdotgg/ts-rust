@@ -306,11 +306,7 @@ mod tests {
         // Run 2: a.ts now has a type error, b.ts unchanged. The changed
         // file must be re-parsed (stale-parse test); the unchanged one may
         // reuse its parse.
-        host::test_host::set_files([
-            tsconfig(),
-            a("export const a: number = 'one';\n"),
-            b(B),
-        ]);
+        host::test_host::set_files([tsconfig(), a("export const a: number = 'one';\n"), b(B)]);
         let (status, reply) = run(&request());
         assert_eq!(status, 2, "{reply}");
         assert!(reply.contains(r#""code":2322"#), "{reply}");

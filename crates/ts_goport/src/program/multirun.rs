@@ -141,7 +141,11 @@ impl CompilerHost for MultiRunHost {
     // stat, then the parse of the cache when the mtime matches, else the
     // parse of the run's host, cached with the new mtime.
     fn get_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
-        let m_time = self.inner.fs().stat(&opts.file_name).map(|info| info.mod_time());
+        let m_time = self
+            .inner
+            .fs()
+            .stat(&opts.file_name)
+            .map(|info| info.mod_time());
         if let Some(file) = self.cached(&opts.path, m_time) {
             return Some(file);
         }
@@ -165,7 +169,8 @@ impl CompilerHost for MultiRunHost {
         parse_options: &SourceFileParseOptions,
         mapper: &Rc<Mapper>,
     ) -> Result<SourceFiles, GoError> {
-        self.inner.get_content_mapped_source_files(parse_options, mapper)
+        self.inner
+            .get_content_mapped_source_files(parse_options, mapper)
     }
 
     fn content_mapper_project(&self) -> Option<Rc<dyn Project>> {

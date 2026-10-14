@@ -352,8 +352,12 @@ pub mod test_host {
         match op {
             Op::Read => map.get(path).cloned(),
             Op::Stat => match map.get(path) {
-                Some(bytes) => Some(format!("f {} {}", bytes.len(), GENERATION.load(Ordering::Relaxed)).into_bytes()),
-                None => is_dir.then(|| format!("d 0 {}", GENERATION.load(Ordering::Relaxed)).into_bytes()),
+                Some(bytes) => Some(
+                    format!("f {} {}", bytes.len(), GENERATION.load(Ordering::Relaxed))
+                        .into_bytes(),
+                ),
+                None => is_dir
+                    .then(|| format!("d 0 {}", GENERATION.load(Ordering::Relaxed)).into_bytes()),
             },
             Op::ReadDir => {
                 if !is_dir {

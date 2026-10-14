@@ -28,9 +28,9 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 mod go_frontend;
 pub(crate) use go_frontend::cached_lazy_js_doc;
+pub mod ls_program;
 /// PORT: not in Go. Multi-run wasm support (see the module comment).
 pub mod multirun;
-pub mod ls_program;
 
 // ---------------------------------------------------------------------------
 // Types
