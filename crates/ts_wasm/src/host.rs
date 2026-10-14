@@ -307,12 +307,19 @@ impl Fs for HostFs {
 pub mod test_host {
     use super::Op;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, PoisonError};
 
     static FILES: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
 
+    /// Bumped at each `set_files`: the mtime that `Stat` reports (in
+    /// nanoseconds), so a file that a later `set_files` wrote is a parse
+    /// cache miss (`program::multirun`), even when its size is the same.
+    static GENERATION: AtomicU64 = AtomicU64::new(1);
+
     /// Replaces the files of the test host.
     pub fn set_files(files: impl IntoIterator<Item = (String, String)>) {
+        GENERATION.fetch_add(1, Ordering::Relaxed);
         let mut map = FILES.lock().unwrap_or_else(PoisonError::into_inner);
         *map = files
             .into_iter()
@@ -345,8 +352,12 @@ pub mod test_host {
         match op {
             Op::Read => map.get(path).cloned(),
             Op::Stat => match map.get(path) {
-                Some(bytes) => Some(format!("f {} 0", bytes.len()).into_bytes()),
-                None => is_dir.then(|| b"d 0 0".to_vec()),
+                Some(bytes) => Some(
+                    format!("f {} {}", bytes.len(), GENERATION.load(Ordering::Relaxed))
+                        .into_bytes(),
+                ),
+                None => is_dir
+                    .then(|| format!("d 0 {}", GENERATION.load(Ordering::Relaxed)).into_bytes()),
             },
             Op::ReadDir => {
                 if !is_dir {

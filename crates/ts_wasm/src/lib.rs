@@ -4,8 +4,13 @@
 //!
 //! The host writes a request to the input buffer (`ts_input`), calls
 //! `ts_run`, and reads the reply at `ts_output` (`ts_output_len` bytes).
-//! One instance runs one request, because the port keeps one program per
-//! process (`core::set_prog`). The host makes a new instance for each.
+//! One instance serves many requests: each `ts_run` loads a new program
+//! version (`program::multirun`), whose unchanged files keep their parses
+//! of the runs before, so a warm run parses only what changed. The host
+//! file system must report a changed mtime for a file whose text changed
+//! between runs (a real one, or a stamp of the writer), or the parse cache
+//! serves the old text. A panic still ends the instance (wasm cannot
+//! unwind): the host makes a new one.
 //!
 //! The request is NUL-separated UTF-8 fields: the current directory, the
 //! flags (a decimal number of `FLAG_*` bits), then the tsc arguments. tsc
@@ -28,6 +33,10 @@ use ts_goport::frontend::tspath::normalize_path;
 use ts_goport::frontend::vfs::{Fs, OsOverride, install_os_override};
 use ts_goport::gostd::context;
 use ts_goport::scanner_util::go_string_from_utf8;
+
+/// The current directory of the run that installed the OS override (see
+/// `run`). Every run of the instance must ask for it.
+static OVERRIDE_CWD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 pub mod host;
 
@@ -94,16 +103,40 @@ pub fn run(request: &str) -> (i32, String) {
     }
 
     let _ = host::CASE_SENSITIVE.set(flags & FLAG_CASE_INSENSITIVE == 0);
-    install_os_override(OsOverride {
-        fs: Arc::new(|| Rc::new(host::HostFs::new()) as Rc<dyn Fs>),
-        current_directory: cwd,
-    });
+    // The override replaces the OS for the process, so it installs once
+    // (`osvfs::install_os_override` panics on the second call): every run
+    // of the instance resolves paths against the directory of the first
+    // one. A request with another cwd is rejected explicitly instead of
+    // being served with the wrong directory. The file system closure makes
+    // a new `HostFs` per thread, so the file system of a run is the host's
+    // now.
+    match OVERRIDE_CWD.get() {
+        Some(installed) if *installed != cwd => {
+            eprintln!(
+                "error: cwd is {cwd}, but this instance serves {installed} (multi-run: one cwd per instance)"
+            );
+            return (1, String::new());
+        }
+        Some(_) => {}
+        None => {
+            install_os_override(OsOverride {
+                fs: Arc::new(|| Rc::new(host::HostFs::new()) as Rc<dyn Fs>),
+                current_directory: cwd.clone(),
+            });
+            let _ = OVERRIDE_CWD.set(cwd);
+        }
+    }
     ts_goport::execute::tsc::stdio::init();
     let sys: Rc<dyn System> = match new_os_system() {
         Ok(sys) => Rc::new(sys),
         Err(status) => return (status.code(), String::new()),
     };
 
+    // Multi-run (see the `program::multirun` module): the run's program is
+    // a program version, built from the version of the run before, whose
+    // unchanged files keep their parses. `end_run` releases the version of
+    // the run before the last, after the diagnostics of this run are made.
+    ts_goport::program::multirun::enable();
     let diagnostics = (flags & FLAG_DIAGNOSTICS_JSON != 0).then(Rc::default);
     let hooks = WasmTsc {
         diagnostics: diagnostics.clone(),
@@ -111,6 +144,7 @@ pub fn run(request: &str) -> (i32, String) {
     let status = command_line(&context::background(), sys.clone(), &args, &hooks)
         .status
         .code();
+    ts_goport::program::multirun::end_run();
     let _ = sys.writer().borrow_mut().flush();
     let reply = diagnostics.map_or_else(String::new, |diagnostics| {
         format!("[{}]", diagnostics.take().join(","))
@@ -211,17 +245,23 @@ mod exports {
     }
 }
 
-// Native only: the test runs over `host::test_host`. A wasm build has no
+// Native only: the tests run over `host::test_host`. A wasm build has no
 // test host, because its file system is the JavaScript host's.
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::sync::PoisonError;
+
+    /// The test host of the process is one state (the files, the OS
+    /// override, the parse cache), so the tests take turns.
+    static HOST: Mutex<()> = Mutex::new(());
 
     /// One run over the test host: the reply has the diagnostics as JSON,
-    /// and the emit writes to the host. A process runs one request, so this
-    /// is the crate's only test of `run`.
+    /// and the emit writes to the host.
     #[test]
     fn run_checks_and_emits_through_the_host() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
         host::test_host::set_files([
             (
                 "/p/tsconfig.json".to_string(),
@@ -243,5 +283,129 @@ mod tests {
             host::test_host::file("/p/out/a.js").as_deref(),
             Some("export const n = 'one';\n")
         );
+    }
+
+    /// PORT: not in Go. The multi-run flow (`program::multirun`): many
+    /// runs in this one process (one `WebAssembly.Instance` in the shipped
+    /// module), across guests that change between runs. Every run reports
+    /// the diagnostics of the files it was given, including a file whose
+    /// text changed: the mtime that the test host reports changes with
+    /// `set_files`, so the parse cache re-parses it.
+    #[test]
+    fn many_runs_in_one_process_report_each_guest() {
+        const CLEAN_A: &str = "export const a: number = 1;\n";
+        const B: &str = "import { a } from './a';\nexport const b: number = a + 1;\n";
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts","b.ts"]}"#
+                    .to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let b = |text: &str| ("/p/b.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: a clean guest (cold: no parse cache, no earlier version).
+        host::test_host::set_files([tsconfig(), a(CLEAN_A), b(B)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const a = 1;\n"),
+            "run 1 emit"
+        );
+
+        // Run 2: a.ts now has a type error, b.ts unchanged. The changed
+        // file must be re-parsed (stale-parse test); the unchanged one may
+        // reuse its parse.
+        host::test_host::set_files([tsconfig(), a("export const a: number = 'one';\n"), b(B)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/a.ts""#), "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const a = 'one';\n"),
+            "run 2 emit"
+        );
+
+        // Run 3: the error is fixed, and the reply is clean again.
+        host::test_host::set_files([tsconfig(), a("export const a: number = 2;\n"), b(B)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+
+        // Run 4: exactly the files of run 3 again (the warm, unchanged
+        // case: every parse comes from the cache).
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/b.js").as_deref(),
+            Some("import { a } from './a';\nexport const b = a + 1;\n"),
+            "run 4 emit"
+        );
+    }
+
+    /// An early-return run (`--version`) installs no program version: its
+    /// `end_run` must rotate nothing, and a compile after it must still
+    /// work on the version chain (the released-as-`previous` bug).
+    #[test]
+    fn early_return_run_does_not_rotate_versions() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let files = || {
+            [
+                (
+                    "/p/tsconfig.json".to_string(),
+                    r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#
+                        .to_string(),
+                ),
+                (
+                    "/p/a.ts".to_string(),
+                    "export const n: number = 1;\n".to_string(),
+                ),
+            ]
+        };
+        host::test_host::set_files(files());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: installs version 1; `end_run` retires it.
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 2: an early return installs nothing.
+        let (status, reply) = run(&["/p", "0", "--version"].join("\0"));
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 3: must build on the live version, not a released one.
+        host::test_host::set_files(files());
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+    }
+
+    /// A run whose cwd differs from the one of the instance is rejected
+    /// explicitly (`run` documents one cwd per multi-run instance).
+    #[test]
+    fn cwd_change_is_rejected() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_files([
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"types":[]},"files":["a.ts"]}"#.to_string(),
+            ),
+            (
+                "/p/a.ts".to_string(),
+                "export const n: number = 1;\n".to_string(),
+            ),
+        ]);
+        let (status, reply) = run(&format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
+        assert_eq!(status, 0, "{reply}");
+        let (status, reply) = run(&format!("/q\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
+        assert_eq!(status, 1, "{reply}");
+        assert!(reply.is_empty(), "{reply}");
     }
 }
