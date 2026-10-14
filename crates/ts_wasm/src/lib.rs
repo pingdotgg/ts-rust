@@ -278,6 +278,8 @@ mod tests {
     /// `set_files`, so the parse cache re-parses it.
     #[test]
     fn many_runs_in_one_process_report_each_guest() {
+        const CLEAN_A: &str = "export const a: number = 1;\n";
+        const B: &str = "import { a } from './a';\nexport const b: number = a + 1;\n";
         let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
         let tsconfig = || {
             (
@@ -288,8 +290,6 @@ mod tests {
         };
         let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
         let b = |text: &str| ("/p/b.ts".to_string(), text.to_string());
-        const CLEAN_A: &str = "export const a: number = 1;\n";
-        const B: &str = "import { a } from './a';\nexport const b: number = a + 1;\n";
         let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
 
         // Run 1: a clean guest (cold: no parse cache, no earlier version).
