@@ -26,6 +26,13 @@ use crate::gostd::GoError;
 
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// True when the run that is ending installed a program version. A run can
+/// end without one (an early return such as `--version`): its `end_run`
+/// must leave `CURRENT` and `RETIRED` alone, or it would release the
+/// version that `CURRENT` still names and store the released version in
+/// `RETIRED` as the `previous` of the next version.
+static INSTALLED_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 thread_local! {
     /// The program version that the last run loaded. It is the current
     /// program of the thread (`core::set_thread_program`), as `set_prog`
@@ -82,13 +89,19 @@ pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<Par
     drop(np);
     crate::core::set_thread_program(Some(version));
     CURRENT.with(|current| current.set(Some(version)));
+    INSTALLED_RUN.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// The end of a run: releases the version that the run before the last
 /// loaded, and moves the last version there. Its checker pool stops; the
 /// published stores and the parse cache stay, so the next run reuses the
 /// parses of its unchanged files. Releases nothing before the second run.
+/// A run that installed no version (an early return such as `--version`)
+/// rotates nothing: `CURRENT` and `RETIRED` keep their programs.
 pub fn end_run() {
+    if !INSTALLED_RUN.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
     let retired = RETIRED.with(|retired| retired.replace(None));
     if let Some(old) = retired {
         crate::program::release_program(old);
@@ -105,17 +118,28 @@ struct MultiRunHost {
 
 impl MultiRunHost {
     /// The cache with a parse of `path` when its mtime is the one the host
-    /// file system reports now. A file that the host deleted, or one with a
-    /// changed mtime, is a miss (the watch host's cache test).
+    /// file system reports now and the parse was made with the parse
+    /// options of this run. A file that the host deleted, one with a
+    /// changed mtime, or one whose earlier parse used other compiler
+    /// options (a later request can pass another tsc argument list, and
+    /// the options choose `external_module_indicator_options`) is a miss
+    /// (the watch host's cache test, plus the options test).
     fn cached(
         &self,
         path: &Path,
         m_time: Option<Option<SystemTime>>,
+        opts: &SourceFileParseOptions,
     ) -> Option<Rc<ParsedSourceFile>> {
         PARSE_CACHE.with(|cache| {
             let cache = cache.borrow();
             let cached = cache.get(path)?;
-            (cached.m_time == m_time).then(|| cached.file.clone())
+            (cached.m_time == m_time
+                && cached
+                    .file
+                    .parse_options()
+                    .external_module_indicator_options
+                    == opts.external_module_indicator_options)
+                .then(|| cached.file.clone())
         })
     }
 }
@@ -146,7 +170,7 @@ impl CompilerHost for MultiRunHost {
             .fs()
             .stat(&opts.file_name)
             .map(|info| info.mod_time());
-        if let Some(file) = self.cached(&opts.path, m_time) {
+        if let Some(file) = self.cached(&opts.path, m_time, opts) {
             return Some(file);
         }
         let file = self.inner.get_source_file(opts)?;

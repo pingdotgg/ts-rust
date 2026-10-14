@@ -34,6 +34,10 @@ use ts_goport::frontend::vfs::{Fs, OsOverride, install_os_override};
 use ts_goport::gostd::context;
 use ts_goport::scanner_util::go_string_from_utf8;
 
+/// The current directory of the run that installed the OS override (see
+/// `run`). Every run of the instance must ask for it.
+static OVERRIDE_CWD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 pub mod host;
 
 /// Report the diagnostics as JSON in the reply, not as text on stdout.
@@ -100,15 +104,27 @@ pub fn run(request: &str) -> (i32, String) {
 
     let _ = host::CASE_SENSITIVE.set(flags & FLAG_CASE_INSENSITIVE == 0);
     // The override replaces the OS for the process, so it installs once
-    // (`osvfs::install_os_override` panics on the second call): the current
-    // directory of the first run is the one of every run. The file system
-    // closure makes a new `HostFs` per thread, so the file system of a run
-    // is the host's now.
-    if !ts_goport::frontend::vfs::os_override_installed() {
-        install_os_override(OsOverride {
-            fs: Arc::new(|| Rc::new(host::HostFs::new()) as Rc<dyn Fs>),
-            current_directory: cwd,
-        });
+    // (`osvfs::install_os_override` panics on the second call): every run
+    // of the instance resolves paths against the directory of the first
+    // one. A request with another cwd is rejected explicitly instead of
+    // being served with the wrong directory. The file system closure makes
+    // a new `HostFs` per thread, so the file system of a run is the host's
+    // now.
+    match OVERRIDE_CWD.get() {
+        Some(installed) if *installed != cwd => {
+            eprintln!(
+                "error: cwd is {cwd}, but this instance serves {installed} (multi-run: one cwd per instance)"
+            );
+            return (1, String::new());
+        }
+        Some(_) => {}
+        None => {
+            install_os_override(OsOverride {
+                fs: Arc::new(|| Rc::new(host::HostFs::new()) as Rc<dyn Fs>),
+                current_directory: cwd.clone(),
+            });
+            let _ = OVERRIDE_CWD.set(cwd);
+        }
     }
     ts_goport::execute::tsc::stdio::init();
     let sys: Rc<dyn System> = match new_os_system() {
@@ -333,6 +349,65 @@ mod tests {
             Some("import { a } from './a';\nexport const b = a + 1;\n"),
             "run 4 emit"
         );
+    }
+
+    /// An early-return run (`--version`) installs no program version: its
+    /// `end_run` must rotate nothing, and a compile after it must still
+    /// work on the version chain (the released-as-`previous` bug).
+    #[test]
+    fn early_return_run_does_not_rotate_versions() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let files = || {
+            [
+                (
+                    "/p/tsconfig.json".to_string(),
+                    r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#
+                        .to_string(),
+                ),
+                (
+                    "/p/a.ts".to_string(),
+                    "export const n: number = 1;\n".to_string(),
+                ),
+            ]
+        };
+        host::test_host::set_files(files());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: installs version 1; `end_run` retires it.
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 2: an early return installs nothing.
+        let (status, reply) = run(&["/p", "0", "--version"].join("\0"));
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 3: must build on the live version, not a released one.
+        host::test_host::set_files(files());
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+    }
+
+    /// A run whose cwd differs from the one of the instance is rejected
+    /// explicitly (`run` documents one cwd per multi-run instance).
+    #[test]
+    fn cwd_change_is_rejected() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_files([
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"types":[]},"files":["a.ts"]}"#.to_string(),
+            ),
+            (
+                "/p/a.ts".to_string(),
+                "export const n: number = 1;\n".to_string(),
+            ),
+        ]);
+        let (status, reply) = run(&format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
+        assert_eq!(status, 0, "{reply}");
+        let (status, reply) = run(&format!("/q\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
+        assert_eq!(status, 1, "{reply}");
+        assert!(reply.is_empty(), "{reply}");
     }
 }
 
