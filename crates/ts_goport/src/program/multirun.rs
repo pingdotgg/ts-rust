@@ -66,6 +66,12 @@ thread_local! {
     /// program is freed with the versions that held it instead of staying
     /// for the life of the instance.
     static LIVE_PATHS: RefCell<FxHashSet<Path>> = RefCell::new(FxHashSet::default());
+    /// The config file of the last installed version, by the host name the
+    /// request named. Part of the file world (`file_world_fingerprint`):
+    /// the config text is the file set of a `files` config, and the config
+    /// parse does not go through the parse cache (the host reads it before
+    /// the run installs a version).
+    static CONFIG_STAMP: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 struct CachedParse {
@@ -104,6 +110,8 @@ pub fn is_enabled() -> bool {
 /// installed program.
 pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) {
     let config_path = config.config_file.as_ref().map(|c| c.path.clone());
+    let config_file_name = config.config_file.as_ref().map(|c| c.file_name.clone());
+    CONFIG_STAMP.with(|stamp| *stamp.borrow_mut() = config_file_name);
     let np = crate::execute::execute_tsc::new_frontend_program(host, config);
     crate::program::mark_freeable_parses(&np);
     // The paths whose parses this version keeps: the files of its program
@@ -119,6 +127,11 @@ pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<Par
         }
     });
     let previous = CURRENT.with(|current| current.get());
+    // The semantic-diagnostic reuse set of this run, from `np` and the cache
+    // of the runs before (see `SemanticCache`). The options pointer is the
+    // interned copy `build_program` leaks, so runs with the same options
+    // share it.
+    prepare_semantic_reuse(&np, super::intern_compiler_options(np.options()));
     let version = crate::program::new_program_version(&np, previous);
     drop(np);
     crate::core::set_thread_program(Some(version));
@@ -287,6 +300,64 @@ impl CompilerHost for MultiRunHost {
     }
 }
 
+/// The host file system as the parse cache sees it, hashed: every path the
+/// cache has parsed, with the mtime the host reports now. A replayed
+/// request (`ts_wasm` `FINGERPRINT`) is the same check only while this
+/// value is the one stored with its reply: a changed or deleted file
+/// changes a stat, and a new program file changes the stat of the config
+/// that names it (the held flow's config text is a function of its file
+/// set). This is the parse cache's own mtime-honesty contract.
+/// The host file system as the parse cache sees it, hashed: every path the
+/// cache has parsed, with the hash of the content the file system serves
+/// now, and the config file of the last run (`CONFIG_STAMP`). A bundled
+/// lib file hashes its path only: its text is embedded in the module and
+/// cannot change within the process. A replayed request (`ts_wasm`
+/// `FINGERPRINT`) is the same check only while this value is the one
+/// stored with its reply: a changed or deleted file changes a read, and a
+/// changed config changes the read of the file set it names (a new program
+/// file of a `files` config changes the config text). This is the parse
+/// cache's own content test (`cached`), so a fingerprint hit means the run
+/// would serve the same parses.
+pub fn file_world_fingerprint(fs: &dyn Fs) -> u64 {
+    use std::hash::{Hash, Hasher};
+    // The reads run with no cache borrow held: a host read can re-enter
+    // (`HostFs` crosses the wasm boundary).
+    let entries: Vec<(Path, String, bool)> = PARSE_CACHE.with(|cache| {
+        let mut entries: Vec<(Path, String, bool)> = cache
+            .borrow()
+            .iter()
+            .map(|(path, cached)| {
+                (
+                    path.clone(),
+                    cached.file.parse_options().file_name.clone(),
+                    cached.bundled,
+                )
+            })
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries
+    });
+    let config_file_name = CONFIG_STAMP.with(|stamp| stamp.borrow().clone());
+    let mut hasher = std::hash::DefaultHasher::new();
+    for (path, file_name, is_bundled) in &entries {
+        path.0.hash(&mut hasher);
+        if *is_bundled {
+            continue;
+        }
+        let (text, ok) = fs.read_file(file_name);
+        ok.hash(&mut hasher);
+        text.hash(&mut hasher);
+    }
+    if let Some(file_name) = config_file_name {
+        hasher.write(b"config");
+        file_name.hash(&mut hasher);
+        let (text, ok) = fs.read_file(&file_name);
+        ok.hash(&mut hasher);
+        text.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// The compiler host of a run in the multi-run flow: the run's host over the
 /// process parse cache. With the flow off, the host unchanged.
 pub(crate) fn wrap_host(host: Rc<dyn CompilerHost>) -> Rc<dyn CompilerHost> {
@@ -294,4 +365,320 @@ pub(crate) fn wrap_host(host: Rc<dyn CompilerHost>) -> Rc<dyn CompilerHost> {
         return host;
     }
     Rc::new(MultiRunHost { inner: host })
+}
+
+// ---- semantic-diagnostic reuse (phase 9) ----
+//
+// The check phase of a warm run is the whole floor (the decomposition that
+// drove this: `C_install_program` 1-3 ms, `D_check_emit` 48-54 ms of a
+// 55-70 ms run, ~47-50 ms of it `get_semantic_diagnostics` over all files —
+// mostly the 57 lib .d.ts files). The parse cache already makes the parses
+// of unchanged files shared `Rc`s, so a file whose parse is the same `Rc`
+// as the run before was checked under the same text — and when nothing it
+// reads changed, its semantic diagnostics are the same list. This cache
+// hands those lists back instead of re-checking the files, so a warm run
+// checks only what a change can reach.
+//
+// Safety rules (a reused list must be the list a full check would compute):
+//
+// 1. Same program shape: the same path set as the cached run, and the same
+//    interned compiler options (a pointer compare). Else everything is
+//    re-checked.
+// 2. Changed files (a new parse store for their path) must be external
+//    modules with no `declare global`/ambient modules and no
+//    augmentations: their declarations cannot reach the global scope that
+//    every file shares. A changed script can (a `const console` in a guest
+//    script reports TS2451 on guest-globals.d.ts too — measured), so a
+//    changed script re-checks everything.
+// 3. A file is reusable only when it imports no changed file, not even
+//    transitively (the resolved module and type-reference edges of the
+//    program) and carries no triple-slash references (those resolve
+//    outside `resolved_modules`).
+// 4. `GOPORT_SEMANTIC_CACHE=0` turns the reuse off (a kill switch for a
+//    diagnosis).
+//
+// The cache holds no program, no tables and no checker: `Rc` diagnostics
+// keyed by path, so `release_program` lifetime rules are untouched.
+
+struct CachedDiags {
+    store: usize,
+    diags: Rc<Vec<crate::core::Diagnostic>>,
+}
+
+thread_local! {
+    /// The per-path semantic diagnostics of the last run that computed
+    /// them, with the parse store they belong to.
+    static SEMANTIC_CACHE: RefCell<SemanticCache> = RefCell::new(SemanticCache {
+        options: None,
+        by_path: FxHashMap::default(),
+        contributions: FxHashMap::default(),
+    });
+    /// Store id -> cached diagnostics that the check of the run that is
+    /// running now returns instead of re-checking. Cleared at every
+    /// `prepare_semantic_reuse`.
+    static SEMANTIC_REUSE: RefCell<FxHashMap<usize, Rc<Vec<crate::core::Diagnostic>>>> =
+        RefCell::new(FxHashMap::default());
+    /// Store id -> path of every file of the run that is running now, for
+    /// `note_semantic_diagnostics` (the check reads nodes, not parses).
+    static NOTE_PATHS: RefCell<FxHashMap<usize, crate::frontend::tspath::Path>> =
+        RefCell::new(FxHashMap::default());
+}
+
+struct SemanticCache {
+    /// The interned options the cache was built under.
+    options: Option<&'static crate::options::CompilerOptions>,
+    by_path: FxHashMap<crate::frontend::tspath::Path, CachedDiags>,
+    /// The global-scope contribution hash of each cached global-scope file
+    /// (`global_contribution_hash`), from the run that cached its
+    /// diagnostics. Cleared with `by_path`.
+    contributions: FxHashMap<crate::frontend::tspath::Path, u64>,
+}
+
+/// True unless `GOPORT_SEMANTIC_CACHE=0`. Read once.
+fn semantic_cache_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("GOPORT_SEMANTIC_CACHE").map_or(true, |v| v != "0"))
+}
+
+/// A file whose change can reach the global scope every file shares: a
+/// script, or a module that augments or declares ambient modules.
+fn reaches_global_scope(file: &ParsedSourceFile) -> bool {
+    file.external_module_indicator.is_nil()
+        || !file.module_augmentations.is_empty()
+        || !file.ambient_module_names.is_empty()
+}
+
+/// What a script file contributes to the global scope, hashed: every
+/// top-level statement's kind and source text — except a function
+/// declaration with an explicit return type annotation, which contributes
+/// its signature only (the text up to its body): a body-only edit cannot
+/// change the type other files see. A changed script whose hash is the one
+/// the cache saw (the common agent edit: a new body for the same signed
+/// function) cannot contaminate any other file, so the run re-checks just
+/// the script.
+fn global_contribution_hash(file: &ParsedSourceFile) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let full: &str = match &file.text {
+        crate::ast::FileText::Static(text) => text,
+        crate::ast::FileText::Shared(text) => text,
+    };
+    let mut hasher = std::hash::DefaultHasher::new();
+    for stmt in file.root.iter_children() {
+        stmt.kind().hash(&mut hasher);
+        let end = if stmt.kind() == crate::astdata::SyntaxKind::FunctionDeclaration
+            && !stmt.body().is_nil()
+            && !stmt.type_().is_nil()
+        {
+            stmt.body().pos()
+        } else {
+            stmt.end()
+        };
+        let start = usize::try_from(stmt.pos()).unwrap_or(0);
+        let end = usize::try_from(end).unwrap_or(full.len()).min(full.len());
+        hasher.write(full.get(start..end).unwrap_or_default().as_bytes());
+    }
+    hasher.finish()
+}
+
+/// The program files that (transitively) import a changed file: the reverse
+/// of the program's resolved module and type-reference edges, walked from
+/// the changed paths.
+fn influenced_by(
+    np: &crate::frontend::compiler::NewProgram,
+    changed: &FxHashMap<crate::frontend::tspath::Path, usize>,
+) -> FxHashSet<crate::frontend::tspath::Path> {
+    let mut reverse: FxHashMap<
+        &crate::frontend::tspath::Path,
+        Vec<&crate::frontend::tspath::Path>,
+    > = FxHashMap::default();
+    for (importer, cache) in np.processed_files.resolved_modules.iter() {
+        for resolution in cache.values() {
+            if resolution.is_resolved() {
+                reverse
+                    .entry(&resolution.resolved_path)
+                    .or_default()
+                    .push(importer);
+            }
+        }
+    }
+    for (importer, cache) in np.processed_files.type_resolutions_in_file.iter() {
+        for resolution in cache.values() {
+            if resolution.is_resolved() {
+                reverse
+                    .entry(&resolution.resolved_path)
+                    .or_default()
+                    .push(importer);
+            }
+        }
+    }
+    let mut influenced: FxHashSet<&crate::frontend::tspath::Path> = changed.keys().collect();
+    let mut queue: Vec<&crate::frontend::tspath::Path> = influenced.iter().copied().collect();
+    while let Some(path) = queue.pop() {
+        if let Some(importers) = reverse.get(path) {
+            for importer in importers {
+                if influenced.insert(importer) {
+                    queue.push(importer);
+                }
+            }
+        }
+    }
+    influenced.into_iter().cloned().collect()
+}
+
+/// Computes the reuse set of the run that is loading now, from `np` and the
+/// cache of the runs before. Called on the loading thread before
+/// `new_program_version`; `options` is the interned copy of the run's
+/// compiler options.
+fn prepare_semantic_reuse(
+    np: &crate::frontend::compiler::NewProgram,
+    options: &'static crate::options::CompilerOptions,
+) {
+    SEMANTIC_REUSE.with(|reuse| reuse.borrow_mut().clear());
+    let files = np.source_files();
+    NOTE_PATHS.with(|note| {
+        let mut note = note.borrow_mut();
+        note.clear();
+        note.extend(files.iter().map(|f| (f.store, f.path().clone())));
+    });
+    if !semantic_cache_enabled() {
+        return;
+    }
+    SEMANTIC_CACHE.with(|cache_cell| {
+        SEMANTIC_REUSE.with(|reuse_cell| {
+            let mut cache = cache_cell.borrow_mut();
+            let mut reuse = reuse_cell.borrow_mut();
+            // Rule 1: the options changed since the cache was built.
+            if !cache
+                .options
+                .is_some_and(|cached| std::ptr::eq(cached, options))
+            {
+                cache.options = Some(options);
+                cache.by_path.clear();
+            }
+            // Rule 1: the path set changed.
+            let same_set = cache.by_path.len() == files.len()
+                && files.iter().all(|f| cache.by_path.contains_key(f.path()));
+            if !same_set {
+                cache.by_path.clear();
+                return;
+            }
+            // The files whose parse changed (or are new to the cache, which
+            // the same-set test rules out).
+            let changed: FxHashMap<crate::frontend::tspath::Path, usize> = files
+                .iter()
+                .filter(|f| {
+                    cache
+                        .by_path
+                        .get(f.path())
+                        .is_none_or(|c| c.store != f.store)
+                })
+                .map(|f| (f.path().clone(), f.store))
+                .collect();
+            if changed.is_empty() {
+                // Every parse is the run before's: every cached list stands.
+                for file in files {
+                    let cached = &cache.by_path[file.path()];
+                    reuse.insert(file.store, Rc::clone(&cached.diags));
+                }
+                return;
+            }
+            // Rule 2: a changed file that can reach the global scope keeps
+            // the rest reusable only when its contribution is the one the
+            // cache saw (a body-only edit of an annotated function). A new
+            // top-level name or signature re-checks everything.
+            let mut global_change = false;
+            for file in files {
+                if !changed.contains_key(file.path()) || !reaches_global_scope(file) {
+                    continue;
+                }
+                let hash = global_contribution_hash(file);
+                global_change |= cache.contributions.get(file.path()) != Some(&hash);
+                cache.contributions.insert(file.path().clone(), hash);
+            }
+            if global_change {
+                // The stored contribution stays: it is the new parse's, and
+                // the next change of this path compares against it.
+                cache.by_path.clear();
+                return;
+            }
+            // Rule 3: keep the files outside the influence of the changed
+            // ones that carry no triple-slash references.
+            let influenced = influenced_by(np, &changed);
+            for file in files {
+                if changed.contains_key(file.path()) || influenced.contains(file.path()) {
+                    continue;
+                }
+                if !file.referenced_files.is_empty() || !file.type_reference_directives.is_empty() {
+                    continue;
+                }
+                let cached = &cache.by_path[file.path()];
+                reuse.insert(file.store, Rc::clone(&cached.diags));
+            }
+        });
+    });
+}
+/// The path of a published source-file node of the run that is checking
+/// now (`NOTE_PATHS`, from the same load).
+fn noted_path(store: usize) -> Option<crate::frontend::tspath::Path> {
+    NOTE_PATHS.with(|note| note.borrow().get(&store).cloned())
+}
+
+/// `program::get_semantic_diagnostics(Node::NIL)` of a multi-run process:
+/// re-checks only the files outside `SEMANTIC_REUSE`, splices the cached
+/// lists of the rest in file order, notes what it computed, and sorts once
+/// at the end — the same calls, order and result as the full fan-out, with
+/// the reused files skipped.
+pub(crate) fn semantic_diagnostics_with_reuse() -> Vec<crate::core::Diagnostic> {
+    let files = super::source_files();
+    let reuse = SEMANTIC_REUSE.with(|reuse| std::mem::take(&mut *reuse.borrow_mut()));
+    enum Slot {
+        Cached(Rc<Vec<crate::core::Diagnostic>>),
+        Check(usize),
+    }
+    let mut slots: Vec<Slot> = Vec::with_capacity(files.len());
+    let mut to_check: Vec<crate::core::Node> = Vec::with_capacity(files.len());
+    for file in &files {
+        match reuse.get(&file.file_index()) {
+            Some(diags) => slots.push(Slot::Cached(Rc::clone(diags))),
+            None => {
+                slots.push(Slot::Check(to_check.len()));
+                to_check.push(*file);
+            }
+        }
+    }
+    let mut checked = if to_check.is_empty() {
+        Vec::new()
+    } else {
+        super::collect_checker_diagnostics_from_files(&to_check, |c, f| {
+            super::get_semantic_diagnostics_with_checker(&crate::gostd::context::background(), c, f)
+        })
+    };
+    let mut fresh: Vec<(
+        crate::frontend::tspath::Path,
+        usize,
+        Rc<Vec<crate::core::Diagnostic>>,
+    )> = Vec::with_capacity(checked.len());
+    let mut out = Vec::new();
+    for (i, file) in files.iter().enumerate() {
+        match &slots[i] {
+            Slot::Cached(diags) => out.extend(diags.iter().cloned()),
+            Slot::Check(k) => {
+                let diags = std::mem::take(&mut checked[*k]);
+                let diags = Rc::new(diags);
+                if let Some(path) = noted_path(file.file_index()) {
+                    fresh.push((path, file.file_index(), Rc::clone(&diags)));
+                }
+                out.extend(diags.iter().cloned());
+            }
+        }
+    }
+    if semantic_cache_enabled() {
+        SEMANTIC_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            for (path, store, diags) in fresh {
+                cache.by_path.insert(path, CachedDiags { store, diags });
+            }
+        });
+    }
+    super::filter_and_sort_diagnostics(out)
 }
