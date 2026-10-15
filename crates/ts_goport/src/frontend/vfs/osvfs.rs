@@ -209,6 +209,17 @@ fn is_file_system_case_sensitive() -> bool {
             return false;
         }
 
+        // PORT: Go returns true for wasm. WASI has no executable path, so the port
+        // probes the current directory under a different case instead.
+        if cfg!(target_os = "wasi")
+            && let Ok(cwd) = os_current_dir()
+        {
+            let swapped = swap_case(&cwd);
+            if swapped != cwd {
+                return std::fs::metadata(os_path(&swapped)).is_err();
+            }
+        }
+
         if cfg!(target_family = "wasm") {
             // !!! Who knows; this depends on the host implementation.
             return true;
