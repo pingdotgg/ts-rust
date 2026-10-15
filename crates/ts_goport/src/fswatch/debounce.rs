@@ -105,7 +105,7 @@ pub fn new_debounce() -> Arc<Debounce> {
         latch_mu: Mutex::new(DebounceLatch::default()),
     });
     let loop_d = d.clone();
-    crate::core::GoThread::new().spawn(move || loop_d.loop_());
+    std::thread::spawn(move || loop_d.loop_());
     d
 }
 

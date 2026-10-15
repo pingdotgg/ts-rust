@@ -52,7 +52,7 @@
 
 use crate::ipc::prelude::*;
 
-use crate::core::{GoThread, go_recover};
+use crate::core::go_recover;
 use crate::frontend::json_ext::{AnyValue, JsonValue};
 use crate::gostd::context::Done;
 use crate::gostd::{Context, GoError, context, errors};
@@ -1165,7 +1165,7 @@ fn start_reader(
     let thread_inbox = inbox.clone();
     let ctx = ctx.clone();
     // The Go stack size, as the LSP reader threads have.
-    GoThread::new()
+    std::thread::Builder::new()
         .name("ipc-reader".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn(move || {
@@ -1198,7 +1198,8 @@ fn start_reader(
             // dispatch thread runs it when it finds the end (`end_read_loop`),
             // and a call that this cancel wakes finds the end first.
             cancel_handlers();
-        });
+        })
+        .expect("failed to spawn ipc-reader thread");
     inbox
 }
 

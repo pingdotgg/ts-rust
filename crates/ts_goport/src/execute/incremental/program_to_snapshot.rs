@@ -489,9 +489,10 @@ fn start_text_hashes(
     if single_threaded || cfg!(target_family = "wasm") {
         hash_texts();
     } else {
-        crate::core::GoThread::new()
+        std::thread::Builder::new()
             .name("goport-text-hash".to_string())
-            .spawn(hash_texts);
+            .spawn(hash_texts)
+            .expect("failed to spawn goport-text-hash thread");
     }
     receiver
 }

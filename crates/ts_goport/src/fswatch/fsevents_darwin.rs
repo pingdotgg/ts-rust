@@ -243,7 +243,7 @@ fn start_stream(
     // Notifies the touched watches once no event has come for 1 ms, and at
     // the latest 20 ms after the first. It ends when the stream drops the
     // handler.
-    crate::core::GoThread::new().spawn(move || {
+    std::thread::spawn(move || {
         use std::time::{Duration, Instant};
         while let Ok(first) = touched_rx.recv() {
             let last = Instant::now() + Duration::from_millis(20);
@@ -285,7 +285,7 @@ fn stop_fs_events_streams(streams: Vec<Arc<FseventsStream>>) {
         .filter_map(|stream| stream.watcher.lock().unwrap().take())
         .collect();
     if !watchers.is_empty() {
-        crate::core::GoThread::new().spawn(move || drop(watchers));
+        std::thread::spawn(move || drop(watchers));
     }
 }
 

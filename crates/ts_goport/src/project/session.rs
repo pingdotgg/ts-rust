@@ -1277,7 +1277,7 @@ fn metrics_read(samples: &mut [MetricsSample]) {
     for sample in samples.iter_mut() {
         sample.value = match sample.name {
             "/sched/gomaxprocs:threads" => {
-                MetricsValue::Uint64(crate::gostd::runtime::gomaxprocs() as u64)
+                MetricsValue::Uint64(crate::program::available_cores() as u64)
             }
             _ => MetricsValue::Bad,
         };

@@ -146,7 +146,7 @@ impl WatcherImpl for WindowsBackend {
         // missing the initial create event or seeing it as a stray modify.
         sub.begin_read()?;
         *w.state.lock().unwrap() = Some(Box::new(sub.clone()));
-        crate::core::GoThread::new().spawn(move || sub.run());
+        std::thread::spawn(move || sub.run());
         Ok(())
     }
 
@@ -434,7 +434,7 @@ impl WindowsSubscription {
             dir_watch: self.dir_watch.clone(),
         };
         if let Some(watcher_impl) = self.watcher_impl.upgrade() {
-            crate::core::GoThread::new().spawn(move || watcher_impl.handle_watcher_error(werr));
+            std::thread::spawn(move || watcher_impl.handle_watcher_error(werr));
         }
         self.stop();
     }

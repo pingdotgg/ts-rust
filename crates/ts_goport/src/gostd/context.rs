@@ -14,8 +14,8 @@
 use crate::prelude::*;
 
 use crate::gostd::errors::{self, GoError};
-use crate::gostd::timer;
 use std::any::{Any, TypeId};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,10 +30,88 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 // PORT: Go `go f()`.
 fn go(f: Box<dyn FnOnce() + Send>) {
-    crate::core::GoThread::new()
+    std::thread::Builder::new()
         .name("goroutine".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
-        .spawn(f);
+        .spawn(f)
+        .expect("failed to spawn context after_func thread");
+}
+
+struct DeadlineScheduler {
+    state: Mutex<DeadlineSchedulerState>,
+    cond: Condvar,
+}
+
+#[derive(Default)]
+struct DeadlineSchedulerState {
+    next_id: u64,
+    due: BTreeMap<(Instant, u64), Box<dyn FnOnce() + Send>>,
+    thread_running: bool,
+}
+
+static DEADLINE_SCHEDULER: LazyLock<DeadlineScheduler> = LazyLock::new(|| DeadlineScheduler {
+    state: Mutex::new(DeadlineSchedulerState::default()),
+    cond: Condvar::new(),
+});
+
+struct DeadlineTimer {
+    key: (Instant, u64),
+}
+
+impl DeadlineTimer {
+    fn schedule(when: Instant, f: impl FnOnce() + Send + 'static) -> Self {
+        let scheduler = &*DEADLINE_SCHEDULER;
+        let mut state = lock(&scheduler.state);
+        let id = state.next_id;
+        state.next_id += 1;
+        let key = (when, id);
+        let is_first = state.due.first_key_value().is_none_or(|(&first, _)| key < first);
+        state.due.insert(key, Box::new(f));
+        if !state.thread_running {
+            state.thread_running = true;
+            drop(state);
+            std::thread::Builder::new()
+                .name("context-timer".to_string())
+                .spawn(run_deadline_scheduler)
+                .expect("failed to spawn context-timer thread");
+        } else if is_first {
+            scheduler.cond.notify_all();
+        }
+        Self { key }
+    }
+
+    fn stop(self) {
+        let mut state = lock(&DEADLINE_SCHEDULER.state);
+        state.due.remove(&self.key);
+    }
+}
+
+fn run_deadline_scheduler() {
+    let scheduler = &*DEADLINE_SCHEDULER;
+    let mut state = lock(&scheduler.state);
+    loop {
+        let Some((&(when, _), _)) = state.due.first_key_value() else {
+            state = scheduler
+                .cond
+                .wait(state)
+                .unwrap_or_else(|e| e.into_inner());
+            continue;
+        };
+        let now = Instant::now();
+        if now < when {
+            state = scheduler
+                .cond
+                .wait_timeout(state, when - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+            continue;
+        }
+        if let Some((_, f)) = state.due.pop_first() {
+            drop(state);
+            f();
+            state = lock(&scheduler.state);
+        }
+    }
 }
 
 /// A Context carries a deadline, a cancellation signal, and other values
@@ -277,7 +355,7 @@ impl Done {
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
         match Instant::now().checked_add(timeout) {
             Some(deadline) => self.wait_deadline(deadline),
-            None => {
+            None { .. } => {
                 self.wait();
                 true
             }
@@ -679,7 +757,7 @@ struct CancelCtxFields {
     cause: Option<GoError>,
     /// Go `timerCtx.timer` ("Under cancelCtx.mu."); always `None` for a
     /// plain cancelCtx or an afterFuncCtx.
-    timer: Option<timer::Timer>,
+    timer: Option<DeadlineTimer>,
 }
 
 impl CancelCtx {
@@ -892,8 +970,8 @@ pub fn with_deadline_cause(
         let mut fields = lock(&c.cancel_ctx.mu);
         if c.cancel_ctx.err.get().is_none() {
             let cc = c.clone();
-            fields.timer = Some(timer::after_func(dur, move || {
-                cc.cancel(true, DEADLINE_EXCEEDED.clone(), cause.clone());
+            fields.timer = Some(DeadlineTimer::schedule(d, move || {
+                cc.cancel(true, DEADLINE_EXCEEDED.clone(), cause);
             }));
         }
     }

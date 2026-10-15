@@ -577,12 +577,13 @@ impl TypingsInstaller {
             }))
         };
         let (ctx, cwd, args) = (ctx.clone(), cwd.to_string(), args.to_vec());
-        crate::core::GoThread::new()
+        std::thread::Builder::new()
             .name("ata-npm".to_string())
             .spawn(move || {
                 let _ = tx.send(npm_install(&ctx, &cwd, &args));
                 post.post();
-            });
+            })
+            .expect("failed to spawn ata-npm thread");
         poll_fn(|cx| {
             let mut state = state.borrow_mut();
             match state.0.take() {

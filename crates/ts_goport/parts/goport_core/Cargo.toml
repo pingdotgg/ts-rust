@@ -25,6 +25,7 @@ jiff = { version = "=0.2.37", default-features = false, features = ["std"] }
 # Native only: wasm has no processes, signals, terminals or pipes (see
 # crates/ts_wasm).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+rayon = "1.11.0"
 rustix = { version = "=1.1.5", features = ["event", "fs", "pipe", "process", "stdio", "termios"] }
 # Go `os/signal` Notify for `signal.NotifyContext` in cmd/tsc (--watch, --lsp).
 signal-hook = "=0.4.4"

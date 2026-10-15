@@ -41,7 +41,7 @@ static NEXT_SEARCH_CHECKER_INDEX: AtomicUsize = AtomicUsize::new(1 << 20);
 
 /// The most searches that run on search threads at once (Go: GOMAXPROCS).
 pub fn max_in_flight() -> usize {
-    crate::gostd::runtime::gomaxprocs()
+    crate::program::available_cores()
 }
 
 // ---------------------------------------------------------------------------
@@ -345,10 +345,11 @@ fn spawn_search_thread(program: &compiler::NewProgram) -> mpsc::Sender<Job> {
         crate::program::WorkerSeed::take()
     };
     let (jobs, receiver) = mpsc::channel::<Job>();
-    crate::core::GoThread::new()
+    std::thread::Builder::new()
         .name("ls-search".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
-        .spawn(move || search_thread_main(seed, data, receiver));
+        .spawn(move || search_thread_main(seed, data, receiver))
+        .expect("failed to spawn ls-search thread");
     jobs
 }
 

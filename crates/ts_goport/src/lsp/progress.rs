@@ -126,7 +126,7 @@ pub fn new_project_loading_progress_from_reporter(
     });
     // Go: go p.run()
     let run = p.clone();
-    crate::core::GoThread::new()
+    std::thread::Builder::new()
         .name("lsp-progress".to_string())
         .spawn(move || {
             if let Err(payload) =
@@ -134,7 +134,8 @@ pub fn new_project_loading_progress_from_reporter(
             {
                 go_crash(payload);
             }
-        });
+        })
+        .expect("failed to spawn lsp-progress thread");
     p
 }
 

@@ -1195,29 +1195,31 @@ impl WatcherBase {
     // event for a new directory walks it (`walk_dir`), one call per level.
     pub fn run(&self) -> Result<(), GoError> {
         let self_impl = self.self_impl();
-        let thread = crate::core::GoThread::new().stack_size(crate::gostd::stack::max_stack_size());
-        thread.spawn(move || {
-            let result = std::panic::catch_unwind(AssertUnwindSafe(|| self_impl.start()));
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => self_impl.base().handle_start_error(err),
-                Err(r) => {
-                    // Go: err, ok := r.(error); if !ok { err = fmt.Errorf("%v", r) }
-                    let text = if let Some(panic) = r.downcast_ref::<crate::core::GoPanic>() {
-                        panic.message.clone()
-                    } else if let Some(s) = r.downcast_ref::<&str>() {
-                        (*s).to_string()
-                    } else if let Some(s) = r.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        format!("{r:?}")
-                    };
-                    self_impl
-                        .base()
-                        .handle_start_error(errors::errorf(text, vec![]));
+        let thread = std::thread::Builder::new().stack_size(crate::gostd::stack::max_stack_size());
+        thread
+            .spawn(move || {
+                let result = std::panic::catch_unwind(AssertUnwindSafe(|| self_impl.start()));
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => self_impl.base().handle_start_error(err),
+                    Err(r) => {
+                        // Go: err, ok := r.(error); if !ok { err = fmt.Errorf("%v", r) }
+                        let text = if let Some(panic) = r.downcast_ref::<crate::core::GoPanic>() {
+                            panic.message.clone()
+                        } else if let Some(s) = r.downcast_ref::<&str>() {
+                            (*s).to_string()
+                        } else if let Some(s) = r.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            format!("{r:?}")
+                        };
+                        self_impl
+                            .base()
+                            .handle_start_error(errors::errorf(text, vec![]));
+                    }
                 }
-            }
-        });
+            })
+            .expect("failed to spawn watcher thread");
         self.started.wait();
         let b = self.mu.lock().unwrap();
         match &b.start_err {

@@ -135,7 +135,7 @@ pub fn start_parent_process_watchdog(ctx: &Context, stop: &CancelFunc, parent_pi
     }
     let ctx = ctx.clone();
     let stop = stop.clone();
-    crate::core::GoThread::new()
+    std::thread::Builder::new()
         .name("lsp-watchdog".to_string())
         .spawn(move || {
             // Go: ticker := time.NewTicker(5 * time.Second); defer ticker.Stop()
@@ -162,7 +162,8 @@ pub fn start_parent_process_watchdog(ctx: &Context, stop: &CancelFunc, parent_pi
                     return;
                 }
             }
-        });
+        })
+        .expect("failed to spawn lsp-watchdog thread");
 }
 
 // Go: vfs/osvfs/os.go:191 GetGlobalTypingsCacheLocation
@@ -276,20 +277,22 @@ fn command_context_output(
         Err(err) => return (Vec::new(), Some(errors::new(err.to_string()))),
     };
     let stdout = child.stdout.take().map(|mut pipe| {
-        crate::core::GoThread::new()
+        std::thread::Builder::new()
             .name("npm-stdout".to_string())
             .spawn(move || {
                 let mut output = Vec::new();
                 let _ = pipe.read_to_end(&mut output);
                 output
             })
+            .expect("failed to spawn npm-stdout thread")
     });
     let stderr = child.stderr.take().map(|mut pipe| {
-        crate::core::GoThread::new()
+        std::thread::Builder::new()
             .name("npm-stderr".to_string())
             .spawn(move || {
                 let _ = std::io::copy(&mut pipe, &mut std::io::sink());
             })
+            .expect("failed to spawn npm-stderr thread")
     });
 
     // Go `watchCtx`: a done ctx kills the command. `canceled` is a Cancel

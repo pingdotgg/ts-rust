@@ -1755,44 +1755,33 @@ impl Server {
     // the `!Send` state. Its result joins the group after it returns, so
     // the group keeps the first error in the same order as Go.
     pub fn run(self: &Rc<Self>, ctx: &Context) -> Result<(), GoError> {
-        let (g, ctx) = gostd::errgroup::with_context(ctx);
+        let (ctx, cancel) = gostd::context::with_cancel(ctx);
         let _ = self.shared.background_ctx.set(ctx.clone());
+        let first_err: Arc<Mutex<Option<GoError>>> = Arc::new(Mutex::new(None));
+        let record_err = |res: Result<(), GoError>| {
+            if let Err(err) = res {
+                let mut slot = lock(&first_err);
+                if slot.is_none() {
+                    *slot = Some(err);
+                    cancel();
+                }
+            }
+        };
 
         let mut w = self.w.borrow_mut().take().expect("lsp: Run called twice");
-        {
-            let shared = self.shared.clone();
-            let ctx = ctx.clone();
-            g.go(move || shared.write_loop(&ctx, &mut *w));
-        }
 
-        // Don't run readLoop in the group, as it blocks on stdin read and cannot be cancelled.
+        // Don't run readLoop in the scope, as it blocks on stdin read and cannot be cancelled.
         // PORT: `None` on the channel is the wake-up of the waiter's
         // `ctx.Done()` case.
         let (read_loop_err_tx, read_loop_err) = sync_channel::<Option<Result<(), GoError>>>(2);
-        {
-            let ctx = ctx.clone();
-            let wake = read_loop_err_tx.clone();
-            g.go(move || {
-                // Go:
-                //	select {
-                //	case <-ctx.Done():
-                //		return ctx.Err()
-                //	case err := <-readLoopErr:
-                //		return err
-                //	}
-                match recv_or_done(&ctx, &wake, &read_loop_err) {
-                    Ok(err) => err,
-                    Err(err) => Err(err),
-                }
-            });
-        }
+        let wake = read_loop_err_tx.clone();
         let mut r = self.r.borrow_mut().take().expect("lsp: Run called twice");
         {
             let shared = self.shared.clone();
             let ctx = ctx.clone();
             // The Go stack size: the read loop decodes the initialize
             // params, whose `LSPAny` values decode one call per level.
-            crate::core::GoThread::new()
+            std::thread::Builder::new()
                 .name("lsp-reader".to_string())
                 .stack_size(crate::gostd::stack::max_stack_size())
                 .spawn(move || {
@@ -1802,13 +1791,42 @@ impl Server {
                         }
                         Err(payload) => go_crash(payload),
                     }
-                });
+                })
+                .expect("failed to spawn lsp-reader thread");
         }
 
-        let dispatch_result = self.dispatch_loop(&ctx);
-        g.go(move || dispatch_result);
+        std::thread::scope(|scope| {
+            let shared = self.shared.clone();
+            let ctx_write = ctx.clone();
+            std::thread::Builder::new()
+                .name("lsp-writer".to_string())
+                .spawn_scoped(scope, move || {
+                    match catch_unwind(AssertUnwindSafe(|| shared.write_loop(&ctx_write, &mut *w))) {
+                        Ok(res) => record_err(res),
+                        Err(payload) => go_crash(payload),
+                    }
+                })
+                .expect("failed to spawn lsp-writer thread");
 
-        if let Err(err) = g.wait() {
+            let ctx_read = ctx.clone();
+            std::thread::Builder::new()
+                .name("lsp-read-wait".to_string())
+                .spawn_scoped(scope, move || {
+                    let res = match recv_or_done(&ctx_read, &wake, &read_loop_err) {
+                        Ok(err) => err,
+                        Err(err) => Err(err),
+                    };
+                    record_err(res);
+                })
+                .expect("failed to spawn lsp-read-wait thread");
+
+            let dispatch_result = self.dispatch_loop(&ctx);
+            record_err(dispatch_result);
+        });
+        cancel();
+
+        let err = lock(&first_err).take();
+        if let Some(err) = err {
             if !errors::is(&err, &errors::EOF) && ctx.err().is_some() {
                 return Err(err);
             }
@@ -4894,7 +4912,7 @@ impl Server {
         {
             let shared = self.shared.clone();
             let session_id = api_session.id();
-            crate::core::GoThread::new()
+            std::thread::Builder::new()
                 .name("api-accept".to_string())
                 .spawn(move || {
                     let accept_result = transport.accept();
@@ -4913,7 +4931,8 @@ impl Server {
                     let ctx = shared.background_ctx();
                     let accepted = ApiAccepted { session_id, rwc };
                     let _ = shared.queue_request(&ctx, QueuedRequest::ApiAccepted(accepted));
-                });
+                })
+                .expect("failed to spawn api-accept thread");
         }
 
         Ok(Some(lsproto::InitializeAPISessionResult {
@@ -5139,7 +5158,7 @@ fn start_api_reader(
     let shared = shared.clone();
     let thread_inbox = inbox.clone();
     // The Go stack size, as the LSP reader thread has.
-    crate::core::GoThread::new()
+    std::thread::Builder::new()
         .name("api-reader".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn(move || {
@@ -5153,7 +5172,8 @@ fn start_api_reader(
                     return;
                 }
             }
-        });
+        })
+        .expect("failed to spawn api-reader thread");
     inbox
 }
 

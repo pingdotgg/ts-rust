@@ -139,7 +139,7 @@ fn main() -> MainResult {
     // each, `max_stack_size`) to unmap, the thread-local destructors or the
     // join. Go runs `runMain` on the main goroutine. A thread that cannot
     // start ends the process as the Go runtime does (`GoThread`).
-    let work = ts_goport::core::GoThread::new()
+    let work = std::thread::Builder::new()
         .name("tsgo".to_string())
         .stack_size(ts_goport::gostd::stack::max_stack_size())
         .spawn(move || {
@@ -152,7 +152,8 @@ fn main() -> MainResult {
             // thread ends the process here: this thread waits for signals.
             let _ = writeln!(std::io::stderr(), "tsgo: work thread failed");
             std::process::exit(EXIT_UNPORTED)
-        });
+        })
+        .expect("failed to spawn tsgo work thread");
     // PERF (startexit1): this thread waits for the signals that end the
     // run (`go_runtime_start`), where a thread of its own did: each thread
     // is a stack, a malloc arena and a teardown at exit in every run.
@@ -489,7 +490,7 @@ fn forward_signals() -> Option<std::sync::mpsc::Sender<rustix::process::Pid>> {
     let mut signals =
         signal_hook::iterator::Signals::new([SIGINT, SIGTERM].into_iter().chain(thrown)).ok()?;
     let (send, receive) = std::sync::mpsc::channel();
-    ts_goport::core::GoThread::new()
+    std::thread::Builder::new()
         .name("forward-signals".to_string())
         .spawn(move || {
             let Ok(pid) = receive.recv() else {
@@ -529,7 +530,8 @@ fn forward_signals() -> Option<std::sync::mpsc::Sender<rustix::process::Pid>> {
                     pause = (pause * 2).min(std::time::Duration::from_millis(8));
                 }
             }
-        });
+        })
+        .expect("failed to spawn forward-signals thread");
     Some(send)
 }
 

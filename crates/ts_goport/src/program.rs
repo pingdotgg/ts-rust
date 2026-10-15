@@ -411,7 +411,7 @@ impl CheckerPool {
         }
         drop(workers);
         if let Some(emit) = emit {
-            threads.extend(emit.stop());
+            emit.stop();
         }
         threads
     }
@@ -501,12 +501,7 @@ impl CheckerPool {
 /// sent. Each thread starts from a `WorkerSeed`, like a checker worker.
 #[cfg(not(target_family = "wasm"))]
 struct EmitPool {
-    queue: std::sync::mpsc::Sender<Job>,
-    threads: Vec<std::thread::JoinHandle<()>>,
-    /// Set by `stop`: when the queue closes, the threads free their
-    /// synthetic nodes. Else they end with the process and leak them, as
-    /// the checker workers do.
-    released: Arc<std::sync::atomic::AtomicBool>,
+    pool: rayon::ThreadPool,
     /// The jobs sent so far (`emit_pool_job_count`).
     jobs: usize,
     /// Each job holds a clone of this token until it ends.
@@ -523,13 +518,15 @@ struct PoolToken(Mutex<Vec<Box<dyn Send>>>);
 
 #[cfg(not(target_family = "wasm"))]
 impl EmitPool {
-    /// Closes the queue and returns the threads. Each thread ends after the
-    /// jobs already sent and frees its synthetic nodes.
-    fn stop(self) -> Vec<std::thread::JoinHandle<()>> {
-        self.released
-            .store(true, std::sync::atomic::Ordering::Release);
-        drop(self.queue);
-        self.threads
+    /// Frees the synthetic nodes on each worker of the pool once the jobs
+    /// already spawned have completed.
+    fn stop(self) {
+        self.pool.broadcast(|_| {
+            free_synthetic_nodes();
+            drop(TABLES.with(|cache| cache.borrow_mut().take()));
+            go_frontend::install_lazy_jsdoc_seed(Default::default());
+            crate::core::set_thread_program(None);
+        });
     }
 }
 
@@ -581,46 +578,36 @@ fn emit_thread_count() -> usize {
     .min(MAX_EMIT_THREADS)
 }
 
-/// Makes the emit pool of the current program with `count` threads.
+/// Makes the emit pool of the current program with `count` threads, backed
+/// by a Rayon work-stealing `ThreadPool`.
 #[cfg(not(target_family = "wasm"))]
 fn create_emit_pool(count: usize) -> EmitPool {
-    let (queue, receiver) = std::sync::mpsc::channel::<Job>();
-    let receiver = Arc::new(Mutex::new(receiver));
-    let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let threads = (0..count)
-        .map(|index| {
-            let seed = WorkerSeed::take();
-            let receiver = Arc::clone(&receiver);
-            let released = Arc::clone(&released);
-            crate::core::GoThread::new()
-                .name(format!("emit-{index}"))
-                .stack_size(crate::gostd::stack::max_stack_size())
-                .spawn(move || {
-                    seed.install();
-                    loop {
-                        // Hold the lock only to take a job.
-                        let job = receiver
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .recv();
-                        let Ok(job) = job else { break };
-                        job();
-                    }
-                    // Like a checker worker (see `create_checkers`): a
-                    // released program frees the synthetic nodes, the end of
-                    // the process leaks them.
-                    if released.load(std::sync::atomic::Ordering::Acquire) {
-                        free_synthetic_nodes();
-                    } else {
-                        forget_synthetic_nodes();
-                    }
-                })
+    let seeds: Mutex<Vec<Option<WorkerSeed>>> =
+        Mutex::new((0..count).map(|_| Some(WorkerSeed::take())).collect());
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(count)
+        .thread_name(|index| format!("emit-{index}"))
+        .stack_size(crate::gostd::stack::max_stack_size())
+        .start_handler(move |index| {
+            if let Some(seed) = seeds
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_mut(index)
+                .and_then(Option::take)
+            {
+                seed.install();
+            }
         })
-        .collect();
+        .exit_handler(|_| {
+            // If `EmitPool::stop` ran, `free_synthetic_nodes()` already
+            // replaced the arena with an empty one; otherwise at process exit
+            // we leak the arena like checker workers do.
+            forget_synthetic_nodes();
+        })
+        .build()
+        .expect("failed to build rayon emit thread pool");
     EmitPool {
-        queue,
-        threads,
-        released,
+        pool,
         jobs: 0,
         token: Arc::default(),
     }
@@ -697,7 +684,7 @@ fn create_dts_twin() -> DtsTwin {
     let (queue, receiver) = std::sync::mpsc::channel::<Job>();
     let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let thread_released = Arc::clone(&released);
-    let thread = crate::core::GoThread::new()
+    let thread = std::thread::Builder::new()
         .name(format!("dts-twin-{index}"))
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn(move || {
@@ -714,7 +701,8 @@ fn create_dts_twin() -> DtsTwin {
             } else {
                 forget_synthetic_nodes();
             }
-        });
+        })
+        .expect("failed to spawn dts-twin thread");
     DtsTwin {
         queue,
         thread,
@@ -794,12 +782,11 @@ pub fn send_emit_pool_jobs<R: Send + 'static>(
             .map(|f| {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let token = Arc::clone(&emit.token);
-                let job: Job = Box::new(move || {
+                emit.pool.spawn_fifo(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
                     let _ = sender.send(result);
                     drop(token);
                 });
-                emit.queue.send(job).expect("emit thread stopped");
                 EmitPoolJob(receiver)
             })
             .collect()
@@ -1949,11 +1936,15 @@ pub(crate) fn note_program_load(root_tasks: usize) -> bool {
     large
 }
 
-/// The cores that this process may run on: Go `GOMAXPROCS`
-/// (`gostd::runtime::gomaxprocs`, read once), so the `GOMAXPROCS` variable
-/// and a cgroup CPU limit size the pools as they size Go's.
+/// The cores that this process may run on (`std::thread::available_parallelism`,
+/// read once).
 pub fn available_cores() -> usize {
-    crate::gostd::runtime::gomaxprocs()
+    static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CORES.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+    })
 }
 
 /// Starts a scoped thread named `name` that runs `f`, for port-only work
@@ -2627,13 +2618,15 @@ fn spawn_bind_chain<'scope, F>(
     queue: &'scope BindQueue,
     sender: std::sync::mpsc::Sender<ParallelBind>,
 ) where
-    F: Fn(std::sync::mpsc::Sender<ParallelBind>, &mut LinkBinders<'scope>) + Sync,
+    F: Fn(std::sync::mpsc::Sender<ParallelBind>, &mut LinkBinders<'scope>) + Sync + 'scope,
 {
     let seed = WorkerSeed::take_unbuilt();
     spawn_bind_thread(scope, move || {
         let mut binders = LinkBinders {
             queue,
             count: threads,
+            #[cfg(test)]
+            on_drop: None,
         };
         seed.install();
         #[cfg(test)]
@@ -2665,6 +2658,8 @@ fn spawn_bind_chain<'scope, F>(
 struct LinkBinders<'a> {
     queue: &'a BindQueue,
     count: usize,
+    #[cfg(test)]
+    on_drop: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl LinkBinders<'_> {
@@ -2689,16 +2684,25 @@ impl Drop for LinkBinders<'_> {
             drop(state);
             self.queue.changed.notify_all();
         }
+        #[cfg(test)]
+        if let Some(on_drop) = self.on_drop.take() {
+            on_drop();
+        }
     }
 }
 
-/// Starts bind thread `f` in `scope`, with the Go stack size.
+/// Starts bind thread `f` in `scope`, with the stack size that a bind needs
+/// (a deep expression in an initializer or a computed property name).
+// PERF (bindonce2): `helper_thread` uses the default 8 MiB stack, and the
+// chain of `spawn_bind_chain` starts one thread per link, so `bind_all` pays
+// only one thread spawn on the loading thread while the chain fans out across
+// cores in parallel.
 fn spawn_bind_thread<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     f: impl FnOnce() + Send + 'scope,
 ) {
-    // Go starts its threads on demand and fails the same way.
-    crate::core::GoThread::new()
+    let _ = std::thread::Builder::new()
+        .name("bind".to_string())
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn_scoped(scope, f);
 }
@@ -3792,12 +3796,13 @@ pub fn spawn_seeded_thread<R: Send + 'static>(
     f: impl FnOnce() -> R + Send + 'static,
 ) -> std::thread::JoinHandle<R> {
     let seed = WorkerSeed::take();
-    crate::core::GoThread::new()
+    std::thread::Builder::new()
         .stack_size(crate::gostd::stack::max_stack_size())
         .spawn(move || {
             seed.install();
             f()
         })
+        .expect("failed to spawn seeded thread")
 }
 
 // Go: compiler/checkerpool.go:309 newCheckerPoolWithTracing (the count)
@@ -3992,7 +3997,7 @@ fn start_checkers(count: usize) -> CheckerPool {
             let seed = WorkerSeed::take();
             #[cfg(all(feature = "jemalloc", target_os = "linux"))]
             let claims = claims.clone();
-            let thread = crate::core::GoThread::new()
+            let thread = std::thread::Builder::new()
                 .name(format!("checker-{index}"))
                 .stack_size(crate::gostd::stack::max_stack_size())
                 .spawn(move || {
@@ -4023,7 +4028,8 @@ fn start_checkers(count: usize) -> CheckerPool {
                         std::mem::forget(WORKER_CHECKER.with(|slot| slot.borrow_mut().take()));
                         forget_synthetic_nodes();
                     }
-                });
+                })
+                .expect("failed to spawn checker thread");
             (sender, thread)
         })
         .unzip();
@@ -6440,18 +6446,6 @@ mod tests {
     // link waited forever for a file that no link takes.
     #[test]
     fn a_bind_chain_link_whose_bind_failed_leaves_the_binders_once() {
-        /// Sends on drop: at the exit of its thread, as a thread-local,
-        /// after the thread's `LinkBinders` dropped.
-        struct SendAtExit(std::sync::mpsc::Sender<()>);
-        impl Drop for SendAtExit {
-            fn drop(&mut self) {
-                let _ = self.0.send(());
-            }
-        }
-        thread_local! {
-            static AT_EXIT: std::cell::RefCell<Option<SendAtExit>> =
-                const { std::cell::RefCell::new(None) };
-        }
         let program = small_program("goport-bind-chain-failed");
         let (done, ended) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -6468,6 +6462,10 @@ mod tests {
             // fails file 1 and leaves the count, and its file 3 waits for the
             // counts of file 0, which no link can take.
             let run = |_, link: &mut LinkBinders<'_>| {
+                let exited = exited.clone();
+                link.on_drop = Some(Box::new(move || {
+                    let _ = exited.send(());
+                }));
                 run_bind_link(
                     &queue,
                     &order,
@@ -6480,8 +6478,6 @@ mod tests {
                     },
                     |i, _| {
                         if i == 2 {
-                            let at_exit = SendAtExit(exited.clone());
-                            AT_EXIT.with(|cell| *cell.borrow_mut() = Some(at_exit));
                             panic!("test: a bind chain link panics after a failed bind");
                         }
                     },
