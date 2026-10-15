@@ -22,6 +22,7 @@
 //! `proc_exit`: 2 for a Go panic, 70 for any other.
 
 use std::cell::RefCell;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -37,6 +38,20 @@ use ts_goport::scanner_util::go_string_from_utf8;
 /// The current directory of the run that installed the OS override (see
 /// `run`). Every run of the instance must ask for it.
 static OVERRIDE_CWD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+// E1: the request hash, the host world hash and the reply of the last run
+// that used the whole pipeline. An identical request (the same bytes: cwd,
+// flags and args) replayed while every file the parse cache knows serves
+// the content it had (`multirun::file_world_fingerprint` — the module's
+// only view of the files is what its loads read and hashed, and the held
+// flow's config text is a function of its file set) returns the stored
+// status and reply with no version, no check and no marshal. A changed
+// guest reads differently, so its rerun re-checks. Only a
+// `FLAG_DIAGNOSTICS_JSON` run is stored: its reply carries the whole
+// answer, while a text run would also have to replay stdout.
+thread_local! {
+    static FINGERPRINT: RefCell<Option<(u64, u64, i32, String)>> = const { RefCell::new(None) };
+}
 
 pub mod host;
 
@@ -100,6 +115,30 @@ pub fn run(request: &str) -> (i32, String) {
     if flags & FLAG_DIAGNOSTICS_JSON != 0 && is_build(&args) {
         eprintln!("error: diagnostics as JSON are not supported with --build");
         return (1, String::new());
+    }
+    // E1: an identical request over an unchanged host file system replays
+    // the last reply (see `FINGERPRINT`). The hash covers the whole request;
+    // the world hash is every path the parse cache knows, read and hashed
+    // now (bundled lib files hash their path only), so a changed, deleted
+    // or newly written guest never hits.
+    let mut fingerprint = DefaultHasher::new();
+    request.hash(&mut fingerprint);
+    let request_hash = fingerprint.finish();
+    let world_hash = if flags & FLAG_DIAGNOSTICS_JSON != 0 {
+        ts_goport::program::multirun::file_world_fingerprint(&host::HostFs::new())
+    } else {
+        0
+    };
+    if flags & FLAG_DIAGNOSTICS_JSON != 0
+        && let Some((seen, world, status, reply)) = FINGERPRINT.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map(|(h, w, s, r)| (*h, *w, *s, r.clone()))
+        })
+        && seen == request_hash
+        && world == world_hash
+    {
+        return (status, reply);
     }
 
     // The case-insensitivity of the host file system is read once per
@@ -175,6 +214,16 @@ pub fn run(request: &str) -> (i32, String) {
     let reply = diagnostics.map_or_else(String::new, |diagnostics| {
         format!("[{}]", diagnostics.take().join(","))
     });
+    // E1: remember the answer of this exact request over this exact host
+    // state (see `FINGERPRINT`). The world is hashed again: the run may
+    // have written files (an emit), and the replay must not serve a reply
+    // from before them.
+    if flags & FLAG_DIAGNOSTICS_JSON != 0 {
+        let world = ts_goport::program::multirun::file_world_fingerprint(&host::HostFs::new());
+        FINGERPRINT.with(|cell| {
+            *cell.borrow_mut() = Some((request_hash, world, status, reply.clone()));
+        });
+    }
     (status, reply)
 }
 
@@ -507,5 +556,100 @@ mod tests {
         assert_eq!(status, 2, "{reply}");
         assert!(reply.contains(r#""fileName":"/p/b.ts""#), "{reply}");
         assert!(reply.contains(r#""code":2322"#), "{reply}");
+    }
+
+    // E1 + the semantic-diagnostic reuse: the reply of a run whose request
+    // bytes are the same as the run before must still be THIS run's — the
+    // host file system changed under the identical request, so neither the
+    // replay nor the per-file cache may serve the old answer.
+    #[test]
+    fn identical_request_over_a_changed_guest_rereports() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#.to_string(),
+            )
+        };
+        let red = "const n: number = 'not a number';\nconsole.log(n);\n";
+        host::test_host::set_files([tsconfig(), ("/p/a.ts".to_string(), red.to_string())]);
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        // Same request bytes, new text: the world hash changes with the
+        // content, so the replay must miss and the fresh check must report
+        // clean.
+        host::test_host::set_files([
+            tsconfig(),
+            (
+                "/p/a.ts".to_string(),
+                "export const a: number = 1;\n".to_string(),
+            ),
+        ]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        // And back to red (the parse and the cached per-file lists are for
+        // the old parse): the fresh check must report the error again.
+        host::test_host::set_files([tsconfig(), ("/p/a.ts".to_string(), red.to_string())]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+    }
+
+    // A script guest whose top-level shape is the same (the same annotated
+    // function, a new body) re-checks only itself; a script whose top-level
+    // shape changed re-checks everything. Both replies must be the fresh
+    // check's.
+    #[test]
+    fn script_body_change_rereports_and_shape_change_rechecks() {
+        const HEAD: &str = "function slugify(input: string): string {\n";
+        const FOOT: &str = "}\ntest('a', () => { expect(slugify('A B')).toEqual('a-b'); });\n";
+        const GLOBALS: &str = "declare function test(name: string, fn: () => void): void;\ndeclare function expect(actual: unknown): { toEqual(expected: unknown): void; };\n";
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts","globals.d.ts"]}"#.to_string(),
+            )
+        };
+        let broken =
+            format!("{HEAD}  const slug: number = input.toLowerCase();\n  return slug;\n{FOOT}");
+        let fixed =
+            format!("{HEAD}  return input.trim().toLowerCase().replace(/\\s+/g, \"-\");\n{FOOT}");
+        host::test_host::set_files([
+            tsconfig(),
+            ("/p/globals.d.ts".to_string(), GLOBALS.to_string()),
+            ("/p/a.ts".to_string(), broken),
+        ]);
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/a.ts""#), "{reply}");
+        // The body edit keeps the signature: the guest is re-checked and
+        // the reply is the fixed one.
+        host::test_host::set_files([
+            tsconfig(),
+            ("/p/globals.d.ts".to_string(), GLOBALS.to_string()),
+            ("/p/a.ts".to_string(), fixed),
+        ]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        // A new top-level declaration changes the global scope: the whole
+        // program re-checks, and the duplicate it makes is reported on both
+        // sides that the full check reports (here: the globals side keeps
+        // its own diagnostic).
+        host::test_host::set_files([
+            tsconfig(),
+            ("/p/globals.d.ts".to_string(), GLOBALS.to_string()),
+            (
+                "/p/a.ts".to_string(),
+                "const test = 5;\nconsole.log(test);\n".to_string(),
+            ),
+        ]);
+        let (status, _reply) = run(&request());
+        assert_eq!(status, 2);
     }
 }

@@ -4611,6 +4611,13 @@ pub fn get_bind_diagnostics(source_file: Node) -> Vec<Diagnostic> {
 // PORT: the compile path has no context; Go tsc passes context.Background()
 // (execute/tsc/emit.go:75). The same holds for the two functions below.
 pub fn get_semantic_diagnostics(source_file: Node) -> Vec<Diagnostic> {
+    // The whole-program diagnostics of a multi-run process (`program::multirun`):
+    // the reuse set of the run skips the files whose lists the cache returns
+    // (empty while the cache is cold or after a rule cleared it: the call
+    // checks everything and fills the cache).
+    if source_file.is_nil() && multirun::is_enabled() {
+        return multirun::semantic_diagnostics_with_reuse();
+    }
     collect_checker_diagnostics_with(source_file, |c, f| {
         get_semantic_diagnostics_with_checker(&context::background(), c, f)
     })
