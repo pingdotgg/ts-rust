@@ -12,7 +12,8 @@ publish = false
 path = "../../src/goport_core_root.rs"
 
 [dependencies]
-goport_util = { path = "../goport_util" }
+# No default features: `lib-snapshot` below turns its part on.
+goport_util = { path = "../goport_util", default-features = false }
 rustc-hash = "=2.1.2"
 indexmap = "=2.14.0"
 memchr = "=2.8.2"
@@ -55,14 +56,20 @@ same-file = "=1.0.6"
 nix = { version = "=0.31.3", default-features = false, features = ["process", "signal"] }
 
 [features]
-# No defaults: ts_goport chooses the global allocator (its `jemalloc`
+# No `jemalloc`: ts_goport chooses the global allocator (its `jemalloc`
 # feature turns on this one), so the two crates cannot disagree about it.
-default = []
+default = ["lib-snapshot", "backtrace"]
 # The binaries' global allocator is jemalloc: thread arenas
 # (`tikv-jemalloc-ctl`), `jemalloc_layout`, and the jemalloc thread budget
 # and glibc tunables in program.rs. Only ts_goport's `jemalloc` turns it on.
 jemalloc = ["dep:tikv-jemalloc-ctl"]
 noembed = ["goport_util/noembed"]
+# The embedded lib parse and bind snapshots (binder/lib_snapshot.rs,
+# frontend/parser/lib_parse_snapshot.rs). Off (lust dev builds,
+# .lust.toml), every lib parses and binds live, with the same output.
+lib-snapshot = ["goport_util/lib-snapshot"]
+# Real backtraces (src/backtrace.rs in goport_util).
+backtrace = ["goport_util/backtrace"]
 
 [lints]
 workspace = true

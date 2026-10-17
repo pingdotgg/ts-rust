@@ -69,7 +69,12 @@ use std::sync::OnceLock;
 use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 /// The embedded snapshot, written by `generate_lib_parse_snapshot`.
+#[cfg(feature = "lib-snapshot")]
 static BLOB: &[u8] = include_bytes!("lib_parse.bin");
+/// Without `lib-snapshot` (lust dev builds): no blob, so `load` misses and
+/// every lib parses live, with the same output.
+#[cfg(not(feature = "lib-snapshot"))]
+static BLOB: &[u8] = &[];
 
 /// The first bytes of `BLOB`.
 const MAGIC: &[u8; 8] = b"TSLIBPRS";
@@ -82,76 +87,88 @@ const SHARED_NAME: u8 = u8::MAX;
 // Key
 // ──────────────────────────────────────────────────────────────────────
 
-/// A compile-time hash of the sources whose change can change the parse
-/// output or the blob format: the parser, the scanner, the node factory,
-/// the store and node reads, `core.rs` (names), the flag values, the lib
-/// name ids, astdata, the blob helpers of `lib_snapshot.rs` and this file.
-/// After a change there, every key misses until the blob is written again.
-// PORT: the parser also calls helpers in other files (ast utilities, for
-// example). `snapshot_matches_live_parse` finds a blob that such a change
-// made stale.
-const SOURCES_HASH: u64 = {
-    let hashes = [
-        SOURCE_PARSER_P1,
-        SOURCE_PARSER_P2,
-        SOURCE_PARSER_P3,
-        SOURCE_PARSER_P4,
-        SOURCE_PARSER_P5,
-        SOURCE_JSDOC,
-        SOURCE_REPARSER,
-        SOURCE_REFERENCES,
-        SOURCE_SOURCE_FILE,
-        SOURCE_PARSER_UTILITIES,
-        SOURCE_SCANNER_P1,
-        SOURCE_SCANNER_P2,
-        SOURCE_COMMENT_RANGES,
-        SOURCE_FACTORY,
-        SOURCE_FACTORY_P2,
-        SOURCE_STORE,
-        SOURCE_NODE,
-        SOURCE_CORE,
-        SOURCE_FLAGS,
-        SOURCE_LIB_NAMES,
-        SOURCE_ASTDATA,
-        SOURCE_ASTDATA_MOD,
-        SOURCE_LIB_SNAPSHOT,
-        SOURCE_SNAPSHOT,
-    ];
-    let mut hash = 0;
-    let mut i = 0;
-    while i < hashes.len() {
-        hash = mix(hash ^ hashes[i]);
-        i += 1;
-    }
-    hash
-};
+#[cfg(feature = "lib-snapshot")]
+use sources::SOURCES_HASH;
+/// Without `lib-snapshot` (lust dev builds) no source is hashed: the blob is
+/// empty, so no key is read. A hash const would change on each edit there.
+#[cfg(not(feature = "lib-snapshot"))]
+const SOURCES_HASH: u64 = 0;
 
-// One item per file, so each compile-time evaluation stays short. The
-// source text is only read at compile time and is not in the binary.
-const SOURCE_PARSER_P1: u64 = const_hash(include_bytes!("parser_p1.rs"));
-const SOURCE_PARSER_P2: u64 = const_hash(include_bytes!("parser_p2.rs"));
-const SOURCE_PARSER_P3: u64 = const_hash(include_bytes!("parser_p3.rs"));
-const SOURCE_PARSER_P4: u64 = const_hash(include_bytes!("parser_p4.rs"));
-const SOURCE_PARSER_P5: u64 = const_hash(include_bytes!("parser_p5.rs"));
-const SOURCE_JSDOC: u64 = const_hash(include_bytes!("jsdoc.rs"));
-const SOURCE_REPARSER: u64 = const_hash(include_bytes!("reparser.rs"));
-const SOURCE_REFERENCES: u64 = const_hash(include_bytes!("references.rs"));
-const SOURCE_SOURCE_FILE: u64 = const_hash(include_bytes!("source_file.rs"));
-const SOURCE_PARSER_UTILITIES: u64 = const_hash(include_bytes!("utilities.rs"));
-const SOURCE_SCANNER_P1: u64 = const_hash(include_bytes!("../scanner/scanner_p1.rs"));
-const SOURCE_SCANNER_P2: u64 = const_hash(include_bytes!("../scanner/scanner_p2.rs"));
-const SOURCE_COMMENT_RANGES: u64 = const_hash(include_bytes!("../scanner/comment_ranges.rs"));
-const SOURCE_FACTORY: u64 = const_hash(include_bytes!("../../ast/factory.rs"));
-const SOURCE_FACTORY_P2: u64 = const_hash(include_bytes!("../ast_factory_p2.rs"));
-const SOURCE_STORE: u64 = const_hash(include_bytes!("../../ast/store.rs"));
-const SOURCE_NODE: u64 = const_hash(include_bytes!("../../ast/node.rs"));
-const SOURCE_CORE: u64 = const_hash(include_bytes!("../../core.rs"));
-const SOURCE_FLAGS: u64 = const_hash(include_bytes!("../../flags.rs"));
-const SOURCE_LIB_NAMES: u64 = const_hash(include_bytes!("../../core/lib_names.rs"));
-const SOURCE_ASTDATA: u64 = const_hash(include_bytes!("../../astdata/ast_generated.rs"));
-const SOURCE_ASTDATA_MOD: u64 = const_hash(include_bytes!("../../astdata/mod.rs"));
-const SOURCE_LIB_SNAPSHOT: u64 = const_hash(include_bytes!("../../binder/lib_snapshot.rs"));
-const SOURCE_SNAPSHOT: u64 = const_hash(include_bytes!("lib_parse_snapshot.rs"));
+#[cfg(feature = "lib-snapshot")]
+mod sources {
+    use super::{const_hash, mix};
+
+    /// A compile-time hash of the sources whose change can change the parse
+    /// output or the blob format: the parser, the scanner, the node factory,
+    /// the store and node reads, `core.rs` (names), the flag values, the lib
+    /// name ids, astdata, the blob helpers of `lib_snapshot.rs` and this file.
+    /// After a change there, every key misses until the blob is written again.
+    // PORT: the parser also calls helpers in other files (ast utilities, for
+    // example). `snapshot_matches_live_parse` finds a blob that such a change
+    // made stale.
+    pub(super) const SOURCES_HASH: u64 = {
+        let hashes = [
+            SOURCE_PARSER_P1,
+            SOURCE_PARSER_P2,
+            SOURCE_PARSER_P3,
+            SOURCE_PARSER_P4,
+            SOURCE_PARSER_P5,
+            SOURCE_JSDOC,
+            SOURCE_REPARSER,
+            SOURCE_REFERENCES,
+            SOURCE_SOURCE_FILE,
+            SOURCE_PARSER_UTILITIES,
+            SOURCE_SCANNER_P1,
+            SOURCE_SCANNER_P2,
+            SOURCE_COMMENT_RANGES,
+            SOURCE_FACTORY,
+            SOURCE_FACTORY_P2,
+            SOURCE_STORE,
+            SOURCE_NODE,
+            SOURCE_CORE,
+            SOURCE_FLAGS,
+            SOURCE_LIB_NAMES,
+            SOURCE_ASTDATA,
+            SOURCE_ASTDATA_MOD,
+            SOURCE_LIB_SNAPSHOT,
+            SOURCE_SNAPSHOT,
+        ];
+        let mut hash = 0;
+        let mut i = 0;
+        while i < hashes.len() {
+            hash = mix(hash ^ hashes[i]);
+            i += 1;
+        }
+        hash
+    };
+
+    // One item per file, so each compile-time evaluation stays short. The
+    // source text is only read at compile time and is not in the binary.
+    const SOURCE_PARSER_P1: u64 = const_hash(include_bytes!("parser_p1.rs"));
+    const SOURCE_PARSER_P2: u64 = const_hash(include_bytes!("parser_p2.rs"));
+    const SOURCE_PARSER_P3: u64 = const_hash(include_bytes!("parser_p3.rs"));
+    const SOURCE_PARSER_P4: u64 = const_hash(include_bytes!("parser_p4.rs"));
+    const SOURCE_PARSER_P5: u64 = const_hash(include_bytes!("parser_p5.rs"));
+    const SOURCE_JSDOC: u64 = const_hash(include_bytes!("jsdoc.rs"));
+    const SOURCE_REPARSER: u64 = const_hash(include_bytes!("reparser.rs"));
+    const SOURCE_REFERENCES: u64 = const_hash(include_bytes!("references.rs"));
+    const SOURCE_SOURCE_FILE: u64 = const_hash(include_bytes!("source_file.rs"));
+    const SOURCE_PARSER_UTILITIES: u64 = const_hash(include_bytes!("utilities.rs"));
+    const SOURCE_SCANNER_P1: u64 = const_hash(include_bytes!("../scanner/scanner_p1.rs"));
+    const SOURCE_SCANNER_P2: u64 = const_hash(include_bytes!("../scanner/scanner_p2.rs"));
+    const SOURCE_COMMENT_RANGES: u64 = const_hash(include_bytes!("../scanner/comment_ranges.rs"));
+    const SOURCE_FACTORY: u64 = const_hash(include_bytes!("../../ast/factory.rs"));
+    const SOURCE_FACTORY_P2: u64 = const_hash(include_bytes!("../ast_factory_p2.rs"));
+    const SOURCE_STORE: u64 = const_hash(include_bytes!("../../ast/store.rs"));
+    const SOURCE_NODE: u64 = const_hash(include_bytes!("../../ast/node.rs"));
+    const SOURCE_CORE: u64 = const_hash(include_bytes!("../../core.rs"));
+    const SOURCE_FLAGS: u64 = const_hash(include_bytes!("../../flags.rs"));
+    const SOURCE_LIB_NAMES: u64 = const_hash(include_bytes!("../../core/lib_names.rs"));
+    const SOURCE_ASTDATA: u64 = const_hash(include_bytes!("../../astdata/ast_generated.rs"));
+    const SOURCE_ASTDATA_MOD: u64 = const_hash(include_bytes!("../../astdata/mod.rs"));
+    const SOURCE_LIB_SNAPSHOT: u64 = const_hash(include_bytes!("../../binder/lib_snapshot.rs"));
+    const SOURCE_SNAPSHOT: u64 = const_hash(include_bytes!("lib_parse_snapshot.rs"));
+}
 
 /// What must match for a lib file to load its section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1851,6 +1868,7 @@ mod tests {
     /// Writes `lib_parse.bin` from a live parse of each lib, and prints
     /// the sizes and times (times mean something only in an optimized test
     /// build).
+    #[cfg(feature = "lib-snapshot")]
     #[test]
     #[ignore = "writes src/frontend/parser/lib_parse.bin"]
     fn generate_lib_parse_snapshot() {
@@ -1908,6 +1926,7 @@ mod tests {
     /// parse of it now, and `parse_source_file` and
     /// `parse_source_file_detached` load it into a store that equals the
     /// live one, with no change to the state of the thread.
+    #[cfg(feature = "lib-snapshot")]
     #[test]
     fn snapshot_matches_live_parse() {
         for lib in parse_snapshot_libs() {

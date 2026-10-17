@@ -23,6 +23,7 @@
 )]
 
 pub mod astdata;
+pub mod backtrace;
 #[path = "gopanic.rs"]
 pub mod core;
 pub mod diag;

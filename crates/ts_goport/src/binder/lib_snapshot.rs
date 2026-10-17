@@ -50,7 +50,12 @@ use std::sync::OnceLock;
 use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 /// The embedded snapshot, written by `generate_lib_bind_snapshot`.
+#[cfg(feature = "lib-snapshot")]
 static BLOB: &[u8] = include_bytes!("lib_bind.bin");
+/// Without `lib-snapshot` (lust dev builds): no blob, so `load` misses and
+/// every lib binds live, with the same output.
+#[cfg(not(feature = "lib-snapshot"))]
+static BLOB: &[u8] = &[];
 
 /// The first bytes of `BLOB`.
 const MAGIC: &[u8; 8] = b"TSLIBBND";
@@ -101,38 +106,50 @@ const D_SKIPPED_ON_NO_EMIT: u8 = 4;
 // Key
 // ──────────────────────────────────────────────────────────────────────
 
-/// A compile-time hash of the sources whose change can change the bind
-/// output or the blob format: the binder, `core.rs` (arena, node data,
-/// names), the flag values, the lib name ids and this file. After a change
-/// there, every key misses until the blob is written again.
-const SOURCES_HASH: u64 = {
-    let hashes = [
-        SOURCE_BINDER_P1,
-        SOURCE_BINDER_P2,
-        SOURCE_BINDER_P3,
-        SOURCE_CORE,
-        SOURCE_FLAGS,
-        SOURCE_LIB_NAMES,
-        SOURCE_SNAPSHOT,
-    ];
-    let mut hash = 0;
-    let mut i = 0;
-    while i < hashes.len() {
-        hash = mix(hash ^ hashes[i]);
-        i += 1;
-    }
-    hash
-};
+#[cfg(feature = "lib-snapshot")]
+use sources::SOURCES_HASH;
+/// Without `lib-snapshot` (lust dev builds) no source is hashed: the blob is
+/// empty, so no key is read. A hash const would change on each edit there.
+#[cfg(not(feature = "lib-snapshot"))]
+const SOURCES_HASH: u64 = 0;
 
-// One item per file, so each compile-time evaluation stays short. The
-// source text is only read at compile time and is not in the binary.
-const SOURCE_BINDER_P1: u64 = const_hash(include_bytes!("binder_p1.rs"));
-const SOURCE_BINDER_P2: u64 = const_hash(include_bytes!("binder_p2.rs"));
-const SOURCE_BINDER_P3: u64 = const_hash(include_bytes!("binder_p3.rs"));
-const SOURCE_CORE: u64 = const_hash(include_bytes!("../core.rs"));
-const SOURCE_FLAGS: u64 = const_hash(include_bytes!("../flags.rs"));
-const SOURCE_LIB_NAMES: u64 = const_hash(include_bytes!("../core/lib_names.rs"));
-const SOURCE_SNAPSHOT: u64 = const_hash(include_bytes!("lib_snapshot.rs"));
+#[cfg(feature = "lib-snapshot")]
+mod sources {
+    use super::{const_hash, mix};
+
+    /// A compile-time hash of the sources whose change can change the bind
+    /// output or the blob format: the binder, `core.rs` (arena, node data,
+    /// names), the flag values, the lib name ids and this file. After a change
+    /// there, every key misses until the blob is written again.
+    pub(super) const SOURCES_HASH: u64 = {
+        let hashes = [
+            SOURCE_BINDER_P1,
+            SOURCE_BINDER_P2,
+            SOURCE_BINDER_P3,
+            SOURCE_CORE,
+            SOURCE_FLAGS,
+            SOURCE_LIB_NAMES,
+            SOURCE_SNAPSHOT,
+        ];
+        let mut hash = 0;
+        let mut i = 0;
+        while i < hashes.len() {
+            hash = mix(hash ^ hashes[i]);
+            i += 1;
+        }
+        hash
+    };
+
+    // One item per file, so each compile-time evaluation stays short. The
+    // source text is only read at compile time and is not in the binary.
+    const SOURCE_BINDER_P1: u64 = const_hash(include_bytes!("binder_p1.rs"));
+    const SOURCE_BINDER_P2: u64 = const_hash(include_bytes!("binder_p2.rs"));
+    const SOURCE_BINDER_P3: u64 = const_hash(include_bytes!("binder_p3.rs"));
+    const SOURCE_CORE: u64 = const_hash(include_bytes!("../core.rs"));
+    const SOURCE_FLAGS: u64 = const_hash(include_bytes!("../flags.rs"));
+    const SOURCE_LIB_NAMES: u64 = const_hash(include_bytes!("../core/lib_names.rs"));
+    const SOURCE_SNAPSHOT: u64 = const_hash(include_bytes!("lib_snapshot.rs"));
+}
 
 /// `SOURCES_HASH` and the text part of the keys (`SnapshotKey::text_const`)
 /// use the compile-time hash of `frontend/bundled.rs`. The lib parse
@@ -1172,7 +1189,8 @@ pub(crate) fn lib_text(name: &str) -> Option<&'static str> {
     })
 }
 
-#[cfg(test)]
+// The blob tests need the blob (`lib-snapshot`).
+#[cfg(all(test, feature = "lib-snapshot"))]
 mod tests {
     use super::*;
 
