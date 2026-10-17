@@ -820,6 +820,19 @@ impl BuildTask {
         crate::program::send_checker_barrier(signal)
     }
 
+    /// PORT: not in Go (`--extendedDiagnostics`). Adds `wait`, the time that
+    /// the checkers ran the task's started check and emit after
+    /// `compile_and_emit_start`, to the check time of the statistics. The
+    /// orchestrator waits for them (`build_all_tasks`) before
+    /// `build_project_finish`, so `EmitFilesAndReportErrors` would find the
+    /// check done and time no wait. The wait covers the early emit of the
+    /// checkers too.
+    pub fn add_compile_wait(&self, wait: std::time::Duration) {
+        if let Some(compile) = &self.compile {
+            compile.incremental_program.add_started_check_time(wait);
+        }
+    }
+
     // Go: build/buildtask.go:147 (*BuildTask).buildProject, from the emit
     // of `compileAndEmit` on (see `build_project_start`).
     // PORT: a `go_panic` here (a bad diagnostic of a `.tsbuildinfo` panics

@@ -257,6 +257,14 @@ impl Program {
         self.started_check_time.replace(Duration::ZERO)
     }
 
+    /// PORT: not in Go. Adds `wait` to the time that `take_started_check_time`
+    /// takes (`tsc -b`: the orchestrator waits for the started check before
+    /// the emit call, see `BuildTask::add_compile_wait`).
+    pub fn add_started_check_time(&self, wait: Duration) {
+        self.started_check_time
+            .set(self.started_check_time.get() + wait);
+    }
+
     // PORT: testing. Go `testingData.SemanticDiagnosticsPerFile.Load(path)`,
     // as the entry identity (see `TestingData`).
     #[must_use]

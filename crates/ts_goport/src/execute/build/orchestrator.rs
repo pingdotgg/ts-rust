@@ -73,7 +73,7 @@ use crate::gostd::Context;
 use crate::execute::tsc::compile::CommandLineTesting;
 use std::collections::VecDeque;
 use std::sync::{Arc, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 // Go: build/orchestrator.go:27 Options
 pub struct Options {
@@ -923,10 +923,28 @@ impl Orchestrator {
         // holds the compiling tasks whose signals have all arrived, in the
         // order their last signal arrived: the order in which their checks
         // and emits ended.
-        let (ready, ready_calls) = std::sync::mpsc::channel::<usize>();
+        // PORT: not in Go (`--extendedDiagnostics`). `compile_wait` is how
+        // long each task's check and emit ran after the task started them:
+        // from `compile_started` to the latest `ReadySignal` instant. The
+        // task adds it to its check time (`BuildTask::add_compile_wait`),
+        // because `EmitFilesAndReportErrors` finds the check done and waits
+        // for nothing.
+        let (ready, ready_calls) = std::sync::mpsc::channel::<(usize, Instant)>();
         let mut signals = vec![0usize; paths.len()];
         let mut compiled = VecDeque::new();
-        fn signal_arrived(signals: &mut [usize], compiled: &mut VecDeque<usize>, index: usize) {
+        let mut compile_started = vec![None::<Instant>; paths.len()];
+        let mut compile_wait = vec![Duration::ZERO; paths.len()];
+        fn signal_arrived(
+            signals: &mut [usize],
+            compiled: &mut VecDeque<usize>,
+            compile_started: &[Option<Instant>],
+            compile_wait: &mut [Duration],
+            (index, at): (usize, Instant),
+        ) {
+            if let Some(started) = compile_started[index] {
+                let wait = at.saturating_duration_since(started);
+                compile_wait[index] = compile_wait[index].max(wait);
+            }
             signals[index] -= 1;
             if signals[index] == 0 {
                 compiled.push_back(index);
@@ -989,6 +1007,7 @@ impl Orchestrator {
                         index,
                         ready: ready.clone(),
                     });
+                    compile_started[index] = Some(Instant::now());
                     if signals[index] == 0 {
                         compiled.push_back(index);
                     }
@@ -1026,20 +1045,33 @@ impl Orchestrator {
             // When no task can finish yet, this waits for a signal, and frees
             // a kept released program first.
             let index = loop {
-                while let Ok(index) = ready_calls.try_recv() {
-                    signal_arrived(&mut signals, &mut compiled, index);
+                while let Ok(signal) = ready_calls.try_recv() {
+                    signal_arrived(
+                        &mut signals,
+                        &mut compiled,
+                        &compile_started,
+                        &mut compile_wait,
+                        signal,
+                    );
                 }
                 let can_finish = |&index: &usize| !in_build_order || index == next_report;
                 if let Some(at) = compiled.iter().position(can_finish) {
                     break compiled.remove(at).expect("the position is in the queue");
                 }
                 if !self.free_released() {
-                    let index = ready_calls.recv().expect("this thread keeps a sender");
-                    signal_arrived(&mut signals, &mut compiled, index);
+                    let signal = ready_calls.recv().expect("this thread keeps a sender");
+                    signal_arrived(
+                        &mut signals,
+                        &mut compiled,
+                        &compile_started,
+                        &mut compile_wait,
+                        signal,
+                    );
                 }
             };
             let task = self.get_task(&paths[index]);
             let mut task = task.borrow_mut();
+            task.add_compile_wait(compile_wait[index]);
             task.build_project_finish(self, &paths[index]);
             states[index] = State::Done;
             self.task_built(&mut task);
@@ -1418,12 +1450,12 @@ const MAX_KEPT_RELEASED: usize = 4;
 /// drops (see `build_all_tasks`).
 struct ReadySignal {
     index: usize,
-    ready: std::sync::mpsc::Sender<usize>,
+    ready: std::sync::mpsc::Sender<(usize, Instant)>,
 }
 
 impl Drop for ReadySignal {
     fn drop(&mut self) {
-        let _ = self.ready.send(self.index);
+        let _ = self.ready.send((self.index, Instant::now()));
     }
 }
 
