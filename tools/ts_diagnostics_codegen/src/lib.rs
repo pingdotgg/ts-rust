@@ -8,7 +8,9 @@ use std::{
     path::Path,
 };
 
-use serde::Deserialize;
+use json::{FromJson, Value};
+
+mod json;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Category {
@@ -40,17 +42,29 @@ pub struct Entry {
     pub reports_deprecated: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct JsonEntry {
     category: String,
     code: u32,
-    #[serde(default)]
     reports_unnecessary: bool,
-    #[serde(default)]
     reports_deprecated: bool,
-    #[serde(default, rename = "elidedInCompatabilityPyramid")]
     elided_in_compatibility_pyramid: bool,
+}
+
+/// Reads an entry with the rules of the serde derive it replaces: camelCase
+/// keys, `false` for a missing flag, and unknown keys ignored.
+impl FromJson for JsonEntry {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            category: fields.required("category")?,
+            code: fields.required("code")?,
+            reports_unnecessary: fields.optional("reportsUnnecessary")?,
+            reports_deprecated: fields.optional("reportsDeprecated")?,
+            // TypeScript spells the key this way.
+            elided_in_compatibility_pyramid: fields.optional("elidedInCompatabilityPyramid")?,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -77,8 +91,12 @@ pub fn read_json_catalog(paths: &[impl AsRef<Path>]) -> Result<Vec<Entry>, Gener
         let source = fs::read_to_string(path).map_err(|error| {
             GenerateError(format!("failed to read {}: {error}", path.display()))
         })?;
-        let input: BTreeMap<String, JsonEntry> =
-            serde_json::from_str(&source).map_err(|error| {
+        let input = json::parse(&source)
+            .and_then(|value| {
+                BTreeMap::<String, JsonEntry>::from_json(&value)
+                    .map_err(|error| format!("${error}"))
+            })
+            .map_err(|error| {
                 GenerateError(format!("failed to parse {}: {error}", path.display()))
             })?;
         messages.extend(
@@ -393,7 +411,8 @@ fn parse_quoted_field(line: &str, prefix: &str) -> Result<String, GenerateError>
         }
     }
     let literal = &tail[..end.ok_or_else(|| GenerateError("unterminated string field".into()))?];
-    serde_json::from_str(literal)
+    json::parse(literal)
+        .and_then(|value| String::from_json(&value).map_err(|error| format!("${error}")))
         .map_err(|error| GenerateError(format!("invalid generated string {literal:?}: {error}")))
 }
 

@@ -4,132 +4,98 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use serde::Deserialize;
+use json::{FromJson, Value, untagged};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct Schema {
     kinds: Kinds,
-    #[serde(default)]
     bases: BTreeMap<String, BaseDef>,
-    #[serde(default)]
     nodes: Nodes,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct Kinds {
     elements: Vec<KindElement>,
     markers: Vec<KindMarker>,
-    #[serde(default)]
     aliases: BTreeMap<String, KindAlias>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 struct BaseDef {
-    #[serde(default)]
     extends: Vec<String>,
-    #[serde(default)]
     fields: BTreeMap<String, FieldDef>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default)]
 struct Nodes {
     definitions: BTreeMap<String, NodeDef>,
     aliases: BTreeMap<String, NodeAlias>,
-    #[serde(default)]
     list_aliases: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum NodeAlias {
     Base { base: String },
     Members(Vec<String>),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 #[allow(dead_code)]
 struct NodeDef {
-    #[serde(default)]
     kind: Option<StringOrList>,
     extends: Vec<String>,
-    #[serde(default)]
     members: Vec<MemberDef>,
-    #[serde(default)]
     type_parameters: Vec<TypeParameterDef>,
-    #[serde(default)]
     instantiation_aliases: BTreeMap<String, String>,
-    #[serde(default)]
     hand_written: bool,
-    #[serde(default)]
     hand_written_visitor: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 #[allow(dead_code)]
 struct TypeParameterDef {
     name: String,
     constraint: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 #[allow(dead_code, clippy::struct_excessive_bools)] // Mirrors boolean schema attributes.
 struct MemberDef {
     name: String,
-    #[serde(default)]
     r#type: Option<StringOrList>,
-    #[serde(default)]
     inherited: bool,
-    #[serde(default)]
     optional: Option<bool>,
-    #[serde(default)]
     list: Option<ListKind>,
-    #[serde(default)]
     go_only: bool,
-    #[serde(default)]
     no_go: bool,
-    #[serde(default)]
     no_factory: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 #[allow(dead_code, clippy::struct_excessive_bools)] // Mirrors boolean schema attributes.
 struct FieldDef {
     r#type: StringOrList,
-    #[serde(default)]
     optional: bool,
-    #[serde(default)]
     list: Option<ListKind>,
-    #[serde(default)]
     go_only: bool,
-    #[serde(default)]
     no_go: bool,
-    #[serde(default)]
     no_factory: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug)]
 enum StringOrList {
     One(String),
     Many(Vec<String>),
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 enum ListKind {
     NodeList,
     ModifierList,
-    #[serde(rename = "raw")]
     Raw,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum KindElement {
     Name(String),
     Detailed {
@@ -138,17 +104,198 @@ enum KindElement {
     },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct KindMarker {
     name: String,
     value: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum KindAlias {
     Members(Vec<String>),
     Range { range: [String; 2] },
+}
+
+// Readers that build the schema types from JSON with the rules of the serde
+// derives they replace: camelCase keys, defaults for missing fields, unknown
+// keys ignored, and untagged enums that try their variants in order.
+
+impl FromJson for Schema {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            kinds: fields.required("kinds")?,
+            bases: fields.optional("bases")?,
+            nodes: fields.optional("nodes")?,
+        })
+    }
+}
+
+impl FromJson for Kinds {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            elements: fields.required("elements")?,
+            markers: fields.required("markers")?,
+            aliases: fields.optional("aliases")?,
+        })
+    }
+}
+
+impl FromJson for BaseDef {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            extends: fields.optional("extends")?,
+            fields: fields.optional("fields")?,
+        })
+    }
+}
+
+impl FromJson for Nodes {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            definitions: fields.required("definitions")?,
+            aliases: fields.required("aliases")?,
+            list_aliases: fields.optional("listAliases")?,
+        })
+    }
+}
+
+impl FromJson for NodeAlias {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let base = || {
+            value
+                .fields()?
+                .required("base")
+                .map(|base| Self::Base { base })
+        };
+        base()
+            .or_else(|_| Vec::from_json(value).map(Self::Members))
+            .map_err(|_| untagged("NodeAlias"))
+    }
+}
+
+impl FromJson for NodeDef {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            kind: fields.optional("kind")?,
+            extends: fields.required("extends")?,
+            members: fields.optional("members")?,
+            type_parameters: fields.optional("typeParameters")?,
+            instantiation_aliases: fields.optional("instantiationAliases")?,
+            hand_written: fields.optional("handWritten")?,
+            hand_written_visitor: fields.optional("handWrittenVisitor")?,
+        })
+    }
+}
+
+impl FromJson for TypeParameterDef {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            name: fields.required("name")?,
+            constraint: fields.required("constraint")?,
+        })
+    }
+}
+
+impl FromJson for MemberDef {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            name: fields.required("name")?,
+            r#type: fields.optional("type")?,
+            inherited: fields.optional("inherited")?,
+            optional: fields.optional("optional")?,
+            list: fields.optional("list")?,
+            go_only: fields.optional("goOnly")?,
+            no_go: fields.optional("noGo")?,
+            no_factory: fields.optional("noFactory")?,
+        })
+    }
+}
+
+impl FromJson for FieldDef {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            r#type: fields.required("type")?,
+            optional: fields.optional("optional")?,
+            list: fields.optional("list")?,
+            go_only: fields.optional("goOnly")?,
+            no_go: fields.optional("noGo")?,
+            no_factory: fields.optional("noFactory")?,
+        })
+    }
+}
+
+impl FromJson for StringOrList {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        String::from_json(value)
+            .map(Self::One)
+            .or_else(|_| Vec::from_json(value).map(Self::Many))
+            .map_err(|_| untagged("StringOrList"))
+    }
+}
+
+impl FromJson for ListKind {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        match String::from_json(value)?.as_str() {
+            "NodeList" => Ok(Self::NodeList),
+            "ModifierList" => Ok(Self::ModifierList),
+            "raw" => Ok(Self::Raw),
+            other => Err(format!(": unknown variant {other:?}")),
+        }
+    }
+}
+
+impl FromJson for KindElement {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let detailed = || -> Result<Self, String> {
+            let fields = value.fields()?;
+            Ok(Self::Detailed {
+                name: fields.optional("name")?,
+                comment: fields.optional("comment")?,
+            })
+        };
+        String::from_json(value)
+            .map(Self::Name)
+            .or_else(|_| detailed())
+            .map_err(|_| untagged("KindElement"))
+    }
+}
+
+impl FromJson for KindMarker {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let fields = value.fields()?;
+        Ok(Self {
+            name: fields.required("name")?,
+            value: fields.required("value")?,
+        })
+    }
+}
+
+impl FromJson for KindAlias {
+    fn from_json(value: &Value) -> Result<Self, String> {
+        let range = || {
+            value
+                .fields()?
+                .required("range")
+                .map(|range| Self::Range { range })
+        };
+        Vec::from_json(value)
+            .map(Self::Members)
+            .or_else(|_| range())
+            .map_err(|_| untagged("KindAlias"))
+    }
+}
+
+/// Parses `ast.json` text into the schema.
+fn parse_schema(json: &str) -> Result<Schema, String> {
+    Schema::from_json(&json::parse(json)?).map_err(|error| format!("invalid schema at ${error}"))
 }
 
 #[derive(Debug)]
@@ -166,7 +313,7 @@ struct NamedKind<'a> {
 /// Returns an error when the input is not valid JSON, contains more kinds than
 /// fit in `u16`, or has invalid/cyclic marker and alias references.
 pub fn generate_syntax_kind(json: &str) -> Result<String, String> {
-    let schema: Schema = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = parse_schema(json)?;
     Generator::new(&schema)?.generate()
 }
 
@@ -183,6 +330,7 @@ pub fn generate_syntax_kind_file(path: &Path) -> Result<String, String> {
 }
 
 mod ast;
+mod json;
 
 pub use ast::{generate_ast, generate_ast_file};
 
@@ -522,9 +670,48 @@ fn one_line(comment: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_syntax_kind;
+    use super::{KindElement, NodeAlias, generate_syntax_kind, parse_schema};
 
     const UPSTREAM_AST: &str = include_str!("../spec/ast.json");
+
+    #[test]
+    fn schema_reader_follows_the_serde_rules() {
+        let schema = parse_schema(
+            r#"{"kinds": {"elements": ["A", {"comment": "c"}], "markers": [], "extra": 1},
+                "nodes": {"definitions": {}, "aliases": {"B": {"base": "X"}, "C": ["D"]}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            schema.kinds.elements[1],
+            KindElement::Detailed {
+                name: None,
+                comment: Some(_)
+            }
+        ));
+        assert!(matches!(schema.nodes.aliases["B"], NodeAlias::Base { .. }));
+        assert!(matches!(schema.nodes.aliases["C"], NodeAlias::Members(_)));
+        assert!(schema.bases.is_empty() && schema.nodes.list_aliases.is_empty());
+
+        for (json, error) in [
+            (
+                r#"{"kinds": {"markers": []}}"#,
+                "$.kinds.elements: missing field",
+            ),
+            (
+                r#"{"kinds": {"elements": [1], "markers": []}}"#,
+                "$.kinds.elements[0]: data did not match any variant of untagged enum KindElement",
+            ),
+            (
+                r#"{"kinds": {"elements": [], "markers": [], "aliases": {"K": {"range": ["A"]}}}}"#,
+                "$.kinds.aliases[\"K\"]: data did not match any variant of untagged enum KindAlias",
+            ),
+        ] {
+            assert_eq!(
+                parse_schema(json).unwrap_err(),
+                format!("invalid schema at {error}")
+            );
+        }
+    }
 
     #[test]
     fn comment_only_elements_do_not_consume_discriminants() {
