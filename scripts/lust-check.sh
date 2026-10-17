@@ -11,28 +11,44 @@ cd "$(dirname "$0")/.." || exit 2
 lust=${LUST:-lust}
 command -v "$lust" >/dev/null || { echo "lust-check: no lust on PATH (see docs/lust.md)" >&2; exit 2; }
 
-# One line per target: <name> <src> <manifest> <--lib | --bin NAME>
-targets=$(cargo metadata --no-deps --format-version 1 --offline | python3 -c '
+# One record per target, 4 NUL-terminated fields: <name> <src> <manifest> <bin name, empty for
+# a lib>. NUL keeps paths with spaces whole. A requested name that is no target is an error.
+list=$(mktemp) || exit 2
+trap 'rm -f "$list"' EXIT
+cargo metadata --no-deps --format-version 1 --offline | python3 -c '
 import json, sys
+want = sys.argv[1:]
+found = set()
+out = sys.stdout.buffer
 for p in json.load(sys.stdin)["packages"]:
     for t in p["targets"]:
         kind = t["kind"][0]
         if kind == "bin":
-            print(p["name"] + ":" + t["name"], t["src_path"], p["manifest_path"], "--bin", t["name"])
+            name, bin_name = p["name"] + ":" + t["name"], t["name"]
         elif kind in ("lib", "cdylib"):
-            print(p["name"], t["src_path"], p["manifest_path"], "--lib")
-') || exit 2
+            name, bin_name = p["name"], ""
+        else:
+            continue
+        if want and name not in want:
+            continue
+        found.add(name)
+        for field in (name, t["src_path"], p["manifest_path"], bin_name):
+            out.write(field.encode() + b"\0")
+missing = [w for w in want if w not in found]
+if missing:
+    sys.exit("lust-check: no such target: " + " ".join(missing) + " (use <package> or <package>:<bin>)")
+' "$@" > "$list" || exit 2
 
-want=" $* "
 fail=0
-while read -r name src manifest sel; do
-  [ $# -eq 0 ] || [[ $want == *" $name "* ]] || continue
-  # shellcheck disable=SC2086 # sel and LUST_FLAGS are word lists
-  if "$lust" check "$src" --manifest-path "$manifest" $sel ${LUST_FLAGS:-}; then
+while IFS= read -r -d '' name && IFS= read -r -d '' src && IFS= read -r -d '' manifest &&
+  IFS= read -r -d '' bin; do
+  if [ -n "$bin" ]; then sel=(--bin "$bin"); else sel=(--lib); fi
+  # shellcheck disable=SC2086 # LUST_FLAGS is a word list
+  if "$lust" check "$src" --manifest-path "$manifest" "${sel[@]}" ${LUST_FLAGS:-} </dev/null; then
     echo "lust-check: $name ok"
   else
     echo "lust-check: $name FAILED"
     fail=1
   fi
-done <<< "$targets"
+done < "$list"
 exit $fail
