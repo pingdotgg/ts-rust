@@ -11,14 +11,19 @@ Use lust for the edit and check loop. Release builds stay with Cargo
 
 ## Install
 
-lust runs on Linux x86_64. Get `lust-<version>-x86_64-linux.tar.gz` from the
-[lust releases](https://github.com/t3dotgg/lust-lang/releases), then:
+lust runs on Linux x86_64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13,
+Fedora 39 and newer). Use lust 0.2.0 or newer. Get
+`lust-0.2.0-x86_64-linux.tar.gz` from the
+[lust releases](https://github.com/t3dotgg/lust-lang/releases/tag/v0.2.0), then:
 
 ```sh
-tar -xzf lust-<version>-x86_64-linux.tar.gz -C ~/.local/opt
-export PATH="$HOME/.local/opt/lust-<version>-x86_64-linux/bin:$PATH"
-lust capabilities   # prints what the subset supports
+tar -xzf lust-0.2.0-x86_64-linux.tar.gz -C ~/.local/opt
+export PATH="$HOME/.local/opt/lust-0.2.0-x86_64-linux/bin:$PATH"
+lust --version
 ```
+
+The daemon needs about 7 GB of memory for `ts_goport`. A 16 GB machine is
+enough.
 
 Keep the `bin/` and `lib/lust/` directories together: lust finds its tcc
 backend and std sources relative to its own executable. Cargo must be on
@@ -47,10 +52,11 @@ line. `lust explain L0820` prints the long text for one error code.
 
 ## The warm daemon
 
-The first `lust check` in a directory is cold: about 70 s for `ts_goport`
-(cold `cargo check` is faster). It also starts a lust daemon in the
-background for that directory (log: `.lust-cache/daemon.log`), which
-loads the target once more before its first warm answer. Later
+The first `lust check` in a directory is cold: about 12 s for the `ts_goport`
+lib (cold `cargo check` with its dependencies: about 24 s). It also starts a
+lust daemon in the background for that directory (log:
+`.lust-cache/daemon.log`), which loads the target once more (about 15 s)
+before its first warm answer. Later
 checks go to the daemon and are warm: it keeps each target's parsed and
 checked program and checks again only what an edit changed. The daemon exits
 after 30 idle minutes. `LUST_NO_DAEMON=1` turns it off. Do not commit or
@@ -76,23 +82,27 @@ Cargo does not read `.lust.toml`, so Cargo builds keep their defaults.
 
 1. Edit.
 2. `scripts/lust-check.sh ts_goport` (or the target you work on). Warm, a
-   check after a one-line body edit in `ts_goport` takes about 15 ms;
-   `cargo check -p ts_goport --lib` takes about 6 s for the same edit.
+   check after a one-line body edit in `ts_goport` takes 10 to 30 ms;
+   incremental `cargo check -p ts_goport --lib` takes about 1.6 s for the
+   same edit. An edit to a fn signature is usually fast too (median about
+   70 ms), but some take several seconds.
 3. Before a commit or a PR, run the normal Cargo checks and tests. The CI
    and the release build do not change.
 
 ## Current state
 
-With lust <LUST_VERSION> on this tree:
+With lust 0.2.0 on this tree (16 vCPU, 32 GB Linux box):
 
-- `lust check`: <CHECK> targets pass.
-- `lust build`: <BUILD> bins build.
-- Parity: the lust-built bins give the same output as the Cargo-built bins
-  on every fixture project of `crates/ts_goport/tests` (<RUNS> runs), the
-  integration test binaries pass with them (<TESTS>), and the codegen tools
-  give the same files (<TOOLS>).
-- Speed (16 vCPU, 12 one-line body edits in `ts_goport`): warm `lust check`
-  median 14 ms, `cargo check` median 5,982 ms.
+- `lust check`: all 18 lib and bin targets pass.
+- `lust build` (measured on the previous revision of this branch, which has
+  the same code except two small rewrites): all 11 bins build. The lust-built
+  bins give the same output as the Cargo-built bins on every fixture project
+  of `crates/ts_goport/tests` (540 of 540 runs: stdout, stderr, exit code and
+  every written file), the 7 integration test binaries pass with them, and
+  the codegen tools give the same files (12 of 12 runs). 683 of 683 unit
+  tests give the same result.
+- Speed: a one-line body edit in `ts_goport` takes 10 to 30 ms warm with
+  lust, and about 1.6 s with incremental `cargo check`.
 
 ## When lust rejects code
 
