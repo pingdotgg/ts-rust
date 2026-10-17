@@ -698,7 +698,8 @@ pub fn parse_json_config_file_content_worker(
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
 ) -> ParsedCommandLine {
     debug_assert!(
-        (json.is_none() && source_file.is_some()) || (json.is_some() && source_file.is_none())
+        (json.is_none() && source_file.is_some()) || (json.is_some() && source_file.is_none()),
+        "assertion failed: (json.is_none() && source_file.is_some()) || (json.is_some() && source_file.is_none())"
     );
     let mut source_file = source_file;
 

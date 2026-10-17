@@ -206,7 +206,7 @@ impl Checker {
         construct_signatures: &[SignatureId],
         index_infos: &[IndexInfoId],
     ) {
-        let signatures = if construct_signatures.is_empty() {
+        let signatures: SharedList<SignatureId> = if construct_signatures.is_empty() {
             call_signatures.into()
         } else if call_signatures.is_empty() {
             construct_signatures.into()

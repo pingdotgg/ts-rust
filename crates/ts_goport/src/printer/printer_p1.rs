@@ -1934,12 +1934,15 @@ impl Printer {
         // PERF: printfast1. Go evaluates `GetSourceFileOfNode` for its
         // `debug.Assert` in every build. It only reads, so a release build
         // skips the parent walk.
-        debug_assert!({
-            let f = get_source_file_of_node(node);
-            f.is_nil()
-                || self.current_source_file.is_nil()
-                || source_file_file_name(f) == source_file_file_name(self.current_source_file)
-        });
+        debug_assert!(
+            {
+                let f = get_source_file_of_node(node);
+                f.is_nil()
+                    || self.current_source_file.is_nil()
+                    || source_file_file_name(f) == source_file_file_name(self.current_source_file)
+            },
+            "assertion failed: {{ let f = get_source_file_of_node(node); f.is_nil() || self.current_source_file.is_nil() || source_file_file_name(f) == source_file_file_name(self.current_source_file) }}"
+        );
         if is_synthetic_node(node) && self.write_factory_name_text(node) {
             return;
         }

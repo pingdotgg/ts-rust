@@ -214,7 +214,8 @@ const _: () = assert!(
         | RelationComparisonResult::REPORTS_MASK.bits()
         | RelationComparisonResult::OVERFLOW.bits())
         >> RESULT_BITS
-        == 0
+        == 0,
+    "assertion failed: (RelationComparisonResult::SUCCEEDED.bits() | RelationComparisonResult::FAILED.bits() | RelationComparisonResult::REPORTS_MASK.bits() | RelationComparisonResult::OVERFLOW.bits()) >> RESULT_BITS == 0"
 );
 
 // PORT: perf. Not in Go. The plain results of one relation, each in one

@@ -751,7 +751,8 @@ pub fn sym_merge_cmp_func<T, F: FnMut(&T, &T) -> i32>(
 
     let mid = (((a + b) as usize) >> 1) as isize;
     let n = mid + m;
-    let (mut start, mut r);
+    let mut start;
+    let mut r;
     if m > mid {
         start = n - b;
         r = mid;
@@ -1361,7 +1362,8 @@ pub fn sym_merge_func<T, F: FnMut(&T, &T) -> bool>(
 
     let mid = (((a + b) as usize) >> 1) as isize;
     let n = mid + m;
-    let (mut start, mut r);
+    let mut start;
+    let mut r;
     if m > mid {
         start = n - b;
         r = mid;

@@ -90,7 +90,8 @@ impl Checker {
         if frozen_store_lacks_deprecated_tag(declaration) {
             debug_assert!(
                 !get_combined_node_flags(declaration)
-                    .intersects(NodeFlags::POSSIBLY_CONTAINS_DEPRECATED_TAG)
+                    .intersects(NodeFlags::POSSIBLY_CONTAINS_DEPRECATED_TAG),
+                "assertion failed: !get_combined_node_flags(declaration).intersects(NodeFlags::POSSIBLY_CONTAINS_DEPRECATED_TAG)"
             );
             return false;
         }

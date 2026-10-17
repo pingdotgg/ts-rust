@@ -1061,7 +1061,8 @@ impl FilesParser {
                             self.parser
                                 .task_data_by_path
                                 .get(&t.path)
-                                .is_some_and(|by_path| Rc::ptr_eq(by_path, &data))
+                                .is_some_and(|by_path| Rc::ptr_eq(by_path, &data)),
+                            "assertion failed: self.parser.task_data_by_path.get(&t.path).is_some_and(|by_path| Rc::ptr_eq(by_path, &data))"
                         );
                         data
                     };

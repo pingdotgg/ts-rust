@@ -15,7 +15,8 @@ use crate::project::prelude::*;
 
 use crate::contentmapper;
 use crate::frontend::core_ext::{ProjectReference, get_script_kind_from_file_name};
-use crate::frontend::{core_bfs, core_ls_ext, core_workgroup};
+use crate::frontend::core_workgroup::{self, WorkGroup as _};
+use crate::frontend::{core_bfs, core_ls_ext};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -1221,7 +1222,7 @@ impl ProjectCollectionBuilder {
         // starts every queued function at once. On the dispatch thread the
         // port runs them serially in queue order (first in, first out), so
         // it builds the port's FIFO group, not `new_work_group` (LIFO).
-        let wg: Rc<dyn core_workgroup::WorkGroup<'_> + '_> =
+        let wg: Rc<core_workgroup::ParallelWorkGroup<'_>> =
             Rc::new(core_workgroup::ParallelWorkGroup {
                 done: Cell::new(false),
                 wg: RefCell::new(VecDeque::new()),
@@ -1277,7 +1278,7 @@ impl ProjectCollectionBuilder {
     // Go: project/projectcollectionbuilder.go:776 ensureProjectTree
     pub fn ensure_project_tree<'a>(
         self: &'a Rc<Self>,
-        wg: &Rc<dyn core_workgroup::WorkGroup<'a> + 'a>,
+        wg: &Rc<core_workgroup::ParallelWorkGroup<'a>>,
         entry: &Rc<dirty::SyncMapEntry<ConfiguredProjectID, Rc<RefCell<Project>>>>,
         project_tree_request: &'a ProjectTreeRequest,
         seen_projects: &'a RefCell<FxHashSet<ConfiguredProjectID>>,

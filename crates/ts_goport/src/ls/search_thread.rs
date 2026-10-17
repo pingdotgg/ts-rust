@@ -269,7 +269,8 @@ fn send_job<Req: Send + 'static, Resp: Send + 'static>(
         let jobs = threads
             .entry(program.identity())
             .or_insert_with(|| spawn_search_thread(program));
-        if let Err(mpsc::SendError(task)) = jobs.send(task) {
+        if let Err(err) = jobs.send(task) {
+            let task = err.0;
             // The thread stopped outside a job; start a new one.
             let new_jobs = spawn_search_thread(program);
             new_jobs.send(task).expect("a new search thread takes jobs");

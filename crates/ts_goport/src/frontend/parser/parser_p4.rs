@@ -2016,7 +2016,8 @@ impl<'a> Parser<'a> {
                             || type_arguments
                                 .nodes()
                                 .iter()
-                                .all(|a| a.parent() == expression))
+                                .all(|a| a.parent() == expression)),
+                    "assertion failed: inner.parent() == expression && (type_arguments.is_nil() || type_arguments.nodes().iter().all(|a| a.parent() == expression))"
                 );
                 continue;
             }

@@ -111,7 +111,7 @@ macro_rules! impl_es_transformer {
             }
 
             fn root_visit(&mut self, node: Node) -> Node {
-                <$t>::visit(self, node)
+                Self::visit(self, node)
             }
         }
 

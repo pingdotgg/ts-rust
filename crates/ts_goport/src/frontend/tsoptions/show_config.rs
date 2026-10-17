@@ -1,6 +1,7 @@
 //! Port of tsoptions/showconfig.go (`tsc --showConfig`).
 
 use crate::frontend::prelude::*;
+use std::sync::LazyLock;
 
 use crate::execute::incremental::build_info::marshal_any;
 use crate::execute::incremental::snapshot_to_build_info::is_zero_compiler_option_value;
@@ -28,83 +29,87 @@ struct ImpliedOption {
 // impliedOptions lists the compiler options that may be implied by other options,
 // mirroring TypeScript's computedOptions used in convertToTSConfig.
 // Each compute function delegates directly to an existing core.CompilerOptions getter.
-static IMPLIED_OPTIONS: [ImpliedOption; 14] = [
-    ImpliedOption {
-        name: "Module",
-        dependencies: &["Target"],
-        compute: |o| CompilerOptionsValue::ModuleKind(o.get_emit_module_kind()),
-    },
-    ImpliedOption {
-        name: "ModuleResolution",
-        dependencies: &["Module", "Target"],
-        compute: |o| CompilerOptionsValue::ModuleResolutionKind(o.get_module_resolution_kind()),
-    },
-    ImpliedOption {
-        name: "ModuleDetection",
-        dependencies: &["Module", "Target"],
-        compute: |o| CompilerOptionsValue::ModuleDetectionKind(o.get_emit_module_detection_kind()),
-    },
-    ImpliedOption {
-        name: "IsolatedModules",
-        dependencies: &["VerbatimModuleSyntax"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_isolated_modules()),
-    },
-    ImpliedOption {
-        name: "PreserveConstEnums",
-        dependencies: &["IsolatedModules", "VerbatimModuleSyntax"],
-        compute: |o| CompilerOptionsValue::Bool(o.should_preserve_const_enums()),
-    },
-    ImpliedOption {
-        name: "Declaration",
-        dependencies: &["Composite"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_emit_declarations()),
-    },
-    ImpliedOption {
-        name: "DeclarationMap",
-        dependencies: &["Declaration", "Composite"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_are_declaration_maps_enabled()),
-    },
-    ImpliedOption {
-        name: "Incremental",
-        dependencies: &["Composite"],
-        compute: |o| CompilerOptionsValue::Bool(o.is_incremental()),
-    },
-    ImpliedOption {
-        name: "UseDefineForClassFields",
-        dependencies: &["Target", "Module"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_use_define_for_class_fields()),
-    },
-    ImpliedOption {
-        name: "ResolvePackageJsonExports",
-        dependencies: &["ModuleResolution", "Module", "Target"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_resolve_package_json_exports()),
-    },
-    ImpliedOption {
-        name: "ResolvePackageJsonImports",
-        dependencies: &[
-            "ModuleResolution",
-            "ResolvePackageJsonExports",
-            "Module",
-            "Target",
-        ],
-        compute: |o| CompilerOptionsValue::Bool(o.get_resolve_package_json_imports()),
-    },
-    ImpliedOption {
-        name: "ResolveJsonModule",
-        dependencies: &["ModuleResolution", "Module", "Target"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_resolve_json_module()),
-    },
-    ImpliedOption {
-        name: "AllowJs",
-        dependencies: &["CheckJs"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_allow_js()),
-    },
-    ImpliedOption {
-        name: "AllowImportingTsExtensions",
-        dependencies: &["RewriteRelativeImportExtensions"],
-        compute: |o| CompilerOptionsValue::Bool(o.get_allow_importing_ts_extensions()),
-    },
-];
+static IMPLIED_OPTIONS: LazyLock<[ImpliedOption; 14]> = LazyLock::new(|| {
+    [
+        ImpliedOption {
+            name: "Module",
+            dependencies: &["Target"],
+            compute: |o| CompilerOptionsValue::ModuleKind(o.get_emit_module_kind()),
+        },
+        ImpliedOption {
+            name: "ModuleResolution",
+            dependencies: &["Module", "Target"],
+            compute: |o| CompilerOptionsValue::ModuleResolutionKind(o.get_module_resolution_kind()),
+        },
+        ImpliedOption {
+            name: "ModuleDetection",
+            dependencies: &["Module", "Target"],
+            compute: |o| {
+                CompilerOptionsValue::ModuleDetectionKind(o.get_emit_module_detection_kind())
+            },
+        },
+        ImpliedOption {
+            name: "IsolatedModules",
+            dependencies: &["VerbatimModuleSyntax"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_isolated_modules()),
+        },
+        ImpliedOption {
+            name: "PreserveConstEnums",
+            dependencies: &["IsolatedModules", "VerbatimModuleSyntax"],
+            compute: |o| CompilerOptionsValue::Bool(o.should_preserve_const_enums()),
+        },
+        ImpliedOption {
+            name: "Declaration",
+            dependencies: &["Composite"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_emit_declarations()),
+        },
+        ImpliedOption {
+            name: "DeclarationMap",
+            dependencies: &["Declaration", "Composite"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_are_declaration_maps_enabled()),
+        },
+        ImpliedOption {
+            name: "Incremental",
+            dependencies: &["Composite"],
+            compute: |o| CompilerOptionsValue::Bool(o.is_incremental()),
+        },
+        ImpliedOption {
+            name: "UseDefineForClassFields",
+            dependencies: &["Target", "Module"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_use_define_for_class_fields()),
+        },
+        ImpliedOption {
+            name: "ResolvePackageJsonExports",
+            dependencies: &["ModuleResolution", "Module", "Target"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_resolve_package_json_exports()),
+        },
+        ImpliedOption {
+            name: "ResolvePackageJsonImports",
+            dependencies: &[
+                "ModuleResolution",
+                "ResolvePackageJsonExports",
+                "Module",
+                "Target",
+            ],
+            compute: |o| CompilerOptionsValue::Bool(o.get_resolve_package_json_imports()),
+        },
+        ImpliedOption {
+            name: "ResolveJsonModule",
+            dependencies: &["ModuleResolution", "Module", "Target"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_resolve_json_module()),
+        },
+        ImpliedOption {
+            name: "AllowJs",
+            dependencies: &["CheckJs"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_allow_js()),
+        },
+        ImpliedOption {
+            name: "AllowImportingTsExtensions",
+            dependencies: &["RewriteRelativeImportExtensions"],
+            compute: |o| CompilerOptionsValue::Bool(o.get_allow_importing_ts_extensions()),
+        },
+    ]
+});
 
 /// TSConfig represents the output structure for --showConfig
 // Go: tsoptions/showconfig.go:49 TSConfig
@@ -551,7 +556,7 @@ fn add_implied_options(
 
     let default_opts = CompilerOptions::default();
 
-    for entry in &IMPLIED_OPTIONS {
+    for entry in IMPLIED_OPTIONS.iter() {
         // Get the option declaration for this implied option (using case-insensitive lookup).
         let Some(option_decl) = COMMAND_LINE_COMPILER_OPTIONS_MAP.get(entry.name) else {
             continue;

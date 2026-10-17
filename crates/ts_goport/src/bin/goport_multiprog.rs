@@ -184,7 +184,7 @@ fn check_versions(
         let pairs = a.source_files().zip(b.source_files());
         for ((a_file, b_file), &id) in pairs.zip(b.source_file_order().iter()) {
             assert!(
-                id == b_changed || std::ptr::eq(&raw const *a_file, &raw const *b_file),
+                id == b_changed || std::ptr::eq(&*a_file, &*b_file),
                 "B does not share the GoFile of {}",
                 a_file.info.file_name
             );

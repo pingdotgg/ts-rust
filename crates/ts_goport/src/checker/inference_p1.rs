@@ -653,7 +653,8 @@ impl Checker {
         }
         if self.ty(target).flags.intersects(TypeFlags::UNION) {
             // PORT: a single source is read from a stack array, not a new list.
-            let (source_list, single);
+            let source_list;
+            let single;
             let source_types: &[TypeId] = if self.ty(source).flags.intersects(TypeFlags::UNION) {
                 source_list = self.ty(source).types_list();
                 &source_list
@@ -705,7 +706,8 @@ impl Checker {
             // infer { extra: any } for T. But when inferring to 'string[] & Iterable<T>' we want to keep the
             // string[] on the source side and infer string for T.
             if !self.ty(source).flags.intersects(TypeFlags::UNION) {
-                let (source_list, single);
+                let source_list;
+                let single;
                 let source_types: &[TypeId] =
                     if self.ty(source).flags.intersects(TypeFlags::INTERSECTION) {
                         source_list = self.ty(source).types_list();
@@ -1541,7 +1543,8 @@ impl Checker {
         let mut type_variable_count = 0;
         if target_flags.intersects(TypeFlags::UNION) {
             let mut naked_type_variable = TypeId::NIL;
-            let (source_list, single);
+            let source_list;
+            let single;
             let sources: &[TypeId] = if self.ty(source).flags.intersects(TypeFlags::UNION) {
                 source_list = self.ty(source).types_list();
                 &source_list

@@ -330,7 +330,7 @@ macro_rules! by_data {
         let frozen = frozen_store_node(node);
         match frozen {
             Some(f) if kind_lacks_variants!(f.kind(), [$($($v),+),+]) => {
-                debug_assert!(!with_data!(node, |d| matches!(d, $($(NodeData::$v(_))|+)|+)));
+                debug_assert!(!with_data!(node, |d| matches!(d, $($(NodeData::$v(_))|+)|+)), "assertion failed: !with_data!(node, |d| matches!(d, $($(NodeData::$v(_))|+)|+))");
                 $def
             }
             _ => match frozen.and_then(FrozenNode::data) {
@@ -354,7 +354,7 @@ macro_rules! by_child_ids {
         let frozen = frozen_store_node(node);
         match frozen {
             Some(f) if kind_lacks_variants!(f.kind(), [$($($v),+),+]) => {
-                debug_assert!(!with_data!(node, |d| matches!(d, $($(NodeData::$v(_))|+)|+)));
+                debug_assert!(!with_data!(node, |d| matches!(d, $($(NodeData::$v(_))|+)|+)), "assertion failed: !with_data!(node, |d| matches!(d, $($(NodeData::$v(_))|+)|+))");
                 $def
             }
             _ => match frozen.and_then(|f| Some((f.data()?, f.ids()))) {

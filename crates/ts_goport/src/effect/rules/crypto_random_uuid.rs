@@ -15,8 +15,12 @@ pub static CRYPTO_RANDOM_UUID: Rule = Rule {
     default_severity: Severity::Off,
     supported_effect: &["v4"],
     codes: &[377078],
-    run: |ctx| run_crypto_random_uuid(ctx, false),
+    run: run_crypto_random_uuid_rule,
 };
+
+fn run_crypto_random_uuid_rule(ctx: &mut RuleContext<'_, '_>) -> Vec<Diagnostic> {
+    run_crypto_random_uuid(ctx, false)
+}
 
 // Go: rules/crypto_random_uuid.go CryptoRandomUUIDInEffect
 pub static CRYPTO_RANDOM_UUID_IN_EFFECT: Rule = Rule {
@@ -26,8 +30,12 @@ pub static CRYPTO_RANDOM_UUID_IN_EFFECT: Rule = Rule {
     default_severity: Severity::Off,
     supported_effect: &["v4"],
     codes: &[377079],
-    run: |ctx| run_crypto_random_uuid(ctx, true),
+    run: run_crypto_random_uuid_in_effect,
 };
+
+fn run_crypto_random_uuid_in_effect(ctx: &mut RuleContext<'_, '_>) -> Vec<Diagnostic> {
+    run_crypto_random_uuid(ctx, true)
+}
 
 // Go: rules/crypto_random_uuid.go runCryptoRandomUUID
 fn run_crypto_random_uuid(ctx: &mut RuleContext<'_, '_>, check_in_effect: bool) -> Vec<Diagnostic> {

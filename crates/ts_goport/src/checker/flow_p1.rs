@@ -788,7 +788,8 @@ impl Checker {
         } {
             debug_assert!(
                 is_expression_of_optional_chain_root(expr)
-                    || parent_kind == SyntaxKind::BinaryExpression
+                    || parent_kind == SyntaxKind::BinaryExpression,
+                "assertion failed: is_expression_of_optional_chain_root(expr) || parent_kind == SyntaxKind::BinaryExpression"
             );
             return self.narrow_type_by_optionality(f, t, expr, assume_true);
         }

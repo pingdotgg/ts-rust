@@ -58,6 +58,13 @@ pub fn write_go_output(out: &mut dyn std::io::Write, bytes: &[u8]) -> std::io::R
 pub struct GoOutput;
 
 impl std::io::Write for GoOutput {
+    // One `write_all` of the whole text per `write!`, as Go's `fmt.Fprintf`
+    // makes one write (std's default writes each format piece; the bytes are
+    // the same).
+    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        self.write_all(std::fmt::format(args).as_bytes())
+    }
+
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         write_go_output(&mut stdio::CliStdout, buf)?;
         Ok(buf.len())
@@ -79,6 +86,13 @@ impl std::io::Write for GoOutput {
 pub struct GoErrorOutput;
 
 impl std::io::Write for GoErrorOutput {
+    // One `write_all` of the whole text per `write!`, as Go's `fmt.Fprintf`
+    // makes one write (std's default writes each format piece; the bytes are
+    // the same).
+    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        self.write_all(std::fmt::format(args).as_bytes())
+    }
+
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         write_go_output(&mut stdio::Stderr, buf)?;
         Ok(buf.len())
