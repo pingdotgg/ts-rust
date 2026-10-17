@@ -82,10 +82,11 @@ Cargo does not read `.lust.toml`, so Cargo builds keep their defaults.
 
 1. Edit.
 2. `scripts/lust-check.sh ts_goport` (or the target you work on). Warm, a
-   check after a one-line body edit in `ts_goport` takes 10 to 30 ms;
-   incremental `cargo check -p ts_goport --lib` takes about 1.6 s for the
-   same edit. An edit to a fn signature is usually fast too (median about
-   70 ms), but some take several seconds.
+   check after a one-line body edit takes 20 to 30 ms. Incremental
+   `cargo check -p ts_goport --lib` takes about 1.4 s for an edit in the
+   `ts_goport` crate's own files and about 5.7 s for an edit in
+   `goport_core`, where most of the code is. An edit to a fn signature is
+   usually fast too (median 54 to 109 ms), but some take 4 to 10 s.
 3. Before a commit or a PR, run the normal Cargo checks and tests. The CI
    and the release build do not change.
 
@@ -94,15 +95,15 @@ Cargo does not read `.lust.toml`, so Cargo builds keep their defaults.
 With lust 0.2.0 on this tree (16 vCPU, 32 GB Linux box):
 
 - `lust check`: all 18 lib and bin targets pass.
-- `lust build` (measured on the previous revision of this branch, which has
-  the same code except two small rewrites): all 11 bins build. The lust-built
+- `lust build`: all 11 bins build. The lust-built
   bins give the same output as the Cargo-built bins on every fixture project
   of `crates/ts_goport/tests` (540 of 540 runs: stdout, stderr, exit code and
   every written file), the 7 integration test binaries pass with them, and
   the codegen tools give the same files (12 of 12 runs). 683 of 683 unit
   tests give the same result.
-- Speed: a one-line body edit in `ts_goport` takes 10 to 30 ms warm with
-  lust, and about 1.6 s with incremental `cargo check`.
+- Speed (12 one-line body edits in `goport_core` files, checked through
+  `ts_goport`): warm `lust check` median 24 ms, incremental `cargo check`
+  median 5.7 s. Cold: `lust check` 9.1 s, `cargo check` 20.8 s.
 
 ## When lust rejects code
 
