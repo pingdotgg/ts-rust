@@ -1,0 +1,197 @@
+# The linux-x64 release tsc (x86_64-unknown-linux-musl, static), built by lust
+# (https://github.com/t3dotgg/lust-lang) next to release.yml. It publishes nothing: Cargo
+# (release.yml) stays the source of truth for releases. The artifact `tsc-linux-x64-lust` is the
+# lust-built tsc of the commit (zstd, with its sha256).
+#
+# Build: release C + PGO + copies, static musl through zig cc, on release.yml's linux-x64
+# runner. A Blacksmith sticky disk keeps lust and zig, the crate registry, a ts-rust clone, the
+# PGO profiles, and lust's state: the front image (the front end of the last build) and the
+# object cache. So a push compiles only what changed. The first run on a disk, or after
+# LUST_REF changes, builds lust from source and trains the profiles (about 15 min); later runs
+# take about 12 s for a typical merge. Runs queue (one disk).
+#
+# Checks: release.yml's "Check the tsc" smoke in the release job; in the verify job, the tsc on
+# Alpine (static) and the 216 tsgo fixture runs against a Cargo tsc of the same commit.
+name: lust-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      retrain:
+        description: "Retrain the PGO profiles on this commit"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lust-release
+  cancel-in-progress: false
+
+env:
+  # A commit of github.com/t3dotgg/lust-lang. The disk keeps the lust built from it.
+  LUST_REF: efddf38e52285323de9ba98af4895d4aaba0d2ee
+  ZIG_VERSION: 0.15.2
+  # lust's object cache: one tsc build holds about 1 GB of objects.
+  LUST_CACHE_MAX_BYTES: "16000000000"
+
+jobs:
+  release:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      D: /home/runner/lust
+    steps:
+      - uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-lust-release-linux-x64
+          path: /home/runner/lust
+      - name: Disk state
+        id: disk
+        env:
+          RETRAIN: ${{ inputs.retrain || false }}
+        run: |
+          sudo chown "$(id -u)" "$D"
+          train=false
+          if [ "$RETRAIN" = true ] || [ "$(cat "$D/pgo/REF" 2>/dev/null)" != "$LUST_REF" ]; then train=true; fi
+          echo "train=$train" >> "$GITHUB_OUTPUT"
+          echo "lust $(cat "$D/tools/REF" 2>/dev/null || echo none), profiles $(cat "$D/pgo/REF" 2>/dev/null || echo none), train: $train"
+      # Node for scripts/goport/pgo-train.sh setup (npm), on a training run only.
+      - uses: actions/setup-node@v5
+        if: steps.disk.outputs.train == 'true'
+        with:
+          node-version: 24
+      - name: Build
+        env:
+          SHA: ${{ github.sha }}
+          TRAIN: ${{ steps.disk.outputs.train }}
+        run: |
+          now() { date +%s.%N; }
+          T0=$(now)
+          # lust and zig, once per LUST_REF.
+          if [ "$(cat "$D/tools/REF" 2>/dev/null)" != "$LUST_REF" ]; then
+            T=$RUNNER_TEMP/tools; mkdir -p "$T/bin"
+            git clone -q https://github.com/t3dotgg/lust-lang.git "$RUNNER_TEMP/lust-src"
+            (cd "$RUNNER_TEMP/lust-src" && git checkout -q "$LUST_REF" && scripts/build-tcc.sh > /dev/null \
+              && LUST_TCC_HOME="$PWD/third_party/tcc" cargo build -q --release --locked --bin lust --bin lust-core \
+              && bash scripts/release.sh --no-build > /dev/null && tar -xzf dist/lust-*-x86_64-linux.tar.gz -C "$T" --strip-components=1)
+            cp "$RUNNER_TEMP/lust-src/scripts/pgo-llvm.sh" "$T/pgo-llvm.sh"
+            (cd "$T" && curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" | tar -xJf -)
+            rm -rf "$D/tools" && cp -a "$T" "$D/tools" && echo "$LUST_REF" > "$D/tools/REF"
+            echo "lust built: $(awk -v a="$T0" -v b="$(now)" 'BEGIN{printf "%.0f", b-a}') s"
+          fi
+          export PATH="$D/tools/bin:$D/tools/zig-x86_64-linux-$ZIG_VERSION:$PATH"
+          export ZIG_GLOBAL_CACHE_DIR=$D/zig-cache CARGO_HOME=$D/cargo TMPDIR=$D/tmp
+          mkdir -p "$TMPDIR"
+          # The pushed commit, fetched into the kept clone (only the new objects).
+          if [ ! -d "$D/ts/.git" ]; then git clone -q --no-checkout "https://github.com/$GITHUB_REPOSITORY.git" "$D/ts"; fi
+          git -C "$D/ts" fetch -q --no-tags "https://github.com/$GITHUB_REPOSITORY.git" "$SHA"
+          git -C "$D/ts" checkout -q -f FETCH_HEAD
+          L=$(sha256sum "$D/ts/Cargo.lock" | cut -c1-16)
+          if [ "$(cat "$D/cargo.lock.key" 2>/dev/null)" != "$L" ]; then
+            mkdir -p "$CARGO_HOME"
+            (cd "$D/ts" && cargo fetch --locked) && echo "$L" > "$D/cargo.lock.key"
+          fi
+          if [ "$TRAIN" = true ]; then
+            t=$(now)
+            bash "$D/ts/scripts/lust-release/train.sh" "$D/ts" "$D/pgo" "$D/tools/pgo-llvm.sh"
+            echo "$LUST_REF" > "$D/pgo/REF"
+            echo "profiles trained: $(awk -v a="$t" -v b="$(now)" 'BEGIN{printf "%.0f", b-a}') s"
+            # A new profile changes every unit: start the image and the cache over.
+            rm -rf "$D/state" "$D/cache"
+          fi
+          export LUST=lust LUST_PGO_USE=$D/pgo/use.profdata LUST_PGO_COPIES=$D/pgo/copies.profdata LUST_PGO_COPY_MIN=1000 \
+            LUST_PROFDATA=$D/pgo/llvm-profdata
+          # lust gets a scrubbed environment: its front image keeps a copy of the build's
+          # environment on this disk, and the job's environment holds the runner's tokens.
+          lenv=(STATE_DIR="$D/state" CACHE_DIR="$D/cache")
+          for v in HOME PATH TMPDIR LANG CARGO_HOME RUSTUP_HOME LUST $(compgen -e | grep -E '^(LUST|ZIG)_'); do
+            [ -n "${!v+x}" ] && lenv+=("$v=${!v}")
+          done
+          rm -rf "$D/out"
+          t=$(now)
+          env -i "${lenv[@]}" bash "$D/ts/scripts/lust-release/build.sh" "$D/ts" "$D/out" > "$RUNNER_TEMP/build.txt" 2>&1 || { cat "$RUNNER_TEMP/build.txt"; exit 1; }
+          tb=$(awk -v a="$t" -v b="$(now)" 'BEGIN{printf "%.1f", b-a}')
+          # release.yml's "Check the tsc" (the Alpine start runs in the verify job), in the
+          # background during the upload; the last step waits for it.
+          C=$RUNNER_TEMP/check; "$D/ts/crates/ts_goport/scripts/copy-libs.sh" "$C" > /dev/null; cp "$D/out/tsc" "$C/tsc"
+          ( set -e
+            [[ $("$C/tsc" --version) == "Version 7."* ]]
+            cd "$RUNNER_TEMP"; echo 'const x: number = "a";' > a.ts
+            "$C/tsc" --listFilesOnly --lib es5 a.ts | grep -qx "$C/lib.es5.d.ts"
+            set +e; "$C/tsc" --noEmit a.ts > check.txt; rc=$?; set -e
+            # Indented: setup-node's tsc problem matcher would make the expected error an annotation.
+            sed 's/^/  /' check.txt
+            [[ $rc == 2 ]] && grep -q "error TS2322" check.txt
+            file "$C/tsc" | grep -q "statically linked"
+            echo "smoke ok" ) > "$RUNNER_TEMP/smoke.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/smoke.pid"
+          U=$RUNNER_TEMP/up; mkdir -p "$U"
+          sha256sum "$C/tsc" | cut -d' ' -f1 > "$U/tsc.sha256" &
+          zstd -q -1 -T0 "$C/tsc" -o "$U/tsc.zst"; wait $!
+          echo "lust-release: $(tail -n 1 "$RUNNER_TEMP/build.txt"); build step ${tb} s, step total $(awk -v a="$T0" -v b="$(now)" 'BEGIN{printf "%.1f", b-a}') s; tsc sha256 $(cat "$U/tsc.sha256")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsc-linux-x64-lust
+          path: ${{ runner.temp }}/up
+          compression-level: 0
+      - name: Check the tsc
+        if: always()
+        run: |
+          p=$(cat "$RUNNER_TEMP/smoke.pid" 2>/dev/null); [ -n "$p" ] && while kill -0 "$p" 2>/dev/null; do sleep 0.05; done
+          cat "$RUNNER_TEMP/smoke.log" 2>/dev/null
+          # The background image save ends before the disk is committed.
+          [ -f "$D/state/lock" ] && flock "$D/state/lock" true
+          grep -q "^smoke ok" "$RUNNER_TEMP/smoke.log"
+
+  # The Cargo tsc of the same commit and the digests of its fixture runs, for verify.
+  goldens:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lust-release-goldens
+      - name: Cargo tsc and fixture digests
+        run: |
+          cargo build --profile goport --locked -p ts_goport --bin tsgo --features noembed
+          O=$RUNNER_TEMP/out; mkdir -p "$O"
+          cp target/goport/tsgo "$O/tsgo"
+          crates/ts_goport/scripts/copy-libs.sh "$O" > /dev/null
+          GOLDENS_JOBS=16 python3 scripts/lust-release/goldens.py make . "$O/tsgo" "$RUNNER_TEMP/goldens.json" "$O/verify-work"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goldens
+          path: ${{ runner.temp }}/goldens.json
+
+  verify:
+    needs: [release, goldens]
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        with:
+          path: ${{ runner.temp }}/a
+      # The same layout as the goldens job ($RUNNER_TEMP/out/tsgo, out/verify-work): some
+      # fixture outputs hold paths relative to the work dir.
+      - name: Alpine start and the 216 fixture runs against the Cargo tsc
+        run: |
+          set -o pipefail
+          A=$RUNNER_TEMP/a; O=$RUNNER_TEMP/out
+          mkdir -p "$O"
+          zstd -q -d "$A/tsc-linux-x64-lust/tsc.zst" -o "$O/tsgo" && chmod +x "$O/tsgo"
+          [ "$(sha256sum < "$O/tsgo" | cut -d' ' -f1)" = "$(cat "$A/tsc-linux-x64-lust/tsc.sha256")" ] || { echo "::error::the unpacked tsc is not the smoke-checked file"; exit 1; }
+          crates/ts_goport/scripts/copy-libs.sh "$O" > /dev/null
+          # Static: it starts on musl (Alpine) too.
+          docker run --rm -v "$O:/t:ro" alpine:3 /t/tsgo --version
+          GOLDENS_JOBS=16 python3 scripts/lust-release/goldens.py check . "$O/tsgo" "$A/goldens/goldens.json" "$O/verify-work" | tail -n 3
