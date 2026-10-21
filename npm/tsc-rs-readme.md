@@ -46,8 +46,21 @@ effect-tsgo 0.51.1. See [the Effect diagnostics doc](https://github.com/pingdotg
 ## VS Code
 
 The TypeScript 7 extension looks for the `typescript` package, so it does not find `tsc-rs` by
-itself. Point it at the dir of the `tsc` in the platform package, in `.vscode/settings.json`, and
-allow it when VS Code asks:
+itself. Install tsc-rs as the `typescript` package with
+[@tsc-rs/typescript](https://www.npmjs.com/package/@tsc-rs/typescript) (from the first release
+after 0.7.0):
+
+```json
+{ "devDependencies": { "typescript": "npm:@tsc-rs/typescript@<version>" } }
+```
+
+Then set this in `.vscode/settings.json`, and allow it when VS Code asks:
+
+```json
+{ "js/ts.tsdk.path": "node_modules/typescript/lib" }
+```
+
+With only `tsc-rs` installed, point the extension at the dir of the `tsc` in the platform package:
 
 ```json
 { "js/ts.tsdk.path": "node_modules/@tsc-rs/linux-x64/lib" }

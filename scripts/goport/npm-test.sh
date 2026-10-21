@@ -2,16 +2,21 @@
 # Installs an npm-pack.sh package set into a fresh project and checks that tsc through npm gives
 # the same output as the native tsc run directly.
 #
-# usage: npm-test.sh [--name tsc-rs] <pkg-dir> <work-dir>
+# usage: npm-test.sh [--name <tsc-rs|@tsc-rs/typescript>] <pkg-dir> <work-dir>
 #   --name      the package set of npm-pack.sh --name (default typescript). tsc-rs: the main package
-#               tsc-rs, bin tsc-rs, platform package @tsc-rs/linux-x64.
+#               tsc-rs, bin tsc-rs, platform package @tsc-rs/linux-x64. @tsc-rs/typescript: bin tsc,
+#               the platform package @tsc-rs/linux-x64 installed under Go's name
+#               @typescript/typescript-linux-x64, as the main package's alias installs it.
 #   <pkg-dir>   npm-pack.sh output (the main and the linux-x64 .tgz files)
 #   <work-dir>  made fresh: <work-dir>/proj (the npm project) and <work-dir>/out (tsc output)
+# NPM_TEST_INPUTS=<dir> names the project inputs (default <repo>/target/project-inputs).
+# The install from a registry, under the name typescript, is scripts/goport/npm-alias-test.sh.
 # Checks:
 #   - bin/tsc: the sh and JS polyglot of npm/install.js when the package has the postinstall
 #     (Rust), else Go's JS launcher. bin/tsc and node_modules/.bin/tsc run the platform tsc without
 #     Node (NODE_OPTIONS that make Node fail to start do not stop them).
 #   - --version, and --listFilesOnly lists the lib files of the platform package's lib dir.
+#   - @tsc-rs/typescript: require("@tsc-rs/typescript").version is the version the tsc reports.
 #   - query and hono, tsc -p <cfg> --outDir <out>: stdout, exit code and the emitted files are the
 #     same for the direct run (platform lib/tsc), node_modules/.bin/tsc, node bin/tsc (a tool that
 #     starts the bin with Node) and the JS launcher (node node_modules/typescript/lib/tsc.js, the
@@ -23,12 +28,14 @@
 # Prints one line per check and ends with "npm-test: PASS" or "npm-test: FAIL (<n>)".
 set -uo pipefail
 repo=/home/theo/Code/sandbox/ts-rust
-usage() { sed -n '5,9p' "$0" >&2; exit 2; }
+usage() { sed -n '5,13p' "$0" >&2; exit 2; }
 name=typescript
 if [[ ${1:-} == --name ]]; then [[ $# -ge 2 ]] || usage; name=$2; shift 2; fi
+# plat is the install name of the platform package, plat_tgz the name of its tarball.
 case $name in
-  typescript) plat=@typescript/typescript-linux-x64 bin=tsc ;;
-  tsc-rs) plat=@tsc-rs/linux-x64 bin=tsc-rs ;;
+  typescript) plat=@typescript/typescript-linux-x64 plat_tgz=typescript-typescript-linux-x64 bin=tsc ;;
+  tsc-rs) plat=@tsc-rs/linux-x64 plat_tgz=tsc-rs-linux-x64 bin=tsc-rs ;;
+  @tsc-rs/typescript) plat=@typescript/typescript-linux-x64 plat_tgz=tsc-rs-linux-x64 bin=tsc ;;
   *) usage ;;
 esac
 [[ $# == 2 ]] || usage
@@ -36,11 +43,13 @@ pkg=$(realpath "$1") work=$(realpath -m "$2")
 proj="$work/proj" out="$work/out"
 rm -rf "$work"
 mkdir -p "$proj" "$out"
-plat_tgz=${plat#@}
-tgz=("$pkg/${plat_tgz/\//-}"-*.tgz "$pkg/$name"-[0-9]*.tgz)
+main_tgz=${name#@}
+tgz=("$pkg/$plat_tgz"-[0-9]*.tgz "$pkg/${main_tgz/\//-}"-[0-9]*.tgz)
 [[ ${#tgz[@]} == 2 && -f ${tgz[0]} && -f ${tgz[1]} ]] || { echo "no package set in $pkg" >&2; exit 2; }
 echo '{"name":"npm-test","private":true}' > "$proj/package.json"
-(cd "$proj" && npm install --offline --no-audit --no-fund --silent "${tgz[@]}") || { echo "npm install failed" >&2; exit 1; }
+# The platform package under its install name (an alias for @tsc-rs/typescript).
+(cd "$proj" && npm install --offline --no-audit --no-fund --silent "$plat@file:${tgz[0]}" "${tgz[1]}") ||
+  { echo "npm install failed" >&2; exit 1; }
 
 fails=0
 check() { # check <name> <ok 0|1> [detail]
@@ -57,7 +66,7 @@ echo > "$out/a.ts"
 
 # bins <tag> <node_modules>: the bin checks, for npm-test's npm project and the pnpm project.
 bins() {
-  local tag=$1 nm=$2 lib_dir listed v env=() how=""
+  local tag=$1 nm=$2 main lib_dir listed v env=() how=""
   local b=$nm/$name/bin/$bin
   if ((native)); then
     [[ -f $b && ! -L $b && -x $b && $(sed -n '1p;3p' "$b") == $'#!/bin/sh\nimport "../lib/tsc.js";' ]]
@@ -75,9 +84,10 @@ bins() {
   v=$(node "$b" --version 2>&1)
   [[ $v == "$want" ]]
   check "$tag node $name/bin/$bin --version: $want" $? "$(grep -m1 Error <<< "$v" || head -1 <<< "$v")"
-  # The platform package is a sibling of the main package (npm hoists both; pnpm links both into
-  # the main package's .pnpm/<pkg>/node_modules).
-  lib_dir=$(realpath "$(dirname "$(realpath "$nm/$name")")/$plat/lib")
+  # The platform package is in the node_modules dir of the main package (npm hoists both; pnpm
+  # links both into the main package's .pnpm/<pkg>/node_modules). $name can be scoped.
+  main=$(realpath "$nm/$name")
+  lib_dir=$(realpath "${main%/"$name"}/$plat/lib")
   for x in "$nm/.bin/$bin" "node $b"; do
     listed=$(cd "$out" && $x --listFilesOnly --lib es5 a.ts 2>&1)
     grep -q "^$lib_dir/lib.es5.d.ts$" <<< "$listed"
@@ -107,6 +117,11 @@ if ((native)); then
 fi
 [[ $(${ways[js]} --version) == "$want" ]]
 check "js --version: $want" $?
+if [[ $name == @tsc-rs/typescript ]]; then
+  v=$(cd "$proj" && node -e 'console.log(require(process.argv[1]).version)' "$name" 2>&1)
+  [[ "Version $v" == "$want" ]]
+  check "require(\"$name\").version: ${want#Version }" $? "$v"
+fi
 lib_dir=$(realpath "$(dirname "$direct")")
 for w in direct js; do
   listed=$(cd "$out" && ${ways[$w]} --listFilesOnly --lib es5 a.ts)
@@ -114,7 +129,7 @@ for w in direct js; do
   check "$w lists $lib_dir/lib.es5.d.ts" $? "$(head -1 <<< "$listed")"
 done
 
-P=$repo/target/project-inputs
+P=${NPM_TEST_INPUTS:-$repo/target/project-inputs}
 declare -A cfgs=([query]=$P/query/source/packages/query-core/tsconfig.prod.json [hono]=$P/hono/source/tsconfig.build.json)
 for p in query hono; do
   for w in direct npm node js; do

@@ -1,9 +1,10 @@
-// Postinstall of the goport `typescript` and `tsc-rs` packages: lib/install.js. Go's package has
-// no install script; this is the only file the port adds to Go's layout.
+// Postinstall of the goport `typescript`, `tsc-rs` and `@tsc-rs/typescript` packages: lib/install.js.
+// Go's package has no install script; this is the only file the port adds to Go's layout.
 //
-// The bin (bin/tsc, or bin/tsc-rs) is Go's JS launcher (packages/typescript/bin/tsc): it starts
-// Node, finds the platform package and execs its native tsc. The Node start costs about 22 ms on
-// every run. On POSIX this script rewrites the bin as a sh and JS polyglot:
+// The bin (bin/tsc, or bin/tsc-rs: the one entry of package.json `bin`) is Go's JS launcher
+// (packages/typescript/bin/tsc): it starts Node, finds the platform package and execs its native
+// tsc. The Node start costs about 22 ms on every run. On POSIX this script rewrites the bin as a sh
+// and JS polyglot:
 //
 //   #!/bin/sh
 //   ":" //; p=$0; ...; t="${p%/*}/../../@typescript/typescript-linux-x64/lib/tsc"; ...; exec "$t" "$@"
@@ -23,9 +24,10 @@
 // launcher, as with Go.
 //
 // To find the real dir, sh first tries npm's node_modules/.bin/tsc link, with no fork: when $0 is
-// a symlink and ../typescript/bin/tsc from its dir (npm's link target) is the same file (test
-// -ef) and not a symlink, that path is the bin. Else it follows $0 one link at a time, as pnpm's
-// shim does (old macOS has no `readlink -f`). A readlink is a fork and an exec, about 1 ms on the
+// a symlink and npm's link target from its dir (../typescript/bin/tsc, under the install name: also
+// for an alias, and ../@tsc-rs/typescript/bin/tsc for a scoped name) is the same file (test -ef)
+// and not a symlink, that path is the bin. Else it follows $0 one link at a time, as pnpm's shim
+// does (old macOS has no `readlink -f`). A readlink is a fork and an exec, about 1 ms on the
 // .bin path, which runs for every npx and package.json script.
 //
 // Every failure keeps the JS launcher, which still works. It stays on Windows (npm's cmd
@@ -53,14 +55,17 @@ function useNativeBin() {
     if (keepLauncherReason()) return;
     const exe = getExePath();
     const out = execFileSync(exe, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-    // tsc-rs records the version its tsc reports as tscVersion (npm/pack.mjs).
+    // The port's packages record the version their tsc reports as tscVersion (npm/pack.mjs).
     const want = `Version ${pkg.tscVersion ?? pkg.version}`;
     if (out !== want) {
         throw new Error(`${exe} reports "${out}", not "${want}"`);
     }
     const target = path.relative(fs.realpathSync(path.dirname(binPath)), fs.realpathSync(exe));
-    // npm links node_modules/.bin/<bin> to this path.
-    const npmLink = path.relative(path.join(path.dirname(pkgDir), ".bin"), binPath);
+    // npm links node_modules/.bin/<bin> to this path. The .bin dir is in the node_modules dir of
+    // the package, above its scope dir when the install name is scoped.
+    const parts = pkgDir.split(path.sep);
+    const nodeModules = parts.slice(0, parts.lastIndexOf("node_modules") + 1).join(path.sep);
+    const npmLink = path.relative(path.join(nodeModules, ".bin"), binPath);
     // The paths go in sh "..." strings on a JS line comment.
     for (const p of [target, npmLink]) {
         if (/["$`\\\n\r\u2028\u2029]/.test(p)) {

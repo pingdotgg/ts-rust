@@ -78,13 +78,22 @@ npx tsc-rs -p tsconfig.json
 ```
 
 `tsc-rs` takes the same options as `tsc`. The npm package is `tsc-rs` so that it does not clash
-with the `typescript` package. Each [release](https://github.com/pingdotgg/ts-rust/releases) also
-has a standalone archive per platform: the `tsc` binary with the lib files next to it.
+with the `typescript` package. To use tsc-rs as the `typescript` package (its `tsc` bin, its JS API
+and the TypeScript 7 VS Code extension), install
+[@tsc-rs/typescript](npm/typescript-readme.md) under that name (from the first release after
+0.7.0):
+
+```json
+{ "devDependencies": { "typescript": "npm:@tsc-rs/typescript@<version>" } }
+```
+
+Each [release](https://github.com/pingdotgg/ts-rust/releases) also has a standalone archive per
+platform: the `tsc` binary with the lib files next to it.
 
 Platforms: Linux x64 and arm64 (static, any distribution), macOS arm64, and (from the first
 release after 0.2.0) macOS x64, Windows x64 and Windows arm64.
 
-To use it in VS Code, see the [npm package README](npm/tsc-rs-readme.md#vs-code).
+To use it in VS Code, see [@tsc-rs/typescript](npm/typescript-readme.md#vs-code).
 
 ## Effect diagnostics
 
