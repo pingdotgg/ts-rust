@@ -146,7 +146,7 @@ info() { sed 's/^/info /'; }
 # VS Code's resolver: a copy of resolveTsdkPathToExe and its helpers in microsoft/TypeScript
 # packages/vscode-typescript (the same lines at the pin fed0bf24149f and at main 538671d3c of
 # 2026-10-21): src/util.ts lines 305-341 (resolveTsdkPathToExe), 343-353 (realpathUri) and 48
-# (packagedExeBaseNames), src/tsdkPackage.ts lines 4-8 (resolvePackageExecutable). node:fs replaces
+# (packagedExeBaseNames), src/tsdkPackage.ts lines 50-54 (resolvePackageExecutable). node:fs replaces
 # vscode.workspace.fs; the tsdk path is absolute, so workspaceResolve is path.resolve. Prints the
 # ExeInfo as JSON.
 cat > "$work/tools/resolve-tsdk.mjs" << 'EOF'

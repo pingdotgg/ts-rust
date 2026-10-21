@@ -34,12 +34,18 @@ Then run `npx tsc -p tsconfig.json`. `tsc` takes the same options as TypeScript 
 npm version of this package is the tsc-rs version.
 
 The postinstall makes `tsc` start without Node on Linux and macOS, about 20 ms faster per run.
-pnpm runs it only when you allow it, for example with `allowBuilds` in `pnpm-workspace.yaml`:
+Package managers run it only when you allow it:
 
-```yaml
-allowBuilds:
-  "@tsc-rs/typescript": true
-```
+- pnpm: `allowBuilds` in `pnpm-workspace.yaml`:
+
+  ```yaml
+  allowBuilds:
+    "@tsc-rs/typescript": true
+  ```
+
+- npm 12: `npm install-scripts approve @tsc-rs/typescript` (it writes `allowScripts` in
+  `package.json`).
+- bun: `"trustedDependencies": ["typescript"]` in `package.json` (bun uses the install name).
 
 Without it, `tsc` still works through Node.
 

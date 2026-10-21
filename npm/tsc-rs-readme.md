@@ -60,11 +60,17 @@ Then set this in `.vscode/settings.json`, and allow it when VS Code asks:
 { "js/ts.tsdk.path": "node_modules/typescript/lib" }
 ```
 
-With only `tsc-rs` installed, point the extension at the dir of the `tsc` in the platform package:
+With only `tsc-rs` installed, point the extension at the dir of the `tsc` in the platform package.
+With npm that is:
 
 ```json
 { "js/ts.tsdk.path": "node_modules/@tsc-rs/linux-x64/lib" }
 ```
+
+pnpm does not put the platform package there: use
+`node_modules/.pnpm/node_modules/@tsc-rs/linux-x64/lib`. When the path names no `tsc`, the
+extension runs its own bundled TypeScript 7 without an error, so check the server path in its
+output. The drop-in above needs neither path.
 
 On Linux arm64, use `@tsc-rs/linux-arm64`. On macOS, use `@tsc-rs/darwin-arm64` (Apple silicon) or
 `@tsc-rs/darwin-x64` (Intel). On Windows, use `@tsc-rs/win32-x64` or `@tsc-rs/win32-arm64`.
