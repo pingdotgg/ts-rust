@@ -19,8 +19,12 @@ use std::sync::Arc;
 #[derive(Debug, Default)]
 pub struct ReferenceMap {
     references: FxIndexMap<Path, Arc<FxIndexSet<Path>>>,
-    // PORT: Go `referencedBy` plus the `referenceBy` sync.Once.
-    referenced_by: OnceCell<FxHashMap<Path, FxIndexSet<Path>>>,
+    // PORT: Go `referencedBy` plus the `referenceBy` sync.Once. Each set is
+    // a shared list (in the set's order), so `get_referenced_by` does not
+    // copy it.
+    referenced_by: OnceCell<FxHashMap<Path, Arc<[Path]>>>,
+    /// The result of `get_referenced_by` for a path that no file references.
+    no_referencers: Arc<[Path]>,
 }
 
 impl ReferenceMap {
@@ -49,24 +53,29 @@ impl ReferenceMap {
     }
 
     // Go: incremental/referencemap.go:32 getReferencedBy
-    // PORT: Go returns an iterator over the set keys; this returns a copy.
+    // PORT: Go returns an iterator over the set keys; this returns the shared
+    // list in the set's order (perf: a call copies no path; t3inc1).
     #[must_use]
-    pub fn get_referenced_by(&self, path: &Path) -> Vec<Path> {
+    pub fn get_referenced_by(&self, path: &Path) -> Arc<[Path]> {
         let referenced_by = self.referenced_by.get_or_init(|| {
-            let mut referenced_by: FxHashMap<Path, FxIndexSet<Path>> = FxHashMap::default();
+            // PORT: perf (t3inc1). Go adds each file to a set per referenced
+            // path. A file references a path at most once, so a list in the
+            // same order holds the same files, and the referenced paths are
+            // cloned once each, not once per reference. T3 Code apps/web has
+            // 327,661 references: 13 to 14 ms, against 32 to 36 ms for sets.
+            let mut referenced_by: FxHashMap<&Path, Vec<Path>> = FxHashMap::default();
             for (key, value) in &self.references {
                 for ref_ in value.iter() {
-                    referenced_by
-                        .entry(ref_.clone())
-                        .or_default()
-                        .insert(key.clone());
+                    referenced_by.entry(ref_).or_default().push(key.clone());
                 }
             }
             referenced_by
+                .into_iter()
+                .map(|(path, refs)| (path.clone(), refs.into()))
+                .collect()
         });
-        match referenced_by.get(path) {
-            Some(refs) => refs.iter().cloned().collect(),
-            None => Vec::new(),
-        }
+        referenced_by
+            .get(path)
+            .map_or_else(|| Arc::clone(&self.no_referencers), Arc::clone)
     }
 }

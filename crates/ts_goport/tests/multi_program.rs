@@ -21,6 +21,10 @@
 //! The serial bind test runs `goport_typesyms` and `tsgo` with one bind
 //! thread and with four, and compares their outputs.
 //!
+//! The no-emit test runs `tsgo -p` with `incremental` and `noEmit` through
+//! a sequence of edits, and compares each run with a fresh run and with a
+//! run of Go's d.ts walk.
+//!
 //! `pair` writes these files to its out dir: `a.txt`, `a.status`, `b.txt`,
 //! `b.status`, `b.reused` and, with `--first`, `first.txt`. A status file
 //! holds the decimal exit code. `b.reused` holds `true` or `false`.
@@ -1132,6 +1136,191 @@ fn a_serial_bind_with_a_lib_snapshot_in_the_new_lineage_equals_the_parallel_bind
         assert_eq!(other_check, check, "{} tsgo", side.0);
     }
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// The files that import `src/a.ts` directly in `no_emit_large_project_reports_like_fresh_runs`.
+const NO_EMIT_LARGE_IMPORTERS: usize = 40;
+
+/// t3inc1: `tsc -p` with `incremental` and `noEmit` on a project of 82
+/// files, more than the d.ts walk limit (`affected_files.rs`
+/// `skips_dts_walk`), where 80 files import `src/a.ts` (40 directly). The
+/// steps are a change of `Shape` that gives the 40 indirect importers an
+/// error, its revert, an error in `a.ts` that keeps its d.ts, its fix, a
+/// second change of `Shape`, a change of `b0.ts` (only `c0.ts` imports it)
+/// that gives `c0.ts` an error, its revert and a run with no change. After
+/// each step the incremental output must equal a fresh run of the same
+/// files, and a second project that runs Go's walk
+/// (`GOPORT_DTS_WALK_FALLBACK=0`) must report the same. The two build infos
+/// may differ only in `fileInfos`, where the closures store their versions.
+// PORT: no Go counterpart; Go always runs the walk.
+#[test]
+fn no_emit_large_project_reports_like_fresh_runs() {
+    let root = scratch_dir("no-emit-large");
+    let fallback = root.join("fallback");
+    let walk = root.join("walk");
+    for project in [&fallback, &walk] {
+        write_no_emit_large_project(project);
+    }
+    // `src/a.ts` with these `Shape` members and this `x` in `make`.
+    let a = |members: &str, x: &str| {
+        format!(
+            "export interface Shape {{ {members} }}\nexport const make = (): Shape => ({{ x: {x} }});\n"
+        )
+    };
+    let (a_ts, b0_ts) = ("src/a.ts", "src/b0.ts");
+    // (step, file, its text, error lines, signatures in the fallback's build info)
+    let steps = [
+        ("cold", a_ts, a("x: number", "1"), 1, 0),
+        (
+            "wide change",
+            a_ts,
+            a("x: string", "\"1\""),
+            1 + NO_EMIT_LARGE_IMPORTERS,
+            1,
+        ),
+        ("revert", a_ts, a("x: number", "1"), 1, 1),
+        ("error in a.ts", a_ts, a("x: number", "\"1\""), 2, 1),
+        ("fix", a_ts, a("x: number", "1"), 1, 1),
+        (
+            "second wide change",
+            a_ts,
+            a("x: number; y?: number", "1"),
+            1,
+            1,
+        ),
+        (
+            "narrow change",
+            b0_ts,
+            "export const v0 = { x: \"0\" };\n".into(),
+            2,
+            1,
+        ),
+        ("narrow revert", b0_ts, no_emit_large_b(0), 1, 1),
+        ("no change", b0_ts, no_emit_large_b(0), 1, 1),
+    ];
+    for (step, file, text, errors, fallback_signatures) in steps {
+        for project in [&fallback, &walk] {
+            write(&project.join(file), &text);
+        }
+        let incremental = tsgo_no_emit(&fallback, &[], false);
+        let _ = fs::remove_file(fallback.join("fresh.tsbuildinfo"));
+        let fresh = tsgo_no_emit(
+            &fallback,
+            &["--tsBuildInfoFile", "fresh.tsbuildinfo"],
+            false,
+        );
+        let walked = tsgo_no_emit(&walk, &[], true);
+        let at = root.display();
+        assert_eq!(
+            incremental, fresh,
+            "{step}: incremental and fresh runs in {at}"
+        );
+        assert_eq!(
+            walked, incremental,
+            "{step}: Go's walk and the fallback in {at}"
+        );
+        assert_eq!(
+            error_lines(&incremental.stdout).len(),
+            errors,
+            "{step}: errors\n{}",
+            incremental.stdout
+        );
+        let fallback_info = read(&fallback.join("tsconfig.tsbuildinfo"));
+        let walk_info = read(&walk.join("tsconfig.tsbuildinfo"));
+        assert_eq!(
+            without_file_infos(&fallback_info),
+            without_file_infos(&walk_info),
+            "{step}: build info outside fileInfos in {at}"
+        );
+        // The build info writes a signature only where it is not the
+        // version. In the fallback only `a.ts` gets one (`b0.ts` has one
+        // importer, so it uses its version); Go's walk gives one to at least
+        // each importer of `a.ts`.
+        let signatures = |info: &str| info.matches("\"signature\":").count();
+        assert_eq!(
+            signatures(&fallback_info),
+            fallback_signatures,
+            "{step}: {fallback_info}"
+        );
+        if fallback_signatures > 0 {
+            assert!(
+                signatures(&walk_info) > NO_EMIT_LARGE_IMPORTERS,
+                "{step}: {walk_info}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Writes the project of `no_emit_large_project_reports_like_fresh_runs`
+/// without `src/a.ts`: `b<i>.ts` imports `a.ts`, `c<i>.ts` imports
+/// `b<i>.ts`, and `u.ts` has an error.
+fn write_no_emit_large_project(project: &Path) {
+    fs::create_dir_all(project.join("src")).expect("create src");
+    write(
+        &project.join("tsconfig.json"),
+        r#"{"compilerOptions":{"incremental":true,"noEmit":true,"strict":true,"skipLibCheck":true,"types":[]},"include":["src"]}"#,
+    );
+    for i in 0..NO_EMIT_LARGE_IMPORTERS {
+        write(&project.join(format!("src/b{i}.ts")), &no_emit_large_b(i));
+        write(
+            &project.join(format!("src/c{i}.ts")),
+            &format!("import {{ v{i} }} from \"./b{i}\";\nexport const n{i}: number = v{i}.x;\n"),
+        );
+    }
+    write(
+        &project.join("src/u.ts"),
+        "export const u: number = \"u\";\n",
+    );
+}
+
+/// The text of `src/b<i>.ts` in `write_no_emit_large_project`.
+fn no_emit_large_b(i: usize) -> String {
+    format!("import {{ make }} from \"./a\";\nexport const v{i} = make();\n")
+}
+
+/// Runs `tsgo -p tsconfig.json --pretty false <args>` in `project`, with
+/// `GOPORT_DTS_WALK_FALLBACK=0` when `walk` is true.
+fn tsgo_no_emit(project: &Path, args: &[&str], walk: bool) -> Report {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tsgo"));
+    command
+        .args(["-p", "tsconfig.json", "--pretty", "false"])
+        .args(args)
+        .current_dir(project);
+    if walk {
+        command.env("GOPORT_DTS_WALK_FALLBACK", "0");
+    }
+    let run = command.output().expect("run tsgo");
+    Report {
+        stdout: String::from_utf8(run.stdout).expect("tsgo stdout is UTF-8"),
+        status: run.status.code().expect("tsgo exited with a code"),
+    }
+}
+
+/// `build_info` without the value of its `fileInfos` key, a JSON array.
+fn without_file_infos(build_info: &str) -> String {
+    let key = "\"fileInfos\":";
+    let start = build_info.find(key).expect("build info has fileInfos") + key.len();
+    let bytes = build_info.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if in_string => i += 1,
+            b'"' => in_string = !in_string,
+            b'[' | b'{' if !in_string => depth += 1,
+            b']' | b'}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return format!("{}{}", &build_info[..start], &build_info[i + 1..]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    panic!("the fileInfos array of the build info does not end");
 }
 
 /// The diagnostic lines of a tsc report.
