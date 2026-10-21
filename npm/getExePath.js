@@ -25,7 +25,11 @@ export default function getExePath() {
     catch {
         throw new Error(`Unable to resolve ${platformPackageName}. Either your platform is unsupported, or you are missing the package on disk.`);
     }
-    const exe = path.join(exeDir, process.platform === "win32" ? "tsc.exe" : "tsc");
+    let exe = path.join(exeDir, process.platform === "win32" ? "tsc.exe" : "tsc");
+    // As Go's getExePath: a Windows path of 248 characters or more needs the long-path prefix.
+    if (process.platform === "win32" && exe.length >= 248) {
+        exe = "\\\\?\\" + exe;
+    }
     if (!fs.existsSync(exe)) {
         throw new Error(`Executable not found: ${exe}`);
     }
