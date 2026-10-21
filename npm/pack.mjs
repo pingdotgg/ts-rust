@@ -8,17 +8,27 @@
 // postinstall npm/install.js (as lib/install.js), which rewrites bin/tsc on POSIX as a sh and JS
 // polyglot: sh runs the native tsc without Node, and Node runs Go's launcher (see there).
 //
-// PORT: not in Go. `--name tsc-rs` writes the port's own package set from the same input:
-// `tsc-rs` (bin `tsc-rs`, npm/getExePath.js as lib/getExePath.js, npm/tsc-rs-readme.md) and one
-// platform package `@tsc-rs/<os>-<arch>` per --exe. The default name `typescript` is Go's set.
-// tsc-rs has its own --package-version. The tsc keeps reporting the TypeScript version (--version):
-// the compiler matches `typesVersions` against it, so a tsc that reported 0.1.0 would pick the
-// typings that packages keep for TypeScript 5.6 and older. The main package records it as
+// PORT: not in Go. Two more names write the port's own package sets from the same input. Both
+// have the same platform packages `@tsc-rs/<os>-<arch>`, one per --exe (byte for byte: the release
+// publishes them once), and the port's metadata, LICENSE and NOTICE.txt. The default name
+// `typescript` is Go's set.
+//   `--name tsc-rs`: the main package `tsc-rs` (bin `tsc-rs`, npm/getExePath.js as
+//     lib/getExePath.js, npm/tsc-rs-readme.md). It does not clash with a `typescript` install.
+//   `--name @tsc-rs/typescript`: the drop-in for `typescript` ("typescript":
+//     "npm:@tsc-rs/typescript@<v>"), npm/typescript-readme.md. It is Go's main package (bin `tsc`,
+//     Go's lib/getExePath.js unchanged) with two changes. Its optionalDependencies alias the
+//     platform packages under Go's names, "@typescript/typescript-<os>-<arch>":
+//     "npm:@tsc-rs/<os>-<arch>@<v>", so Go's getExePath.js and the VS Code extension's
+//     resolveTsdkPathToExe find the tsc-rs tsc under any install name. Its lib/version.cjs exports
+//     the TypeScript version (see versionCjs below). Only at layout "typescript".
+// Both have their own --package-version. The tsc keeps reporting the TypeScript version
+// (--version): the compiler matches `typesVersions` against it, so a tsc that reported 0.1.0 would
+// pick the typings that packages keep for TypeScript 5.6 and older. The main package records it as
 // `tscVersion`, for the postinstall check.
 //
 // usage: node npm/pack.mjs --layout <typescript|typescript-go> --go-dir <dir> --exe <tsc>...
 //          --libs <dir> --dist <dir> --version <v> --git-head <sha> --out <dir> [--native-bin]
-//          [--name <typescript|tsc-rs>] [--package-version <v>]
+//          [--name <typescript|tsc-rs|@tsc-rs/typescript>] [--package-version <v>]
 //
 // --version is the version the tsc reports. --package-version is the npm version (default
 // --version).
@@ -31,6 +41,9 @@
 // on): --go-dir is <repo>/tsc, the input is <repo>/packages/typescript (it already has bin/tsc and
 // lib/tsc.js), and LICENSE.txt and NOTICE.txt are at <repo>. "typescript-go": the input is
 // <go-dir>/_packages/native-preview (bin/tsgo, lib/tsgo.js), with LICENSE and NOTICE.txt at <go-dir>.
+//
+// Output: one dir per package in --out: `typescript` and `typescript-<os>-<arch>` (Go's set), or
+// `tsc-rs` or `tsc-rs-typescript`, and `tsc-rs-<os>-<arch>`.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,32 +70,47 @@ for (const name of ["layout", "go-dir", "exe", "libs", "dist", "version", "git-h
 }
 const { layout, "go-dir": goDir, libs, dist, version, "git-head": gitHead, out, name } = args;
 if (layout !== "typescript" && layout !== "typescript-go") throw new Error(`unknown --layout ${layout}`);
-if (name !== "typescript" && name !== "tsc-rs") throw new Error(`unknown --name ${name}`);
+// The port's sets, by main package name: the bin and the README.
+const portSets = {
+    "tsc-rs": { binName: "tsc-rs", readme: "tsc-rs-readme.md" },
+    "@tsc-rs/typescript": { binName: "tsc", readme: "typescript-readme.md" },
+};
 const asTypescript = name === "typescript";
-const binName = asTypescript ? "tsc" : name;
+const portSet = portSets[name];
+if (!asTypescript && !portSet) throw new Error(`unknown --name ${name}`);
+// The drop-in keeps Go's main package: Go's name for the platform packages (aliased) and Go's
+// getExePath.js.
+const dropIn = name === "@tsc-rs/typescript";
+const binName = asTypescript ? "tsc" : portSet.binName;
 const packageVersion = args["package-version"] ?? version;
 const atN = layout === "typescript";
+if (dropIn && !atN) throw new Error(`--name ${name} needs --layout typescript`);
 const root = atN ? path.dirname(goDir) : goDir;
 const inputDir = atN ? path.join(root, "packages", "typescript") : path.join(goDir, "_packages", "native-preview");
 const tsLicenseFile = path.join(root, atN ? "LICENSE.txt" : "LICENSE");
 const tsNoticeFile = path.join(root, "NOTICE.txt");
+// The port's output dirs are named as npm pack names the tarball: @scope/name is scope-name.
+const dirName = packageName => packageName.replace(/^@/, "").replace("/", "-");
 
 // Go: Herebyfile.mjs getPlatforms. PORT: the platforms are the --exe values, not only the current
 // platform as in Go's local build.
 const platforms = args.exe.map(value => {
     const match = value.match(/^([a-z0-9]+)-([a-z0-9]+)=(.+)$/);
     const [nodeOs, nodeArch, exe] = match ? match.slice(1) : ["linux", "x64", value];
+    const goName = `@typescript/typescript-${nodeOs}-${nodeArch}`;
     return {
         nodeOs,
         nodeArch,
         exe,
-        packageName: asTypescript ? `@typescript/typescript-${nodeOs}-${nodeArch}` : `@${name}/${nodeOs}-${nodeArch}`,
+        packageName: asTypescript ? goName : `@tsc-rs/${nodeOs}-${nodeArch}`,
+        // The name the main package depends on: Go's name in Go's set and the drop-in.
+        dependencyName: asTypescript || dropIn ? goName : `@tsc-rs/${nodeOs}-${nodeArch}`,
     };
 });
 
 // Go: Herebyfile.mjs getPublishTag (publishAsTypescript). Go's nativePreviewReleaseVersion is
 // undefined at both layouts, so a version with no dev, beta or rc part is refused.
-// PORT: tsc-rs has no such rule; `npm publish --tag` picks its tag.
+// PORT: the port's sets have no such rule; `npm publish --tag` picks their tag.
 function publishTag() {
     const match = version.match(/-(dev|beta|rc)(?:[.-]|$)/);
     if (match?.[1]) return match[1] === "dev" ? "next" : match[1];
@@ -114,8 +142,9 @@ if (asTypescript) {
     input.repository = { type: "git", url: "https://github.com/microsoft/TypeScript.git" };
 }
 else {
-    // PORT: the port's own package. The port is MIT. The JS launcher, the JS API and the lib files
-    // are TypeScript's, unchanged (Apache-2.0). See portNotice below.
+    // PORT: the port's own packages. The port is MIT. The JS launcher, the JS API and the lib files
+    // are TypeScript's, unchanged (Apache-2.0). See portNotice below. The platform packages copy
+    // these fields, so both port sets give the same platform packages.
     input.license = "MIT AND Apache-2.0";
     input.author = "Theo Browne";
     input.description = "A Rust port of the TypeScript 7 compiler";
@@ -134,13 +163,14 @@ input.publishConfig = asTypescript ? { access: "public", tag: publishTag() } : {
 
 fs.rmSync(out, { recursive: true, force: true });
 
-// The main package (`typescript`, or `tsc-rs`).
-const mainDir = path.join(out, name);
+// The main package (`typescript`, `tsc-rs` or `@tsc-rs/typescript`).
+const mainDir = path.join(out, dirName(name));
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.dirname(here);
 
-// PORT: tsc-rs ships the port's MIT LICENSE, and a NOTICE.txt with the licenses and notices of
-// the code it ports or copies (the repo's NOTICE.md and licenses/). Go's set keeps TypeScript's.
+// PORT: the port's sets ship the port's MIT LICENSE, and a NOTICE.txt with the licenses and
+// notices of the code it ports or copies (the repo's NOTICE.md and licenses/). Go's set keeps
+// TypeScript's.
 function portNotice() {
     const part = (title, file) => [`${"=".repeat(78)}\n${title}\n${"=".repeat(78)}\n`, fs.readFileSync(file, "utf8")];
     return [
@@ -164,8 +194,13 @@ function writeLicense(dir) {
 const mainPackage = {
     ...input,
     name,
+    // PORT: the drop-in's own description. Its platform packages keep the port's.
+    ...(dropIn ? { description: "A Rust port of the TypeScript 7 compiler, as a drop-in for the typescript package" } : {}),
     ...(asTypescript ? {} : { tscVersion: version }),
-    optionalDependencies: Object.fromEntries(platforms.map(p => [p.packageName, packageVersion])),
+    // PORT: the drop-in aliases the port's platform packages under Go's names.
+    optionalDependencies: Object.fromEntries(
+        platforms.map(p => [p.dependencyName, dropIn ? `npm:${p.packageName}@${packageVersion}` : packageVersion]),
+    ),
 };
 if (atN) {
     // Go copies the whole input but node_modules and dist; its filter sees the path from the repo.
@@ -193,8 +228,13 @@ if (asTypescript) {
     fs.copyFileSync(path.join(inputDir, "typescript-package-readme.md"), path.join(mainDir, "README.md"));
 }
 else {
-    fs.copyFileSync(path.join(here, `${name}-readme.md`), path.join(mainDir, "README.md"));
+    fs.copyFileSync(path.join(here, portSet.readme), path.join(mainDir, "README.md"));
+}
+if (name === "tsc-rs") {
     fs.copyFileSync(path.join(here, "getExePath.js"), path.join(mainDir, "lib", "getExePath.js"));
+}
+if (dropIn) {
+    fs.writeFileSync(path.join(mainDir, "lib", "version.cjs"), versionCjs(fs.readFileSync(path.join(mainDir, "lib", "version.cjs"), "utf8")));
 }
 if (args["native-bin"]) {
     // PORT: not in Go. The native bin on POSIX (npm/install.js).
@@ -204,9 +244,30 @@ if (args["native-bin"]) {
 writeJson(path.join(mainDir, "package.json"), mainPackage);
 writeLicense(mainDir);
 
+// PORT: the drop-in's lib/version.cjs. Go's exports package.json `version`, which is the TypeScript
+// version in Go's package. The drop-in's npm version is the port's own (0.8.0), and tools compare
+// require("typescript").version with TypeScript versions, so it exports `tscVersion`, the version
+// the tsc reports. Go's versionMajorMinor stays; it must be the major.minor of that version.
+function versionCjs(go) {
+    // Go's file: the version line, `exports.version = version;` and versionMajorMinor (CRLF in
+    // some checkouts).
+    const lines = go.split(/\r?\n/);
+    const majorMinor = lines[2]?.match(/^exports\.versionMajorMinor = "(\d+\.\d+)";$/)?.[1];
+    if (lines[0] !== 'const { version } = require("../package.json");' || lines[1] !== "exports.version = version;" || !majorMinor) {
+        throw new Error(`unexpected lib/version.cjs at the pin:\n${go}`);
+    }
+    if (!version.startsWith(`${majorMinor}.`)) throw new Error(`the tsc reports ${version}, not ${majorMinor}.x (lib/version.cjs)`);
+    return [
+        "// PORT: tsc-rs. package.json `version` is the tsc-rs npm version; `tscVersion` is the TypeScript",
+        "// version that the tsc reports (npm/pack.mjs versionCjs).",
+        'const { tscVersion: version } = require("../package.json");',
+        ...lines.slice(1),
+    ].join("\n");
+}
+
 // The platform packages: the lib files and the native tsc in lib/.
 for (const { nodeOs, nodeArch, exe, packageName } of platforms) {
-    const platformDir = path.join(out, `${name}-${nodeOs}-${nodeArch}`);
+    const platformDir = path.join(out, asTypescript ? `typescript-${nodeOs}-${nodeArch}` : dirName(packageName));
     const platformPackage = {
         ...input,
         bin: undefined,
@@ -225,12 +286,14 @@ for (const { nodeOs, nodeArch, exe, packageName } of platforms) {
     fs.chmodSync(path.join(platformDir, "lib", exeName), 0o755);
     writeJson(path.join(platformDir, "package.json"), platformPackage);
     writeLicense(platformDir);
+    // PORT: the port's platform packages serve both port sets.
+    const mains = asTypescript ? ["typescript"] : Object.keys(portSets);
     fs.writeFileSync(
         path.join(platformDir, "README.md"),
         [
             `# \`${packageName}\``,
             "",
-            `This package provides ${nodeOs}-${nodeArch} support for [${name}](https://www.npmjs.com/package/${name}).`,
+            `This package provides ${nodeOs}-${nodeArch} support for ${mains.map(m => `[${m}](https://www.npmjs.com/package/${m})`).join(" and ")}.`,
         ].join("\n") + "\n",
     );
 }

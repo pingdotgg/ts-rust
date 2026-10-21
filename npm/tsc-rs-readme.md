@@ -46,12 +46,31 @@ effect-tsgo 0.51.1. See [the Effect diagnostics doc](https://github.com/pingdotg
 ## VS Code
 
 The TypeScript 7 extension looks for the `typescript` package, so it does not find `tsc-rs` by
-itself. Point it at the dir of the `tsc` in the platform package, in `.vscode/settings.json`, and
-allow it when VS Code asks:
+itself. Install tsc-rs as the `typescript` package with
+[@tsc-rs/typescript](https://www.npmjs.com/package/@tsc-rs/typescript) (from the first release
+after 0.7.0):
+
+```json
+{ "devDependencies": { "typescript": "npm:@tsc-rs/typescript@<version>" } }
+```
+
+Then set this in `.vscode/settings.json`, and allow it when VS Code asks:
+
+```json
+{ "js/ts.tsdk.path": "node_modules/typescript/lib" }
+```
+
+With only `tsc-rs` installed, point the extension at the dir of the `tsc` in the platform package.
+With npm that is:
 
 ```json
 { "js/ts.tsdk.path": "node_modules/@tsc-rs/linux-x64/lib" }
 ```
+
+pnpm does not put the platform package there: use
+`node_modules/.pnpm/node_modules/@tsc-rs/linux-x64/lib`. When the path names no `tsc`, the
+extension runs its own bundled TypeScript 7 without an error, so check the server path in its
+output. The drop-in above needs neither path.
 
 On Linux arm64, use `@tsc-rs/linux-arm64`. On macOS, use `@tsc-rs/darwin-arm64` (Apple silicon) or
 `@tsc-rs/darwin-x64` (Intel). On Windows, use `@tsc-rs/win32-x64` or `@tsc-rs/win32-arm64`.

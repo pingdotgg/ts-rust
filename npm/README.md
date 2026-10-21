@@ -1,7 +1,7 @@
 # npm packages
 
 Local npm packages for the port, in the layout of the Go packages at the pin, and the port's own
-published set `tsc-rs` (see "tsc-rs releases" below).
+published sets `tsc-rs` and `@tsc-rs/typescript` (see "tsc-rs releases" below).
 
 - `typescript`: Go's JS launcher (`bin/tsc`, `lib/tsc.js`, `lib/getExePath.js`) and JS API (`dist`).
 - `@typescript/typescript-linux-x64`: `lib/tsc` (a noembed build) and the lib files next to it.
@@ -26,6 +26,7 @@ Files:
   (`buildNativePreviewPackages`, release profile `typescript`).
 - `install.js` is the postinstall.
 - `getExePath.js` and `tsc-rs-readme.md` replace Go's launcher lookup and README in `tsc-rs`.
+- `typescript-readme.md` is the README of `@tsc-rs/typescript`.
 
 Build, test and time (see the header of each script):
 
@@ -67,6 +68,27 @@ against that version. A tsc that reported 0.1.0 picked the `<=5.6` typings of zo
 and lost 2 of Go's 21 zod errors. The main package records the tsc version as `tscVersion` for the
 postinstall check.
 
+`@tsc-rs/typescript` is the drop-in for the `typescript` package: a project installs it under that
+name, `"typescript": "npm:@tsc-rs/typescript@<v>"` (in `package.json`, a pnpm catalog or
+overrides). It is Go's main package (bin `tsc`, Go's `lib/getExePath.js` unchanged, the JS API and
+Go's `exports`), with the port's metadata, its postinstall, `npm/typescript-readme.md` and two
+changes:
+
+- Its `optionalDependencies` alias the tsc-rs platform packages under Go's names:
+  `"@typescript/typescript-linux-x64": "npm:@tsc-rs/linux-x64@<v>"`. Go's `getExePath.js` and the
+  VS Code extension's resolver (`resolveTsdkPathToExe` in microsoft/TypeScript
+  `packages/vscode-typescript/src/util.ts`) find `@typescript/typescript-<platform>-<arch>` from
+  the package dir, so they find the tsc-rs tsc under any install name. npm, pnpm and bun install
+  only the alias of the current platform.
+- `lib/version.cjs` exports `tscVersion` as `version` (Go's exports package.json `version`), so
+  `require("typescript").version` is the TypeScript version that tools compare. package.json
+  `version` stays the npm version, which the VS Code extension shows.
+
+Both sets have the same platform packages, byte for byte (the release workflow compares the
+tarballs), and the release publishes them once. A package with a peer dependency on `typescript`
+sees the npm version: npm stops with ERESOLVE (also for an optional peer) and pnpm warns.
+`npm/typescript-readme.md` gives the overrides that accept it.
+
 The release workflow (`.github/workflows/release.yml`) makes a release:
 
 1. Push a tag `v<version>`, for example `git tag v0.1.0 && git push origin v0.1.0`. The npm
@@ -79,19 +101,22 @@ The release workflow (`.github/workflows/release.yml`) makes a release:
    Windows runner: darwin-x64 builds on GitHub's `macos-15-intel` and win32-arm64 on GitHub's
    `windows-11-arm`.
 3. It packs the set with `npm-pack.sh --name tsc-rs --package-version <v> --also linux-arm64=<tsc> --also darwin-arm64=<tsc> --also darwin-x64=<tsc> --also win32-x64=<tsc.exe> --also win32-arm64=<tsc.exe>`,
-   makes one archive per platform (the tsc, the lib files, LICENSE and NOTICE.txt; a .tar.gz, and
-   a .zip for Windows) and installs the packages in a fresh project on each platform
-   (GitHub-hosted `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel`,
-   `windows-latest` and `windows-11-arm`).
-4. It publishes the platform packages, then `tsc-rs`, and creates a GitHub release with the
-   archives, the .tgz files and `SHA256SUMS`. A stable version goes to the dist-tag `latest` and a
+   and `@tsc-rs/typescript` with the same line and `--name @tsc-rs/typescript` (its platform
+   packages must be the same bytes), makes one archive per platform (the tsc, the lib files,
+   LICENSE and NOTICE.txt; a .tar.gz, and a .zip for Windows) and installs the packages in a fresh
+   project on each platform (GitHub-hosted `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`,
+   `macos-15-intel`, `windows-latest` and `windows-11-arm`): `tsc-rs`, and `@tsc-rs/typescript`
+   under the name `typescript`.
+4. It publishes the platform packages, then `tsc-rs` and `@tsc-rs/typescript`, and creates a
+   GitHub release with the archives, the .tgz files and `SHA256SUMS`. A stable version goes to the dist-tag `latest` and a
    normal release. A version with a prerelease part (`0.2.0-beta.1`) goes to `next` and a GitHub
    prerelease. The publish uses npm
    trusted publishing (see below), so there is no npm token in the repo.
 
 Pull requests that change the release files run steps 2 and 3 with the version `0.0.0-ci.<run>`.
 To make a prerelease the default after a check of `npx tsc-rs@next` on each platform, run
-`npm dist-tag add tsc-rs@<v> latest`, and the same for each platform package.
+`npm dist-tag add tsc-rs@<v> latest`, and the same for `@tsc-rs/typescript` and each platform
+package.
 
 The CI builds are PGO builds of the shipped profile (fat LTO): `build-pgo.sh` trains each
 platform's tsc on the set of `scripts/goport/pgo-train.sh`, and the job fails unless the PGO tsc
@@ -112,10 +137,18 @@ GOPORT_PIN=<pin> scripts/goport/npm-pack.sh --name tsc-rs --package-version <v> 
 scripts/goport/npm-test.sh --name tsc-rs <out>/pkg <out>/test
 ```
 
+`@tsc-rs/typescript` packs into the same `<out>/pkg` with the same line and `--name
+@tsc-rs/typescript` (each run replaces only its own packages). `npm-test.sh --name
+@tsc-rs/typescript <out>/pkg <out>/test-ts` tests it from the tarballs.
+`scripts/goport/npm-alias-test.sh <out>/pkg <out>/alias` (on a boat sandbox) publishes the set to
+a local registry and installs it as `typescript` with npm, pnpm (isolated, hoisted, the global
+virtual store) and bun. It also runs a copy of the VS Code resolver and an LSP initialize, and
+checks the install for another platform.
+
 ### Trusted publishing
 
 npm trusts the workflow file `release.yml` of `pingdotgg/ts-rust`, in the GitHub environment
-`npm`, to publish each of the 7 packages (OIDC, no token). Set it up once with
+`npm`, to publish each of the 8 packages (OIDC, no token). Set it up once with
 `npm/trust-setup.sh`, logged in to npm with 2FA and npm 11.15.0 or later. It publishes a
 `0.0.0-placeholder` version of a package that is not on npm yet, because npm can only trust a
 workflow for a package that exists. The workflow refuses `0.0.x` tags, so a release never
@@ -126,8 +159,9 @@ Environments) to approve each publish by hand.
 The first publish binds each trust to the repo's GitHub ID, not only its name. After the repo is
 recreated, run `npm/trust-setup.sh --relink`: it revokes the old trusts and creates new ones for
 the new repo. The 2026-10-07 recreation needs no relink: v0.1.0 already published from the new
-repo. To add a platform package, run plain `npm/trust-setup.sh` shortly before the next tag: it
-publishes the new package's placeholder, adds its trust and leaves the other packages as they are.
+repo. To add a package (a platform, or `@tsc-rs/typescript` before its first release), run plain
+`npm/trust-setup.sh` shortly before the next tag: it publishes the new package's placeholder, adds
+its trust and leaves the other packages as they are.
 
 While the repo is private, npm publishes with no provenance. From a public repo it adds
 provenance by itself.
