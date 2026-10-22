@@ -33,7 +33,7 @@ concurrency:
 
 env:
   # A commit of github.com/t3dotgg/lust-lang. The disk keeps the lust built from it.
-  LUST_REF: 0b08aedd43c53ec5209e1b0976981656f7c7d25a
+  LUST_REF: 73af0a13420905c4bb319864f16df3ffa3380ded
   ZIG_VERSION: 0.15.2
   # lust's object cache: one tsc build holds about 1 GB of objects.
   LUST_CACHE_MAX_BYTES: "16000000000"
