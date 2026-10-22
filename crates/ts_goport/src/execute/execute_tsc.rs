@@ -575,7 +575,14 @@ pub(crate) fn get_trace_from_sys(
 // PORT: the new program is installed for the process (see the module
 // comment). Go `NewProgram` cannot fail; the Rust install fails only when
 // the current directory cannot be read, and that ends the run.
+// PORT: in the multi-run flow (`program::multirun`), the program is a
+// program version of the process instead (`install_program_version`), so a
+// later run can load another version.
 pub(crate) fn install_program(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) {
+    if crate::program::multirun::is_enabled() {
+        crate::program::multirun::install_program_version(host, config);
+        return;
+    }
     if let Err(message) = crate::program::install_new_program(program_options(host, config)) {
         panic!("cannot load program: {message}");
     }
@@ -763,6 +770,10 @@ fn perform_compilation(
         Some(get_trace_from_sys(sys, config.locale(), testing.clone())),
         content_mapper_project,
     );
+    // PORT: in the multi-run flow, the host of the run sits over the parse
+    // cache of the process (`program::multirun`), so a run reuses the
+    // parses of the files that an earlier run saw with the same mtime.
+    let host = crate::program::multirun::wrap_host(host);
     let config = Rc::new(config);
 
     start_tracing_if_needed(sys, &config, testing.is_some());
