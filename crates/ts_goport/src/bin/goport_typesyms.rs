@@ -98,7 +98,7 @@ fn install_panic_hook() {
             if std::env::var_os("GOPORT_TRACE").is_some() {
                 eprintln!(
                     "trace: {message}\n{}",
-                    std::backtrace::Backtrace::force_capture()
+                    ts_goport::backtrace::force_capture()
                 );
             }
             return;

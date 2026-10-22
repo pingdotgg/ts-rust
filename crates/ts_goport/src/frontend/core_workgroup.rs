@@ -27,7 +27,9 @@ pub trait WorkGroup<'a> {
 // language-service work group runs on the dispatch thread, so the port
 // always makes the single-threaded group. Its functions run last-in
 // first-out, as in Go's single-threaded group.
-pub fn new_work_group<'a>(single_threaded: bool) -> Rc<dyn WorkGroup<'a> + 'a> {
+// PORT: returns the concrete group, not `Rc<dyn WorkGroup<'a>>` (lust has no
+// lifetime arguments of a trait in a `dyn` type).
+pub fn new_work_group<'a>(single_threaded: bool) -> Rc<SingleThreadedWorkGroup<'a>> {
     let _ = single_threaded;
     Rc::new(SingleThreadedWorkGroup {
         done: Cell::new(false),

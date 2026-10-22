@@ -94,14 +94,22 @@ struct FreeAfterMessage {
 impl FreeAfterMessage {
     /// Counts one more running message until the guard drops, also on a
     /// panic. The guard of the top-level message runs the frees.
-    fn enter(&self) -> Defer<impl FnMut() + '_> {
+    fn enter(&self) -> MessageGuard<'_> {
         self.depth.set(self.depth.get() + 1);
-        Defer(move || {
-            self.depth.set(self.depth.get() - 1);
-            if self.depth.get() == 0 {
-                crate::gostd::local::drop_garbage(|| false);
-            }
-        })
+        MessageGuard(self)
+    }
+}
+
+/// The guard of `FreeAfterMessage::enter`. A named type, not a `Defer` of a
+/// closure, because lust does not take `impl Trait` inside a return type.
+struct MessageGuard<'a>(&'a FreeAfterMessage);
+
+impl Drop for MessageGuard<'_> {
+    fn drop(&mut self) {
+        self.0.depth.set(self.0.depth.get() - 1);
+        if self.0.depth.get() == 0 {
+            crate::gostd::local::drop_garbage(|| false);
+        }
     }
 }
 

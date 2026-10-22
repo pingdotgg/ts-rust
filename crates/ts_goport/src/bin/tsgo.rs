@@ -1039,7 +1039,7 @@ fn install_panic_hook() {
                 let _ = writeln!(
                     std::io::stderr(),
                     "trace: {message}\n{}",
-                    std::backtrace::Backtrace::force_capture()
+                    ts_goport::backtrace::force_capture()
                 );
             }
             return;
@@ -1055,7 +1055,7 @@ fn install_panic_hook() {
             let _ = writeln!(
                 std::io::stderr(),
                 "{}",
-                std::backtrace::Backtrace::force_capture()
+                ts_goport::backtrace::force_capture()
             );
         }
     }));

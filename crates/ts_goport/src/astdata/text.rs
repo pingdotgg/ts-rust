@@ -96,8 +96,36 @@ impl fmt::Debug for SourceText {
             .debug_struct("SourceText")
             .field("bytes", &self.bytes)
             .field("scannable", &self.scannable)
-            .field("invalid_byte_ranges", &self.invalid_byte_ranges)
+            .field(
+                "invalid_byte_ranges",
+                &RangesDebug(&self.invalid_byte_ranges),
+            )
             .finish()
+    }
+}
+
+// lust: `RangesDebug` and `RangeDebug` print a range list as std's Debug of
+// `[Range<usize>]` does, for `{:?}` and `{:#?}` (lust has no Debug of a range
+// inside a container). Used only by `SourceText`'s Debug.
+struct RangesDebug<'a>(&'a [Range<usize>]);
+
+impl fmt::Debug for RangesDebug<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_list()
+            .entries(self.0.iter().map(|range| RangeDebug(range)))
+            .finish()
+    }
+}
+
+struct RangeDebug<'a>(&'a Range<usize>);
+
+impl fmt::Debug for RangeDebug<'_> {
+    // The same steps as std's `impl Debug for Range`.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.start.fmt(formatter)?;
+        formatter.write_str("..")?;
+        self.0.end.fmt(formatter)
     }
 }
 
@@ -336,8 +364,10 @@ impl Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::{
-        Diagnostic, DiagnosticCategory, JsString, PositionMap, SourceText, TextPos, TextRange,
+        Diagnostic, DiagnosticCategory, JsString, PositionMap, RangesDebug, SourceText, TextPos,
+        TextRange,
     };
+    use std::ops::Range;
 
     #[test]
     fn diagnostics_support_legacy_and_typescript_metadata() {
@@ -360,6 +390,26 @@ mod tests {
         assert_eq!(source.invalid_byte_ranges(), &[1..2, 3..5]);
         assert_eq!(source.as_scannable_str().len(), source.len());
         assert!(source.as_str().is_none());
+    }
+
+    #[test]
+    fn source_text_debug_prints_ranges_as_std() {
+        let ranges: [Range<usize>; 3] = [1..2, 3..5, 10..usize::MAX];
+        let ours = RangesDebug(&ranges);
+        assert_eq!(format!("{ours:?}"), format!("{:?}", &ranges[..]));
+        assert_eq!(format!("{ours:#?}"), format!("{:#?}", &ranges[..]));
+        assert_eq!(format!("{ours:x?}"), format!("{:x?}", &ranges[..]));
+        assert_eq!(format!("{ours:#X?}"), format!("{:#X?}", &ranges[..]));
+        assert_eq!(format!("{ours:5?}"), format!("{:5?}", &ranges[..]));
+        let none = RangesDebug(&[]);
+        assert_eq!(
+            format!("{none:#?}"),
+            format!("{:#?}", &[] as &[Range<usize>])
+        );
+        let source = SourceText::from_bytes(vec![b'a', 0x80, b'b', 0xf0, 0x9f]);
+        let pretty = format!("{source:#?}");
+        assert!(pretty.contains("invalid_byte_ranges: [\n        1..2,\n        3..5,\n    ],"));
+        assert!(format!("{source:?}").ends_with("invalid_byte_ranges: [1..2, 3..5] }"));
     }
 
     #[test]

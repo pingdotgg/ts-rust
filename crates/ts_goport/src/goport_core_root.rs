@@ -80,4 +80,4 @@ pub mod transpile;
 pub use goport_util::{go_assert, unported};
 
 pub mod astnav;
-pub use goport_util::{fswatch, gostd, jsonrpc};
+pub use goport_util::{backtrace, fswatch, gostd, jsonrpc};

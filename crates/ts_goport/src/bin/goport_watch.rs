@@ -190,6 +190,13 @@ fn wait_for_builds(output: &Mutex<Vec<u8>>, count: usize) -> bool {
 struct SharedOutput(Arc<Mutex<Vec<u8>>>);
 
 impl Write for SharedOutput {
+    // One `write_all` of the whole text per `write!`, as Go's `fmt.Fprintf`
+    // makes one write (std's default writes each format piece; the bytes are
+    // the same).
+    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        self.write_all(std::fmt::format(args).as_bytes())
+    }
+
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.lock().expect("output").extend_from_slice(buf);
         Ok(buf.len())

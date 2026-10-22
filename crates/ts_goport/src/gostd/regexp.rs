@@ -2167,7 +2167,8 @@ pub mod syntax {
 
                 // Single character or simple range.
                 let rng = t;
-                let (lo, mut hi);
+                let lo;
+                let mut hi;
                 (lo, t) = self.parse_class_char(t, s)?;
                 hi = lo;
                 // [a-] means (a|-) so check for final ].

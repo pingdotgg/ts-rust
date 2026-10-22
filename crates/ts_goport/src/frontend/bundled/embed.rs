@@ -11,7 +11,7 @@
 //! stream up to each lib on its first read. The names and texts do not
 //! change.
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "lib-snapshot"))]
 use super::{SNAPSHOT_TEXT_MIN, const_hash};
 use crate::frontend::prelude::*;
 #[cfg(not(target_family = "wasm"))]
@@ -57,7 +57,7 @@ pub fn is_bundled(path: &str) -> bool {
 /// brought every page of lib.dom (2.3 MB of the binary) into the RSS of a
 /// program that uses it. With this hash a load reads no page of the text.
 // PORT: not in Go.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "lib-snapshot"))]
 #[must_use]
 pub fn embedded_text_hash(text: &str) -> Option<u64> {
     EMBEDDED_CONTENTS
@@ -67,9 +67,10 @@ pub fn embedded_text_hash(text: &str) -> Option<u64> {
 }
 
 /// wasm: always `None`. The wasm build reads no snapshot
-/// (`bundled_lib_name`), so no key needs the hash.
+/// (`bundled_lib_name`), so no key needs the hash. The same without
+/// `lib-snapshot` (lust dev builds), which has no snapshot blobs.
 // PORT: not in Go.
-#[cfg(target_family = "wasm")]
+#[cfg(any(target_family = "wasm", not(feature = "lib-snapshot")))]
 #[must_use]
 pub fn embedded_text_hash(_text: &str) -> Option<u64> {
     None
@@ -256,14 +257,9 @@ fn new_file_info(name: &str, mode: FileMode, size: i64) -> FileInfo {
 #[cfg(not(target_family = "wasm"))]
 fn embedded_contents(rest: &str) -> Option<&'static str> {
     static MAP: OnceLock<FxHashMap<&'static str, &'static str>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        EMBEDDED_CONTENTS
-            .iter()
-            .map(|&(path, text, _)| (path, text))
-            .collect()
-    })
-    .get(rest)
-    .copied()
+    MAP.get_or_init(|| EMBEDDED_CONTENTS.iter().map(|lib| (lib.0, lib.1)).collect())
+        .get(rest)
+        .copied()
 }
 
 // Go: embed_generated.go:242 embeddedContents
@@ -336,8 +332,11 @@ pub(crate) fn unpack(packed: &[u8]) -> String {
 }
 
 /// One `EMBEDDED_CONTENTS` entry (see `bundled_lib!`).
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "lib-snapshot"))]
 type EmbeddedLib = (&'static str, &'static str, u64);
+/// Without `lib-snapshot` (lust dev builds): the path and the text, no hash.
+#[cfg(all(not(target_family = "wasm"), not(feature = "lib-snapshot")))]
+type EmbeddedLib = (&'static str, &'static str);
 /// wasm: the path. The texts are in one stream (`embedded_contents`).
 #[cfg(target_family = "wasm")]
 type EmbeddedLib = &'static str;
@@ -348,7 +347,7 @@ type EmbeddedLib = &'static str;
 // manifest dir is not `crates/ts_goport`.
 // `crates/ts_goport/scripts/copy-libs.sh` copies the same set for a noembed
 // build.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "lib-snapshot"))]
 macro_rules! bundled_lib {
     ($name:literal) => {{
         const TEXT: &str = include_str!(concat!("../../../libs/", $name));
@@ -357,6 +356,19 @@ macro_rules! bundled_lib {
         const HASH: u64 = snapshot_text_hash(TEXT);
         (concat!("libs/", $name), TEXT, HASH)
     }};
+}
+
+/// Without `lib-snapshot` (lust dev builds): no compile-time hash. It costs
+/// about 3 s, and it is a const that each edit to a snapshot lib changes.
+// PORT: not in Go.
+#[cfg(all(not(target_family = "wasm"), not(feature = "lib-snapshot")))]
+macro_rules! bundled_lib {
+    ($name:literal) => {
+        (
+            concat!("libs/", $name),
+            include_str!(concat!("../../../libs/", $name)),
+        )
+    };
 }
 
 /// wasm: one `EMBEDDED_CONTENTS` entry: the path.
@@ -371,7 +383,7 @@ macro_rules! bundled_lib {
 /// `const_hash` of `text` for a snapshot lib (`SNAPSHOT_TEXT_MIN`), else 0.
 /// Only the three snapshot libs are hashed, so the compile-time evaluation
 /// stays short (about 3 s for 3.4 MB).
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "lib-snapshot"))]
 const fn snapshot_text_hash(text: &str) -> u64 {
     if text.len() >= SNAPSHOT_TEXT_MIN {
         const_hash(text.as_bytes())
@@ -499,7 +511,7 @@ static EMBEDDED_CONTENTS: &[EmbeddedLib] = &[
     bundled_lib!("lib.webworker.iterable.d.ts"),
 ];
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lib-snapshot"))]
 mod tests {
     use super::*;
 

@@ -174,7 +174,7 @@ impl FileVersion {
     /// Takes the data out of a version that dies (`PinRelease`): its store
     /// and `GoFile`, name table, position map, declaration map and
     /// identifier set. The version then drops with nothing to free.
-    fn take_data(&mut self) -> impl Send + use<> {
+    fn take_data(&mut self) -> VersionData {
         (
             self.published.take(),
             self.name_table.take(),
@@ -195,6 +195,18 @@ impl FileVersion {
         }
     }
 }
+
+/// The data that `FileVersion::take_data` takes out of a dying version.
+/// Callers only drop it (often on a free thread).
+// Not an opaque `impl Send` return type: the named type is the same type,
+// and lust can check it.
+pub(crate) type VersionData = (
+    Option<VersionStore>,
+    Option<FxHashMap<String, i32>>,
+    Option<PositionMap>,
+    Option<FxHashMap<String, Vec<Node>>>,
+    Option<FxHashSet<&'static str>>,
+);
 
 impl Drop for FileVersion {
     // The store and `GoFile` (`published`) are freed after this, with the
@@ -753,7 +765,7 @@ impl Drop for PinRelease {
 /// (`released`) from now on. `None` when another holder keeps the version
 /// (a guard, or the tables of a program on another thread): the `Arc`
 /// drops here as usual, and the version dies with its last holder.
-fn kill_and_take_data(version: Arc<FileVersion>) -> Option<(usize, impl Send + use<>)> {
+fn kill_and_take_data(version: Arc<FileVersion>) -> Option<(usize, VersionData)> {
     let mut version = Arc::try_unwrap(version).ok()?;
     // Before `take_data`, which takes the store that it reads.
     let nodes = version.node_count();
@@ -769,9 +781,7 @@ fn kill_and_take_data(version: Arc<FileVersion>) -> Option<(usize, impl Send + u
 /// parses that a config change drops this way
 /// (`BuildHost::drop_kept_parses_whose_module_indicator_options_change`),
 /// as Go's GC frees the files of the old program.
-pub(crate) fn take_data_of_dying_versions(
-    versions: Vec<Arc<FileVersion>>,
-) -> Vec<impl Send + use<>> {
+pub(crate) fn take_data_of_dying_versions(versions: Vec<Arc<FileVersion>>) -> Vec<VersionData> {
     versions
         .into_iter()
         .filter_map(kill_and_take_data)

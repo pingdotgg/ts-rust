@@ -184,7 +184,7 @@ impl SyncConn {
         };
         {
             let r = recovered_value(payload.as_ref());
-            let stack = std::backtrace::Backtrace::force_capture().to_string();
+            let stack = crate::backtrace::force_capture();
             let err = errors::new(format!("panic: {r}\n{stack}"));
 
             // The panic answer runs in Go's deferred recover: a panic in it

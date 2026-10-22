@@ -71,6 +71,14 @@ notify = { version = "=8.2.0", default-features = false, features = ["macos_fsev
 notify = { version = "=8.2.0", default-features = false }
 
 [features]
+default = ["lib-snapshot", "backtrace"]
+# The compile-time hash of each snapshot lib text (frontend/bundled/embed.rs
+# `embedded_text_hash`). Build it through ts_goport's feature.
+lib-snapshot = []
+# Real backtraces in panic logs, panic replies and GOPORT_TRACE output
+# (src/backtrace.rs). Off (lust dev builds, .lust.toml), each gives a fixed
+# text. Build it through ts_goport's feature.
+backtrace = []
 # Go build tag `noembed`: the lib files are read from next to the binary, not
 # embedded (src/frontend/bundled.rs). Build it through ts_goport's feature.
 noembed = []

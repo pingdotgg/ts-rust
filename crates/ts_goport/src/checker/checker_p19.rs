@@ -1165,7 +1165,9 @@ fn xxh3_hash128_9to16(input_lo: u64, input_hi: u64, l: u64) -> (u64, u64) {
 /// 8-byte reads fold into register moves.
 #[inline(always)]
 fn short_key_hash<const N: usize>(p: &[u8; N]) -> CacheHashKey {
-    const { assert!(N > 8 && N <= 16) };
+    // A debug check, not `const { assert!(..) }`: lust has no inline const
+    // that reads a generic parameter. Both callers pass N = 12 or 16.
+    debug_assert!(N > 8 && N <= 16, "short_key_hash: N must be 9..=16");
     let (hi, lo) = xxh3_hash128_9to16(xxh_read64(p, 0), xxh_read64(p, N - 8), N as u64);
     CacheHashKey { hi, lo }
 }
@@ -1184,7 +1186,8 @@ fn xxh3_hash128(p: &[u8]) -> (u64, u64) {
     let l = p.len();
     let lu = l as u64;
     if l <= 16 {
-        let (lo, hi);
+        let lo;
+        let hi;
         if l > 8 {
             return xxh3_hash128_9to16(xxh_read64(p, 0), xxh_read64(p, l - 8), lu);
         } else if l > 3 {

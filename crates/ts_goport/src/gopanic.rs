@@ -258,7 +258,7 @@ pub fn go_work_group_task<R>(f: impl FnOnce() -> R) -> R {
 #[track_caller]
 pub fn go_fatal_newosproc(err: &std::io::Error) -> ! {
     // PORT: Go prints `mcount()`, its own count of threads.
-    let threads = std::fs::read_dir("/proc/self/task").map_or(0, Iterator::count);
+    let threads = std::fs::read_dir("/proc/self/task").map_or(0, |tasks| tasks.count());
     let errno = err.raw_os_error().unwrap_or(0);
     let mut text = format!(
         "runtime: failed to create new OS thread (have {threads} already; errno={errno})\n"
@@ -554,12 +554,7 @@ pub fn go_recovered_stack(r: &(dyn std::any::Any + Send)) -> String {
             panic.location.line()
         );
     }
-    let backtrace = std::backtrace::Backtrace::capture();
-    if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
-        backtrace.to_string()
-    } else {
-        String::new()
-    }
+    crate::backtrace::captured().unwrap_or_default()
 }
 
 // Go: runtime/panic.go:1581 dopanic_m (go1.27.1), Linux: the line for a

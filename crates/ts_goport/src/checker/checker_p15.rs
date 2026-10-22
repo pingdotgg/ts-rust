@@ -397,7 +397,8 @@ impl Checker {
                 // as an ordinary function declaration with a single parameter and a Void return type.
                 debug_assert!(
                     member_decl.kind() == SyntaxKind::GetAccessor
-                        || member_decl.kind() == SyntaxKind::SetAccessor
+                        || member_decl.kind() == SyntaxKind::SetAccessor,
+                    "assertion failed: member_decl.kind() == SyntaxKind::GetAccessor || member_decl.kind() == SyntaxKind::SetAccessor"
                 );
                 self.check_node_deferred(member_decl);
             }
@@ -1820,7 +1821,8 @@ fn is_inline_import_attributes(node: Node, parent: Node) -> bool {
     debug_assert!(
         is_object_literal_expression(node)
             && is_property_assignment(parent)
-            && parent == node.parent()
+            && parent == node.parent(),
+        "assertion failed: is_object_literal_expression(node) && is_property_assignment(parent) && parent == node.parent()"
     );
     if parent.initializer() != node {
         return false;

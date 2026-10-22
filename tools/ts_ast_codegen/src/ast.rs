@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::{
-    FieldDef, ListKind, MemberDef, NodeAlias, NodeDef, Schema, StringOrList, rust_type_name,
-    snake_case,
+    FieldDef, ListKind, MemberDef, NodeAlias, NodeDef, Schema, StringOrList, parse_schema,
+    rust_type_name, snake_case,
 };
 
 #[derive(Clone, Debug)]
@@ -52,7 +52,7 @@ struct AstGenerator<'a> {
 /// Returns an error when the input is invalid or contains unresolved base,
 /// member, alias, or type references.
 pub fn generate_ast(json: &str) -> Result<String, String> {
-    let schema: Schema = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = parse_schema(json)?;
     AstGenerator::new(&schema)?.generate()
 }
 
@@ -1367,7 +1367,7 @@ impl NodeArena {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Schema, rust_type_name};
+    use crate::{parse_schema, rust_type_name};
 
     use super::generate_ast;
 
@@ -1437,7 +1437,7 @@ mod tests {
             .split("// END schema-exhaustive direct child visitor")
             .next()
             .unwrap();
-        let schema: Schema = serde_json::from_str(UPSTREAM_AST).unwrap();
+        let schema = parse_schema(UPSTREAM_AST).unwrap();
 
         assert_eq!(
             visitor.matches("            Self::").count(),

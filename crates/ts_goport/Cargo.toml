@@ -10,7 +10,8 @@ license.workspace = true
 # src/goport_lsproto_root.rs).
 goport_core = { path = "parts/goport_core", default-features = false }
 goport_lsproto = { path = "parts/goport_lsproto" }
-goport_util = { path = "parts/goport_util" }
+# No default features: `lib-snapshot` below turns its part on.
+goport_util = { path = "parts/goport_util", default-features = false }
 rustc-hash = "=2.1.2"
 indexmap = "=2.14.0"
 memchr = "=2.8.2"
@@ -56,7 +57,7 @@ same-file = "=1.0.6"
 nix = { version = "=0.31.3", default-features = false, features = ["process", "signal"] }
 
 [features]
-default = ["jemalloc"]
+default = ["jemalloc", "lib-snapshot", "backtrace"]
 # jemalloc as the global allocator of the goport binaries (default; the
 # shipped build). `--no-default-features` gives glibc malloc with its
 # tunables. See bin/goport.rs `set_malloc_tunables`.
@@ -67,6 +68,18 @@ jemalloc = ["goport_core/jemalloc", "dep:tikv-jemallocator", "dep:tikv-jemalloc-
 # there with crates/ts_goport/scripts/copy-libs.sh (build-release.sh does
 # this).
 noembed = ["goport_core/noembed", "goport_util/noembed"]
+# The embedded lib parse and bind snapshots and their compile-time keys:
+# hashes of the parser and binder sources and of the snapshot lib texts
+# (binder/lib_snapshot.rs). Off, every lib parses and binds live, with the
+# same output. Lust dev builds turn it off (.lust.toml): an edit to a hashed
+# source file changes a const.
+lib-snapshot = ["goport_core/lib-snapshot", "goport_util/lib-snapshot"]
+# Real backtraces (src/backtrace.rs) in the panic logs and panic replies of
+# the lib and in the GOPORT_TRACE output of the bins' panic hooks. Off, each
+# gives the fixed text "backtrace not captured (build with --features
+# backtrace)". Lust dev builds turn it off (.lust.toml): a backtrace's text
+# depends on the compiler's symbols.
+backtrace = ["goport_core/backtrace", "goport_util/backtrace"]
 
 [lints]
 workspace = true

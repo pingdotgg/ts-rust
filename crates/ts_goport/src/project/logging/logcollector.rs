@@ -80,6 +80,13 @@ impl Logger for LogCollectorImpl {
 struct StringBuilderWriter(Rc<RefCell<String>>);
 
 impl std::io::Write for StringBuilderWriter {
+    // One `write_all` of the whole text per `write!`, as Go's `fmt.Fprintf`
+    // makes one write (std's default writes each format piece; the bytes are
+    // the same).
+    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        self.write_all(std::fmt::format(args).as_bytes())
+    }
+
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.borrow_mut().push_str(&String::from_utf8_lossy(buf));
         Ok(buf.len())

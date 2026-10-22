@@ -1819,7 +1819,8 @@ impl Checker {
         debug_assert!(
             result_flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
                 || result_flags.intersects(SymbolFlags::CLASS)
-                || result_flags.intersects(SymbolFlags::ENUM)
+                || result_flags.intersects(SymbolFlags::ENUM),
+            "assertion failed: result_flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE) || result_flags.intersects(SymbolFlags::CLASS) || result_flags.intersects(SymbolFlags::ENUM)"
         );
         if result_flags.intersects(
             SymbolFlags::FUNCTION | SymbolFlags::FUNCTION_SCOPED_VARIABLE | SymbolFlags::ASSIGNMENT,

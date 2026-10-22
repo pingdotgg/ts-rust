@@ -2363,7 +2363,7 @@ impl Session {
                 response.error = format!(
                     "panic: {}\n{}",
                     ipc::conn::recovered_value(recovered.as_ref()),
-                    std::backtrace::Backtrace::force_capture()
+                    crate::backtrace::force_capture()
                 );
             }
         }

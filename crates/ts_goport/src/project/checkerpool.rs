@@ -663,7 +663,8 @@ impl CheckerPool {
         debug_assert!(
             self.checkers.borrow()[i]
                 .as_ref()
-                .is_some_and(|checker| Rc::ptr_eq(checker, c))
+                .is_some_and(|checker| Rc::ptr_eq(checker, c)),
+            "assertion failed: self.checkers.borrow()[i].as_ref().is_some_and(|checker| Rc::ptr_eq(checker, c))"
         );
         self.checkers.borrow_mut()[i] = None;
         self.held_by.borrow_mut()[i] = String::new();

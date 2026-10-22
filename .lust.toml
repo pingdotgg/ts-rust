@@ -1,0 +1,8 @@
+# lust dev builds (docs/lust.md): jemalloc, the lib snapshots and real
+# backtraces off. lust has no jemalloc. The lib snapshot keys hash source
+# files at compile time, so each edit to one changes a const; without the
+# snapshots every lib parses and binds live, with the same output. A
+# backtrace's text depends on the compiler's symbols, so lust cannot give
+# the same text as rustc.
+# Cargo does not read this file: Cargo builds keep all three.
+dev-exclude-features = ["jemalloc", "lib-snapshot", "backtrace"]

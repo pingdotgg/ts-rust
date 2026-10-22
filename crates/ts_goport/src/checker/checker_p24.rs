@@ -2179,7 +2179,8 @@ impl Checker {
         debug_assert!(
             self.active_type_mappers_caches[active..]
                 .iter()
-                .all(ActiveMapperCache::is_empty)
+                .all(ActiveMapperCache::is_empty),
+            "assertion failed: self.active_type_mappers_caches[active..].iter().all(ActiveMapperCache::is_empty)"
         );
         for cache in &mut self.active_type_mappers_caches[..active] {
             cache.clear_plain(false);

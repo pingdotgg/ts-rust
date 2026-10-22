@@ -72,7 +72,8 @@ const _: () = assert!(
         && O_NONBLOCK == 0x800
         && O_NOCTTY == 0x100
         && IN_NONBLOCK == 0x800
-        && IN_CLOEXEC == 0x80000
+        && IN_CLOEXEC == 0x80000,
+    "assertion failed: O_RDONLY == 0x0 && O_CLOEXEC == 0x80000 && O_NONBLOCK == 0x800 && O_NOCTTY == 0x100 && IN_NONBLOCK == 0x800 && IN_CLOEXEC == 0x80000"
 );
 #[cfg(target_arch = "x86_64")]
 const _: () = assert!(O_DIRECTORY == 0x10000 && O_NOFOLLOW == 0x20000);

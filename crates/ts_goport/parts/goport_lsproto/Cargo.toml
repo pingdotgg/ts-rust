@@ -12,7 +12,7 @@ publish = false
 path = "../../src/goport_lsproto_root.rs"
 
 [dependencies]
-goport_util = { path = "../goport_util" }
+goport_util = { path = "../goport_util", default-features = false }
 rustc-hash = "=2.1.2"
 indexmap = "=2.14.0"
 

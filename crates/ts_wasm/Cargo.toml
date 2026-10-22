@@ -15,6 +15,12 @@ crate-type = ["cdylib"]
 [dependencies]
 ts_goport = { path = "../ts_goport", default-features = false }
 
+[features]
+# Real backtraces in panic text, as before ts_goport had the feature. Lust
+# dev builds turn it off (.lust.toml).
+default = ["backtrace"]
+backtrace = ["ts_goport/backtrace"]
+
 # Not the workspace lints: this crate is the wasm ABI, and its exports need
 # `#[unsafe(no_mangle)]` and its imports an `unsafe extern` block. All other
 # code here is safe.
