@@ -6,8 +6,10 @@ an edit is checked again in milliseconds. Every program lust accepts is valid
 Rust with the same behavior. When lust does not support some code, it rejects
 it with an `L####` error code; it does not guess.
 
-Use lust for the edit and check loop. Release builds stay with Cargo
-(`cargo build --release`, `crates/ts_goport/scripts/build-release.sh`).
+Use lust for the edit and check loop. Published releases stay with Cargo
+(`cargo build --release`, `crates/ts_goport/scripts/build-release.sh`); CI also builds a
+lust release tsc for linux-x64 on each push to main (see
+[Release builds in CI](#release-builds-in-ci-linux-x64)).
 
 ## Install
 
@@ -104,6 +106,52 @@ With lust 0.2.0 on this tree (16 vCPU, 32 GB Linux box):
 - Speed (12 one-line body edits in `goport_core` files, checked through
   `ts_goport`): warm `lust check` median 24 ms, incremental `cargo check`
   median 5.7 s. Cold: `lust check` 9.1 s, `cargo check` 20.8 s.
+
+## Release builds in CI (linux-x64)
+
+`.github/workflows/lust-release.yml` builds the linux-x64 release tsc
+(`x86_64-unknown-linux-musl`, static) with lust on each push to main, and on
+demand (Actions, "lust-release", Run workflow; tick "retrain" to retrain the
+PGO profiles on that commit). It publishes nothing: the artifact
+`tsc-linux-x64-lust.zst` is the tsc as one zstd file (not zipped; `zstd -d`
+checks its stored checksum). `release.yml` and Cargo stay the source of truth
+for releases.
+
+The build is the shipped config of lust's release driver: release C (lust
+emits C, zig cc compiles it at `-O2`), PGO with pinned profiles, and hot copies
+chosen by the profile. It runs on `release.yml`'s linux-x64 runner
+(`blacksmith-16vcpu-ubuntu-2404`). A Blacksmith sticky disk keeps lust and
+zig, the crate registry, a clone of this repo, the profiles and lust's state:
+the front image (the front end of the last build) and the object cache. So a
+push recompiles only the C units whose text changed:
+
+- Warm (the usual push): about 11 s of job time for a typical merge into main
+  (median of 18 jobs on a 12-merge replay of main's history; the cargo
+  linux-x64 job of `release.yml` takes about 17 min).
+- Cold (a new disk, or a new `LUST_REF`): about 15 min of job time. lust is
+  built from source (about 6 min), the profiles are trained on
+  `scripts/goport/pgo-train.sh`'s set (about 6.5 min), then a cold build
+  (about 1.5 min).
+
+The release job is one step after the sticky disk: it builds, runs
+`release.yml`'s "Check the tsc" smoke, and uploads the artifact while the smoke
+runs (`scripts/lust-release/upload.sh`, the calls `upload-artifact@v7` makes
+for one unzipped file; it creates the artifact during the build and finalizes
+it only when the smoke passes). This takes about 0.6 s off the job against a
+separate upload step (TABLE 26 in lust's notes). Those calls are not a
+documented API: if `upload.sh` fails for any reason, the job uploads the same
+file with `upload-artifact@v7` in a later step, stays green, and logs a
+warning.
+
+Checks: the release job runs the smoke. The verify job starts the tsc on Alpine (static) and runs the 216 tsgo fixture
+runs against a Cargo tsc of the same commit (`scripts/lust-release/goldens.py`,
+built in the `goldens` job). Its run speed is within 1.2x of the Cargo PGO
+tsc (wall time on the PGO training set and on a TypeORM check).
+
+`LUST_REF` pins a lust-lang commit. To update lust, change `LUST_REF`: the
+next run builds that lust and retrains the profiles. The scripts:
+`scripts/lust-release/build.sh` (the build), `scripts/lust-release/train.sh`
+(the profiles) and `scripts/lust-release/upload.sh` (the artifact).
 
 ## When lust rejects code
 
