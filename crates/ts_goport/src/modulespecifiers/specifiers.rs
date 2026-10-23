@@ -1720,7 +1720,7 @@ fn try_get_module_name_from_exports_or_imports(
                         )
                     };
                     // Go tests rooted paths (`CaseSensitivity.ContainsPath` and
-                    // `ContainsFilePath`, :1289-1301): the package directory,
+                    // `ContainsFilePath`, :1281-1301): the package directory,
                     // the target and the output names are rooted and
                     // normalized.
                     // PORT: Go passes the arguments in this order

@@ -131,7 +131,7 @@ impl Checker {
         debug_assert!(!chain.is_empty() && 0 <= index && (index as usize) < chain.len());
         let symbol = chain[index as usize];
         // Go keys the list by `ast.GetSymbolId(symbol)`, which gives the
-        // symbol its id (`ValueSymbolLinkStore`).
+        // symbol its global id (`get_symbol_id`).
         get_symbol_id(&self.symbols, symbol);
         {
             let ctx = nb_ctx(b);
@@ -1846,7 +1846,7 @@ impl Checker {
         if declaration.is_some() && !node_is_synthesized(declaration) {
             let symbol = self.get_symbol_of_declaration(declaration);
             // Go keys the map by `ast.GetSymbolId(symbol)`, which gives the
-            // symbol its id (`ValueSymbolLinkStore`).
+            // symbol its global id (`get_symbol_id`).
             get_symbol_id(&self.symbols, symbol);
             let cached = nb_ctx(b)
                 .borrow()

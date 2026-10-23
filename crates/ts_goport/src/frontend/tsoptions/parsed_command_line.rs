@@ -668,8 +668,8 @@ impl ParsedCommandLine {
     }
 
     // Go: tsoptions/parsedcommandline.go:207 (*ParsedCommandLine).checkSourceFilesBelongToPath
-    // Go tests rooted paths (`CaseSensitivity.ContainsFilePath`, :210): the
-    // root directory and the config's file names are rooted and normalized.
+    // Go tests rooted paths (:210 `ContainsFilePath`): the root directory
+    // and the config's file names are rooted and normalized.
     // Go makes the path key of a file only for its diagnostic.
     pub fn check_source_files_belong_to_path(
         &self,
