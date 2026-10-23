@@ -1230,6 +1230,9 @@ impl Checker {
             let object_type = self.get_actual_type_variable(t_object_type);
             let index_type = self.get_actual_type_variable(t_index_type);
             if object_type != t_object_type || index_type != t_index_type {
+                // constvar1: this call can read lazy state that
+                // `ConstTypeVariableMemo` does not guard.
+                self.const_type_variable_memo.mark += 1;
                 return self.get_indexed_access_type(object_type, index_type);
             }
         }

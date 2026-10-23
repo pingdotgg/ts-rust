@@ -355,15 +355,17 @@ impl ConfigFileRegistryBuilder {
             current_directory: self.session_options.current_directory.clone(),
             use_case_sensitive_file_names: self.fs().use_case_sensitive_file_names(),
         };
+        // Go tests rooted paths (`CaseSensitivity.ContainsPath` and
+        // `ContainsFilePath`, :231-256): the workspace directory, the
+        // tsconfig directory, the wildcard directories and the file names
+        // are rooted.
+        let case_sensitive = compare_paths_options.use_case_sensitive_file_names;
+        let workspace_directory = &self.session_options.current_directory;
         // PORT: Go map order is random; the globs are sorted below.
         for dir in wildcard_directories.keys() {
-            if tspath::contains_path(
-                &self.session_options.current_directory,
-                dir,
-                &compare_paths_options,
-            ) {
+            if tspath::contains_rooted_path(workspace_directory, dir, case_sensitive) {
                 include_workspace = true;
-            } else if tspath::contains_path(&tsconfig_dir, dir, &compare_paths_options) {
+            } else if tspath::contains_rooted_path(&tsconfig_dir, dir, case_sensitive) {
                 include_tsconfig_dir = true;
             } else {
                 external_directories.push(dir.clone());
@@ -374,13 +376,9 @@ impl ConfigFileRegistryBuilder {
             None => &[],
         };
         for file_name in literal_file_names {
-            if tspath::contains_path(
-                &self.session_options.current_directory,
-                file_name,
-                &compare_paths_options,
-            ) {
+            if tspath::contains_rooted_path(workspace_directory, file_name, case_sensitive) {
                 include_workspace = true;
-            } else if tspath::contains_path(&tsconfig_dir, file_name, &compare_paths_options) {
+            } else if tspath::contains_rooted_path(&tsconfig_dir, file_name, case_sensitive) {
                 include_tsconfig_dir = true;
             } else {
                 external_directories.push(tspath::get_directory_path(file_name));
@@ -401,11 +399,7 @@ impl ConfigFileRegistryBuilder {
         };
         for file_name in extended_source_files {
             if include_workspace
-                && tspath::contains_path(
-                    &self.session_options.current_directory,
-                    file_name,
-                    &compare_paths_options,
-                )
+                && tspath::contains_rooted_path(workspace_directory, file_name, case_sensitive)
             {
                 continue;
             }

@@ -394,9 +394,12 @@ pub fn get_each_file_name_of_module(
                 }; // Continue to ancestor directory
 
                 // Don't want to a package to globally import from itself (importNameCodeFix_symlink_own_package.ts)
-                if tspath::starts_with_directory(
-                    importing_file_name,
+                // Go tests rooted paths (`CaseSensitivity.ContainsFilePath`,
+                // :311): the directory is an ancestor of the normalized
+                // imported file name, and the importing file name is rooted.
+                if tspath::contains_rooted_path(
                     real_path_directory,
+                    importing_file_name,
                     host.use_case_sensitive_file_names(),
                 ) {
                     return (false, true); // Stop search, each ancestor directory will also hit this condition
@@ -1716,10 +1719,18 @@ fn try_get_module_name_from_exports_or_imports(
                             &[str_value, fragment],
                         )
                     };
+                    // Go tests rooted paths (`CaseSensitivity.ContainsPath` and
+                    // `ContainsFilePath`, :1289-1301): the package directory,
+                    // the target and the output names are rooted and
+                    // normalized.
                     // PORT: Go passes the arguments in this order
                     // (`targetFilePath` as the parent).
                     if can_try_ts_extension
-                        && tspath::contains_path(target_file_path, &path_or_pattern, &compare_opts)
+                        && tspath::contains_rooted_path(
+                            target_file_path,
+                            &path_or_pattern,
+                            case_sensitive,
+                        )
                     {
                         let fragment = tspath::get_relative_path_from_directory(
                             &path_or_pattern,
@@ -1729,10 +1740,10 @@ fn try_get_module_name_from_exports_or_imports(
                         return from_fragment(&fragment);
                     }
                     if !extension_swapped_target.is_empty()
-                        && tspath::contains_path(
+                        && tspath::contains_rooted_path(
                             &path_or_pattern,
                             &extension_swapped_target,
-                            &compare_opts,
+                            case_sensitive,
                         )
                     {
                         let fragment = tspath::get_relative_path_from_directory(
@@ -1743,7 +1754,11 @@ fn try_get_module_name_from_exports_or_imports(
                         return from_fragment(&fragment);
                     }
                     if !can_try_ts_extension
-                        && tspath::contains_path(&path_or_pattern, target_file_path, &compare_opts)
+                        && tspath::contains_rooted_path(
+                            &path_or_pattern,
+                            target_file_path,
+                            case_sensitive,
+                        )
                     {
                         let fragment = tspath::get_relative_path_from_directory(
                             &path_or_pattern,
@@ -1753,7 +1768,11 @@ fn try_get_module_name_from_exports_or_imports(
                         return from_fragment(&fragment);
                     }
                     if !output_file.is_empty()
-                        && tspath::contains_path(&path_or_pattern, &output_file, &compare_opts)
+                        && tspath::contains_rooted_path(
+                            &path_or_pattern,
+                            &output_file,
+                            case_sensitive,
+                        )
                     {
                         let fragment = tspath::get_relative_path_from_directory(
                             &path_or_pattern,
@@ -1763,7 +1782,11 @@ fn try_get_module_name_from_exports_or_imports(
                         return tspath::combine_paths(package_name, &[&fragment]);
                     }
                     if !declaration_file.is_empty()
-                        && tspath::contains_path(&path_or_pattern, &declaration_file, &compare_opts)
+                        && tspath::contains_rooted_path(
+                            &path_or_pattern,
+                            &declaration_file,
+                            case_sensitive,
+                        )
                     {
                         let fragment = tspath::get_relative_path_from_directory(
                             &path_or_pattern,
@@ -2037,6 +2060,135 @@ fn get_module_specifier_with_preferences(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modulespecifiers::packagejson::InfoCacheEntry;
+    use crate::modulespecifiers::symlinks::KnownSymlinks;
+    use std::sync::Arc;
+
+    /// A host that answers only the case sensitivity and the current
+    /// directory, the reads of the "exports" directory match.
+    struct CaseHost {
+        use_case_sensitive_file_names: bool,
+    }
+
+    impl deps::OutputPathsHost for CaseHost {
+        fn common_source_directory(&self) -> String {
+            unreachable!()
+        }
+        fn content_mapper_extensions(&self) -> Vec<String> {
+            unreachable!()
+        }
+        fn content_mapper_extension_rewrites(
+            &self,
+        ) -> Vec<crate::frontend::tspath::ExtensionRewrite> {
+            unreachable!()
+        }
+        fn get_current_directory(&self) -> String {
+            "/project".to_string()
+        }
+        fn use_case_sensitive_file_names(&self) -> bool {
+            self.use_case_sensitive_file_names
+        }
+    }
+
+    impl ModuleSpecifierGenerationHost for CaseHost {
+        fn get_symlink_cache(&self) -> Option<Rc<KnownSymlinks>> {
+            unreachable!()
+        }
+        fn common_source_directory(&self) -> String {
+            unreachable!()
+        }
+        fn content_mapper_extensions(&self) -> Vec<String> {
+            unreachable!()
+        }
+        fn content_mapper_extension_rewrites(
+            &self,
+        ) -> Vec<crate::frontend::tspath::ExtensionRewrite> {
+            unreachable!()
+        }
+        fn get_global_typings_cache_location(&self) -> String {
+            unreachable!()
+        }
+        fn use_case_sensitive_file_names(&self) -> bool {
+            self.use_case_sensitive_file_names
+        }
+        fn get_current_directory(&self) -> String {
+            "/project".to_string()
+        }
+        fn get_project_reference_from_source(
+            &self,
+            _path: &tspath::Path,
+        ) -> Option<Arc<SourceOutputAndProjectReference>> {
+            unreachable!()
+        }
+        fn get_redirect_targets(&self, _path: &tspath::Path) -> Vec<String> {
+            unreachable!()
+        }
+        fn get_source_of_project_reference_if_output_included(&self, _file: Node) -> String {
+            unreachable!()
+        }
+        fn file_exists(&self, _path: &str) -> bool {
+            unreachable!()
+        }
+        fn get_nearest_ancestor_directory_with_package_json(&self, _dirname: &str) -> String {
+            unreachable!()
+        }
+        fn get_package_json_info(&self, _pkg_json_path: &str) -> Option<Arc<InfoCacheEntry>> {
+            unreachable!()
+        }
+        fn get_default_resolution_mode_for_file(&self, _file: Node) -> ResolutionMode {
+            unreachable!()
+        }
+        fn get_resolved_module_from_module_specifier(
+            &self,
+            _file: Node,
+            _module_specifier: Node,
+        ) -> Option<ResolvedModule> {
+            unreachable!()
+        }
+        fn get_mode_for_usage_location(
+            &self,
+            _file: Node,
+            _module_specifier: Node,
+        ) -> ResolutionMode {
+            unreachable!()
+        }
+        fn as_output_paths_host(&self) -> &dyn deps::OutputPathsHost {
+            self
+        }
+    }
+
+    // followups74 (R226 reviewer item 2): an "exports" directory target
+    // holds the file by Go's rooted test (`CaseSensitivity.ContainsFilePath`,
+    // specifiers.go:1295). On a case-insensitive host Go folds case with
+    // ToLower, which keeps 'ſ' (EqualFold would match it to 's'), so
+    // "./ſrc/" does not hold "src/a.js"; "./SRC/" does. Go answers from a
+    // probe of tryGetModuleNameFromExportsOrImports with Go's mock host at
+    // 3e9236361fa9 (target/continuation-r97-goport/after226/followups74/goprobe).
+    #[test]
+    fn exports_directory_target_tests_rooted_paths_like_go() {
+        let host = CaseHost {
+            use_case_sensitive_file_names: false,
+        };
+        for (target, want) in [
+            ("./\u{17f}rc/", ""),
+            ("./SRC/", "pkg/SRC/a.js"),
+            ("./src/", "pkg/src/a.js"),
+        ] {
+            let got = try_get_module_name_from_exports_or_imports(
+                &CompilerOptions::default(),
+                &host,
+                "/project/node_modules/pkg/src/a.js",
+                "/project/node_modules/pkg",
+                "pkg",
+                &JSONValue::String(target.to_string()),
+                &[],
+                MatchingMode::Directory,
+                false,
+                false,
+            );
+            assert_eq!(got, want, "{target}");
+        }
+    }
 
     // Go: modulespecifiers/specifiers_test.go:332 TestIsPackageMainFilePreservesDirectoryIntent (ts#64159)
     #[test]

@@ -1879,19 +1879,22 @@ impl ResolutionState<'_> {
             return continue_searching();
         }
         let options = self.compiler_options.clone();
+        let use_case_sensitive_file_names = self.resolver.host.fs().use_case_sensitive_file_names();
         let compare_paths_options = ComparePathsOptions {
-            use_case_sensitive_file_names: self.resolver.host.fs().use_case_sensitive_file_names(),
+            use_case_sensitive_file_names,
             current_directory: self.resolver.host.get_current_directory().to_string(),
         };
         // Replace any references to outputs for files in the program with the input files to support package self-names used with outDir
+        // Go tests rooted paths (`CaseSensitivity.ContainsFilePath`, :1105):
+        // the package path and the config file path are rooted and normalized.
         if !self.is_config_lookup
             && (!options.declaration_dir.is_empty() || !options.out_dir.is_empty())
             && !final_path.contains("/node_modules/")
             && (options.config_file_path.is_empty()
-                || contains_path(
+                || contains_rooted_path(
                     &get_directory_path(package_path),
                     &options.config_file_path,
-                    &compare_paths_options,
+                    use_case_sensitive_file_names,
                 ))
         {
             // Note: this differs from Strada's tryLoadInputFileForPath in that it
@@ -2471,6 +2474,52 @@ mod internal_tests {
             }
         }
         assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
+
+    // followups74 (R226 reviewer item 2): Go tryLoadInputFileForPath maps
+    // an output path back to its input only when the package directory
+    // holds the config file, by Go's rooted test
+    // (`CaseSensitivity.ContainsFilePath`, resolver.go:1105). On a
+    // case-insensitive file system Go folds case with ToLower, which keeps
+    // 'ſ' (EqualFold would match it to 's'): the package "ſ" does not hold
+    // "s/tsconfig.json", the package "S" does. Go answers from a probe at
+    // 3e9236361fa9 (target/continuation-r97-goport/after226/followups74/goprobe).
+    #[test]
+    fn input_file_for_output_needs_the_config_in_the_package_like_go() {
+        let dir = write_files("input_for_output_case", &[("s/index.ts", "export {};")]);
+        let fs = crate::frontend::vfs::wrapvfs_wrap(
+            osvfs_fs(),
+            crate::frontend::vfs::Replacements {
+                use_case_sensitive_file_names: Some(Box::new(|| false)),
+                ..Default::default()
+            },
+        );
+        let host: Rc<dyn ResolutionHost> = Rc::new(TestHost {
+            fs,
+            current_directory: dir.clone(),
+        });
+        let resolver = new_resolver(ResolverOptions {
+            host: Some(host),
+            compiler_options: Some(Rc::new(CompilerOptions {
+                out_dir: format!("{dir}/s/dist"),
+                config_file_path: format!("{dir}/s/tsconfig.json"),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let mut state = ResolutionState::zero(&resolver, resolver.compiler_options.clone());
+        state.extensions = Extensions::TYPE_SCRIPT | Extensions::DECLARATION;
+        for (package, want) in [("\u{17f}", None), ("S", Some(format!("{dir}/s/index.ts")))] {
+            let got = state
+                .try_load_input_file_for_path(
+                    &format!("{dir}/s/dist/index.js"),
+                    "",
+                    &format!("{dir}/{package}/package.json"),
+                    false,
+                )
+                .map(|resolved| resolved.path);
+            assert_eq!(got, want, "package {package}");
+        }
     }
 
     // Go: module/resolver_internal_test.go:132 TestOutputDirectoriesRemoveTrailingSeparators
