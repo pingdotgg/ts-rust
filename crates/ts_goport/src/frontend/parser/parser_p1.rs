@@ -419,7 +419,14 @@ pub fn adopt_detached_parse(
     } = parse;
     let remap = adopt_detached_store(store);
     file.remap_store(remap);
-    file.parse_options = opts.clone();
+    // PERF (loadfree1): the parse has the file name and path of `opts`, so
+    // it keeps the worker's copies, which the loader would free.
+    if file.parse_options.file_name == opts.file_name && file.parse_options.path == opts.path {
+        file.parse_options.external_module_indicator_options =
+            opts.external_module_indicator_options;
+    } else {
+        file.parse_options = opts.clone();
+    }
     if file.has_lazy_js_doc {
         set_file_store_lazy_js_doc(file.store, &file.parse_options, file.script_kind);
     }
