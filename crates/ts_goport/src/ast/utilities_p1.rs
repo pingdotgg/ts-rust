@@ -64,7 +64,7 @@ fn id_cell(id: u64) -> IdCell {
 
 /// The id in `cell`, assigned now by `give` when it has none. `big` keeps
 /// the ids that have no cell, by `place`.
-#[inline]
+#[inline(always)]
 fn cell_id<K: Eq + std::hash::Hash>(
     cell: &mut IdCell,
     big: &mut FxHashMap<K, u64>,
@@ -162,7 +162,7 @@ impl LineageIds {
     /// The id of lineage index `index`, assigned now when it has none.
     // PERF: the hot path of `get_symbol_id` is one more load and test than
     // a dense `Vec`; a new chunk and the frees are out of line.
-    #[inline]
+    #[inline(always)]
     fn id(&mut self, index: usize, give: impl FnOnce() -> u64) -> u64 {
         if let Some(Some(chunk)) = self.chunks.get_mut(index >> LINEAGE_ID_SHIFT) {
             return cell_id(
@@ -275,7 +275,7 @@ impl OwnSymbolIds {
 
     /// The id of the own symbol at `place` of arena `key`, assigned now when
     /// it has none.
-    #[inline]
+    #[inline(always)]
     fn id(&mut self, key: u32, place: usize, give: impl FnOnce() -> u64) -> u64 {
         if self.key != key {
             self.switch_to(key);
@@ -553,7 +553,7 @@ pub fn get_symbol_id(symbols: &SymbolArena, symbol: SymbolId) -> u64 {
 }
 
 /// The id of `symbol`, assigned now by `give` when it has none.
-#[inline]
+#[inline(always)]
 fn symbol_id_or(symbols: &SymbolArena, symbol: SymbolId, give: impl FnOnce() -> u64) -> u64 {
     let slot = symbols.id_slot(symbol);
     let place = slot.place as usize;
@@ -580,7 +580,10 @@ impl SymbolIdGenerator {
     // Go: ast/utilities.go:79 (*SymbolIdGenerator).GetSymbolId
     /// The id of `symbol`: a block id of this generator when it has no id.
     /// A symbol with an id (global or block) keeps it, and takes nothing.
-    #[inline]
+    // PERF: one call with the id path inlined, as `get_symbol_id`. Inlined
+    // into `ValueSymbolLinkStore::insert_new_by_id`, the path was split into
+    // 3 calls (hono +0.6% instructions).
+    #[inline(never)]
     pub fn get_symbol_id(&self, symbols: &SymbolArena, symbol: SymbolId) -> u64 {
         symbol_id_or(symbols, symbol, || self.next_id())
     }
