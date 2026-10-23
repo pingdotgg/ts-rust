@@ -14,9 +14,11 @@
 # The tsc is a PGO build of the shipped profile (fat LTO), trained on each platform:
 # crates/ts_goport/scripts/build-pgo.sh with the training set of scripts/goport/pgo-train.sh (7
 # projects at fixed commits). The job also builds the plain tsc, and fails unless the PGO tsc gives
-# the same stdout, stderr, exit code and emitted files as the plain tsc on that set. No BOLT
-# (build-release.sh has it): BOLT refuses the static Linux bin (build-bolt.sh), its Mach-O support
-# is experimental, macOS has no perf branch sampling for its profile, and BOLT has no PE support.
+# the same stdout, stderr, exit code and emitted files as the plain tsc on that set. linux-x64 also
+# gets BOLT: crates/ts_goport/scripts/bolt-musl.sh, with a profile from a counting copy that runs
+# the same set, and no -split-eh (it breaks the unwinding of a caught panic with musl). The PGO
+# check then compares the BOLT tsc with the plain tsc. The others have no BOLT: linux-arm64 is not
+# tried yet, BOLT's Mach-O support is experimental, and BOLT has no PE support.
 # Linux is static musl and non-PIE, so it starts on any x86-64 or arm64 Linux, Alpine too
 # (npm/README.md, "Linux libc"). Each Linux tsc builds natively on a Blacksmith runner of its arch.
 # The linux-x64 PGO tsc links lust's memfast.c in place of musl's memcpy, memmove, memcmp, bcmp and
@@ -45,6 +47,8 @@ on:
       - "crates/ts_goport/scripts/copy-libs.sh"
       - "crates/ts_goport/scripts/build-pgo.sh"
       - "crates/ts_goport/scripts/memfast.*"
+      - "crates/ts_goport/scripts/bolt-musl.sh"
+      - "crates/ts_goport/scripts/check-unwind.py"
       - "LICENSE"
       - "NOTICE.md"
       - "licenses/**"
@@ -137,6 +141,15 @@ jobs:
       - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }} --component llvm-tools
       - if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -yq musl-tools
+      # linux-x64: llvm-bolt, merge-fdata, llvm-objcopy and llvm-dwarfdump of LLVM 23 for bolt-musl.sh.
+      - name: BOLT tools
+        if: matrix.platform == 'linux-x64'
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb https://apt.llvm.org/$codename/ llvm-toolchain-$codename-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list
+          sudo apt-get update -q && sudo apt-get install -yq bolt-23 llvm-23
+          /usr/lib/llvm-23/bin/llvm-bolt --version | grep -m1 'LLVM version'
       # darwin-x64 on an arm64 Mac: the check runs the x86-64 tsc, so Rosetta 2 must be there.
       - name: Rosetta
         if: matrix.rosetta
@@ -211,10 +224,19 @@ jobs:
           PGO_BINS: tsgo
           PGO_CARGO: cargo
           CARGO_FEATURES: --features noembed
+          # The BOLT input needs the static relocations.
+          PGO_EMIT_RELOCS: ${{ matrix.platform == 'linux-x64' && '1' || '' }}
         run: |
           PGO_TRAIN="scripts/goport/pgo-train.sh run $RUNNER_TEMP/train" crates/ts_goport/scripts/build-pgo.sh "$RUNNER_TEMP/pgo"
           mkdir -p "$RUNNER_TEMP/out"
           cp "$RUNNER_TEMP/pgo/target-use/goport/tsgo${{ matrix.exe }}" "$RUNNER_TEMP/out/tsc${{ matrix.exe }}"
+      # linux-x64: BOLT of the PGO tsc. bolt-musl.sh also checks that the BOLT tsc still unwinds a
+      # caught panic (check-unwind.py).
+      - name: BOLT
+        if: matrix.platform == 'linux-x64'
+        run: |
+          crates/ts_goport/scripts/bolt-musl.sh "$RUNNER_TEMP/out/tsc" "$RUNNER_TEMP/train" "$RUNNER_TEMP/bolt"
+          cp "$RUNNER_TEMP/bolt/bin/tsc" "$RUNNER_TEMP/out/tsc"
       - name: Check the PGO tsc against the plain tsc
         if: ${{ !matrix.no-pgo }}
         run: scripts/goport/pgo-train.sh compare "$RUNNER_TEMP/train" "$RUNNER_TEMP/plain/tsc${{ matrix.exe }}" "$RUNNER_TEMP/out/tsc${{ matrix.exe }}"

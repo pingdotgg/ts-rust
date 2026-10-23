@@ -27,8 +27,9 @@
 #       the layout when BOLT is not used.
 #   --emit-relocs  keeps the static relocations in the file (non-alloc
 #       sections, not mapped at run time). BOLT needs them for relocation
-#       mode, where it also reorders functions. Not with PGO_LINK=static:
-#       build-bolt.sh refuses static bins, so they only make the file bigger.
+#       mode, where it also reorders functions. Not with PGO_LINK=static
+#       unless PGO_EMIT_RELOCS=1 (bolt-musl.sh, release.yml's linux-x64
+#       tsc): else they only make the file bigger.
 # The build prints the .text and .rela.text sections of tsgo
 # (readelf -S). Expect .text.hot, .text.unlikely and .rela.text. GNU ld (the
 # linker of the musl target) ignores keep-text-section-prefix, but its default
@@ -55,6 +56,8 @@
 #   PGO_BINS          the bins to build, for example "tsgo" (default: all)
 #   PGO_RUSTFLAGS     extra rustc flags of both builds. release.yml sets the
 #                     memfast link flags of the linux-x64 tsc (memfast.sh).
+#   PGO_EMIT_RELOCS=1 link the use build with --emit-relocs also when
+#                     PGO_LINK=static (the input of bolt-musl.sh)
 #   PGO_TRAIN         training command, in place of the default training
 #                     (which needs the project inputs and the corpus of
 #                     GOPORT_DATA_ROOT). The script runs `$PGO_TRAIN <dir>`,
@@ -303,7 +306,7 @@ echo "merged $(du -h "$merged" | cut -f1) -> $merged"
 # The Linux link args are the r3-link layout (see the header).
 use_flags="-Cprofile-use=$merged"
 if [[ $(uname -s) == Linux ]]; then
-  [[ $link == static ]] || use_flags+=" -Clink-arg=-Wl,--emit-relocs"
+  [[ $link == static && ${PGO_EMIT_RELOCS:-0} != 1 ]] || use_flags+=" -Clink-arg=-Wl,--emit-relocs"
   use_flags+=" -Clink-arg=-Wl,-z,keep-text-section-prefix"
 fi
 build target-use "$use_flags"
