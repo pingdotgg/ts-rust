@@ -479,7 +479,7 @@ fn parse_command_line_verify_null() {
     t.finish();
 }
 
-// Go: commandlineparser_test.go:243 createVerifyNullForNonNullIncluded
+// Go: commandlineparser_test.go:282 createVerifyNullForNonNullIncluded
 // PORT: the Go `slices.Concat` result is leaked so the list is `&'static`,
 // as the parser's declaration lists are.
 fn create_verify_null_for_non_null_included(

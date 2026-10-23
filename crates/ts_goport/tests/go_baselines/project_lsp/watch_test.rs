@@ -199,3 +199,40 @@ fn resolution_lookup_watcher_aggregates_using_host_case_sensitivity() {
         }
     }
 }
+
+child_test! {
+    // followups74 (R226 reviewer item 2): Go updateRootFilesWatch
+    // (configfileregistrybuilder.go:231-256) tests rooted paths
+    // (`CaseSensitivity.ContainsPath`). On a case-insensitive file system Go
+    // folds case with ToLower, which keeps 'ſ' (EqualFold would match it to
+    // 's'), so the workspace "/home/ſ" does not hold the wildcard directory
+    // "/home/s" and the tsconfig directory is watched. Go answer from a probe
+    // at 3e9236361fa9 (target/continuation-r97-goport/after226/followups74/goprobe).
+    fn root_files_watch_tests_rooted_paths_like_go() {
+        let (session, _utils) = super::projecttestutil::setup_with_options(
+            super::projecttestutil::files(&[
+                ("/home/s/tsconfig.json", "{}"),
+                ("/home/s/a.ts", "export {};"),
+            ]),
+            ts_goport::project::SessionOptions {
+                current_directory: "/home/\u{17f}".to_string(),
+                ..super::projecttestutil::default_session_options()
+            },
+        );
+        super::util::open(&session, "file:///home/s/a.ts", "export {};");
+        session.wait_for_background_tasks();
+        let snapshot = session.snapshot();
+        let entry = snapshot
+            .config_file_registry
+            .configs
+            .get(&super::util::path("/home/s/tsconfig.json"))
+            .expect("the config entry")
+            .clone();
+        let watch = entry
+            .borrow()
+            .root_files_watch
+            .clone()
+            .expect("a root files watch");
+        assert_eq!(watch.input.patterns_inside_workspace, ["/home/s/**/*"]);
+    }
+}
