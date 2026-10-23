@@ -760,6 +760,12 @@ impl Watcher {
 
     // Go: execute/watcher.go:419 (*Watcher).doBuild
     pub fn do_build(&mut self) -> Result<(), GoError> {
+        // PORT: Go's symbol id counters are per process, so the next program
+        // counts on from the ids of the last one. Its checker pool hands them
+        // back before the next program is made (`program::carry_symbol_ids_of`).
+        if let Some(version) = self.program.as_ref().and_then(|program| program.program) {
+            crate::program::carry_symbol_ids_of(version);
+        }
         // PORT: the full build below can still use the parses of the old
         // cache (`WatchCompilerHost::reuse_parse`); Go drops them here.
         let mut config_parses = FxHashMap::default();
