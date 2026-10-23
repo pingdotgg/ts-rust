@@ -1811,8 +1811,11 @@ impl Checker {
                 return self.is_weak_unresolved_object_type(t);
             }
             // PERF: memberflags1. A resolved type keeps its answer in
-            // `ObjectFlags::WEAK_BITS`. Each write of its properties,
-            // signatures or index infos clears them, so a stored answer is
+            // `ObjectFlags::WEAK_BITS`. The answer reads the properties, the
+            // signatures, the index infos and each property's `OPTIONAL`
+            // symbol flag. Each write of the properties, signatures or index
+            // infos clears the bits, and an in-place change of `OPTIONAL`
+            // (`merge_symbol`) sets `weak_bits_off`, so a stored answer is
             // Go's answer on the current members. On a resolved type, Go's
             // `resolveStructuredTypeMembers` does nothing, so a hit skips
             // nothing else.
