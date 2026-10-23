@@ -516,15 +516,18 @@ impl Checker {
                 let parent = self.sym(value_declaration.symbol()).parent;
                 self.sym_mut(clone).parent = parent;
             }
-            // Go reads the links of `clone` before it gets the write type of
-            // `single_prop` (checker.go:22041-22044).
+            // PORT: Go reads the links of `clone` before it gets the write
+            // type of `single_prop` (checker.go:22041-22044). The order is
+            // the same in effect: `create_symbol_with_type` gave `clone` its
+            // id (Go's does too, checker.go:22170), so that read gives no
+            // id, and the write type does not read `clone`. Go's order needs
+            // a second read of the links here, which cost zod 0.012% more
+            // --singleThreaded instructions (followups76).
+            let write_type = self.get_write_type_of_symbol(single_prop);
             let links = self.value_symbol_links.get_by_id(&self.symbols, clone);
             links.containing_type = containing_type;
             links.mapper = single_prop_mapper;
-            let write_type = self.get_write_type_of_symbol(single_prop);
-            self.value_symbol_links
-                .get_by_id(&self.symbols, clone)
-                .write_type = write_type;
+            links.write_type = write_type;
             return clone;
         }
         if prop_set.is_empty() {
