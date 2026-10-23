@@ -27,12 +27,16 @@
 #                          source under evidence-cache/<key>/ and reused. The oracle compares use the answer
 #                          sets of the base (protectedBase.oracleAnswers) and of the batch (batch.oracleAnswers)
 #                          with --answers. With batch.oracleRebase (a pin bump, reviewer ruling 10) their base
-#                          is its runs of each kind, with --parity, the API knownDiffs and --identity. A passing
-#                          compare is reused only when it used the same base runs, answer sets and rebase
-#                          record. To redo only the compares (for example after root sets batch.oracleRebase),
-#                          move the old <kind>.json, <kind>-fail.json and <kind>-compare.json aside and run side
-#                          with a new label: the oracle runs stay in lsp-run and api-run, so no oracle runs
-#                          again. Check first with --dry-run that every other step says "reuse".
+#                          is its runs of each kind, with --parity, the API knownDiffs and --identity. When the
+#                          batch is accepted, the side run is for the next batch, which open_revision.py opens
+#                          without the batch's oracleRebase, gateIdMap and gateToolChanges: side drops them too.
+#                          A passing compare is reused only when it used the same base runs, answer sets and
+#                          rebase record; else its <kind>.json or <kind>-fail.json moves to
+#                          <kind>[-fail]-key-<sha256 prefix of its key>.json with its <kind>-compare.json, and
+#                          the run is compared again (the oracle runs stay in lsp-run and api-run, so no oracle
+#                          runs again). A gate compare is reused only with the same base and the batch's gate id
+#                          map; one of another map moves to gate-compare-idmap-<sha256 prefix>.json. Check first
+#                          with --dry-run that every other step says "reuse".
 #                          --host testbox runs the heavy steps on one Blacksmith testbox (testbox.sh) instead:
 #                          the release bins, test bins, goport tests, bound runs, gate, LSP and API oracles and
 #                          clippy, with the same commands and paths. The testbox workspace is this checkout
@@ -50,7 +54,8 @@
 #                          revision's side run then reuses its bins, test run, gate run and oracle runs (same
 #                          crates tree, so same key) and runs only the bound runs. A tests or gate compare
 #                          made with an older base (the integration ran before the last accept) moves to
-#                          tests-base-<sha>.json or gate-compare-base-<label>.json and runs again.
+#                          tests-base-<sha>.json or gate-compare-base-<label>.json and runs again, as does a
+#                          gate or oracle compare of another gate id map, rebase record or answer sets (above).
 #   verdict-request <rev>  The request text for the auditor and the reviewer, then the accept command.
 # --dry-run prints each command that writes and runs only the read-only checks.
 # The state, target/ and the host commands (gate.sh, lsp_oracle.py, api_oracle.py, which remote.sh sync-scripts
@@ -135,6 +140,12 @@ in_scope() {
   for pat in "$@"; do if [[ $path == $pat ]]; then return 0; fi; done
   return 1
 }
+# side_state: the saved state as a side run judges it (SIDE_STATE, a jq filter). An accepted batch is the base of the
+# next batch, which open_revision.py --new-batch opens without the accepted batch's oracleRebase, gateIdMap and
+# gateToolChanges (the records of its pin bump), so a side run after an accept drops them too (int90: accepted batch
+# 103's rebase failed its oracle compares, and its gate id map made a gate compare that batch 104 refused).
+SIDE_STATE='if .batch.compilerAccepted == true then .batch |= del(.oracleRebase, .gateIdMap, .gateToolChanges) else . end'
+side_state() { node scripts/state.mjs export | jq -c "$SIDE_STATE"; }
 # oracle_setup <base json>: the base results dirs and extra arguments of oracle-compare.py per kind (lsp, api).
 # OBASE[kind]: the base dirs, protectedBase's run (the <base json> .lsp.dir or .api.dir) or the runs of
 # batch.oracleRebase. OARGS[kind]: --answers for each answer set of the base (protectedBase.oracleAnswers) and of
@@ -145,7 +156,7 @@ in_scope() {
 declare -A OBASE=([lsp]='' [api]='') OARGS=([lsp]='' [api]='') OKEY=([lsp]='' [api]='') OREBASE=([lsp]='' [api]='')
 oracle_setup() {
   local base=$1 cfg kind path hash dir
-  cfg=$(node scripts/state.mjs export | jq -c --argjson base "$base" '{rebase: .batch.oracleRebase,
+  cfg=$(side_state | jq -c --argjson base "$base" '{rebase: .batch.oracleRebase,
     sets: ([($base.oracleAnswers // [])[], (.batch.oracleAnswers // [])[]] | unique_by([.kind, .sha256]) | sort_by(.sha256))}')
   for kind in lsp api; do
     OARGS[$kind]='' OREBASE[$kind]=$(jq -c --arg k "$kind" '.rebase[$k] // empty' <<< "$cfg")
@@ -407,7 +418,7 @@ side_unit() {
     [[ ! -f $C/$k-run ]] || ok=$(cat "$C/$k-run.host" 2> /dev/null || echo ssh)
     [[ $ok == testbox ]] || ok=ssh
     [[ $rk == "$ok" ]] || die "batch.oracleRebase $k runs ran on $rk hosts, and this source's $k oracle runs on $ok: ruling 10 needs one host kind for both (oracle-rebase.sh runs on the SSH hosts, so run side without --host testbox)"
-  done < <(node scripts/state.mjs export | jq -r '(.batch.oracleRebase // {}) | to_entries[] | select(.key == "lsp" or .key == "api")
+  done < <(side_state | jq -r '(.batch.oracleRebase // {}) | to_entries[] | select(.key == "lsp" or .key == "api")
     | "\(.key) \([(.value.runs // [])[] | if .host == "testbox" then "testbox" else "ssh" end] | unique | join(","))"')
   run mkdir -p "$C"
 
@@ -602,18 +613,26 @@ side_unit() {
 
   # Gate compare: each item against the base gate manifest (a MATCH stays MATCH, no new FAIL, no removed id,
   # the open editor long-growth items under their fixed caps). A failed run is kept under its label.
-  # A compare with an older base moves to gate-compare-base-<base label>.json, and the run is compared again.
-  if [[ -f $C/gate-compare.json && $(jq -r .base.sha256 "$C/gate-compare.json") == "$bgs" ]]; then
+  # A compare with an older base moves to gate-compare-base-<base label>.json, one with another gate id map than the
+  # batch's (side_state; R223 reused int90's compare with batch 103's map) to gate-compare-idmap-<sha256 prefix>.json,
+  # and the run is compared again. gate-compare.py reads the batch from side_state.
+  local gim cim=none
+  gim=$(side_state | jq -r '.batch.gateIdMap.sha256 // "none"')
+  [[ ! -f $C/gate-compare.json ]] || cim=$(jq -r '.idMap.sha256 // "none"' "$C/gate-compare.json")
+  if [[ -f $C/gate-compare.json && $(jq -r .base.sha256 "$C/gate-compare.json") == "$bgs" && $cim == "$gim" ]]; then
     say "reuse gate compare $(jq -c .counts "$C/gate-compare.json")"
   else
-    if [[ -f $C/gate-compare.json ]]; then
+    if [[ -f $C/gate-compare.json && $(jq -r .base.sha256 "$C/gate-compare.json") != "$bgs" ]]; then
       old=$(jq -r .base.label "$C/gate-compare.json")
       say "gate compare: the cached compare used base $old; keep it as gate-compare-base-$old.json and compare again"
       run mv "$C/gate-compare.json" "$C/gate-compare-base-$old.json"
+    elif [[ -f $C/gate-compare.json ]]; then
+      say "gate compare: the cached compare used gate id map ${cim:0:12}, the batch has ${gim:0:12}; keep it as gate-compare-idmap-${cim:0:12}.json and compare again"
+      run mv "$C/gate-compare.json" "$C/gate-compare-idmap-${cim:0:12}.json"
     fi
     say "gate compare with the base"
     rc=0
-    run_sh "python3 $G/gate-compare.py $bg \$(jq -r .manifest $C/gate.json) --out $C/gate-compare.json > /dev/null" || rc=$?
+    run_sh "node scripts/state.mjs export | jq -c '$SIDE_STATE' | python3 $G/gate-compare.py $bg \$(jq -r .manifest $C/gate.json) --state /dev/stdin --out $C/gate-compare.json > /dev/null" || rc=$?
     if [[ $DRY == 0 ]] && ((rc)); then
       # Exit 2 is bad input, not a failed run: nothing moves, and the next run compares the same gate again.
       [[ $rc == 1 && -f $C/gate-compare.json ]] || { rm -f "$C/gate-compare.json"; die "gate-compare.py rc $rc (bad input)"; }
@@ -666,8 +685,9 @@ PY
   # oracle_json <kind> <out-root> <label> <base results dirs> <record>: compares the results of <label> with the
   # base per request (oracle-compare.py with OARGS, see oracle_setup) and writes <record>.json, or
   # <record>-fail.json on a loss, a parity problem, a rebase run that is not the base bins at the batch pin, or
-  # without a base; the other one goes, as it is not the last compare. Exit 2 (bad input or a refused answer set)
-  # stops the side run. The finished run's label stays in <record>-run, so a rerun only compares again.
+  # without a base; the other one goes, as it is not the last compare (a record of another OKEY moves aside first,
+  # oracle_aside). Exit 2 (bad input or a refused answer set) stops the side run. The finished run's label stays in
+  # <record>-run, so a rerun only compares again.
   oracle_json() {
     local kind=$1 root=$2 lab=$3 base=$4 rec=$5 rc=0 prc=0 out rhost
     # A new run records its host next to its label; a reused run keeps the host it ran on (none before --host testbox).
@@ -679,6 +699,7 @@ PY
       fails+="${fails:+; }$kind oracle: no base results ($lab ran; a rerun compares it once the base exists)"
       return 0
     fi
+    oracle_aside "$rec"
     say "$(date -u +%FT%TZ) $kind compare with the base $base${OARGS[$rec]:+ (${OARGS[$rec]% })}"
     run_sh "python3 $G/oracle-compare.py $base $root/results/$lab ${OARGS[$rec]}--out $C/$rec-compare.new.json > /dev/null" || rc=$?
     [[ $DRY == 0 ]] || return 0
@@ -731,6 +752,19 @@ PY
   # compareKey was a compare with its base dir alone).
   oracle_done() {
     [[ -f $C/$1.json ]] && jq -e .compare "$C/$1.json" > /dev/null && [[ $(jq -r '.compareKey // .base.dir' "$C/$1.json") == "${OKEY[$1]}" ]]
+  }
+  # oracle_aside <record>: a <record>.json or <record>-fail.json of another OKEY (an older batch's rebase record or
+  # answer sets: int90 under accepted batch 103) moves to <record>[-fail]-key-<sha256 prefix of its key>.json with
+  # <record>-compare.json, so the next compare does not replace or remove it.
+  oracle_aside() {
+    local f k
+    for f in "$C/$1.json" "$C/$1-fail.json"; do
+      [[ -f $f ]] && k=$(jq -r '.compareKey // .base.dir' "$f") && [[ $k != "${OKEY[$1]}" ]] || continue
+      k=$(printf %s "$k" | sha256sum | cut -c1-12)
+      say "$1 compare: ${f##*/} used another base, answer sets or rebase record; keep it as $(basename "$f" .json)-key-$k.json and compare again"
+      run mv "$f" "${f%.json}-key-$k.json"
+      [[ ! -f $C/$1-compare.json ]] || run mv "$C/$1-compare.json" "$C/$1-compare-key-$k.json"
+    done
   }
   if [[ -n $base ]]; then
     oracle_setup "$base"
