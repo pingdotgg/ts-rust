@@ -864,6 +864,8 @@ fn end_by_signal(signal: i32) {
 /// worker (see `launch`) flushes stdout and sends the code (`send_code`).
 /// On Windows it hands the code to the main thread (`windows_exit`).
 fn exit(code: i32) -> ! {
+    // unionmemo1 verify (never merged): write the counters (GOPORT_UNIONMEMO_VERIFY).
+    ts_goport::checker::checker_p28::umv::dump();
     #[cfg(target_os = "linux")]
     if let Some(worker) = worker() {
         let _ = std::io::stdout().flush();

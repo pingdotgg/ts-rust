@@ -1234,14 +1234,55 @@ impl Checker {
         };
         let hash = call.hash();
         if let Some(t) = self.union_calls.get(hash, &call) {
+            if umv::on() {
+                // unionmemo1 verify: run Go's worker anyway; it must give the
+                // kept result and make or move nothing.
+                let before = self.umv_snapshot();
+                let mark = self.union_calls.mark;
+                let w =
+                    self.get_union_type_worker(types, union_reduction, alias.clone(), TypeId::NIL);
+                let after = self.umv_snapshot();
+                umv::add(&umv::HITS);
+                if w != t || before != after || mark != self.union_calls.mark {
+                    if umv::add(&umv::BAD) < 20 {
+                        eprintln!(
+                            "unionmemo1 verify: BAD hit kept {t:?} worker {w:?} mark moved {} before {before:?} after {after:?}",
+                            mark != self.union_calls.mark
+                        );
+                    }
+                }
+                return w;
+            }
             return t;
         }
         let mark = self.union_calls.mark;
         let t = self.get_union_type_worker(types, union_reduction, alias.clone(), TypeId::NIL);
+        umv::add(&umv::MISSES);
         if self.union_calls.mark == mark && t != self.error_type {
+            umv::add(&umv::KEPT);
             self.union_calls.put(hash, &call, t);
+        } else if self.union_calls.mark != mark {
+            umv::add(&umv::UNSAFE);
+        } else {
+            umv::add(&umv::ERROR);
         }
         t
+    }
+
+    /// unionmemo1 verify: the counts that a hit must not change.
+    fn umv_snapshot(&self) -> [u64; 10] {
+        [
+            u64::from(self.type_count),
+            u64::from(self.symbol_count),
+            u64::from(self.signature_count),
+            u64::from(self.instantiation_count),
+            self.diagnostics.count as u64,
+            self.suggestion_diagnostics.count as u64,
+            self.union_types.len() as u64,
+            self.union_of_union_types.len() as u64,
+            self.intersection_types.len() as u64,
+            crate::ast::utilities_p1::peek_next_symbol_id(),
+        ]
     }
 
     // Go: checker/checker.go:26251 getUnionTypeWorker
@@ -2041,5 +2082,46 @@ impl UnionCalls {
         self.slots.fill(KeptUnionCall::default());
         self.types.clear();
         self.added = 0;
+    }
+}
+
+/// unionmemo1 verify (never merged): counters, written at exit to the file
+/// that `GOPORT_UNIONMEMO_VERIFY` names. With it set, a hit runs the worker
+/// too and checks it.
+pub mod umv {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    pub static HITS: AtomicU64 = AtomicU64::new(0);
+    pub static MISSES: AtomicU64 = AtomicU64::new(0);
+    pub static KEPT: AtomicU64 = AtomicU64::new(0);
+    pub static UNSAFE: AtomicU64 = AtomicU64::new(0);
+    pub static ERROR: AtomicU64 = AtomicU64::new(0);
+    pub static BAD: AtomicU64 = AtomicU64::new(0);
+
+    pub fn on() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("GOPORT_UNIONMEMO_VERIFY").is_some())
+    }
+
+    #[inline]
+    pub fn add(c: &AtomicU64) -> u64 {
+        if on() { c.fetch_add(1, Relaxed) } else { 0 }
+    }
+
+    pub fn dump() {
+        let Some(path) = std::env::var_os("GOPORT_UNIONMEMO_VERIFY") else {
+            return;
+        };
+        let out = format!(
+            "hits {}\nmisses {}\nkept {}\nunsafe {}\nerror {}\nbad {}\n",
+            HITS.load(Relaxed),
+            MISSES.load(Relaxed),
+            KEPT.load(Relaxed),
+            UNSAFE.load(Relaxed),
+            ERROR.load(Relaxed),
+            BAD.load(Relaxed)
+        );
+        let _ = std::fs::write(path, out);
     }
 }
