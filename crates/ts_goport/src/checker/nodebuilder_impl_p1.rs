@@ -1306,6 +1306,12 @@ impl Checker {
                             symbol_name = results[&result_symbols[0]].clone();
                         }
                     }
+                    // PORT: a private name holds the key of its class, where
+                    // Go's holds the class's symbol id, which Go prints here
+                    // (`go_private_name`).
+                    if let Some(go_name) = go_private_name(&self.symbols, symbol) {
+                        symbol_name = go_name;
+                    }
                 }
             }
         }

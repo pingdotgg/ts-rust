@@ -1118,6 +1118,14 @@ impl Binder {
                     name.text(),
                 ));
                 self.symbols.note_private_name(&private_name);
+                // PORT: Go gives the class symbol its id here
+                // (`ast.GetSymbolId`); `program::bind_all` gives it after
+                // the bind, in Go's bind order.
+                let classes = &mut self.file_bind.private_name_classes;
+                if classes.last() != Some(&containing_class) && !classes.contains(&containing_class)
+                {
+                    classes.push(containing_class);
+                }
                 return private_name;
             }
             // Go `ast.IsPropertyNameLiteral(name) || ast.IsJsxNamespacedName(name)`
@@ -1194,7 +1202,10 @@ impl Binder {
 // in the name. Here the number is the key of the class node
 // (`private_name_key`), so the binder and the checker give the class the
 // same names, and `go_symbol_name` puts the Go id back where Go shows
-// `symbol.Name` outside the process (the API). The binder passes the
+// `symbol.Name`: the API and the node builder
+// (`create_access_from_symbol_chain`). The binder notes the class
+// (`FileBindData::private_name_classes`), and `program::bind_all` gives it
+// its id after the bind, as Go's bind does. The binder passes the
 // containing class node; the checker passes the class symbol
 // (`get_symbol_name_for_private_identifier_of_symbol`).
 // PORT: edleak1. The number was the arena index of the class symbol, so
@@ -1273,23 +1284,24 @@ pub fn get_symbol_name_for_private_identifier_of_symbol(
 /// the name holds, has such a name; a name that source text spells stays.
 #[must_use]
 pub fn go_symbol_name(symbols: &SymbolArena, symbol: SymbolId) -> String {
+    go_private_name(symbols, symbol).unwrap_or_else(|| symbols.sym(symbol).name.to_string())
+}
+
+/// `go_symbol_name` for a private identifier name only: None when the name
+/// of `symbol` holds no class key, so the caller keeps the name it has.
+#[must_use]
+pub fn go_private_name(symbols: &SymbolArena, symbol: SymbolId) -> Option<String> {
     let s = symbols.sym(symbol);
-    let name = s.name.as_str();
     if !s.name.is_internal() {
-        return name.to_string();
+        return None;
     }
-    let Some(rest) = name
-        .strip_prefix(INTERNAL_SYMBOL_NAME_PREFIX)
-        .and_then(|rest| rest.strip_prefix('#'))
-    else {
-        return name.to_string();
-    };
-    let Some(at) = rest.find('@') else {
-        return name.to_string();
-    };
-    let Ok(key) = rest[..at].parse::<u128>() else {
-        return name.to_string();
-    };
+    let rest = s
+        .name
+        .as_str()
+        .strip_prefix(INTERNAL_SYMBOL_NAME_PREFIX)?
+        .strip_prefix('#')?;
+    let at = rest.find('@')?;
+    let key = rest[..at].parse::<u128>().ok()?;
     // The binder names a private identifier declaration after its
     // containing class (`get_declaration_name_of_kind`).
     let class = s
@@ -1297,16 +1309,13 @@ pub fn go_symbol_name(symbols: &SymbolArena, symbol: SymbolId) -> String {
         .iter()
         .filter(|&&declaration| is_private_identifier(get_name_of_declaration(declaration)))
         .map(|&declaration| get_containing_class(declaration))
-        .find(|&class| class.is_some() && private_name_key(class) == key);
-    let Some(class) = class else {
-        return name.to_string();
-    };
-    format!(
+        .find(|&class| class.is_some() && private_name_key(class) == key)?;
+    Some(format!(
         "{}#{}{}",
         INTERNAL_SYMBOL_NAME_PREFIX,
         get_symbol_id(symbols, class.symbol()),
         &rest[at..]
-    )
+    ))
 }
 
 impl Binder {
