@@ -328,18 +328,30 @@ fn print_summary(stash: Stash) {
         keys,
     } = stash;
     let tail_start = last_worker.clamp(load_begin, runq_end);
+    // After the last wait of the loader for a worker, the loader does not
+    // wait again: all its work from there to the end of the queue is serial
+    // (the `crit` window).
+    let crit_start = events
+        .iter()
+        .filter(|&&(_, _, kind)| kind == WAIT)
+        .map(|&(_, e, _)| e)
+        .max()
+        .unwrap_or(load_begin)
+        .clamp(load_begin, runq_end);
     let (inner, whole) = calibrate();
     // Parents end after their children; sort by begin, longer first.
     events.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    let overlap = |b: u64, e: u64| e.min(runq_end).saturating_sub(b.max(tail_start));
+    // Per window (0: the tail, 1: crit): the overlap of a span with it.
+    let starts = [tail_start, crit_start];
+    let overlap = |w: usize, b: u64, e: u64| e.min(runq_end).saturating_sub(b.max(starts[w]));
     let mut n = [0u64; KINDS];
     let mut gross = [0u64; KINDS];
-    let mut gross_tail = [0u64; KINDS];
     let mut child_gross = [0u64; KINDS];
-    let mut child_tail = [0u64; KINDS];
     let mut children = [0u64; KINDS];
-    let mut children_tail = [0u64; KINDS];
-    let mut n_tail = [0u64; KINDS];
+    let mut gross_in = [[0u64; KINDS]; 2];
+    let mut child_in = [[0u64; KINDS]; 2];
+    let mut children_in = [[0u64; KINDS]; 2];
+    let mut n_in = [[0u64; KINDS]; 2];
     // The open spans: (end, kind).
     let mut stack: Vec<(u64, u8)> = Vec::new();
     for &(b, e, kind) in &events {
@@ -349,61 +361,74 @@ fn print_summary(stash: Stash) {
         let k = kind as usize;
         n[k] += 1;
         gross[k] += e - b;
-        let tail = overlap(b, e);
-        gross_tail[k] += tail;
-        if b >= tail_start {
-            n_tail[k] += 1;
-        }
-        if let Some(&(_, parent)) = stack.last() {
-            let p = parent as usize;
+        let parent = stack.last().map(|&(_, parent)| parent as usize);
+        if let Some(p) = parent {
             child_gross[p] += e - b;
-            child_tail[p] += tail;
             children[p] += 1;
-            if b >= tail_start {
-                children_tail[p] += 1;
+        }
+        for w in 0..2 {
+            let part = overlap(w, b, e);
+            gross_in[w][k] += part;
+            let inside = b >= starts[w];
+            n_in[w][k] += u64::from(inside);
+            if let Some(p) = parent {
+                child_in[w][p] += part;
+                children_in[w][p] += u64::from(inside);
             }
         }
         stack.push((e, kind));
     }
     let ms = |ns: f64| ns / 1e6;
-    let events_tail: u64 = n_tail.iter().sum();
+    let events_tail: u64 = n_in[0].iter().sum();
+    let events_crit: u64 = n_in[1].iter().sum();
     eprintln!(
-        "loadstamp load begin_ms={:.3} runq_end_ms={:.3} last_worker_ms={:.3} load_ms={:.3} tail_ms={:.3} events={} events_tail={} overhead_ms={:.3} overhead_tail_ms={:.3} inner_ns={:.1} whole_ns={:.1} hash_cold_ns={:.2} hash_warm_ns={:.2} keys={}",
+        "loadstamp load begin_ms={:.3} runq_end_ms={:.3} last_worker_ms={:.3} last_wait_ms={:.3} load_ms={:.3} tail_ms={:.3} crit_ms={:.3} events={} events_tail={} events_crit={} overhead_ms={:.3} overhead_tail_ms={:.3} overhead_crit_ms={:.3} inner_ns={:.1} whole_ns={:.1} hash_cold_ns={:.2} hash_warm_ns={:.2} keys={}",
         ms(load_begin as f64),
         ms(runq_end as f64),
         ms(last_worker as f64),
+        ms(crit_start as f64),
         ms((runq_end - load_begin) as f64),
         ms((runq_end - tail_start) as f64),
+        ms((runq_end - crit_start) as f64),
         events.len(),
         events_tail,
+        events_crit,
         ms(events.len() as f64 * whole),
         ms(events_tail as f64 * whole),
+        ms(events_crit as f64 * whole),
         inner,
         whole,
         hash_ns[0],
         hash_ns[1],
         keys
     );
+    let extra = whole - inner;
     for k in 0..KINDS {
         if n[k] == 0 {
             continue;
         }
-        let extra = whole - inner;
         let net = gross[k] as f64 - n[k] as f64 * inner;
-        let net_tail = gross_tail[k] as f64 - n_tail[k] as f64 * inner;
         let self_net = net - child_gross[k] as f64 - children[k] as f64 * extra;
-        let self_tail = net_tail - child_tail[k] as f64 - children_tail[k] as f64 * extra;
-        eprintln!(
-            "loadstamp span {} n={} n_tail={} gross_ms={:.3} net_ms={:.3} tail_net_ms={:.3} self_ms={:.3} self_tail_ms={:.3}",
+        let mut line = format!(
+            "loadstamp span {} n={} n_tail={} n_crit={} gross_ms={:.3} net_ms={:.3} self_ms={:.3}",
             KIND_NAMES[k],
             n[k],
-            n_tail[k],
+            n_in[0][k],
+            n_in[1][k],
             ms(gross[k] as f64),
             ms(net),
-            ms(net_tail),
-            ms(self_net),
-            ms(self_tail)
+            ms(self_net)
         );
+        for (w, name) in ["tail", "crit"].iter().enumerate() {
+            let net_in = gross_in[w][k] as f64 - n_in[w][k] as f64 * inner;
+            let self_in = net_in - child_in[w][k] as f64 - children_in[w][k] as f64 * extra;
+            line.push_str(&format!(
+                " {name}_net_ms={:.3} self_{name}_ms={:.3}",
+                ms(net_in),
+                ms(self_in)
+            ));
+        }
+        eprintln!("{line}");
     }
     for (index, value) in counts.iter().enumerate() {
         eprintln!("loadstamp count {} {}", COUNT_NAMES[index], value);
