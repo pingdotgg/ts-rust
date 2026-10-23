@@ -1173,9 +1173,13 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   symbols that `NewChecker` gave (merge error texts): Go gives each of those
   once in the pool. It also does not skip the ids that other checkers give
   while they check, which race in Go. Go also gives each class with private
-  names an id at bind time; the port does not
-  (`get_symbol_name_for_private_identifier`), so such a class gets its id
-  later, at its first id site. The 4 check-time private name sites give an
+  names an id at bind time (binder.go:375). The port's binds give no ids:
+  the binder notes the class (`FileBindData::private_name_classes`), and
+  `program::bind_all` gives the ids on the loading thread after the binds,
+  before the checkers copy its ids, in Go's `--singleThreaded` bind order
+  (last file first; Go's parallel bind races). The names hold a class key,
+  and the node builder and the API print Go's id (`go_symbol_name`).
+  The 4 check-time private name sites give an
   id to the symbol that they look in, as Go does: the class, or the symbol
   of the type that the site looks in
   (`Checker::private_identifier_symbol_name`).

@@ -493,10 +493,14 @@ impl Checker {
             }
         }
         {
-            let d = &mut self.ty_mut(t).as_object_type_mut().structured;
+            let ty = self.ty_mut(t);
+            let d = &mut ty.as_object_type_mut().structured;
             let (signatures, call_signature_count) =
                 (d.signatures_list(), d.call_signature_count());
             d.set_signatures(signatures, call_signature_count, index_infos.into());
+            // memberflags1: code runs between these writes, so each one
+            // clears the weak bit.
+            ty.clear_weak_bits();
         }
         // We resolve the members before computing the signatures because a signature may use
         // typeof with a qualified name expression that circularly references the type we are
@@ -508,10 +512,12 @@ impl Checker {
             .intersects(SymbolFlags::FUNCTION | SymbolFlags::METHOD)
         {
             let signatures = self.get_signatures_of_symbol(symbol);
-            let d = &mut self.ty_mut(t).as_object_type_mut().structured;
+            let ty = self.ty_mut(t);
+            let d = &mut ty.as_object_type_mut().structured;
             let call_signature_count = signatures.len() as i32;
             let index_infos = d.index_infos_list();
             d.set_signatures(signatures.into(), call_signature_count, index_infos);
+            ty.clear_weak_bits();
         }
         // And likewise for construct signatures for classes
         if self.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
@@ -524,12 +530,14 @@ impl Checker {
             if construct_signatures.is_empty() {
                 construct_signatures = self.get_default_construct_signatures(class_type);
             }
-            let d = &mut self.ty_mut(t).as_object_type_mut().structured;
+            let ty = self.ty_mut(t);
+            let d = &mut ty.as_object_type_mut().structured;
             let mut signatures = d.signatures().to_vec();
             signatures.extend(construct_signatures);
             let (call_signature_count, index_infos) =
                 (d.call_signature_count(), d.index_infos_list());
             d.set_signatures(signatures.into(), call_signature_count, index_infos);
+            ty.clear_weak_bits();
         }
     }
 

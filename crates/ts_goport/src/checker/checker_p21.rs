@@ -1405,7 +1405,7 @@ impl Checker {
                 let object_flags = self
                     .ty(t)
                     .object_flags
-                    .without(ObjectFlags::MEMBERS_RESOLVED);
+                    .without(ObjectFlags::MEMBERS_RESOLVED | ObjectFlags::WEAK_BITS);
                 self.ty_mut(t).object_flags = object_flags;
             }
             self.drop_augment_filter_of(t);

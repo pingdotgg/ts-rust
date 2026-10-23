@@ -376,7 +376,7 @@ impl Checker {
         let resolved_object_flags = self.ty(t).object_flags;
         self.ty_mut(regular).flags = resolved_flags;
         self.ty_mut(regular).object_flags |=
-            resolved_object_flags.without(ObjectFlags::FRESH_LITERAL);
+            resolved_object_flags.without(ObjectFlags::FRESH_LITERAL | ObjectFlags::WEAK_BITS);
         self.cached_types.insert(key, regular);
         regular
     }
