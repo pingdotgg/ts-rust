@@ -457,6 +457,8 @@ pub struct SymbolReferenceLinks {
 // Links for value symbols
 
 // Go: checker/types.go:183 ValueSymbolLinks
+// PORT: Go's write, name and containing types sit in a cold record
+// (`valueSymbolExtra`, ts#64797); here they stay in the record.
 #[derive(Clone, Debug, Default)]
 pub struct ValueSymbolLinks {
     pub resolved_type: TypeId, // Type of value symbol
@@ -465,16 +467,14 @@ pub struct ValueSymbolLinks {
     pub mapper: MapperId,
     pub name_type: TypeId,
     pub containing_type: TypeId, // Mapped type for mapped type property, containing union or intersection type for synthetic property
-    pub function_or_constructor_checked: bool,
     /// PORT: memo, no Go counterpart. The declaration test of Go
     /// `getTypeOfParameter` (initializer or question token on
     /// `value_declaration`), set on the first call for this symbol. It fits
-    /// in the padding after the bool.
+    /// in the padding after the type ids.
     pub optional_parameter: Tristate,
     /// PORT: no Go counterpart. The symbol has its id: a read of
-    /// `ValueSymbolLinkStore` gave it (Go keys the store by
-    /// `ast.GetSymbolId`), so later reads skip `get_symbol_id`. It fits in
-    /// the padding too.
+    /// `ValueSymbolLinkStore` gave it (Go keys the store by the symbol's
+    /// id), so later reads skip the id call. It fits in the padding too.
     pub has_id: bool,
 }
 

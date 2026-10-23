@@ -430,9 +430,9 @@ pub fn is_alias_resolution_failed(c: &Checker, symbol: SymbolId) -> bool {
 /// through the generated checker layout, without allocating links.
 ///
 /// PORT: this is the one place where the Effect port reads
-/// `value_symbol_links` (2 callers). Go `symbolArenaLinkStore.TryGet` keys the
-/// store by `ast.GetSymbolId(symbol)`, which gives the symbol its id on the
-/// first read. `try_get_by_id` is that read: it gives the id, as Go does.
+/// `value_symbol_links` (2 callers). Go `symbolLinkStore.TryGet` keys the
+/// store by the symbol's id, which gives the symbol a block id on the first
+/// read (ts#64711). `try_get_by_id` is that read: it gives the id, as Go does.
 fn materialized_value_symbol_links(c: &Checker, symbol: SymbolId) -> Option<&ValueSymbolLinks> {
     c.value_symbol_links.try_get_by_id(&c.symbols, symbol)
 }
