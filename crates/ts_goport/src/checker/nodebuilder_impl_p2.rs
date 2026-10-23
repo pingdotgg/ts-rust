@@ -13,13 +13,10 @@ type Nb = Rc<RefCell<NodeBuilderImpl>>;
 
 // PORT: small readers for `b.ctx` and `b.e`. Each one takes and drops the
 // borrow, so callers never hold it across a Checker call.
-// Go `b.ctx`. The context is its own `Rc<RefCell<..>>`. `nb_ctx` clones the
-// handle out, for a caller that keeps it across a Checker call. The field
-// readers below borrow `b`, then `b.ctx`, in one expression (nbctx1: no `Rc`
-// clone).
-fn nb_ctx(b: &Nb) -> Rc<RefCell<NodeBuilderContext>> {
-    b.borrow().ctx.clone()
-}
+// Go `b.ctx.<field>`. The context is its own `Rc<RefCell<..>>`. The readers
+// borrow `b`, then `b.ctx`, in one expression, with no `Rc` clone (nbctx1).
+// A block that holds a context guard binds `let b = b.borrow();` first, so
+// it cannot pass `b` to a Checker call while the guard lives.
 
 fn nb_flags(b: &Nb) -> NodeBuilderFlags {
     b.borrow().ctx.borrow().flags
@@ -136,8 +133,8 @@ impl Checker {
         // symbol its id (`ValueSymbolLinkStore`).
         get_symbol_id(&self.symbols, symbol);
         {
-            let ctx = nb_ctx(b);
-            let mut ctx = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut ctx = b.ctx.borrow_mut();
             if ctx.type_parameter_symbol_list.has(&symbol) {
                 return NodeList::NIL;
             }
@@ -191,8 +188,8 @@ impl Checker {
             .flags
             .intersects(SymbolFlags::TYPE_PARAMETER);
         let (has_enclosing, flags, internal_flags) = {
-            let ctx = nb_ctx(b);
-            let ctx = ctx.borrow();
+            let b = b.borrow();
+            let ctx = b.ctx.borrow();
             (
                 ctx.enclosing_declaration.is_some(),
                 ctx.flags,
@@ -562,7 +559,8 @@ impl Checker {
     // The host is the program (see `get_specifier_for_module_symbol`), so
     // this reads the current program's.
     pub fn rewrite_content_mapped_module_specifier(&self, b: &Nb, specifier: String) -> String {
-        if nb_ctx(b)
+        if b.borrow()
+            .ctx
             .borrow()
             .internal_flags
             .intersects(InternalNodeBuilderFlags::REWRITE_MODULE_SPECIFIERS)
@@ -796,7 +794,9 @@ impl Checker {
     // PORT: `typeParameterNames` is keyed by `TypeId` for Go `typeParameter.id`.
     pub fn type_parameter_to_name(&mut self, b: &Nb, type_parameter: TypeId) -> Node {
         if nb_flags(b).intersects(NodeBuilderFlags::GENERATE_NAMES_FOR_SHADOWED_TYPE_PARAMS) {
-            if let Some(cached) = nb_ctx(b)
+            if let Some(cached) = b
+                .borrow()
+                .ctx
                 .borrow()
                 .type_parameter_names
                 .get(&type_parameter)
@@ -823,7 +823,9 @@ impl Checker {
         }
         if nb_flags(b).intersects(NodeBuilderFlags::GENERATE_NAMES_FOR_SHADOWED_TYPE_PARAMS) {
             let raw_text = result.text().to_string();
-            let mut i: i32 = nb_ctx(b)
+            let mut i: i32 = b
+                .borrow()
+                .ctx
                 .borrow()
                 .type_parameter_names_by_text_next_name_count
                 .get(&raw_text)
@@ -832,7 +834,12 @@ impl Checker {
             let mut text = raw_text.clone();
 
             loop {
-                let taken = nb_ctx(b).borrow().type_parameter_names_by_text.has(&text);
+                let taken = b
+                    .borrow()
+                    .ctx
+                    .borrow()
+                    .type_parameter_names_by_text
+                    .has(&text);
                 if !taken
                     && !self.type_parameter_shadows_other_type_parameter_in_scope(
                         b,
@@ -855,8 +862,8 @@ impl Checker {
 
             // avoiding iterations of the above loop turns out to be worth it when `i` starts to get large, so we cache the max
             // `i` we've used thus far, to save work later
-            let ctx = nb_ctx(b);
-            let mut ctx = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut ctx = b.ctx.borrow_mut();
             ctx.type_parameter_names_by_text_next_name_count
                 .set(raw_text, i);
             ctx.type_parameter_names.set(type_parameter, result);
@@ -1365,8 +1372,8 @@ impl Checker {
         return_type: TypeId,
     ) -> Node {
         let old_suppress_report_inference_fallback = {
-            let ctx = nb_ctx(b);
-            let mut ctx = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut ctx = b.ctx.borrow_mut();
             let old = ctx.suppress_report_inference_fallback;
             ctx.suppress_report_inference_fallback = true;
             old
@@ -1384,8 +1391,10 @@ impl Checker {
         } else {
             return_type_node = self.type_to_type_node(b, return_type);
         }
-        nb_ctx(b).borrow_mut().suppress_report_inference_fallback =
-            old_suppress_report_inference_fallback;
+        b.borrow()
+            .ctx
+            .borrow_mut()
+            .suppress_report_inference_fallback = old_suppress_report_inference_fallback;
         return_type_node
     }
 
@@ -1850,7 +1859,9 @@ impl Checker {
             // Go keys the map by `ast.GetSymbolId(symbol)`, which gives the
             // symbol its id (`ValueSymbolLinkStore`).
             get_symbol_id(&self.symbols, symbol);
-            let cached = nb_ctx(b)
+            let cached = b
+                .borrow()
+                .ctx
                 .borrow()
                 .enclosing_symbol_types
                 .get(&symbol)
@@ -1877,7 +1888,7 @@ impl Checker {
                 let restore = self.add_symbol_type_to_context(b, declaration_symbol, return_type);
                 let pc = b.borrow().pc.clone();
                 let mut pt = Some(pc.get_return_type_of_signature(&self.symbols, declaration));
-                let report_fallback = !nb_ctx(b).borrow().suppress_report_inference_fallback;
+                let report_fallback = !b.borrow().ctx.borrow().suppress_report_inference_fallback;
                 let equivalent = match &pt {
                     Some(p) => self.pseudo_type_equivalent_to_type(
                         b,
@@ -1901,7 +1912,7 @@ impl Checker {
                             None => false,
                         };
                         if !matches {
-                            if !nb_ctx(b).borrow().suppress_report_inference_fallback {
+                            if !b.borrow().ctx.borrow().suppress_report_inference_fallback {
                                 nb_tracker(b).report_inference_fallback(self, declaration);
                             }
                             pt = None;
@@ -1941,7 +1952,7 @@ impl Checker {
             return false;
         }
         // ts#64649, Go N' nodebuilderimpl.go:2156: the checker method, not the emit resolver.
-        let enclosing_declaration = nb_ctx(b).borrow().enclosing_declaration;
+        let enclosing_declaration = b.borrow().ctx.borrow().enclosing_declaration;
         self.is_entity_name_visible(e.name().expression(), enclosing_declaration, false)
             .accessibility
             == SymbolAccessibility::ACCESSIBLE
@@ -2061,7 +2072,7 @@ impl Checker {
         if value_type.is_nil()
             && !nb_flags(b).intersects(NodeBuilderFlags::ALLOW_EMPTY_INDEX_INFO_TYPE)
         {
-            nb_ctx(b).borrow_mut().encountered_error = true;
+            b.borrow().ctx.borrow_mut().encountered_error = true;
         }
         nb_add_approximate_length(b, go_len(&name) as i32 + 4);
         let mut modifiers = ModifierList::NIL;

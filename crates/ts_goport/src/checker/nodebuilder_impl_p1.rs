@@ -712,8 +712,8 @@ impl Checker {
             // `UseFullyQualifiedType` flag enabled.
             let restore_flags = self.save_restore_flags(b);
             {
-                let ctx = p1_ctx(b);
-                let mut c = ctx.borrow_mut();
+                let b = b.borrow();
+                let mut c = b.ctx.borrow_mut();
                 c.flags = c.flags | NodeBuilderFlags::USE_FULLY_QUALIFIED_TYPE;
             }
             for types in seen_names.values() {
@@ -752,7 +752,7 @@ impl Checker {
             resolved_symbol = self.resolve_alias(symbol);
         }
 
-        let enclosing_declaration = p1_ctx(b).borrow().enclosing_declaration;
+        let enclosing_declaration = b.borrow().ctx.borrow().enclosing_declaration;
         if self
             .is_symbol_accessible(symbol, enclosing_declaration, meaning, false)
             .accessibility
@@ -783,7 +783,7 @@ impl Checker {
         node: Node,
         range_: Node,
     ) {
-        let enclosing_file = p1_ctx(b).borrow().enclosing_file;
+        let enclosing_file = b.borrow().ctx.borrow().enclosing_file;
         if range_.is_some()
             && enclosing_file.is_some()
             && enclosing_file == get_source_file_of_node(range_)
@@ -890,7 +890,7 @@ impl Checker {
         mut annotation_type: TypeId,
     ) -> Node {
         if host.is_nil() {
-            host = p1_ctx(b).borrow().enclosing_declaration;
+            host = b.borrow().ctx.borrow().enclosing_declaration;
         }
         if annotation_type.is_nil() {
             annotation_type = self.nb_get_type_from_type_node(b, existing, true);
@@ -966,8 +966,8 @@ impl Checker {
         symbol: SymbolId,
         meaning: SymbolFlags,
     ) -> Node {
-        let ctx = p1_ctx(b);
-        if ctx
+        if b.borrow()
+            .ctx
             .borrow()
             .internal_flags
             .intersects(InternalNodeBuilderFlags::WRITE_COMPUTED_PROPS)
@@ -991,12 +991,12 @@ impl Checker {
                         .intersects(TypeFlags::ENUM_LITERAL | TypeFlags::UNIQUE_ES_SYMBOL)
                 {
                     let name_type_symbol = self.ty(name_type).symbol;
-                    let old_enclosing = ctx.borrow().enclosing_declaration;
-                    ctx.borrow_mut().enclosing_declaration =
+                    let old_enclosing = b.borrow().ctx.borrow().enclosing_declaration;
+                    b.borrow().ctx.borrow_mut().enclosing_declaration =
                         self.sym(name_type_symbol).value_declaration;
                     let expression = self.symbol_to_expression_worker(b, name_type_symbol, meaning);
                     let result = p1_e(b).factory().new_computed_property_name(expression);
-                    ctx.borrow_mut().enclosing_declaration = old_enclosing;
+                    b.borrow().ctx.borrow_mut().enclosing_declaration = old_enclosing;
                     return result;
                 }
             }
@@ -1014,8 +1014,8 @@ impl Checker {
     ) -> Node {
         let chain = self.lookup_symbol_chain(b, symbol, meaning, false);
         {
-            let ctx = p1_ctx(b);
-            let mut c = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut c = b.ctx.borrow_mut();
             if expects_identifier
                 && chain.len() != 1
                 && !c.encountered_error
@@ -1039,15 +1039,16 @@ impl Checker {
     ) -> Node {
         // typeParameterNodes := b.lookupTypeParameterNodes(chain, index)
         let symbol = chain[index];
-        let ctx = p1_ctx(b);
 
         if index == 0 {
-            let mut c = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut c = b.ctx.borrow_mut();
             c.flags = c.flags | NodeBuilderFlags::IN_INITIAL_ENTITY_NAME;
         }
         let symbol_name = self.get_name_of_symbol_as_written(b, symbol);
         if index == 0 {
-            let mut c = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut c = b.ctx.borrow_mut();
             c.flags = NodeBuilderFlags(c.flags.0 ^ NodeBuilderFlags::IN_INITIAL_ENTITY_NAME.0);
         }
 
@@ -1089,7 +1090,6 @@ impl Checker {
         mask: SymbolFlags,
         type_arguments: NodeList,
     ) -> Node {
-        let ctx = p1_ctx(b);
         let e = p1_e(b);
         let f = e.factory();
         let use_alias_outside =
@@ -1120,7 +1120,7 @@ impl Checker {
             if type_parameter_nodes.is_nil() {
                 type_parameter_nodes = self.lookup_type_parameter_nodes(b, &chain, 0);
             }
-            let enclosing_declaration = ctx.borrow().enclosing_declaration;
+            let enclosing_declaration = b.borrow().ctx.borrow().enclosing_declaration;
             let context_file = get_source_file_of_node(e.most_original(enclosing_declaration)); // TODO: Just use b.ctx.enclosingFile ? Or is the delayed lookup important for context moves?
             let target_file = get_source_file_of_module(&self.symbols, chain[0]);
             let mut specifier_result = ModuleSpecifierResult::default();
@@ -1172,8 +1172,8 @@ impl Checker {
                 if import_mode_override == ResolutionMode::NONE {
                     // If ultimately we can only name the symbol with a reference that dives into a `node_modules` folder, we should error
                     // since declaration files with these kinds of references are liable to fail when published :(
-                    ctx.borrow_mut().encountered_error = true;
-                    let tracker = ctx.borrow().tracker.clone();
+                    b.borrow().ctx.borrow_mut().encountered_error = true;
+                    let tracker = b.borrow().ctx.borrow().tracker.clone();
                     let symbol_name = self.sym(symbol).name.clone();
                     tracker.report_likely_unsafe_import_required_error(
                         self,
@@ -1247,7 +1247,6 @@ impl Checker {
         stopper: usize,
         override_type_arguments: NodeList,
     ) -> Node {
-        let ctx = p1_ctx(b);
         let e = p1_e(b);
         let f = e.factory();
         let mut type_parameter_nodes = override_type_arguments;
@@ -1264,12 +1263,14 @@ impl Checker {
         let mut symbol_name = String::new();
         if index == 0 {
             {
-                let mut c = ctx.borrow_mut();
+                let b = b.borrow();
+                let mut c = b.ctx.borrow_mut();
                 c.flags = c.flags | NodeBuilderFlags::IN_INITIAL_ENTITY_NAME;
             }
             symbol_name = self.get_name_of_symbol_as_written(b, symbol);
             p1_add_length(b, go_len(&symbol_name) + 1);
-            let mut c = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut c = b.ctx.borrow_mut();
             c.flags = NodeBuilderFlags(c.flags.0 ^ NodeBuilderFlags::IN_INITIAL_ENTITY_NAME.0);
         } else {
             // lookup a ref to symbol within parent to handle export aliases
@@ -1411,8 +1412,8 @@ impl Checker {
         mask: SymbolFlags,
     ) -> Node {
         let (tracker, enclosing_declaration) = {
-            let ctx = p1_ctx(b);
-            let ctx = ctx.borrow();
+            let b = b.borrow();
+            let ctx = b.ctx.borrow();
             (ctx.tracker.clone(), ctx.enclosing_declaration)
         };
         tracker.track_symbol(self, symbol, enclosing_declaration, mask);
@@ -1441,17 +1442,18 @@ impl Checker {
         let type_parameter_nodes =
             self.lookup_expression_chain_type_argument_nodes(b, chain, index);
         let symbol = chain[index];
-        let ctx = p1_ctx(b);
         let e = p1_e(b);
         let f = e.factory();
 
         if index == 0 {
-            let mut c = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut c = b.ctx.borrow_mut();
             c.flags = c.flags | NodeBuilderFlags::IN_INITIAL_ENTITY_NAME;
         }
         let mut symbol_name = self.get_name_of_symbol_as_written(b, symbol);
         if index == 0 {
-            let mut c = ctx.borrow_mut();
+            let b = b.borrow();
+            let mut c = b.ctx.borrow_mut();
             c.flags = NodeBuilderFlags(c.flags.0 ^ NodeBuilderFlags::IN_INITIAL_ENTITY_NAME.0);
         }
 
@@ -1568,15 +1570,21 @@ impl Checker {
         b: &Rc<RefCell<NodeBuilderImpl>>,
         mut symbol: SymbolId,
     ) -> String {
-        let ctx = p1_ctx(b);
         // Go keys the map by `ast.GetSymbolId(symbol)`, which gives the symbol
         // its id (`ValueSymbolLinkStore`).
         get_symbol_id(&self.symbols, symbol);
-        if let Some(&result) = ctx.borrow().remapped_symbol_references.get(&symbol) {
+        if let Some(&result) = b
+            .borrow()
+            .ctx
+            .borrow()
+            .remapped_symbol_references
+            .get(&symbol)
+        {
             symbol = result;
         }
         let (flags, enclosing_declaration) = {
-            let c = ctx.borrow();
+            let b = b.borrow();
+            let c = b.ctx.borrow();
             (c.flags, c.enclosing_declaration)
         };
         let declarations = self.sym(symbol).declarations.clone();
@@ -1639,7 +1647,8 @@ impl Checker {
             {
                 // PORT: Go checks `b.ctx != nil`. The Rust context always exists.
                 {
-                    let mut c = ctx.borrow_mut();
+                    let b = b.borrow();
+                    let mut c = b.ctx.borrow_mut();
                     if !c.encountered_error
                         && !c
                             .flags
