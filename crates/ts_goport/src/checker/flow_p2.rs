@@ -1218,11 +1218,12 @@ impl Checker {
                 // `MatchingReferenceMemo`). Each one is made at the same
                 // point as in Go the first time.
                 if self.matching_reference_memo.node != source {
-                    self.matching_reference_memo = MatchingReferenceMemo {
-                        node: source,
-                        this_in_type_query: is_this_in_type_query(source),
-                        ..MatchingReferenceMemo::default()
-                    };
+                    let memo = &mut self.matching_reference_memo;
+                    memo.node = source;
+                    memo.this_in_type_query = is_this_in_type_query(source);
+                    memo.resolved = SymbolId::NIL;
+                    memo.export = SymbolId::NIL;
+                    memo.export_merge_version = 0;
                 }
                 if self.matching_reference_memo.this_in_type_query {
                     return target_kind == SyntaxKind::ThisKeyword;
@@ -1311,6 +1312,25 @@ impl Checker {
                     source.name().text_name() == target.name().text_name(),
                     source.name().text() == target.name().text()
                 );
+                // PERF: synthref1. A synthetic `source` (Go
+                // `getFlowTypeInConstructor` and
+                // `isPropertyInitializedInConstructor`) reads its name and
+                // expression from the memo (`SyntheticAccessMemo`).
+                if is_synthetic_node(source) {
+                    self.fill_synthetic_access_memo(source);
+                    let memo = &self.matching_reference_memo.access;
+                    if memo.name != target.name().text_name() {
+                        return false;
+                    }
+                    let (expression, expression_kind) = (memo.expression, memo.expression_kind);
+                    let target_expression = target.expression();
+                    return self.is_matching_reference_kinds(
+                        expression,
+                        expression_kind,
+                        target_expression,
+                        target_expression.kind(),
+                    );
+                }
                 return source.name().text_name() == target.name().text_name()
                     && self.is_matching_reference(source.expression(), target.expression());
             }
@@ -1375,7 +1395,7 @@ impl Checker {
 /// merge (`Checker::merge_version`). A nested `is_matching_reference` call
 /// (during the first resolution of `node`) can replace the memo, so a value
 /// is stored only while the memo still holds its node.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MatchingReferenceMemo {
     /// The identifier; nil when the memo is empty.
     pub node: Node,
@@ -1387,6 +1407,43 @@ pub struct MatchingReferenceMemo {
     pub export: SymbolId,
     /// `Checker::merge_version` when `export` was read.
     pub export_merge_version: u64,
+    /// The last synthetic property access `source`. A new identifier
+    /// `source` keeps it.
+    pub access: SyntheticAccessMemo,
+}
+
+/// PERF: synthref1, not in Go. What `is_matching_reference` and
+/// `contains_matching_reference` read about their last synthetic property
+/// access `source`: the `this.<name>` reference of a constructor walk (Go
+/// `getFlowTypeInConstructor` and `isPropertyInitializedInConstructor`).
+/// The walk compares it with each assignment of the constructor, and each
+/// read of a synthetic node goes through the synthetic arena (its name text
+/// is also interned again), where Go reads a field.
+///
+/// The values are tree reads, so they are stable: the checker does not
+/// change the data of its own reference nodes, and a synthetic handle never
+/// names another node while the checker lives (`ast::synthetic`).
+#[derive(Clone, Debug)]
+pub struct SyntheticAccessMemo {
+    /// The synthetic property access; nil when the memo is empty.
+    pub node: Node,
+    /// Go `node.Name().Text()`, interned.
+    pub name: Name,
+    /// Go `node.Expression()`.
+    pub expression: Node,
+    /// The kind of `expression`.
+    pub expression_kind: SyntaxKind,
+}
+
+impl Default for SyntheticAccessMemo {
+    fn default() -> Self {
+        SyntheticAccessMemo {
+            node: Node::NIL,
+            name: Name::default(),
+            expression: Node::NIL,
+            expression_kind: SyntaxKind::Unknown,
+        }
+    }
 }
 
 // Go: checker/flow.go:1651 nonDottedNameCacheKey
@@ -1752,14 +1809,53 @@ impl Checker {
     }
 
     // Go: checker/flow.go:1841 containsMatchingReference
+    // PERF: synthref1. The first step of a synthetic property access
+    // `source` reads its expression from the memo (`SyntheticAccessMemo`),
+    // and the kind of each `source` is read once.
     pub fn contains_matching_reference(&mut self, mut source: Node, target: Node) -> bool {
-        while is_access_expression(source) {
-            source = source.expression();
-            if self.is_matching_reference(source, target) {
+        let mut source_kind = source.kind();
+        while matches!(
+            source_kind,
+            SyntaxKind::PropertyAccessExpression | SyntaxKind::ElementAccessExpression
+        ) {
+            if source_kind == SyntaxKind::PropertyAccessExpression && is_synthetic_node(source) {
+                self.fill_synthetic_access_memo(source);
+                let memo = &self.matching_reference_memo.access;
+                (source, source_kind) = (memo.expression, memo.expression_kind);
+            } else {
+                source = source.expression();
+                source_kind = source.kind();
+            }
+            if self.is_matching_reference_kinds(source, source_kind, target, target.kind()) {
                 return true;
             }
         }
         false
+    }
+
+    /// Puts the synthetic property access `source` in the access memo
+    /// (`SyntheticAccessMemo`) unless it is there.
+    fn fill_synthetic_access_memo(&mut self, source: Node) {
+        debug_assert!(is_synthetic_node(source));
+        debug_assert_eq!(source.kind(), SyntaxKind::PropertyAccessExpression);
+        if self.matching_reference_memo.access.node == source {
+            debug_assert_eq!(
+                self.matching_reference_memo.access.name,
+                source.name().text_name()
+            );
+            debug_assert_eq!(
+                self.matching_reference_memo.access.expression,
+                source.expression()
+            );
+            return;
+        }
+        let expression = source.expression();
+        self.matching_reference_memo.access = SyntheticAccessMemo {
+            node: source,
+            name: source.name().text_name(),
+            expression,
+            expression_kind: expression.kind(),
+        };
     }
 
     // Go: checker/flow.go:1851 optionalChainContainsReference
