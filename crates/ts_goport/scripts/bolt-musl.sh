@@ -18,12 +18,14 @@
 #     (-instrumentation-no-counters-clear). Some watchers spin after their last write and block
 #     every signal but SIGKILL: the script kills them.
 #   - No -split-eh. It moves landing pads to the cold part and gives their LSDA a start address
-#     (LPStart). The musl target unwinds with LLVM libunwind, which aborts on such an LSDA
-#     ("lsda at ... does not start with 0xFF"), so a caught panic would end the tsc.
+#     (LPStart). The musl target unwinds with LLVM libunwind, which logs "lsda at ... does not
+#     start with 0xFF" for such an LSDA. In some cases a caught panic through it then aborts
+#     (relmusl1's test program: "failed to initiate panic"); in others it works.
 #   - The relocation mode needs the static relocations (--emit-relocs).
 # Checks of the BOLT tsc: no BOLT runtime code (no __bolt symbols), one RW PT_GNU_STACK, and
-# check-unwind.py (a caught panic in the tsc, and every LSDA starts with 0xFF). release.yml then
-# compares its output with the plain tsc on the training set.
+# check-unwind.py (two caught panics in the tsc with no libunwind line, and every LSDA starts with
+# 0xFF: a cautious guard that can reject a tsc that would work). release.yml then compares its
+# output with the plain tsc on the training set.
 set -euo pipefail
 
 case "${1:-}" in

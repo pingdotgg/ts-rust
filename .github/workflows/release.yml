@@ -16,7 +16,7 @@
 # projects at fixed commits). The job also builds the plain tsc, and fails unless the PGO tsc gives
 # the same stdout, stderr, exit code and emitted files as the plain tsc on that set. linux-x64 also
 # gets BOLT: crates/ts_goport/scripts/bolt-musl.sh, with a profile from a counting copy that runs
-# the same set, and no -split-eh (it breaks the unwinding of a caught panic with musl). The PGO
+# the same set, and no -split-eh (it can break the unwinding of a caught panic with musl). The PGO
 # check then compares the BOLT tsc with the plain tsc. The others have no BOLT: linux-arm64 is not
 # tried yet, BOLT's Mach-O support is experimental, and BOLT has no PE support.
 # Linux is static musl and non-PIE, so it starts on any x86-64 or arm64 Linux, Alpine too
