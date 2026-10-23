@@ -301,7 +301,9 @@ impl Checker {
                 // See `declarationFileNoCrashOnExtraExportModifier` for an example
                 return target;
             }
-            if !target_flags.intersects(SymbolFlags::TRANSIENT) {
+            // A transient target is changed in place (no clone).
+            let in_place = target_flags.intersects(SymbolFlags::TRANSIENT);
+            if !in_place {
                 let resolved_target = self.resolve_symbol(target);
                 if resolved_target == self.unknown_symbol {
                     return source;
@@ -334,6 +336,16 @@ impl Checker {
                 .intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE)
             {
                 merged_flags = merged_flags.without(SymbolFlags::CONST_ENUM_ONLY_MODULE);
+            }
+            // memberflags1: an in-place merge (`combine_symbol_tables`) can
+            // make a property in a resolved `properties` list optional, and
+            // then a stored weak bit can be wrong. Rare: turn the weak bits
+            // off for the rest of this checker (`weak_bits_off`).
+            if in_place
+                && merged_flags.intersects(SymbolFlags::OPTIONAL)
+                && !self.sym(target).flags.intersects(SymbolFlags::OPTIONAL)
+            {
+                self.weak_bits_off = true;
             }
             self.sym_mut(target).flags |= merged_flags;
             let source_value_declaration = self.sym(source).value_declaration;
