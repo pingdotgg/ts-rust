@@ -864,6 +864,8 @@ fn end_by_signal(signal: i32) {
 /// worker (see `launch`) flushes stdout and sends the code (`send_code`).
 /// On Windows it hands the code to the main thread (`windows_exit`).
 fn exit(code: i32) -> ! {
+    // identmatch1 count probe: write the counters (GOPORT_IDENTCOUNT).
+    ts_goport::checker::inference_p2::identcount::dump();
     #[cfg(target_os = "linux")]
     if let Some(worker) = worker() {
         let _ = std::io::stdout().flush();

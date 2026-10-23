@@ -522,6 +522,7 @@ impl Checker {
         if self.is_fresh_literal_type(target) {
             target = self.ty(target).as_literal_type().regular_type;
         }
+        identcount::add(0);
         if source == target {
             return true;
         }
@@ -541,6 +542,7 @@ impl Checker {
         {
             return self.is_type_related_to_kind(source, target, RelationKind::Identity);
         }
+        identcount::add(1);
         // Go: relater.go:369. checkTypeRelatedToEx reads the relation size before isRelatedToEx normalizes.
         let relation_size = self.identity_relation.borrow().size();
         // Go: relater.go:2654, the source before the target.
@@ -551,15 +553,19 @@ impl Checker {
         // Go: relater.go:2656-2665. These ends set no overflow and no error chain, so Go's checkTypeRelatedToEx
         // only takes and puts back a relater.
         if normalized_source == normalized_target {
+            identcount::add(2);
             return true;
         }
         let flags = self.ty(normalized_source).flags;
         if flags != self.ty(normalized_target).flags {
+            identcount::add(3);
             return false;
         }
         if flags.intersects(TypeFlags::SINGLETON) {
+            identcount::add(4);
             return true;
         }
+        identcount::add(5);
         self.check_normalized_type_identical_to(
             source,
             target,
@@ -581,8 +587,10 @@ impl Checker {
     fn normalize_for_matching(&mut self, t: TypeId, writing: bool, slot: &mut TypeId) -> TypeId {
         let under_count_limit = self.instantiation_count < 5_000_000;
         if slot.is_some() && under_count_limit {
+            identcount::add(7);
             return *slot;
         }
+        identcount::add(6);
         let counts = |c: &Checker| {
             (
                 c.total_instantiation_count,
@@ -597,6 +605,10 @@ impl Checker {
         let normalized = self.get_normalized_type(t, writing);
         if can_keep && counts(self) == before {
             *slot = normalized;
+        } else if can_keep {
+            identcount::add(8);
+        } else {
+            identcount::add(9);
         }
         normalized
     }
@@ -1614,6 +1626,37 @@ impl Checker {
                 let info = self.inference_context(source).inferences[i].clone();
                 self.inference_context_mut(target).inferences[i] = info;
             }
+        }
+    }
+}
+
+// identmatch1 count probe (never merge): counters of the identity matching pairs, written at exit to the file that
+// GOPORT_IDENTCOUNT names.
+pub mod identcount {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static C: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+    const NAMES: [&str; 10] = [
+        "pairs_after_same",
+        "fast",
+        "equal",
+        "flags_differ",
+        "singleton",
+        "structural",
+        "normalized",
+        "slot_hits",
+        "not_kept_counts",
+        "not_kept_limits",
+    ];
+    pub fn add(i: usize) {
+        C[i].fetch_add(1, Relaxed);
+    }
+    pub fn dump() {
+        if let Ok(path) = std::env::var("GOPORT_IDENTCOUNT") {
+            let mut out = String::new();
+            for (i, name) in NAMES.iter().enumerate() {
+                out.push_str(&format!("{name} {}\n", C[i].load(Relaxed)));
+            }
+            let _ = std::fs::write(path, out);
         }
     }
 }
