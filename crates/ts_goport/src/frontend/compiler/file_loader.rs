@@ -4,7 +4,9 @@
 //! PORT: Go `opts.Tracing` is the process tracing session
 //! (`crate::tracing::get`).
 
-use super::files_parser::{TakenParse, count_prep, note_commit, note_names_own, note_prep_taken};
+use super::files_parser::{
+    TakenParse, count_prep, free_prep_off_loader, note_commit, note_names_own, note_prep_taken,
+};
 use crate::contentmapper::{
     ConcurrentTransform, DiagnosticDirectiveError, DiagnosticDirectiveErrorKind, InitializeError,
     InitializeErrorKind, InvalidVirtualExtensionError, Mapper, ProjectError, ProjectErrorKind,
@@ -1767,7 +1769,7 @@ impl FileLoader {
             let mut prep = prep
                 .filter(|_| self.shared_resolution.is_some() && crate::tracing::get().is_none())
                 .and_then(TakenParse::take_prep)
-                .filter(|prep| {
+                .and_then(|prep| {
                     let usable = prep.fits(
                         &meta,
                         redirect_ref.map_or("", |r| r.config_name()),
@@ -1775,15 +1777,17 @@ impl FileLoader {
                         &synthetic,
                         file.imports.len(),
                     );
-                    if !usable {
-                        count_prep(|c| c.preps_unfit += 1);
-                    }
                     #[cfg(test)]
                     PREP_FITS.with(|fits| {
                         fits.borrow_mut()
                             .push((file.file_name().to_string(), usable));
                     });
-                    usable
+                    if usable {
+                        return Some(prep);
+                    }
+                    count_prep(|c| c.preps_unfit += 1);
+                    free_prep_off_loader(prep);
+                    None
                 });
             let (mut names_taken, mut names_own) = (0, 0);
             let mut resolutions_trace: Vec<DiagAndArgs> = Vec::new();
@@ -1791,20 +1795,22 @@ impl FileLoader {
             // module augmentations of a parse that the loads keep
             // (`import_names`), or that the parse worker read (parload1,
             // `FilePrep::names`), and the file's emit format, once per file.
-            let kept = if self.keeps_import_names {
-                Some(import_names(&file))
-            } else {
-                prep.as_mut()
-                    .and_then(|prep| prep.names.take())
-                    .map(|names| Rc::new(*names))
-            }
-            .filter(|kept| kept.len() == module_names.len() - imports_start as usize);
+            let kept_shared = self.keeps_import_names.then(|| import_names(&file));
+            // The worker's names go back to the prep, which frees off the
+            // loader (`free_prep_off_loader`).
+            let worker_names = prep
+                .as_mut()
+                .filter(|_| !self.keeps_import_names)
+                .and_then(|prep| prep.names.take());
+            let kept = kept_shared
+                .as_deref()
+                .or(worker_names.as_deref())
+                .filter(|kept| kept.len() == module_names.len() - imports_start as usize);
             // The load reads the worker's names (`preps_named`).
             let named = !self.keeps_import_names && kept.is_some();
             let mut file_emit_mode = None;
-            let kept_names = &kept;
             let name_at = move |index: usize, entry: Node| match (
-                kept_names,
+                kept,
                 index.checked_sub(imports_start as usize),
             ) {
                 (Some(kept), Some(kept_index)) => kept.get(kept_index),
@@ -1832,8 +1838,9 @@ impl FileLoader {
             // The first name that the loop below resolves.
             let mut first_name = 0;
             let mut resolutions_in_file: ModeAwareCache<Arc<ResolvedModule>> = match commit {
-                Some(commit) => {
-                    let prep = prep.as_ref().expect("a commit comes with its prep");
+                Some(mut commit) => {
+                    let taken_prep = prep.as_mut().expect("a commit comes with its prep");
+                    let prep = &**taken_prep;
                     first_name = imports_start as usize + file.imports.len();
                     // Debug builds check the commit against the loader's
                     // own decisions (the loop below).
@@ -1904,8 +1911,7 @@ impl FileLoader {
                         self.note_worker_logs(&answer.package_jsons, &answer.lookups);
                         names_taken += 1;
                     }
-                    let commit = *commit;
-                    for add in commit.adds {
+                    for add in commit.adds.drain(..) {
                         let import_index = add.index as i32 - imports_start;
                         t.add_normalized_sub_task(
                             ResolvedRef {
@@ -1930,7 +1936,11 @@ impl FileLoader {
                             None,
                         );
                     }
-                    commit.resolutions
+                    let resolutions = std::mem::take(&mut commit.resolutions);
+                    // The commit box and its `adds` buffer go back to the
+                    // prep, which frees off the loader.
+                    taken_prep.commit = Some(commit);
+                    resolutions
                 }
                 None => {
                     let mut resolutions = ModeAwareCache::default();
@@ -2165,6 +2175,12 @@ impl FileLoader {
             }
             t.resolutions_in_file = resolutions_in_file;
             t.resolutions_trace = resolutions_trace;
+            // PERF (loadfree1): the worker's prep, with its names and
+            // commit, frees off the loader.
+            if let Some(mut prep) = prep {
+                prep.names = worker_names;
+                free_prep_off_loader(prep);
+            }
         }
     }
 
