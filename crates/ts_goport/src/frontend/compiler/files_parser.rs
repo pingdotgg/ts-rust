@@ -951,7 +951,15 @@ impl FilesParser {
                 None
             };
 
-        let mut include_processor = IncludeProcessor::default();
+        // PERF (collect1): sized as Go sizes it (filesparser.go:355). Only
+        // tests iterate this map, so its capacity changes no output.
+        let mut include_processor = IncludeProcessor {
+            file_include_reasons: Rc::new(FxHashMap::with_capacity_and_hasher(
+                total_file_count,
+                Default::default(),
+            )),
+            ..IncludeProcessor::default()
+        };
         let mut output_file_to_project_reference_source: Option<FxHashMap<Path, String>> =
             if !loader.opts.can_use_project_reference_source() {
                 Some(FxHashMap::default())
@@ -986,7 +994,10 @@ impl FilesParser {
 
         // PORT: Go `seen map[*parseTaskData]string` is keyed by pointer. The
         // key here is the `Rc` pointer of the task data.
-        let mut seen: FxHashMap<*const RefCell<ParseTaskData>, String> =
+        // PERF (collect1): the value is the task whose name Go stores, not a
+        // copy of the name. A task gets its `normalized_file_path` when it is
+        // made and keeps it, so the stored task gives Go's `checkedName`.
+        let mut seen: FxHashMap<*const RefCell<ParseTaskData>, ParseTaskRef> =
             FxHashMap::with_capacity_and_hasher(self.task_data_by_path.len(), Default::default());
 
         // PORT: the Go closure `collectFiles` is an explicit recursive
@@ -994,7 +1005,7 @@ impl FilesParser {
         struct Collector<'a> {
             parser: &'a FilesParser,
             loader: &'a FileLoader,
-            seen: &'a mut FxHashMap<*const RefCell<ParseTaskData>, String>,
+            seen: &'a mut FxHashMap<*const RefCell<ParseTaskData>, ParseTaskRef>,
             missing_files: &'a mut Vec<String>,
             duplicate_source_files: &'a mut Vec<DuplicateSourceFile>,
             files: &'a mut Vec<Rc<ParsedSourceFile>>,
@@ -1028,72 +1039,78 @@ impl FilesParser {
         }
 
         impl Collector<'_> {
+            /// The `seen` key of loaded task `t`: the pointer of its task
+            /// data. `task_data_by_path` keeps every task data while the
+            /// parser lives, so a set link points to the live data.
+            // PERF (collect1): the pointer of the task's link
+            // (`ParseTask::data`) with no upgrade, else the data of its path.
+            fn data_key(&self, t: &ParseTask) -> *const RefCell<ParseTaskData> {
+                let by_path = || {
+                    self.parser
+                        .task_data_by_path
+                        .get(&t.path)
+                        .expect("loaded parse task without task data")
+                };
+                if t.data.ptr_eq(&Weak::new()) {
+                    return Rc::as_ptr(by_path());
+                }
+                debug_assert_eq!(t.data.as_ptr(), Rc::as_ptr(by_path()));
+                t.data.as_ptr()
+            }
+
             // Go: filesparser.go:386 collectFiles
             fn collect_files(&mut self, tasks: &[ParseTaskRef]) {
                 let loader = self.loader;
-                for task in tasks {
-                    let mut task = task.clone();
-                    let include_reason = task.borrow().include_reason.clone();
+                // PERF (collect1): the task of the list, its loaded task and
+                // its include reason are borrowed, not cloned (Go copies
+                // pointers). The reason is cloned once, when it is stored.
+                for listed in tasks {
                     // Exclude automatic type directive tasks from include reason processing,
                     // as these are internal implementation details and should not contribute
                     // to the reasons for including files.
-                    let (has_redirect, is_automatic) = {
-                        let t = task.borrow();
-                        (
-                            t.redirected_parse_task.is_some(),
-                            t.is_for_automatic_type_directive,
-                        )
-                    };
-                    if !has_redirect && !is_automatic {
-                        let loaded_task = task.borrow().loaded_task.clone();
-                        if let Some(loaded_task) = loaded_task {
-                            task = loaded_task;
+                    let loaded_task = {
+                        let l = listed.borrow();
+                        if l.redirected_parse_task.is_none() && !l.is_for_automatic_type_directive {
+                            let loaded_task = l.loaded_task.clone();
+                            self.parser.add_include_reason(
+                                self.include_processor,
+                                loaded_task.as_ref().unwrap_or(listed),
+                                l.include_reason.as_ref(),
+                            );
+                            loaded_task
+                        } else {
+                            None
                         }
-                        self.parser.add_include_reason(
-                            self.include_processor,
-                            &task,
-                            include_reason.clone(),
-                        );
-                    }
+                    };
+                    let task = loaded_task.as_ref().unwrap_or(listed);
                     if !task.borrow().loaded {
                         continue;
                     }
-                    // PERF (parload1 step 4): the task's link to its data
-                    // (`ParseTask::data`), else the lookup by path.
-                    let data = {
-                        let t = task.borrow();
-                        let data = t.data.upgrade().unwrap_or_else(|| {
-                            self.parser
-                                .task_data_by_path
-                                .get(&t.path)
-                                .cloned()
-                                .expect("loaded parse task without task data")
-                        });
-                        debug_assert!(
-                            self.parser
-                                .task_data_by_path
-                                .get(&t.path)
-                                .is_some_and(|by_path| Rc::ptr_eq(by_path, &data))
-                        );
-                        data
-                    };
-                    let data_key = Rc::as_ptr(&data);
+                    let data_key = self.data_key(&task.borrow());
 
                     // ensure we only walk each task once
-                    // PERF (parload1 step 4): a visit of a walked task with
-                    // the same name (most visits) copies no name.
-                    if let Some(checked_name) = self.seen.get(&data_key) {
-                        if *checked_name != task.borrow().normalized_file_path {
-                            let checked_name = checked_name.clone();
-                            let (normalized_file_path, task_path, file) = {
-                                let t = task.borrow();
-                                (
-                                    t.normalized_file_path.clone(),
-                                    t.path.clone(),
-                                    t.file.clone(),
-                                )
-                            };
-                            if let Some(file) = file
+                    // PERF (collect1): one lookup. A visit of the stored task
+                    // (most visits: Go's `loadedTask`) has the stored name, so
+                    // Go's name check below is false and is skipped.
+                    let checked = match self.seen.entry(data_key) {
+                        std::collections::hash_map::Entry::Occupied(entry) => {
+                            if Rc::ptr_eq(entry.get(), task) {
+                                continue;
+                            }
+                            Some(entry.get().clone())
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(task.clone());
+                            None
+                        }
+                    };
+                    if let Some(checked) = checked {
+                        let checked = checked.borrow();
+                        let t = task.borrow();
+                        let checked_name = &checked.normalized_file_path;
+                        let normalized_file_path = &t.normalized_file_path;
+                        if checked_name != normalized_file_path {
+                            if let Some(file) = &t.file
                                 && self
                                     .recorded_duplicates
                                     .entry(data_key)
@@ -1125,20 +1142,22 @@ impl FilesParser {
                                 // Check if it differs only in drive letters its ok to ignore that error:
                                 let checked_absolute_path =
                                     get_normalized_absolute_path_without_root(
-                                        &checked_name,
+                                        checked_name,
                                         &loader.compare_paths_options.current_directory,
                                     );
                                 let input_absolute_path = get_normalized_absolute_path_without_root(
-                                    &normalized_file_path,
+                                    normalized_file_path,
                                     &loader.compare_paths_options.current_directory,
                                 );
                                 if checked_absolute_path != input_absolute_path {
                                     self.include_processor
                                         .add_processing_diagnostics_for_file_casing(
-                                            &task_path,
-                                            &checked_name,
-                                            &normalized_file_path,
-                                            include_reason
+                                            &t.path,
+                                            checked_name,
+                                            normalized_file_path,
+                                            listed
+                                                .borrow()
+                                                .include_reason
                                                 .clone()
                                                 .expect("nil pointer dereference: includeReason"),
                                         );
@@ -1147,24 +1166,27 @@ impl FilesParser {
                         }
                         continue;
                     }
-                    let normalized_file_path = task.borrow().normalized_file_path.clone();
-                    let task_path = task.borrow().path.clone();
-                    self.seen.insert(data_key, normalized_file_path.clone());
 
+                    // PERF (collect1): the first visit reads the task's name,
+                    // path and package id in place; only the values that a
+                    // map or a list keeps are copied.
+                    let t = task.borrow();
                     if let Some(tasks_seen_by_name_ignore_case) =
                         self.tasks_seen_by_name_ignore_case.as_mut()
                     {
-                        let path_lower_case = to_file_name_lower_case(&task_path);
+                        let path_lower_case = to_file_name_lower_case(&t.path);
                         if let Some(task_by_ignore_case) =
                             tasks_seen_by_name_ignore_case.get(&path_lower_case)
                         {
-                            let t = task_by_ignore_case.borrow();
+                            let other = task_by_ignore_case.borrow();
                             self.include_processor
                                 .add_processing_diagnostics_for_file_casing(
-                                    &t.path,
+                                    &other.path,
+                                    &other.normalized_file_path,
                                     &t.normalized_file_path,
-                                    &normalized_file_path,
-                                    include_reason
+                                    listed
+                                        .borrow()
+                                        .include_reason
                                         .clone()
                                         .expect("nil pointer dereference: includeReason"),
                                 );
@@ -1173,87 +1195,89 @@ impl FilesParser {
                         }
                     }
 
-                    {
-                        let t = task.borrow();
-                        for trace in &t.type_resolutions_trace {
-                            loader.host.trace(trace.message, trace.args.clone());
-                        }
-                        for trace in &t.resolutions_trace {
-                            loader.host.trace(trace.message, trace.args.clone());
-                        }
+                    for trace in &t.type_resolutions_trace {
+                        loader.host.trace(trace.message, trace.args.clone());
+                    }
+                    for trace in &t.resolutions_trace {
+                        loader.host.trace(trace.message, trace.args.clone());
                     }
 
-                    let file = task.borrow().file.clone();
-                    let data_package_id = data.borrow().package_id.clone();
-                    let data_lowest_depth = data.borrow().lowest_depth;
+                    let file = t.file.clone();
+                    // PERF (parload1 step 4): the task's link to its data
+                    // (`ParseTask::data`), else the lookup by path.
+                    let data = t.data.upgrade().unwrap_or_else(|| {
+                        self.parser
+                            .task_data_by_path
+                            .get(&t.path)
+                            .cloned()
+                            .expect("loaded parse task without task data")
+                    });
+                    debug_assert_eq!(Rc::as_ptr(&data), data_key);
+                    let data = data.borrow();
+                    let data_lowest_depth = data.lowest_depth;
                     if let Some(package_id_to_source_file) = self.package_id_to_source_file.as_mut()
+                        && !data.package_id.name.is_empty()
                     {
-                        if !data_package_id.name.is_empty() {
-                            if let Some(package_id_file) =
-                                package_id_to_source_file.get(&data_package_id).cloned()
-                            {
-                                if let Some(file) = &file {
-                                    // Package deduplication keeps the first package instance in the
-                                    // program, but we still parsed this file and acquired it through
-                                    // the host, so snapshot disposal must release that extra owner.
-                                    self.duplicate_source_files.push(DuplicateSourceFile {
-                                        parse_options: file.parse_options().clone(),
-                                        content_mapper_parse_options: file
-                                            .content_mapper_parse_options()
-                                            .clone(),
-                                        text: file.text.clone(),
-                                        hash: file.hash.get(),
-                                        script_kind: file.script_kind,
-                                        content_mapper: file.content_mapper().to_string(),
-                                        is_content_mapper_failure_stub: file
-                                            .is_content_mapper_failure_stub(),
-                                    });
-                                }
-                                self.redirect_targets_map
-                                    .as_mut()
-                                    .expect("redirectTargetsMap is set with packageIdToSourceFile")
-                                    .entry(package_id_file.path().clone())
-                                    .or_default()
-                                    .push(normalized_file_path.clone());
-                                let redirect_files_by_path =
-                                    self.redirect_files_by_path.get_or_insert_with(|| {
-                                        FxHashMap::with_capacity_and_hasher(
-                                            self.total_file_count,
-                                            Default::default(),
-                                        )
-                                    });
-                                let index =
-                                    (self.files.len() + redirect_files_by_path.len()) as i32;
-                                redirect_files_by_path.insert(
-                                    task_path.clone(),
-                                    RedirectsFile {
-                                        index,
-                                        file_name: normalized_file_path.clone(),
-                                        path: task_path.clone(),
-                                        target: package_id_file.path().clone(),
-                                    },
-                                );
-                                self.files_by_path
-                                    .insert(task_path.clone(), package_id_file);
-                                if data_lowest_depth > 0 {
-                                    self.file_maps.add(FileMapEntry::Found(task_path.clone()));
-                                }
-                                continue;
-                            } else if let Some(file) = &file {
-                                package_id_to_source_file
-                                    .insert(data_package_id.clone(), file.clone());
+                        if let Some(package_id_file) =
+                            package_id_to_source_file.get(&data.package_id).cloned()
+                        {
+                            if let Some(file) = &file {
+                                // Package deduplication keeps the first package instance in the
+                                // program, but we still parsed this file and acquired it through
+                                // the host, so snapshot disposal must release that extra owner.
+                                self.duplicate_source_files.push(DuplicateSourceFile {
+                                    parse_options: file.parse_options().clone(),
+                                    content_mapper_parse_options: file
+                                        .content_mapper_parse_options()
+                                        .clone(),
+                                    text: file.text.clone(),
+                                    hash: file.hash.get(),
+                                    script_kind: file.script_kind,
+                                    content_mapper: file.content_mapper().to_string(),
+                                    is_content_mapper_failure_stub: file
+                                        .is_content_mapper_failure_stub(),
+                                });
                             }
+                            self.redirect_targets_map
+                                .as_mut()
+                                .expect("redirectTargetsMap is set with packageIdToSourceFile")
+                                .entry(package_id_file.path().clone())
+                                .or_default()
+                                .push(t.normalized_file_path.clone());
+                            let redirect_files_by_path =
+                                self.redirect_files_by_path.get_or_insert_with(|| {
+                                    FxHashMap::with_capacity_and_hasher(
+                                        self.total_file_count,
+                                        Default::default(),
+                                    )
+                                });
+                            let index = (self.files.len() + redirect_files_by_path.len()) as i32;
+                            redirect_files_by_path.insert(
+                                t.path.clone(),
+                                RedirectsFile {
+                                    index,
+                                    file_name: t.normalized_file_path.clone(),
+                                    path: t.path.clone(),
+                                    target: package_id_file.path().clone(),
+                                },
+                            );
+                            self.files_by_path.insert(t.path.clone(), package_id_file);
+                            if data_lowest_depth > 0 {
+                                self.file_maps.add(FileMapEntry::Found(t.path.clone()));
+                            }
+                            continue;
+                        } else if let Some(file) = &file {
+                            package_id_to_source_file.insert(data.package_id.clone(), file.clone());
                         }
                     }
+                    drop(data);
 
-                    {
-                        // PERF: walks the subtasks in place (no copy of the
-                        // list). Collecting only reads tasks.
-                        let t = task.borrow();
-                        if !t.sub_tasks.is_empty() {
-                            self.collect_files(&t.sub_tasks);
-                        }
+                    // PERF: walks the subtasks in place (no copy of the
+                    // list). Collecting only reads tasks.
+                    if !t.sub_tasks.is_empty() {
+                        self.collect_files(&t.sub_tasks);
                     }
+                    drop(t);
 
                     // PERF: the loader does not read a task after its file
                     // is collected, so the per-file maps move out of it
@@ -1437,12 +1461,12 @@ impl FilesParser {
     // Go: filesparser.go:594 (*filesParser).addIncludeReason
     // PORT: Go can append a nil reason. Only the automatic type directive
     // root task has no reason, and `collectFiles` never passes it here, so a
-    // nil reason is skipped.
+    // nil reason is skipped. The reason is cloned only when it is stored.
     pub fn add_include_reason(
         &self,
         include_processor: &mut IncludeProcessor,
         task: &ParseTaskRef,
-        reason: Option<Rc<FileIncludeReason>>,
+        reason: Option<&Rc<FileIncludeReason>>,
     ) {
         let t = task.borrow();
         if let Some(redirected) = &t.redirected_parse_task {
@@ -1455,9 +1479,9 @@ impl FilesParser {
             // `make_mut` copies nothing.
             let reasons = Rc::make_mut(&mut include_processor.file_include_reasons);
             if let Some(existing) = reasons.get_mut(&t.path) {
-                existing.push(reason);
+                existing.push(reason.clone());
             } else {
-                reasons.insert(t.path.clone(), vec![reason]);
+                reasons.insert(t.path.clone(), vec![reason.clone()]);
             }
         }
     }
