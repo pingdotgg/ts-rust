@@ -15,24 +15,28 @@ use crate::pseudochecker::{self, PseudoChecker, PseudoTypeKind};
 // that layout changes, only these helpers change. They are free functions so
 // they do not clash with methods of other node builder files.
 
-/// Runs `f` with a shared borrow of `b.ctx`.
+/// Runs `f` with a shared borrow of `b.ctx` (Go `b.ctx.<field>`).
+///
+/// `f` runs while `b` and `b.ctx` are borrowed, with no `Rc` clone of the
+/// context (nbctx1). So `f` must only read context fields: it must not use
+/// `b`, the Checker or the tracker.
 pub(super) fn nb_ctx<R>(
     b: &Rc<RefCell<NodeBuilderImpl>>,
     f: impl FnOnce(&NodeBuilderContext) -> R,
 ) -> R {
-    // PORT: `ctx` is an `Rc<RefCell<..>>`; clone it out so no borrow of `b` is held during `f`.
-    let ctx = b.borrow().ctx.clone();
-    let r = f(&ctx.borrow());
+    let b = b.borrow();
+    let r = f(&b.ctx.borrow());
     r
 }
 
-/// Runs `f` with a mutable borrow of `b.ctx`.
+/// Runs `f` with a mutable borrow of `b.ctx`. The rule of `nb_ctx` holds:
+/// `f` must only read or write context fields.
 pub(super) fn nb_ctx_mut<R>(
     b: &Rc<RefCell<NodeBuilderImpl>>,
     f: impl FnOnce(&mut NodeBuilderContext) -> R,
 ) -> R {
-    let ctx = b.borrow().ctx.clone();
-    let r = f(&mut ctx.borrow_mut());
+    let b = b.borrow();
+    let r = f(&mut b.ctx.borrow_mut());
     r
 }
 
