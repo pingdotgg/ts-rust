@@ -288,27 +288,45 @@ impl Checker {
         result & ObjectFlags::PROPAGATING_FLAGS
     }
 
+    /// The member mask of a new union or intersection with these members
+    /// (`Type::member_mask`). Not in Go (memberflags1). It reads only flags
+    /// and masks of types that exist, so it makes no type and reports
+    /// nothing.
+    fn member_mask_of(&self, types: &[TypeId]) -> TypeFlags {
+        let mut mask = TypeFlags::NONE;
+        for &m in types {
+            let ty = self.ty(m);
+            mask |= ty.flags;
+            if let Some(nested) = ty.member_mask() {
+                mask |= nested;
+            }
+        }
+        mask
+    }
+
     // PERF: the data is made in its arena or heap slot (`new_with`) and
     // `types` is written there, so the 216-byte `UnionType` is not copied.
     // The `new_type_with` closure only moves the `ArenaBox` and makes no call.
     // Go: checker/checker.go:25776 newUnionType
     pub fn new_union_type(&mut self, object_flags: ObjectFlags, types: &[TypeId]) -> TypeId {
+        let mask = self.member_mask_of(types);
         let types = SharedList::from(types);
         let mut data = ArenaBox::new_with(UnionType::default);
         data.union_or_intersection.types = types;
         self.new_type_with(TypeFlags::UNION, object_flags, move || {
-            TypeData::Union(data)
+            TypeData::Union(data, mask)
         })
     }
 
     // PERF: built in place, as in `new_union_type`.
     // Go: checker/checker.go:25782 newIntersectionType
     pub fn new_intersection_type(&mut self, object_flags: ObjectFlags, types: &[TypeId]) -> TypeId {
+        let mask = self.member_mask_of(types);
         let types = SharedList::from(types);
         let mut data = ArenaBox::new_with(IntersectionType::default);
         data.union_or_intersection.types = types;
         self.new_type_with(TypeFlags::INTERSECTION, object_flags, move || {
-            TypeData::Intersection(data)
+            TypeData::Intersection(data, mask)
         })
     }
 

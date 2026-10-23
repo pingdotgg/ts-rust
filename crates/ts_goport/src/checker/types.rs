@@ -936,6 +936,20 @@ impl Type {
         self.object_flags
     }
 
+    /// The member mask of a union or intersection: the OR of the flags of
+    /// its members and, for each member that is a union or intersection, of
+    /// that member's mask. `None` for other kinds. The constructors
+    /// (`new_union_type`, `new_intersection_type`) compute it once. Type
+    /// flags and member lists do not change after a type can be a member,
+    /// so it stays exact (memberflags1).
+    #[inline(always)]
+    pub fn member_mask(&self) -> Option<TypeFlags> {
+        match &self.data {
+            TypeData::Union(_, mask) | TypeData::Intersection(_, mask) => Some(*mask),
+            _ => None,
+        }
+    }
+
     // Casts for concrete struct types
 
     // Go: checker/types.go:841 Type.AsIntrinsicType
@@ -1086,14 +1100,14 @@ impl Type {
     #[inline]
     pub fn as_union_type(&self) -> &UnionType {
         match &self.data {
-            TypeData::Union(d) => d,
+            TypeData::Union(d, _) => d,
             other => type_cast_panic(other, "UnionType"),
         }
     }
     #[inline]
     pub fn as_union_type_mut(&mut self) -> &mut UnionType {
         match &mut self.data {
-            TypeData::Union(d) => d,
+            TypeData::Union(d, _) => d,
             other => type_cast_panic(other, "UnionType"),
         }
     }
@@ -1102,14 +1116,14 @@ impl Type {
     #[inline]
     pub fn as_intersection_type(&self) -> &IntersectionType {
         match &self.data {
-            TypeData::Intersection(d) => d,
+            TypeData::Intersection(d, _) => d,
             other => type_cast_panic(other, "IntersectionType"),
         }
     }
     #[inline]
     pub fn as_intersection_type_mut(&mut self) -> &mut IntersectionType {
         match &mut self.data {
-            TypeData::Intersection(d) => d,
+            TypeData::Intersection(d, _) => d,
             other => type_cast_panic(other, "IntersectionType"),
         }
     }
@@ -1574,8 +1588,10 @@ pub enum TypeData {
     Mapped(Box<MappedType>),
     ReverseMapped(Box<ReverseMappedType>),
     EvolvingArray(Box<EvolvingArrayType>),
-    Union(ArenaBox<UnionType>),
-    Intersection(ArenaBox<IntersectionType>),
+    /// The `TypeFlags` field is the member mask (`member_mask`).
+    Union(ArenaBox<UnionType>, TypeFlags),
+    /// The `TypeFlags` field is the member mask (`member_mask`).
+    Intersection(ArenaBox<IntersectionType>, TypeFlags),
 }
 
 impl TypeData {
@@ -1600,8 +1616,8 @@ impl TypeData {
             TypeData::Mapped(_) => "MappedType",
             TypeData::ReverseMapped(_) => "ReverseMappedType",
             TypeData::EvolvingArray(_) => "EvolvingArrayType",
-            TypeData::Union(_) => "UnionType",
-            TypeData::Intersection(_) => "IntersectionType",
+            TypeData::Union(..) => "UnionType",
+            TypeData::Intersection(..) => "IntersectionType",
         }
     }
 }
@@ -1642,8 +1658,10 @@ impl TypeData {
             TypeData::StringMapping(d) => Some(&mut d.constrained),
             TypeData::Substitution(d) => Some(&mut d.constrained),
             TypeData::Conditional(d) => Some(&mut d.constrained),
-            TypeData::Union(d) => Some(&mut d.union_or_intersection.structured.constrained),
-            TypeData::Intersection(d) => Some(&mut d.union_or_intersection.structured.constrained),
+            TypeData::Union(d, _) => Some(&mut d.union_or_intersection.structured.constrained),
+            TypeData::Intersection(d, _) => {
+                Some(&mut d.union_or_intersection.structured.constrained)
+            }
             TypeData::Object(d) => Some(&mut d.structured.constrained),
             TypeData::InstantiationExpression(d) => Some(&mut d.object.structured.constrained),
             TypeData::Mapped(d) => Some(&mut d.object.structured.constrained),
@@ -1675,8 +1693,8 @@ impl TypeData {
     #[inline(never)]
     fn as_structured_type_other(&self) -> Option<&StructuredType> {
         match self {
-            TypeData::Union(d) => Some(&d.union_or_intersection.structured),
-            TypeData::Intersection(d) => Some(&d.union_or_intersection.structured),
+            TypeData::Union(d, _) => Some(&d.union_or_intersection.structured),
+            TypeData::Intersection(d, _) => Some(&d.union_or_intersection.structured),
             _ => self.as_object_type().map(|o| &o.structured),
         }
     }
@@ -1684,8 +1702,8 @@ impl TypeData {
     #[inline]
     pub fn as_structured_type_mut(&mut self) -> Option<&mut StructuredType> {
         match self {
-            TypeData::Union(d) => Some(&mut d.union_or_intersection.structured),
-            TypeData::Intersection(d) => Some(&mut d.union_or_intersection.structured),
+            TypeData::Union(d, _) => Some(&mut d.union_or_intersection.structured),
+            TypeData::Intersection(d, _) => Some(&mut d.union_or_intersection.structured),
             TypeData::Object(d) => Some(&mut d.structured),
             TypeData::InstantiationExpression(d) => Some(&mut d.object.structured),
             TypeData::Mapped(d) => Some(&mut d.object.structured),
@@ -1768,8 +1786,8 @@ impl TypeData {
     #[inline]
     pub fn as_union_or_intersection_type(&self) -> Option<&UnionOrIntersectionType> {
         match self {
-            TypeData::Union(d) => Some(&d.union_or_intersection),
-            TypeData::Intersection(d) => Some(&d.union_or_intersection),
+            TypeData::Union(d, _) => Some(&d.union_or_intersection),
+            TypeData::Intersection(d, _) => Some(&d.union_or_intersection),
             _ => None,
         }
     }
@@ -1777,8 +1795,8 @@ impl TypeData {
     #[inline]
     pub fn as_union_or_intersection_type_mut(&mut self) -> Option<&mut UnionOrIntersectionType> {
         match self {
-            TypeData::Union(d) => Some(&mut d.union_or_intersection),
-            TypeData::Intersection(d) => Some(&mut d.union_or_intersection),
+            TypeData::Union(d, _) => Some(&mut d.union_or_intersection),
+            TypeData::Intersection(d, _) => Some(&mut d.union_or_intersection),
             _ => None,
         }
     }
@@ -2970,5 +2988,42 @@ impl<T> std::ops::IndexMut<usize> for ChunkedArena<T> {
     #[inline]
     fn index_mut(&mut self, i: usize) -> &mut T {
         &mut self.chunks[i >> ARENA_CHUNK_SHIFT][i & ARENA_CHUNK_MASK]
+    }
+}
+
+#[cfg(test)]
+mod member_mask_tests {
+    use super::*;
+
+    /// memberflags1: the member mask of a union or intersection is on the
+    /// first cache line of `Type`, with the flags, so `maybe_type_of_kind`
+    /// reads one line.
+    #[test]
+    fn member_mask_is_on_the_first_line() {
+        for data in [
+            TypeData::Union(ArenaBox::new(UnionType::default()), TypeFlags::STRING),
+            TypeData::Intersection(
+                ArenaBox::new(IntersectionType::default()),
+                TypeFlags::STRING,
+            ),
+        ] {
+            let ty = Type {
+                data,
+                ..Type::default()
+            };
+            let base = &ty as *const Type as usize;
+            let mask = match &ty.data {
+                TypeData::Union(_, mask) | TypeData::Intersection(_, mask) => {
+                    mask as *const TypeFlags as usize
+                }
+                _ => unreachable!(),
+            };
+            let offset = mask - base;
+            assert!(
+                offset + std::mem::size_of::<TypeFlags>() <= 64,
+                "offset {offset}"
+            );
+            assert_eq!(ty.member_mask(), Some(TypeFlags::STRING));
+        }
     }
 }
