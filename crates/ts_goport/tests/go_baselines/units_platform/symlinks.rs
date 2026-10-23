@@ -6,10 +6,11 @@
 //! cache is `&mut` and single-threaded, so `TestKnownSymlinksThreadSafety`
 //! runs its ten writers in order.
 //!
-//! Blocked: `TestGuessDirectorySymlink` and
+//! `TestGuessDirectorySymlink` is a unit test in
+//! `src/modulespecifiers/symlinks.rs` (`guess_directory_symlink`), because
+//! the guess is private there. Blocked:
 //! `TestIsNodeModulesOrScopedPackageDirectory` (the Rust
-//! `guess_directory_symlink` and `is_node_modules_or_scoped_package_directory`
-//! in `src/modulespecifiers/symlinks.rs` are private).
+//! `is_node_modules_or_scoped_package_directory` is private too).
 
 use std::rc::Rc;
 use std::sync::Arc;

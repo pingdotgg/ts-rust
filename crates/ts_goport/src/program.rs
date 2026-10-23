@@ -342,11 +342,11 @@ struct CheckerPool {
     /// (`send_emit_pool_jobs`). It stops with the checkers. wasm has none.
     #[cfg(not(target_family = "wasm"))]
     emit: Option<EmitPool>,
-    /// `--singleThreaded`: the next symbol id of the loading thread when the
-    /// pool was made. The pool's checker hands its symbol ids to the next
-    /// pool (`symbol_id_carry_start`) or back to the loading thread when it
-    /// stops (`carry_symbol_ids`). None for other pools.
-    carry_from: Option<u64>,
+    /// `--singleThreaded`: the next symbol id and block of the loading
+    /// thread when the pool was made. The pool's checker hands its symbol
+    /// ids to the next pool (`symbol_id_carry_start`) or back to the loading
+    /// thread when it stops (`carry_symbol_ids`). None for other pools.
+    carry_from: Option<(u64, u64)>,
 }
 
 impl CheckerPool {
@@ -439,16 +439,17 @@ impl CheckerPool {
     /// next program's checker starts from them (`WorkerSeed`). When this
     /// thread gave ids after the pool was made, or took the ids of a later
     /// pool, it keeps its own.
-    // PORT: Go has one symbol id counter per process, so the ids of the next
-    // program (`tsc -b`, a watch cycle) count on from the last one, and a
-    // bound file keeps the ids of its symbols (`ast::SymbolIdCarry`). With
-    // more checkers Go's ids race, and each checker here counts on its own,
-    // so only a one-checker `--singleThreaded` pool hands its ids on.
+    // PORT: Go's symbol id counters (global and block) are per process, so
+    // the ids of the next program (`tsc -b`, a watch cycle) count on from the
+    // last one, and a bound file keeps the ids of its symbols
+    // (`ast::SymbolIdCarry`). With more checkers Go's ids race, and each
+    // checker here counts on its own, so only a one-checker
+    // `--singleThreaded` pool hands its ids on.
     fn carry_symbol_ids(&mut self) {
         let Some(from) = self.carry_from else {
             return;
         };
-        if next_ids().1 != from {
+        if (next_ids().1, next_symbol_block_id()) != from {
             return;
         }
         if let Some(carry) = self.symbol_ids() {
@@ -3990,16 +3991,18 @@ fn fast_cost_split(
 // Go: compiler/checkerpool.go:367 createCheckers (one `checker.NewChecker`)
 /// Makes checker `index` of a pool of `count` on this thread.
 // PORT: Go makes every checker of the pool before the first check, and the
-// checkers share one symbol id counter (`ast.GetSymbolId`). So the first
-// check of each checker comes after the ids that all `NewChecker` calls gave
-// (`initializeChecker` gives 4 checker symbols their ids). A worker here
-// counts its ids on its own (`ast::id_seed`), so it skips the ids that the
-// other checkers' `NewChecker` gave to their own symbols: each makes the
-// same calls. A binder symbol is shared, so Go gives it its id only once
-// in the pool (for example in the text of a merge error), and the worker
-// gave that id itself: it is not skipped. Late-bound names hold symbol ids
-// (`__@iterator@<id>`), and the node builder counts their length toward
-// truncation.
+// checkers share one global symbol id counter (`ast.GetSymbolId`). So the
+// first check of each checker comes after the global ids that all
+// `NewChecker` calls gave. A worker here counts its ids on its own
+// (`ast::id_seed`), so it skips the global ids that the other checkers'
+// `NewChecker` gave to their own symbols: each makes the same calls. The
+// link reads of `initializeChecker` (4 checker symbols) give block ids
+// (ts#64711), which count apart and are not skipped: so far no `NewChecker`
+// gives a global id. A binder symbol is shared, so Go gives it its id only
+// once in the pool (for example in the text of a merge error), and the
+// worker gave that id itself: it is not skipped. Late-bound names hold
+// symbol ids (`__@iterator@<id>`), and the node builder counts their length
+// toward truncation.
 fn new_pool_checker(index: usize, count: usize) -> Checker {
     let before = own_symbol_id_count();
     let checker = Checker::new(index);
@@ -4009,20 +4012,20 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
 }
 
 /// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id of this thread for a one-checker `--singleThreaded` pool
-/// (`singleThreaded` on the command line or in the project tsconfig).
+/// symbol id and block of this thread for a one-checker `--singleThreaded`
+/// pool (`singleThreaded` on the command line or in the project tsconfig).
 /// Watch mode makes the next program before it releases the last one, so
 /// the pool of the last program can still be here: its symbol ids become
 /// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
 /// builders the last pool can still be checking: the copy then waits for
 /// its jobs, so such projects check one after the other (PORTING.md,
 /// Threads).
-fn symbol_id_carry_start(count: usize) -> Option<u64> {
+fn symbol_id_carry_start(count: usize) -> Option<(u64, u64)> {
     if count != 1 || !single_threaded() {
         return None;
     }
     carry_last_pool_symbol_ids();
-    Some(next_ids().1)
+    Some((next_ids().1, next_symbol_block_id()))
 }
 
 /// The carry of `symbol_id_carry_start`: the last one-checker

@@ -2,9 +2,9 @@
 
 [tsc-rs](https://www.npmjs.com/package/tsc-rs) as the `typescript` package. tsc-rs is a Rust port
 of the TypeScript 7 compiler, which Microsoft writes in Go. This package has the layout of the
-TypeScript 7 `typescript` package: the `tsc` bin, the JS API (`typescript/unstable/*`) and the
-platform packages that VS Code finds. Install it under the name `typescript`, and the tools that
-use `typescript` run tsc-rs.
+TypeScript 7 `typescript` package: the `tsc` bin, the JS API (`typescript/sync`, `typescript/async`
+and the other `typescript/*` modules) and the platform packages that VS Code finds. Install it
+under the name `typescript`, and the tools that use `typescript` run tsc-rs.
 
 This is an early release. Report problems at https://github.com/pingdotgg/ts-rust/issues.
 

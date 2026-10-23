@@ -2294,8 +2294,10 @@ enum PrefetchRequest {
 /// (`PrefetchShared::job`). Every insert holds the queue lock too
 /// (`PrefetchQueue::add`), so a file name still gets one job, and no job
 /// is removed.
-// PORT: Go `taskDataByPath` is a `collections.SyncMap` (filesparser.go:235),
-// and Go has no central queue (loadpar3b step A).
+// PORT: port-only, as the prefetch queue is. Go has no parse prefetch and
+// no central queue. The lock-free lookup is like Go's `taskDataByPath`
+// (a `collections.SyncMap` keyed by path, filesparser.go:235), but this map
+// holds the prefetch jobs and is keyed by file name (loadpar3b step A).
 struct JobMap {
     shards: Box<[Mutex<FxHashMap<String, Arc<PrefetchJob>>>]>,
 }
@@ -3141,8 +3143,9 @@ impl PrefetchShared {
     fn queue_batch(&self, mut requests: Vec<PrefetchRequest>) {
         // loadpar3b step A: a request whose job a worker started or the
         // loader took needs nothing, and the loader finds that without the
-        // queue lock (Go has no central queue; `taskDataByPath` is a
-        // `SyncMap`, filesparser.go:235). The lock is for the rest.
+        // queue lock. Port-only: Go has no prefetch queue (its
+        // `taskDataByPath` `SyncMap`, filesparser.go:235, is a lock-free map
+        // of a different kind, keyed by path). The lock is for the rest.
         if self.job_map {
             requests.retain(|request| !self.settled(request));
         }
