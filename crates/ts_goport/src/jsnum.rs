@@ -3,7 +3,7 @@
 
 use std::{fmt, ops};
 
-use num_bigint::{BigInt, BigUint};
+use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::ToPrimitive;
 
 pub const MAX_SAFE_INTEGER: Number = Number(9_007_199_254_740_991.0);
@@ -172,7 +172,7 @@ impl Number {
             if magnitude > 53.0 && magnitude <= go_math::log2(f64::MAX) {
                 // |b| >= 2 here, so the magnitude limit keeps e <= 1024.
                 let exact = BigInt::from(go_math::int64(b)).pow(go_math::int64(e) as u32);
-                return Self(big_float_256_to_f64(&exact));
+                return Self(big_float_to_f64(&exact, 256));
             }
         }
         Self(go_math::pow(b, e))
@@ -293,8 +293,10 @@ fn parse_integer_literal(text: &str) -> Option<Number> {
     if let Some(value) = parse_safe_integer(digits, radix) {
         return Some(Number(value as f64));
     }
+    // Go: `new(big.Int).SetString(s, 0)` then `bi.Float64()` (jsnum/string.go
+    // tryParseInt), which does not round in `SetInt`.
     let integer = BigInt::parse_bytes(digits.as_bytes(), radix)?;
-    Some(Number(integer.to_f64()?))
+    Some(Number(big_float_to_f64(&integer, integer.bits())))
 }
 
 /// The value of `digits` (valid digits of `radix`) when it is at most
@@ -465,26 +467,62 @@ pub fn parse_pseudo_big_int(text: &str) -> String {
         .to_string()
 }
 
-/// Go's `new(big.Float).SetPrec(256).SetInt(x).Float64()` in `Exponentiate`:
-/// rounds to 256 bits, then to 53 bits, both to nearest even.
-fn big_float_256_to_f64(value: &BigInt) -> f64 {
-    const PRECISION: u64 = 256;
-    let bits = value.bits();
-    if bits <= PRECISION {
-        return value.to_f64().unwrap_or(f64::NAN);
+/// Go's `new(big.Float).SetPrec(precision).SetInt(value).Float64()`
+/// (math/big/float.go:601 and :961): `SetInt` rounds `value` to `precision`
+/// bits, then `Float64` rounds that to 53 bits, both half to even. The `f64`
+/// of the result is exact, or ±Inf from 2^1024 up. `Exponentiate` uses
+/// precision 256. `big.Int.Float64` (the literal parser) is the case
+/// `precision >= value.bits()`: one rounding.
+///
+/// Do not use num-bigint's `to_f64`: its sticky bit can miss 1 bits below
+/// the top 64, so a tie can round down where Go rounds up (gopow1 skeptic).
+fn big_float_to_f64(value: &BigInt, precision: u64) -> f64 {
+    let (kept, first_shift) = round_half_even(value.magnitude(), precision);
+    let (kept, second_shift) = round_half_even(&kept, 53);
+    // At most 2^53 (a carry), so the conversion is exact.
+    let mantissa = kept.to_u64().unwrap_or_default();
+    if mantissa == 0 {
+        return 0.0;
     }
-    let shift = bits - PRECISION;
-    let magnitude = value.magnitude();
-    let half = BigUint::from(1_u8) << (shift - 1);
-    let dropped = magnitude & ((&half << 1_u8) - 1_u8);
+    // The value is `mantissa << shift`, and `top` is its bit length. Go:
+    // `e := r.exp - 1`, Inf when `e > 1023`.
+    let shift = first_shift + second_shift;
+    let top = u64::from(64 - mantissa.leading_zeros()) + shift;
+    let magnitude = if top > 1024 {
+        f64::INFINITY
+    } else {
+        // Go: `msb64(r.mant) >> ebits` puts the leading 1 at bit 52, and the
+        // mask drops it. The bits that this shift drops are zero.
+        let fraction = ((mantissa << mantissa.leading_zeros()) >> 11) & ((1 << 52) - 1);
+        f64::from_bits(((top - 1 + 1023) << 52) | fraction)
+    };
+    if value.sign() == Sign::Minus {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+/// Go's `big.Float.round` (math/big/float.go:400) in its default mode,
+/// ToNearestEven, for an integer: the top `precision` bits of `magnitude`,
+/// one higher when the dropped bits are over half, or exactly half and the
+/// kept bits are odd. Returns the kept bits and the count of dropped bits. A
+/// carry gives `1 << precision`, the same value as Go's `exp++`.
+fn round_half_even(magnitude: &BigUint, precision: u64) -> (BigUint, u64) {
+    let shift = magnitude.bits().saturating_sub(precision);
+    if shift == 0 {
+        return (magnitude.clone(), 0);
+    }
     let mut kept = magnitude >> shift;
-    if dropped > half || dropped == half && kept.bit(0) {
+    // Go's rbit is the top dropped bit; its sbit is 1 when any bit below is 1.
+    let round_bit = magnitude.bit(shift - 1);
+    let sticky_bit = magnitude
+        .trailing_zeros()
+        .is_some_and(|zeros| zeros < shift - 1);
+    if round_bit && (sticky_bit || kept.bit(0)) {
         kept += 1_u8;
     }
-    // num-bigint rounds once, to nearest even, and the dropped bits are zero.
-    BigInt::from_biguint(value.sign(), kept << shift)
-        .to_f64()
-        .unwrap_or(f64::NAN)
+    (kept, shift)
 }
 
 /// The Go `math` functions that `**` folding uses, ported from Go 1.27
@@ -946,6 +984,13 @@ mod tests {
             (-3.0, 41.0, 0xc3ff_a2a1_cf67_b5fc),
             (3.0, 646.0, 0x7fed_906a_378b_5987),
             (3.0, 647.0, f64::INFINITY.to_bits()),
+            // Ties after the 256-bit rounding that num-bigint's to_f64 rounds
+            // down (gopow1 skeptic).
+            (21_265.0, 58.0, 0x740c_3b21_e289_64df),
+            (228_861.0, 36.0, 0x67fe_de2f_6ded_4ea1),
+            (321_798.0, 7.0, 0x47f0_cd57_547b_4e59),
+            (-321_798.0, 7.0, 0xc7f0_cd57_547b_4e59),
+            (10_836.0, 43.0, 0x63f4_6d5e_7794_4e7d),
             (2.0, -1074.0, 1),
             (2.0, -1075.0, 0),
             // Go's int64(2^63) is math.MinInt64 on amd64, so the sign flips.
@@ -956,6 +1001,48 @@ mod tests {
         for (base, exponent, bits) in cases {
             let result = Number(base).exponentiate(Number(exponent)).0;
             assert_eq!(result.to_bits(), bits, "{base} ** {exponent} = {result}");
+        }
+    }
+
+    // Expected bits are Go's (pin 3e9236361fa9, Go 1.27.1):
+    // `new(big.Float).SetPrec(256).SetInt(x).Float64()`, `x.Float64()` and
+    // `jsnum.FromString`.
+    #[test]
+    fn big_integers_round_like_go_big_float() {
+        // An even top, a tie at the 53-bit point, then one far 1 bit: Go
+        // rounds up. num-bigint's to_f64 does not see the far bit and rounds
+        // down to even.
+        let even = BigInt::from((1_u64 << 52) | 2);
+        let far = (even << 77_u8) | (BigInt::from(1) << 76_u8) | (BigInt::from(1) << 10_u8);
+        // An odd top, a 0, then 203 ones: the 256-bit rounding makes a tie,
+        // which rounds up to even. One rounding goes down.
+        let odd = BigInt::from((1_u64 << 52) | 1);
+        let ones = (odd << 204_u8) | ((BigInt::from(1) << 203_u8) - 1);
+        // Rounds to 2^1024 (Inf) in two steps, and to f64::MAX in one.
+        let edge = (BigInt::from(1) << 1024_u16) - (BigInt::from(1) << 970_u16) - 1;
+        let cases = [
+            (&far, 0x4800_0000_0000_0003, 0x4800_0000_0000_0003),
+            (&ones, 0x4ff0_0000_0000_0002, 0x4ff0_0000_0000_0001),
+            (&edge, f64::INFINITY.to_bits(), f64::MAX.to_bits()),
+        ];
+        for (value, precision_256, single) in cases {
+            assert_eq!(super::big_float_to_f64(value, 256).to_bits(), precision_256);
+            assert_eq!(
+                super::big_float_to_f64(value, value.bits()).to_bits(),
+                single
+            );
+            let negative = -value;
+            let bits = super::big_float_to_f64(&negative, 256).to_bits();
+            assert_eq!(bits, precision_256 | 1 << 63);
+        }
+        for literal in [
+            "0x200000000000050000000000000000400",
+            "680564733841877304716067844435153519616",
+        ] {
+            assert_eq!(
+                Number::from_string(literal).0.to_bits(),
+                0x4800_0000_0000_0003
+            );
         }
     }
 
