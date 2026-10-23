@@ -85,6 +85,7 @@ mod configfilechanges_test;
 mod contentmapper_test;
 mod customconfigfilename_test;
 mod dirty_syncmap_test;
+mod dynamic_casing_test;
 mod effect_autoimport_style_test;
 mod effect_document_symbols_test;
 mod effect_fixables_e5c_test;
