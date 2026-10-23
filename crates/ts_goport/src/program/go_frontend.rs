@@ -43,9 +43,9 @@ pub(super) struct GoSharedState {
     import_helpers_import_specifiers: FxHashMap<String, Node>,
     /// Go include processor diagnostics of each program file, by file index.
     /// Go builds them at the first read (`includeProcessor.getDiagnostics`),
-    /// and their file format lines read the bound CommonJS indicator, so
-    /// they wait for that read on the loading thread
-    /// (`fill_include_diagnostics`).
+    /// and their file format lines read the bound CommonJS indicator. The
+    /// loading thread builds them at such a read, or after the bind that
+    /// comes before any checker read (`fill_include_diagnostics`).
     include_diagnostics: OnceLock<FxHashMap<usize, Vec<Diagnostic>>>,
     /// The frontend `IncludeProcessor::diagnostics_read`: set where Go builds
     /// the include processor diagnostics (`get_include_processor_diagnostics`).
@@ -674,7 +674,8 @@ pub(super) fn new_program_version(
 }
 
 /// Builds the include processor diagnostics of `p`, the current program,
-/// where Go builds them (`GetProgramDiagnostics`, and after the bind of a
+/// where Go first reads them (`GetProgramDiagnostics`), or after the bind
+/// that comes before any checker read (`create_checkers`, and the bind of a
 /// project version). Does nothing when they are built.
 pub(super) fn fill_include_diagnostics(p: &NewProgram) {
     let tables = held_tables(prog());
@@ -2107,9 +2108,9 @@ impl GoSharedState {
 
     // Go: compiler/program.go:869 GetIncludeProcessorDiagnostics (the
     // include processor part)
-    // PORT: a checker thread reads them after the loading thread built
-    // them (program diagnostics come first, as in Go); a first read on a
-    // checker thread panics (`go_frontend`).
+    // PORT: a read on the loading thread builds them. A checker thread reads
+    // them after the loading thread built them (`fill_include_diagnostics`);
+    // a first read on a checker thread panics (`go_frontend`).
     pub(super) fn get_include_processor_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         // Go builds the collection here (`includeProcessor.getDiagnostics`).
         self.include_diagnostics_read
