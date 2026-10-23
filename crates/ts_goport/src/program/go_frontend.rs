@@ -983,6 +983,7 @@ fn build_program(
     cwd: String,
     previous: Option<&'static GoProgram>,
 ) -> &'static GoProgram {
+    crate::loadstamp::mark(crate::loadstamp::M_BUILD_B);
     let use_case_sensitive_file_names = osvfs_fs().use_case_sensitive_file_names();
     let options = crate::program::intern_compiler_options(np.options());
     let files = np.source_files();
@@ -1024,7 +1025,9 @@ fn build_program(
     }
     let id = next_program_id();
     let publish = || {
+        crate::loadstamp::mark(crate::loadstamp::M_PUB_B);
         let go_files = go_files_of_unpublished_stores(&parsed, &cwd, use_case_sensitive_file_names);
+        crate::loadstamp::mark(crate::loadstamp::M_GOFILES_E);
         FRONTENDS.with(|frontends| {
             assert!(
                 frontends.borrow_mut().insert(id, Rc::clone(np)).is_none(),
@@ -1033,6 +1036,7 @@ fn build_program(
         });
         // The stores become read-only here, before the program is installed.
         publish_file_stores(go_files);
+        crate::loadstamp::mark(crate::loadstamp::M_PUB_E);
         // A program file must be published as a source file. A parse that an
         // earlier publish did not know (see `note_parsed_source_file`) became a
         // store with no root there, and its bind would fail far from the cause.
@@ -1049,6 +1053,7 @@ fn build_program(
             Some(replaced) if !check => replaced.iter().for_each(|r| assert_published(r.file)),
             _ => files.iter().for_each(assert_published),
         }
+        crate::loadstamp::mark(crate::loadstamp::M_PUB_CLOSURE_E);
     };
     // PERF (serialgap1): a program that needs its full tables builds their
     // per-file part on two threads while this thread makes and publishes
@@ -1059,6 +1064,7 @@ fn build_program(
         publish();
         None
     };
+    crate::loadstamp::mark(crate::loadstamp::M_PARTS_E);
     let program: &'static GoProgram = Box::leak(Box::new(GoProgram {
         id,
         options,
@@ -1067,6 +1073,7 @@ fn build_program(
     let one_program = match entry {
         Entry::Only => {
             set_prog(program);
+            crate::loadstamp::mark(crate::loadstamp::M_SET_PROG);
             true
         }
         Entry::Version => {
@@ -1100,6 +1107,7 @@ fn build_program(
         _ => {
             let parts = parts.unwrap_or_else(|| TableParts::build(np, || ()));
             let tables = full_tables_of(np, previous_shared, parts);
+            crate::loadstamp::mark(crate::loadstamp::M_TABLES_E);
             let common_source_directory = intern_program_str(&common_source_directory_of(np));
             (tables, common_source_directory)
         }
@@ -1130,6 +1138,7 @@ fn build_program(
         tables: TablesSlot::new(tables, one_program),
     };
     assert!(program.state.set(program_state).is_ok());
+    crate::loadstamp::mark(crate::loadstamp::M_BUILD_E);
     program
 }
 

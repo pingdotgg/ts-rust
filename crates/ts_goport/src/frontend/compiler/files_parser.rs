@@ -72,6 +72,7 @@ impl ParseTask {
 
     // Go: filesparser.go:59 (*parseTask).load
     pub fn load(&mut self, loader: &FileLoader) {
+        let _ls = crate::loadstamp::span(crate::loadstamp::LOAD);
         self.loaded = true;
         if self.is_for_automatic_type_directive {
             self.load_automatic_type_directives(loader);
@@ -144,14 +145,20 @@ impl ParseTask {
             // PERF (loadpar1): the metadata that the parse worker of the
             // file found, when it found it for this loader.
             self.metadata = take_prefetched_meta(loader, &self.normalized_file_path)
-                .unwrap_or_else(|| loader.load_source_file_meta_data(&self.normalized_file_path));
+                .unwrap_or_else(|| {
+                    let _ls = crate::loadstamp::span(crate::loadstamp::META_OWN);
+                    loader.load_source_file_meta_data(&self.normalized_file_path)
+                });
         }
 
         // tsgo#4712: a content mapper supplemental task comes with its file.
         TAKEN.with(|taken| taken.borrow_mut().take());
         let file = match self.file.clone() {
             Some(file) => Some(file),
-            None => loader.parse_source_file(self),
+            None => {
+                let _ls = crate::loadstamp::span(crate::loadstamp::PSF);
+                loader.parse_source_file(self)
+            }
         };
         let Some(file) = file else {
             return;
@@ -173,6 +180,15 @@ impl ParseTask {
 
         let compiler_options = loader.opts.config.compiler_options();
         if !compiler_options.no_resolve.is_true() && !loader.opts.skip_module_resolution {
+            let c2 = if file.referenced_files.is_empty() {
+                None
+            } else {
+                crate::loadstamp::count(
+                    crate::loadstamp::N_PATH_REFS,
+                    file.referenced_files.len() as u64,
+                );
+                crate::loadstamp::span(crate::loadstamp::C2_PATH_REFS)
+            };
             for (index, ref_) in file.referenced_files.iter().enumerate() {
                 let (resolved_ref, processing_diagnostic) = loader
                     .resolve_tripleslash_path_reference(
@@ -190,10 +206,16 @@ impl ParseTask {
                 );
             }
 
+            drop(c2);
             loader.resolve_type_reference_directives(self);
         }
 
         if compiler_options.no_lib != Tristate::True && !loader.opts.skip_module_resolution {
+            let _ls = if file.lib_reference_directives.is_empty() {
+                None
+            } else {
+                crate::loadstamp::span(crate::loadstamp::LIB_REFS)
+            };
             for (index, lib) in file.lib_reference_directives.iter().enumerate() {
                 let include_reason = new_file_include_reason(
                     FileIncludeKind::LIB_REFERENCE_DIRECTIVE,
@@ -594,6 +616,7 @@ impl FilesParser {
                 .store(!redirects.is_empty(), AtomicOrdering::Relaxed);
             lock(&pool.shared.queue).redirects = redirects;
         }
+        crate::loadstamp::load_begin();
         let prefetch = PrefetchGuard::install(pool.shared.clone());
         self.start(loader, tasks, 0);
         pool.shared
@@ -601,10 +624,33 @@ impl FilesParser {
         // The root jobs are queued now, so the added workers start at once.
         pool.add_workers(extra_worker_count(large));
         self.run_queue(loader, Some(&mut pool));
+        crate::loadstamp::load_end();
         // Closes the queue, then waits for the workers.
         drop(prefetch);
         let shared = Arc::clone(&pool.shared);
         drop(pool);
+        crate::loadstamp::mark(crate::loadstamp::M_POOL_E);
+        // loadstamp1: the hash replay, after the pool join (marks stamp_b, stamp_e).
+        if crate::loadstamp::on() {
+            use std::hash::BuildHasher;
+            crate::loadstamp::mark(crate::loadstamp::M_STAMP_B);
+            let keys = self.task_data_by_path.len();
+            let hasher = self.task_data_by_path.hasher();
+            // The first pass reads the keys from memory, the second from
+            // the cache: the hash work alone.
+            let mut hash_ns = [0.0; 2];
+            for pass in &mut hash_ns {
+                let begin = std::time::Instant::now();
+                let mut acc = 0u64;
+                for key in self.task_data_by_path.keys() {
+                    acc ^= hasher.hash_one(key);
+                }
+                std::hint::black_box(acc);
+                *pass = begin.elapsed().as_nanos() as f64 / keys.max(1) as f64;
+            }
+            crate::loadstamp::set_hash(hash_ns, keys);
+            crate::loadstamp::mark(crate::loadstamp::M_STAMP_E);
+        }
         // The program keeps the lookups of the plain OS host's load for the
         // thread that finishes its symlink cache (`HostStatCache`). A `tsc
         // -b` host keeps its own (`CompilerHost::stat_cache`).
@@ -678,6 +724,7 @@ impl FilesParser {
 
     // Go: filesparser.go:273 (*filesParser).start
     pub fn start(&mut self, loader: &FileLoader, tasks: &[ParseTaskRef], depth: i32) {
+        let _ls = crate::loadstamp::span(crate::loadstamp::START);
         let prefetch = PREFETCH.with(|p| p.borrow().clone());
         let mut requests = Vec::new();
         for task in tasks {
@@ -686,7 +733,21 @@ impl FilesParser {
             // and the port does not (root, lib, automatic type directive
             // and redirect tasks) get it here.
             set_task_path(loader, &mut task.borrow_mut());
+            // loadstamp1: with the stamps on, the hash of the path alone
+            // first (its first read of the path), then the lookup.
+            let ls = crate::loadstamp::span(crate::loadstamp::C6_HASH);
+            if ls.is_some() {
+                use std::hash::BuildHasher;
+                std::hint::black_box(
+                    self.task_data_by_path
+                        .hasher()
+                        .hash_one(&task.borrow().path),
+                );
+            }
+            drop(ls);
+            let ls = crate::loadstamp::span(crate::loadstamp::C6_GET);
             let existing = self.task_data_by_path.get(&task.borrow().path).cloned();
+            drop(ls);
             let (data, loaded) = match existing {
                 Some(data) => {
                     // No queued task of this path ran yet, so the loader
@@ -699,8 +760,10 @@ impl FilesParser {
                 None => {
                     let candidate = get_parse_task_data(task);
                     let path = task.borrow().path.clone();
+                    let ls = crate::loadstamp::span(crate::loadstamp::C6_INSERT);
                     self.task_data_by_path
                         .insert(path.clone(), candidate.clone());
+                    drop(ls);
                     if prefetch.is_some() {
                         requests.extend(self.prefetch_request(
                             loader,
@@ -722,6 +785,7 @@ impl FilesParser {
             });
         }
         if let Some(prefetch) = prefetch {
+            let _ls = crate::loadstamp::span(crate::loadstamp::QUEUE_BATCH);
             prefetch.queue_batch(requests);
         }
     }
@@ -830,6 +894,7 @@ impl FilesParser {
     /// The body of the closure that Go `start` queues.
     // Go: filesparser.go:273 (*filesParser).start (queued func)
     fn run_queued(&mut self, loader: &FileLoader, queued: QueuedParseTask) {
+        let _ls = crate::loadstamp::span(crate::loadstamp::RUNQ);
         let QueuedParseTask {
             task,
             data,
@@ -1791,6 +1856,7 @@ impl PrefetchJob {
         &'j self,
         state: std::sync::MutexGuard<'j, PrefetchState>,
     ) -> std::sync::MutexGuard<'j, PrefetchState> {
+        let _ls = crate::loadstamp::span(crate::loadstamp::WAIT);
         self.waited.store(true, AtomicOrdering::Relaxed);
         self.done
             .wait(state)
@@ -2087,11 +2153,15 @@ impl TakenParse {
 /// parse, as `take_prefetched` does. `None`: the loader finds it.
 // PORT: not in Go (loadpar1).
 fn take_prefetched_meta(loader: &FileLoader, file_name: &str) -> Option<SourceFileMetaData> {
+    let _ls = crate::loadstamp::span(crate::loadstamp::META);
     if loader.shared_resolution.is_none() || loader.opts.skip_module_resolution {
         return None;
     }
     let shared = PREFETCH.with(|p| p.borrow().clone())?;
-    let job = shared.job(file_name)?;
+    let ls = crate::loadstamp::span(crate::loadstamp::C4_META_JOB);
+    let job = shared.job(file_name);
+    drop(ls);
+    let job = job?;
     // A content-mapped job finds no metadata, so the loader does not wait
     // for its transform here.
     if job.mapped.is_some() {
@@ -3873,6 +3943,7 @@ fn run_prefetch_worker(shared: &PrefetchShared, mapped_only: bool) {
     let mut resolver_failed = false;
     let timed = shared.counts.is_some();
     loop {
+        crate::loadstamp::worker_done();
         let job = {
             let mut queue = lock(&shared.queue);
             loop {
@@ -5568,10 +5639,14 @@ pub fn take_prefetched(
     script_kind: ScriptKind,
     text: Option<&str>,
 ) -> Prefetched {
+    let _ls = crate::loadstamp::span(crate::loadstamp::TAKE);
     let Some(shared) = PREFETCH.with(|p| p.borrow().clone()) else {
         return Prefetched::Nothing;
     };
-    let Some(job) = shared.job(&opts.file_name) else {
+    let ls = crate::loadstamp::span(crate::loadstamp::C4_TAKE_JOB);
+    let job = shared.job(&opts.file_name);
+    drop(ls);
+    let Some(job) = job else {
         shared.count(|c| c.not_queued.push(opts.file_name.clone()));
         return Prefetched::Nothing;
     };
@@ -5644,7 +5719,9 @@ pub fn take_prefetched(
                 == opts.external_module_indicator_options);
     if same {
         shared.count(|c| c.taken += 1);
+        let ls = crate::loadstamp::span(crate::loadstamp::ADOPT);
         let file = adopt_detached_parse(parse, opts);
+        drop(ls);
         TAKEN.with(|taken| *taken.borrow_mut() = Some((job, file.root)));
         Prefetched::Parse(file)
     } else {

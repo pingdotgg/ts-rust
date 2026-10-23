@@ -244,6 +244,7 @@ pub fn process_all_program_files(
     factories: ProgramFactories,
     single_threaded: bool,
 ) -> (ProcessedFiles, Option<GoError>) {
+    crate::loadstamp::mark(crate::loadstamp::M_PAPF_B);
     let ProgramHosts { host } = hosts;
     let compiler_options = opts.config.compiler_options().clone();
     // PERF (buildprog1): the root names are read from the config, as Go
@@ -489,7 +490,9 @@ pub fn process_all_program_files(
     }
 
     let files_parser = loader.files_parser.borrow();
+    crate::loadstamp::mark(crate::loadstamp::M_COLLECT_B);
     let processed_files = files_parser.get_processed_files(&loader);
+    crate::loadstamp::mark(crate::loadstamp::M_COLLECT_E);
     let module_resolution_error = loader.module_resolution_error.borrow().clone();
     drop(files_parser);
     drop(root_tasks);
@@ -499,6 +502,7 @@ pub fn process_all_program_files(
     if FORGET_LOADER_STATE.with(Cell::get) {
         std::mem::forget(loader);
     }
+    crate::loadstamp::mark(crate::loadstamp::M_PAPF_E);
     (processed_files, module_resolution_error)
 }
 
@@ -1595,6 +1599,11 @@ impl FileLoader {
         if file.type_reference_directives.is_empty() {
             return;
         }
+        let _ls = crate::loadstamp::span(crate::loadstamp::C1_TYPE_REFS);
+        crate::loadstamp::count(
+            crate::loadstamp::N_TYPE_REFS,
+            file.type_reference_directives.len() as u64,
+        );
         let _trace = crate::tracing::get().map(|tr| {
             tr.push(
                 crate::tracing::Phase::Program,
@@ -1626,12 +1635,14 @@ impl FileLoader {
                     redirect_ref,
                 ),
             );
+            let ls = crate::loadstamp::span(crate::loadstamp::C1_RESOLVER);
             let (resolved, trace) = self.resolver().resolve_type_reference_directive(
                 &ref_.file_name,
                 &file_name,
                 resolution_mode,
                 redirect_ref,
             );
+            drop(ls);
             let trace_done = crate::tracing::get().map(|tr| {
                 tr.push(
                     crate::tracing::Phase::Program,
@@ -1698,6 +1709,7 @@ impl FileLoader {
         t: &mut ParseTask,
         prep: Option<TakenParse>,
     ) {
+        let _ls = crate::loadstamp::span(crate::loadstamp::RES);
         let _trace = crate::tracing::get().map(|tr| {
             let containing_file_name = t
                 .file
@@ -1833,6 +1845,8 @@ impl FileLoader {
             let mut first_name = 0;
             let mut resolutions_in_file: ModeAwareCache<Arc<ResolvedModule>> = match commit {
                 Some(commit) => {
+                    let _ls = crate::loadstamp::span(crate::loadstamp::RES_COMMIT);
+                    crate::loadstamp::count(crate::loadstamp::N_COMMIT, 1);
                     let prep = prep.as_ref().expect("a commit comes with its prep");
                     first_name = imports_start as usize + file.imports.len();
                     // Debug builds check the commit against the loader's
@@ -1900,10 +1914,13 @@ impl FileLoader {
                             commit.adds.iter().map(|add| add.index).collect();
                         assert_eq!(adds, committed, "commit of {}", file.file_name());
                     }
+                    let ls = crate::loadstamp::span(crate::loadstamp::RES_NOTE);
                     for answer in prep.answers().iter().flatten() {
                         self.note_worker_logs(&answer.package_jsons, &answer.lookups);
                         names_taken += 1;
                     }
+                    drop(ls);
+                    let _adds = crate::loadstamp::span(crate::loadstamp::RES_ADDS);
                     let commit = *commit;
                     for add in commit.adds {
                         let import_index = add.index as i32 - imports_start;
@@ -1959,6 +1976,7 @@ impl FileLoader {
                     Option<GoError>,
                 )>,
             > = Vec::new();
+            let ls = crate::loadstamp::span(crate::loadstamp::RES_AHEAD);
             if prep.is_none()
                 && self.shared_resolution.is_some()
                 && crate::tracing::get().is_none()
@@ -1995,7 +2013,16 @@ impl FileLoader {
                 }
             }
 
+            drop(ls);
+            let aug_start = imports_start as usize + file.imports.len();
+            let loop_span = crate::loadstamp::span(crate::loadstamp::RES_LOOP);
             for (index, entry) in module_names.iter().copied().enumerate().skip(first_name) {
+                let _aug = if index >= aug_start {
+                    crate::loadstamp::count(crate::loadstamp::N_AUG, 1);
+                    crate::loadstamp::span(crate::loadstamp::C3_AUG)
+                } else {
+                    None
+                };
                 let (module_name, usage, adds, source_phase) = name_at(index, entry);
                 // ts#63915: a source phase import is not resolved
                 // (fileloader.go:880).
@@ -2149,7 +2176,9 @@ impl FileLoader {
                 }
             }
 
+            drop(loop_span);
             if prep.is_some() {
+                crate::loadstamp::count(crate::loadstamp::N_PREP, 1);
                 #[cfg(test)]
                 if named {
                     PREPS_NAMED.with(|files| files.borrow_mut().push(file_name.to_string()));
@@ -2165,6 +2194,12 @@ impl FileLoader {
             }
             t.resolutions_in_file = resolutions_in_file;
             t.resolutions_trace = resolutions_trace;
+            // loadstamp1: the frees of the worker's prep and names, at the
+            // end of the block as before.
+            let _ls = crate::loadstamp::span(crate::loadstamp::C5_FREE);
+            drop(resolved_ahead);
+            drop(kept);
+            drop(prep);
         }
     }
 
