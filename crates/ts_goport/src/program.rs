@@ -6853,6 +6853,59 @@ mod tests {
         }
     }
 
+    // TS2783 prints `left.Name()` (checker.go:13626). For a private name Go
+    // holds the class's symbol id there, which Go's bind gives (binder.go:375):
+    // at pin 3e9236361fa9 Go prints `'\u{FFFD}#1@#x'` and `'\u{FFFD}#2@#y'`
+    // for this file. The port's name holds a class key, so the message must
+    // print Go's id, not the key.
+    #[test]
+    fn spread_override_prints_go_private_name_ids() {
+        let dir = std::env::temp_dir().join(format!("goport-ts2783-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let globals = "interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n\
+                       interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n\
+                       interface Number {}\ninterface Object {}\ninterface RegExp {}\n\
+                       interface String {}\n";
+        let a = "class K { m() { return { #x: 1, ...{ #x: 2 } }; } }\n\
+                 class L { #y = 1; n() { return { #y: 1, a: 1, ...{ #y: 2, a: 2 } }; } }\n";
+        std::fs::write(dir.join("globals.d.ts"), globals).unwrap();
+        std::fs::write(dir.join("a.ts"), a).unwrap();
+        let config = dir.join("tsconfig.json");
+        std::fs::write(
+            &config,
+            r#"{ "compilerOptions": { "noLib": true, "types": [], "noEmit": true },
+                 "files": ["globals.d.ts", "a.ts"] }"#,
+        )
+        .unwrap();
+        let (messages, start) = std::thread::spawn(move || {
+            let program = try_load_version(&config.to_string_lossy(), |_| {})
+                .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+            let scope = crate::core::enter_program(Some(program));
+            let start = next_ids().1;
+            bind_all();
+            let messages: Vec<String> = program
+                .source_files()
+                .flat_map(|file| get_semantic_diagnostics(file.root))
+                .filter(|d| d.code() == 2783)
+                .map(|d| format_diagnostic(&d))
+                .collect();
+            drop(scope);
+            release_program(program);
+            (messages, start)
+        })
+        .join()
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (k, l) = (start + 1, start + 2);
+        assert!(
+            messages.len() == 3
+                && messages[0].contains(&format!("'\u{FFFD}#{k}@#x' is specified more than once"))
+                && messages[1].contains(&format!("'\u{FFFD}#{l}@#y' is specified more than once"))
+                && messages[2].contains("'a' is specified more than once"),
+            "TS2783 prints Go's private name ids: {messages:?}"
+        );
+    }
+
     #[test]
     fn json_file_may_be_emitted_case_insensitive() {
         let options = CompilerOptions {
