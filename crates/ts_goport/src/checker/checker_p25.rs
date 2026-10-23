@@ -832,6 +832,10 @@ impl Checker {
         } else {
             self.error_type
         };
+        // constvar1: the constraint can write the field first.
+        let old = self.ty(t).as_mapped_type().constraint_type;
+        self.const_type_variable_memo
+            .overwrite(old.is_some() && old != constraint_type);
         self.ty_mut(t).as_mapped_type_mut().constraint_type = constraint_type;
         constraint_type
     }
