@@ -98,6 +98,7 @@ mod effect_refactors_test;
 mod effect_schema_refactors_test;
 mod extendedconfigcache_test;
 mod file_version_test;
+mod include_format_test;
 mod logging_logtree_test;
 mod lsp_dynamic_queue_test;
 mod lsp_progress_test;
