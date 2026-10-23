@@ -907,7 +907,7 @@ impl Checker {
         let ty = self.ty(t);
         if ty.flags.intersects(BASE_CONSTRAINT_FLAGS) {
             let resolved = match &ty.data {
-                TypeData::Intersection(d) => {
+                TypeData::Intersection(d, _) => {
                     d.union_or_intersection
                         .structured
                         .constrained
@@ -1161,27 +1161,14 @@ impl Checker {
     // Return true if type might be of the given kind. A union or intersection type might be of a given
     // kind if at least one constituent type is of the given kind.
     // Go: checker/checker.go:28211 maybeTypeOfKind
-    // PERF: unionfn1. It only reads flags and lists, so it takes `&self` and
-    // loops over the list in place. For a constituent that is not a union or
-    // intersection, Go's recursive call is its flags test, so the loop tests
-    // the flags here and only a nested union or intersection recurses.
+    // PERF: memberflags1. Go's walk over the members of a union or
+    // intersection (and into nested ones) is a test of the member mask that
+    // the constructor stored (`Type::member_mask`): the walk is true exactly
+    // when some member's flags, or a nested member's, intersect `kind`. The
+    // walk is pure, so the order of its reads has no effect.
     pub fn maybe_type_of_kind(&self, t: TypeId, kind: TypeFlags) -> bool {
         let ty = self.ty(t);
-        if ty.flags.intersects(kind) {
-            return true;
-        }
-        if ty.flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-            for &m in ty.types() {
-                let flags = self.ty(m).flags;
-                if flags.intersects(kind)
-                    || (flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
-                        && self.maybe_type_of_kind(m, kind))
-                {
-                    return true;
-                }
-            }
-        }
-        false
+        ty.flags.intersects(kind) || ty.member_mask().is_some_and(|mask| mask.intersects(kind))
     }
 
     // Go: checker/checker.go:28225 maybeTypeOfKindConsideringBaseConstraint

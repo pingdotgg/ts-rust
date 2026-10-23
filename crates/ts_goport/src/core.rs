@@ -3886,6 +3886,12 @@ pub struct FileBindData {
     /// file has an `ASSIGNMENT` symbol, so the declaration transformer skips
     /// its expando walk (`transform_source_file`).
     pub has_expando_assignments: bool,
+    /// Rust-only: the class-like nodes in which the binder named a private
+    /// identifier declaration (`get_symbol_name_for_private_identifier`),
+    /// in the order of the first such name in each. Go's binder gives the
+    /// class symbol its id there (binder.go:375); the port gives these ids
+    /// after the bind (`program::bind_all`).
+    pub private_name_classes: Vec<Node>,
 }
 
 /// Go `*ast.Diagnostic`. Positions are Go positions (UTF-8 byte offsets).

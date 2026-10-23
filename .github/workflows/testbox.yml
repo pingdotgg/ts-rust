@@ -3,6 +3,10 @@
 # the working tree to it and runs one command. The setup matches the Linux test job of ci.yml, with
 # zbook's toolchains. Sticky disks keep target/ and the cargo registry warm between testboxes.
 # A pull request that changes this file, testbox-data.sh or testbox-data.txt runs it in validation mode (no testbox_id).
+# Validation mode commits no sticky disk: it does not mount target/ or the cargo registry, and it mounts
+# the data disks with commit: false. A PR run uses the PR's copy of this file, so this only stops mistakes.
+# Blacksmith's "Sticky Disks: branch protection" (dashboard Settings > Caching) stops a hostile PR: with it
+# on, only push, schedule and workflow_dispatch jobs on main commit.
 name: Blacksmith Testbox
 
 on:
@@ -47,12 +51,14 @@ jobs:
       # After checkout: its clean step would empty a disk mounted in the workspace. A sticky disk commits only
       # when the job ends with no failed or cancelled step: the idle timeout end requests a commit (testbox.sh
       # release; not every request lands, see scripts/goport/README.md), `blacksmith testbox stop` cancels the
-      # job and does not (testbox.sh stop).
+      # job and does not (testbox.sh stop). Validation mode does not mount these two.
       - uses: useblacksmith/stickydisk@v1
+        if: github.event_name != 'pull_request'
         with:
           key: ts-rust-testbox-target
           path: ${{ github.workspace }}/target
       - uses: useblacksmith/stickydisk@v1
+        if: github.event_name != 'pull_request'
         with:
           key: ts-rust-testbox-cargo
           path: ~/.cargo/registry
@@ -69,17 +75,18 @@ jobs:
           python3 scripts/upstream/pin.py show ${key:+"$key"} > "$RUNNER_TEMP/pin.json"
           jq -r '"key=\(.key)", "repo=\(.repo)", "commit=\(.commit)", "subdir=\(.subdir // "")", "go=\(.oracle.go | ltrimstr("go"))"' "$RUNNER_TEMP/pin.json" >> "$GITHUB_OUTPUT"
       # The zbook files of the gate and the LSP and API oracles (scripts/goport/testbox-data.txt), filled by
-      # `testbox.sh seed`. on-change: a testbox that only reads them does not commit an older copy.
+      # `testbox.sh seed`. on-change: a testbox that only reads them does not commit an older copy. Validation
+      # mode mounts them with commit: false, so testbox-data.sh mount runs on the real disks and its writes drop.
       - uses: useblacksmith/stickydisk@v1
         with:
           key: ts-rust-testbox-inputs
           path: ~/goport-data/inputs
-          commit: on-change
+          commit: ${{ github.event_name == 'pull_request' && 'false' || 'on-change' }}
       - uses: useblacksmith/stickydisk@v1
         with:
           key: ts-rust-testbox-pin-${{ steps.pin.outputs.key }}
           path: ~/goport-data/pin
-          commit: on-change
+          commit: ${{ github.event_name == 'pull_request' && 'false' || 'on-change' }}
       # The whole repo, not only the Go subdir: np-suite reads packages/typescript and the root node_modules.
       - name: Check out the pinned Go source
         uses: actions/checkout@v5
@@ -112,6 +119,7 @@ jobs:
       # testbox.sh sources this file before each command: commands run over SSH, without this job's env.
       # TS_CARGO_CGROUP_ACTIVE=1 skips the systemd user scope of run-cargo-capped.sh (no user session here).
       # HOME=/home/theo: the gate and the oracles read ~/.local/bin and ~/.explore at zbook's paths.
+      # GOPORT_TESTS_JOBS=5: goport-tests.sh runs the go_baselines run and its 4 shards at once (32 vCPU).
       - name: Write the testbox env
         env:
           SUBDIR: ${{ steps.pin.outputs.subdir }}
@@ -125,6 +133,7 @@ jobs:
           export TS_CARGO_CGROUP_ACTIVE=1
           export TS_CARGO_JOBS=32
           export TS_CARGO_SLOTS=1
+          export GOPORT_TESTS_JOBS=5
           export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup" HOME=/home/theo
           export PYTHONDONTWRITEBYTECODE=1
           EOF
