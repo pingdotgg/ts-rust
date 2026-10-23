@@ -231,3 +231,62 @@ impl KnownSymlinks {
         !s.is_empty() && (self.canonicalize(s) == "node_modules" || s.starts_with('@'))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Go: symlinks/knownsymlinks_test.go:129 TestGuessDirectorySymlink
+    // PORT: the guess is private, so the test sits here (the other Go tests
+    // of this file are in tests/go_baselines/units_platform/symlinks.rs).
+    // Go's ("", "") is `None`. The inputs are rooted and normalized, so Go's
+    // `ToRootedFilePath(name, cwd)` is the name itself.
+    #[test]
+    fn guess_directory_symlink() {
+        let cache = KnownSymlinks::new("/test/dir", true);
+        // (name, a, b, [commonResolved, commonOriginal])
+        let tests: &[(&str, &str, &str, Option<(&str, &str)>)] = &[
+            (
+                "identical paths",
+                "/test/path/file.ts",
+                "/test/path/file.ts",
+                Some(("/", "/")),
+            ),
+            (
+                "different files same directory",
+                "/test/path/file1.ts",
+                "/test/path/file2.ts",
+                None,
+            ),
+            (
+                "different directories",
+                "/test/path1/file.ts",
+                "/test/path2/file.ts",
+                Some(("/test/path1", "/test/path2")),
+            ),
+            (
+                "node_modules paths",
+                "/test/node_modules/pkg/file.ts",
+                "/test/node_modules/pkg/file.ts",
+                Some(("/test/node_modules/pkg", "/test/node_modules/pkg")),
+            ),
+            (
+                "scoped package paths",
+                "/test/node_modules/@scope/pkg/file.ts",
+                "/test/node_modules/@scope/pkg/file.ts",
+                Some((
+                    "/test/node_modules/@scope/pkg",
+                    "/test/node_modules/@scope/pkg",
+                )),
+            ),
+        ];
+        let failures: Vec<String> = tests
+            .iter()
+            .filter_map(|&(name, a, b, expected)| {
+                let got = cache.guess_directory_symlink_from_file_paths(a, b);
+                (got != expected).then(|| format!("{name}: got {got:?}, expected {expected:?}"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

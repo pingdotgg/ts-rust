@@ -342,11 +342,11 @@ struct CheckerPool {
     /// (`send_emit_pool_jobs`). It stops with the checkers. wasm has none.
     #[cfg(not(target_family = "wasm"))]
     emit: Option<EmitPool>,
-    /// `--singleThreaded`: the next symbol id of the loading thread when the
-    /// pool was made. The pool's checker hands its symbol ids to the next
-    /// pool (`symbol_id_carry_start`) or back to the loading thread when it
-    /// stops (`carry_symbol_ids`). None for other pools.
-    carry_from: Option<u64>,
+    /// `--singleThreaded`: the next symbol id and block of the loading
+    /// thread when the pool was made. The pool's checker hands its symbol
+    /// ids to the next pool (`symbol_id_carry_start`) or back to the loading
+    /// thread when it stops (`carry_symbol_ids`). None for other pools.
+    carry_from: Option<(u64, u64)>,
 }
 
 impl CheckerPool {
@@ -439,16 +439,17 @@ impl CheckerPool {
     /// next program's checker starts from them (`WorkerSeed`). When this
     /// thread gave ids after the pool was made, or took the ids of a later
     /// pool, it keeps its own.
-    // PORT: Go has one symbol id counter per process, so the ids of the next
-    // program (`tsc -b`, a watch cycle) count on from the last one, and a
-    // bound file keeps the ids of its symbols (`ast::SymbolIdCarry`). With
-    // more checkers Go's ids race, and each checker here counts on its own,
-    // so only a one-checker `--singleThreaded` pool hands its ids on.
+    // PORT: Go's symbol id counters (global and block) are per process, so
+    // the ids of the next program (`tsc -b`, a watch cycle) count on from the
+    // last one, and a bound file keeps the ids of its symbols
+    // (`ast::SymbolIdCarry`). With more checkers Go's ids race, and each
+    // checker here counts on its own, so only a one-checker
+    // `--singleThreaded` pool hands its ids on.
     fn carry_symbol_ids(&mut self) {
         let Some(from) = self.carry_from else {
             return;
         };
-        if next_ids().1 != from {
+        if (next_ids().1, next_symbol_block_id()) != from {
             return;
         }
         if let Some(carry) = self.symbol_ids() {
@@ -1832,8 +1833,12 @@ pub fn bind_all() {
 /// this thread after the bind of `files`, before a checker copies the ids
 /// (`WorkerSeed`): in Go's `--singleThreaded` bind order, last-queued-first
 /// (core/workgroup.go:67), and in binder order in each file
-/// (`FileBindData::private_name_classes`). Go's parallel bind races, and
-/// mostly takes the same order (2 files: 59 of 60 runs). With `carry` (a
+/// (`FileBindData::private_name_classes`). The port always takes this order,
+/// also for a parallel bind. Go's default parallel bind races, so its order
+/// changes from run to run, and more often with more files (R227 reviewer,
+/// at pin 3e9236361fa9: 2 files took this order in 114 of 120 runs, 4 files
+/// in 4 of 60 runs). No fixed order can equal every run of Go's parallel
+/// bind; the `--singleThreaded` order is Go's one fixed order. With `carry` (a
 /// `--singleThreaded` program) this thread first takes the ids of the last
 /// one-checker pool (`CheckerPool::carry_symbol_ids`), as the pool would
 /// when it is made, so the ids count on from the last program as in Go.
@@ -3990,16 +3995,18 @@ fn fast_cost_split(
 // Go: compiler/checkerpool.go:367 createCheckers (one `checker.NewChecker`)
 /// Makes checker `index` of a pool of `count` on this thread.
 // PORT: Go makes every checker of the pool before the first check, and the
-// checkers share one symbol id counter (`ast.GetSymbolId`). So the first
-// check of each checker comes after the ids that all `NewChecker` calls gave
-// (`initializeChecker` gives 4 checker symbols their ids). A worker here
-// counts its ids on its own (`ast::id_seed`), so it skips the ids that the
-// other checkers' `NewChecker` gave to their own symbols: each makes the
-// same calls. A binder symbol is shared, so Go gives it its id only once
-// in the pool (for example in the text of a merge error), and the worker
-// gave that id itself: it is not skipped. Late-bound names hold symbol ids
-// (`__@iterator@<id>`), and the node builder counts their length toward
-// truncation.
+// checkers share one global symbol id counter (`ast.GetSymbolId`). So the
+// first check of each checker comes after the global ids that all
+// `NewChecker` calls gave. A worker here counts its ids on its own
+// (`ast::id_seed`), so it skips the global ids that the other checkers'
+// `NewChecker` gave to their own symbols: each makes the same calls. The
+// link reads of `initializeChecker` (4 checker symbols) give block ids
+// (ts#64711), which count apart and are not skipped: so far no `NewChecker`
+// gives a global id. A binder symbol is shared, so Go gives it its id only
+// once in the pool (for example in the text of a merge error), and the
+// worker gave that id itself: it is not skipped. Late-bound names hold
+// symbol ids (`__@iterator@<id>`), and the node builder counts their length
+// toward truncation.
 fn new_pool_checker(index: usize, count: usize) -> Checker {
     let before = own_symbol_id_count();
     let checker = Checker::new(index);
@@ -4009,20 +4016,20 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
 }
 
 /// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id of this thread for a one-checker `--singleThreaded` pool
-/// (`singleThreaded` on the command line or in the project tsconfig).
+/// symbol id and block of this thread for a one-checker `--singleThreaded`
+/// pool (`singleThreaded` on the command line or in the project tsconfig).
 /// Watch mode makes the next program before it releases the last one, so
 /// the pool of the last program can still be here: its symbol ids become
 /// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
 /// builders the last pool can still be checking: the copy then waits for
 /// its jobs, so such projects check one after the other (PORTING.md,
 /// Threads).
-fn symbol_id_carry_start(count: usize) -> Option<u64> {
+fn symbol_id_carry_start(count: usize) -> Option<(u64, u64)> {
     if count != 1 || !single_threaded() {
         return None;
     }
     carry_last_pool_symbol_ids();
-    Some(next_ids().1)
+    Some((next_ids().1, next_symbol_block_id()))
 }
 
 /// The carry of `symbol_id_carry_start`: the last one-checker
@@ -6730,8 +6737,10 @@ mod tests {
     // (`typeof D.\u{FFFD}#1@#d`). `bind_all` gives the ids after the bind,
     // in Go's `--singleThreaded` order: b.ts first, then a.ts in binder
     // order (function declarations first). The serial, parallel and
-    // `--singleThreaded` binds give the same ids. Go prints the two lines
-    // below with ids 1 and 4 in both modes.
+    // `--singleThreaded` binds of the port give the same ids. Go with
+    // `--singleThreaded` prints the two lines below with ids 1 and 4. Go's
+    // default parallel bind races: it printed other ids (B=3, D=4) in 6 of
+    // 120 runs (R227 reviewer).
     #[test]
     fn bind_all_gives_private_name_classes_go_bind_ids() {
         let dir = std::env::temp_dir().join(format!("goport-private-ids-{}", std::process::id()));
@@ -6845,6 +6854,59 @@ mod tests {
                 "the node builder prints Go's ids: {messages:?}"
             );
         }
+    }
+
+    // TS2783 prints `left.Name()` (checker.go:13626). For a private name Go
+    // holds the class's symbol id there, which Go's bind gives (binder.go:375):
+    // at pin 3e9236361fa9 Go prints `'\u{FFFD}#1@#x'` and `'\u{FFFD}#2@#y'`
+    // for this file. The port's name holds a class key, so the message must
+    // print Go's id, not the key.
+    #[test]
+    fn spread_override_prints_go_private_name_ids() {
+        let dir = std::env::temp_dir().join(format!("goport-ts2783-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let globals = "interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n\
+                       interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n\
+                       interface Number {}\ninterface Object {}\ninterface RegExp {}\n\
+                       interface String {}\n";
+        let a = "class K { m() { return { #x: 1, ...{ #x: 2 } }; } }\n\
+                 class L { #y = 1; n() { return { #y: 1, a: 1, ...{ #y: 2, a: 2 } }; } }\n";
+        std::fs::write(dir.join("globals.d.ts"), globals).unwrap();
+        std::fs::write(dir.join("a.ts"), a).unwrap();
+        let config = dir.join("tsconfig.json");
+        std::fs::write(
+            &config,
+            r#"{ "compilerOptions": { "noLib": true, "types": [], "noEmit": true },
+                 "files": ["globals.d.ts", "a.ts"] }"#,
+        )
+        .unwrap();
+        let (messages, start) = std::thread::spawn(move || {
+            let program = try_load_version(&config.to_string_lossy(), |_| {})
+                .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+            let scope = crate::core::enter_program(Some(program));
+            let start = next_ids().1;
+            bind_all();
+            let messages: Vec<String> = program
+                .source_files()
+                .flat_map(|file| get_semantic_diagnostics(file.root))
+                .filter(|d| d.code() == 2783)
+                .map(|d| format_diagnostic(&d))
+                .collect();
+            drop(scope);
+            release_program(program);
+            (messages, start)
+        })
+        .join()
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (k, l) = (start + 1, start + 2);
+        assert!(
+            messages.len() == 3
+                && messages[0].contains(&format!("'\u{FFFD}#{k}@#x' is specified more than once"))
+                && messages[1].contains(&format!("'\u{FFFD}#{l}@#y' is specified more than once"))
+                && messages[2].contains("'a' is specified more than once"),
+            "TS2783 prints Go's private name ids: {messages:?}"
+        );
     }
 
     #[test]

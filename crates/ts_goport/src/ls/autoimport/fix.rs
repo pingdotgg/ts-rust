@@ -1411,7 +1411,7 @@ pub fn get_import_kind_for_import_statement(
     )
 }
 
-// Go: ls/autoimport/fix.go:808 getImportKind
+// Go: ls/autoimport/fix.go:811 getImportKind
 // PORT: Go `fallthrough` from the Named case into the Modifier case is the
 // shared `NAMED` result.
 fn get_import_kind(

@@ -6,14 +6,19 @@ use std::sync::{Mutex, PoisonError};
 
 // Atomic ids
 
-// PORT: Go keeps `nextNodeId`/`nextSymbolId` as process-wide atomics and
-// stores the lazily assigned id on the node or symbol. Our AST and symbol
-// arena entries have no id slot, so the lazily assigned ids live in
-// thread-local maps keyed by handle. Ids are still assigned on first request
-// in request order, like Go.
+// PORT: Go keeps `nextNodeId`/`nextSymbolId`/`nextSymbolBlockId` as
+// process-wide atomics and stores the lazily assigned id on the node or
+// symbol. Our AST and symbol arena entries have no id slot, so the lazily
+// assigned ids live in thread-local maps keyed by handle. Ids are still
+// assigned on first request in request order, like Go. Go's
+// `nextNodeBlockId` has no port: node link stores give no node ids (their
+// ids reach no output).
 thread_local! {
     static NEXT_NODE_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NEXT_SYMBOL_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    // Go `nextSymbolBlockId`: the start of the next block of symbol ids
+    // that a link store takes (`SymbolIdGenerator`).
+    static NEXT_SYMBOL_BLOCK_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     // Forgets the ids of dead file versions (`PerFileMap`, lsshells M3a).
     // Their nodes are not read again, and an id is never given twice: a
     // node of a dead version that has no id here panics (`get_node_id`).
@@ -27,37 +32,57 @@ thread_local! {
 }
 
 /// A symbol id as an id table keeps it: 0 for no id yet (Go ids start at
-/// 1), `BIG_ID` for an id of `BIG_ID` or more (in the table's `big` map),
-/// else the id.
+/// 1), `BIG_ID` for an id that has no cell (in the table's `big` map),
+/// `BLOCK_CELL | n` for the block id `BLOCK_ID_OFFSET + n`, else the id.
 // PERF: 4 bytes per symbol. Each checker gives an id to most symbols that it
-// reads (Go `GetSymbolId` in `symbolArenaLinkStore`), up to 2 million of its
-// own on zod. Ids count per thread from 1, so a CLI run stays far below
-// `BIG_ID`.
+// reads, up to 2 million of its own on zod. Most are block ids (Go
+// `symbolLinkStore` reads), the rest global ids (Go `GetSymbolId`). Both
+// count per thread from 0, so a CLI run stays far below `BIG_ID`.
 type IdCell = u32;
 const BIG_ID: IdCell = IdCell::MAX;
+const BLOCK_CELL: IdCell = 1 << 31;
 
-/// The id in `cell`, assigned now when it has none. `big` keeps ids from
-/// `BIG_ID` on, by `place`.
+// Go: ast/utilities.go:48 BlockIdOffset
+/// The first block id. A block id is always 15 digits long, and the text
+/// of a late-bound name holds it (`__@k@<id>`): the node builder counts its
+/// length, and `compare_symbols` compares names as text before ids.
+pub const BLOCK_ID_OFFSET: u64 = 0x1_0000_0000_0000;
+// Go: ast/utilities.go:49 BlockIdSize (core.LinkPageSize)
+const BLOCK_ID_SIZE: u64 = 256;
+
+/// The cell of `id` (not 0): `BIG_ID` when it has none.
 #[inline]
+fn id_cell(id: u64) -> IdCell {
+    if id < u64::from(BLOCK_CELL) {
+        return id as IdCell;
+    }
+    match id.checked_sub(BLOCK_ID_OFFSET) {
+        Some(n) if n < u64::from(BIG_ID - BLOCK_CELL) => BLOCK_CELL | n as IdCell,
+        _ => BIG_ID,
+    }
+}
+
+/// The id in `cell`, assigned now by `give` when it has none. `big` keeps
+/// the ids that have no cell, by `place`.
+#[inline(always)]
 fn cell_id<K: Eq + std::hash::Hash>(
     cell: &mut IdCell,
     big: &mut FxHashMap<K, u64>,
     place: K,
+    give: impl FnOnce() -> u64,
 ) -> u64 {
     match *cell {
         0 => {
-            let id = next_symbol_id();
-            match IdCell::try_from(id) {
-                Ok(small) if small != BIG_ID => *cell = small,
-                _ => {
-                    *cell = BIG_ID;
-                    big.insert(place, id);
-                }
+            let id = give();
+            *cell = id_cell(id);
+            if *cell == BIG_ID {
+                big.insert(place, id);
             }
             id
         }
         BIG_ID => big[&place],
-        id => u64::from(id),
+        // A block cell is `BLOCK_CELL | n`: no branch.
+        id => u64::from(id & !BLOCK_CELL) + (u64::from(id >> 31) * BLOCK_ID_OFFSET),
     }
 }
 
@@ -74,7 +99,7 @@ fn cell_id<K: Eq + std::hash::Hash>(
 struct LineageIds {
     /// None: no id in this chunk yet, or a freed chunk (`freed`).
     chunks: Vec<Option<Box<[IdCell; LINEAGE_ID_CHUNK]>>>,
-    /// The ids from `BIG_ID` on, by lineage index.
+    /// The ids that have no cell (`BIG_ID`), by lineage index.
     big: FxHashMap<usize, u64>,
     /// The freed chunks, one bit each.
     freed: Vec<u64>,
@@ -137,16 +162,17 @@ impl LineageIds {
     /// The id of lineage index `index`, assigned now when it has none.
     // PERF: the hot path of `get_symbol_id` is one more load and test than
     // a dense `Vec`; a new chunk and the frees are out of line.
-    #[inline]
-    fn id(&mut self, index: usize) -> u64 {
+    #[inline(always)]
+    fn id(&mut self, index: usize, give: impl FnOnce() -> u64) -> u64 {
         if let Some(Some(chunk)) = self.chunks.get_mut(index >> LINEAGE_ID_SHIFT) {
             return cell_id(
                 &mut chunk[index & (LINEAGE_ID_CHUNK - 1)],
                 &mut self.big,
                 index,
+                give,
             );
         }
-        self.id_in_new_chunk(index)
+        self.id_in_new_chunk(index, give)
     }
 
     /// `id` when the chunk of `index` has no ids: frees the chunks of the
@@ -154,7 +180,7 @@ impl LineageIds {
     /// Panics when the chunk is freed.
     #[cold]
     #[inline(never)]
-    fn id_in_new_chunk(&mut self, index: usize) -> u64 {
+    fn id_in_new_chunk(&mut self, index: usize, give: impl FnOnce() -> u64) -> u64 {
         self.free_dead();
         let chunk = index >> LINEAGE_ID_SHIFT;
         if self
@@ -172,6 +198,7 @@ impl LineageIds {
             &mut ids[index & (LINEAGE_ID_CHUNK - 1)],
             &mut self.big,
             index,
+            give,
         )
     }
 
@@ -228,7 +255,7 @@ struct OwnSymbolIds {
     ids: Vec<IdCell>,
     /// The ids of the other arenas.
     others: FxHashMap<u32, Vec<IdCell>>,
-    /// The ids from `BIG_ID` on, by arena and place.
+    /// The ids that have no cell (`BIG_ID`), by arena and place.
     big: FxHashMap<(u32, usize), u64>,
     /// The arenas whose ids stay after the arena drops
     /// (`keep_own_symbol_ids`).
@@ -248,14 +275,14 @@ impl OwnSymbolIds {
 
     /// The id of the own symbol at `place` of arena `key`, assigned now when
     /// it has none.
-    #[inline]
-    fn id(&mut self, key: u32, place: usize) -> u64 {
+    #[inline(always)]
+    fn id(&mut self, key: u32, place: usize, give: impl FnOnce() -> u64) -> u64 {
         if self.key != key {
             self.switch_to(key);
         }
         match self.ids.get_mut(place) {
-            Some(cell) => cell_id(cell, &mut self.big, (key, place)),
-            None => self.id_past_end(key, place),
+            Some(cell) => cell_id(cell, &mut self.big, (key, place), give),
+            None => self.id_past_end(key, place, give),
         }
     }
 
@@ -264,10 +291,10 @@ impl OwnSymbolIds {
     /// rarely.
     #[cold]
     #[inline(never)]
-    fn id_past_end(&mut self, key: u32, place: usize) -> u64 {
+    fn id_past_end(&mut self, key: u32, place: usize, give: impl FnOnce() -> u64) -> u64 {
         let len = (place + 1).max(self.ids.len() * 2).max(LINEAGE_ID_CHUNK);
         self.ids.resize(len, 0);
-        cell_id(&mut self.ids[place], &mut self.big, (key, place))
+        cell_id(&mut self.ids[place], &mut self.big, (key, place), give)
     }
 
     /// Makes arena `key` the one in `ids`.
@@ -322,6 +349,7 @@ pub(crate) fn keep_own_symbol_ids(key: u32) {
 pub struct IdSeed {
     next_node_id: u64,
     next_symbol_id: u64,
+    next_symbol_block_id: u64,
     node_ids: PerFileMap<u64>,
     symbol_ids: LineageIds,
 }
@@ -330,14 +358,17 @@ pub struct IdSeed {
 /// the ids of the loading thread (`install_id_seed`), so a node or symbol
 /// that got an id before the checkers started keeps it on every thread.
 /// The ids of checker symbols stay: a new thread has none of those checkers.
-// PORT: Go shares one atomic counter between checker goroutines, so ids
+// PORT: Go shares its atomic counters between checker goroutines, so ids
 // that checkers assign race. Here each checker thread counts on its own
-// from the same start, which keeps its ids deterministic.
+// from the same start, which keeps its ids deterministic. The block
+// counter comes too: a lineage cell can hold a block id, so a thread that
+// counted blocks from 0 again would give that id to a second symbol.
 #[must_use]
 pub fn id_seed() -> IdSeed {
     IdSeed {
         next_node_id: NEXT_NODE_ID.with(std::cell::Cell::get),
         next_symbol_id: NEXT_SYMBOL_ID.with(std::cell::Cell::get),
+        next_symbol_block_id: NEXT_SYMBOL_BLOCK_ID.with(std::cell::Cell::get),
         node_ids: NODE_IDS.with(|ids| {
             let mut ids = ids.borrow_mut();
             // The copy has no ids of dead file versions.
@@ -362,6 +393,13 @@ pub fn next_ids() -> (u64, u64) {
     )
 }
 
+/// The start of the next block of symbol ids of this thread (Go
+/// `nextSymbolBlockId`, `SymbolIdGenerator`).
+#[must_use]
+pub fn next_symbol_block_id() -> u64 {
+    NEXT_SYMBOL_BLOCK_ID.with(std::cell::Cell::get)
+}
+
 /// Skips `count` symbol ids on this thread: the next id is `count` higher.
 /// A checker worker skips the ids that the other checkers of its pool gave
 /// as they were made (`program::new_pool_checker`).
@@ -369,22 +407,25 @@ pub fn skip_symbol_ids(count: u64) {
     NEXT_SYMBOL_ID.with(|next| next.set(next.get() + count));
 }
 
-/// The number of ids that this thread gave to symbols that checker arenas
-/// made (not binder symbols), in every arena. A checker worker counts the
-/// ids that its `NewChecker` gave to its own symbols with it
+/// The number of global ids (Go `GetSymbolId`, not block ids) that this
+/// thread gave to symbols that checker arenas made (not binder symbols), in
+/// every arena. A checker worker counts the global ids that its
+/// `NewChecker` gave to its own symbols with it
 /// (`program::new_pool_checker`).
 #[must_use]
 pub fn own_symbol_id_count() -> u64 {
     OWN_SYMBOL_IDS.with(|own| {
         let own = own.borrow();
-        let given = |ids: &[IdCell]| ids.iter().filter(|&&id| id != 0).count() as u64;
-        given(&own.ids) + own.others.values().map(|ids| given(ids)).sum::<u64>()
+        let given =
+            |ids: &[IdCell]| ids.iter().filter(|&&id| id != 0 && id < BLOCK_CELL).count() as u64;
+        let big = own.big.values().filter(|&&id| id < BLOCK_ID_OFFSET).count() as u64;
+        given(&own.ids) + own.others.values().map(|ids| given(ids)).sum::<u64>() + big
     })
 }
 
 /// The symbol ids that the checker of one program left on its thread: the
-/// next id and the ids of the binder lineage symbols. The ids of the
-/// checker's own symbols die with the checker.
+/// next id, the next block and the ids of the binder lineage symbols. The
+/// ids of the checker's own symbols die with the checker.
 // PORT: Go has one symbol id counter per process, and a bound file keeps
 // the ids of its symbols in every later program. A one-checker
 // `--singleThreaded` pool hands these ids to its loading thread when the
@@ -392,6 +433,7 @@ pub fn own_symbol_id_count() -> u64 {
 // of the process (`tsc -b`, watch) counts on from them.
 pub struct SymbolIdCarry {
     next_symbol_id: u64,
+    next_symbol_block_id: u64,
     symbol_ids: LineageIds,
 }
 
@@ -400,6 +442,7 @@ pub struct SymbolIdCarry {
 pub fn copy_symbol_ids() -> SymbolIdCarry {
     SymbolIdCarry {
         next_symbol_id: NEXT_SYMBOL_ID.with(std::cell::Cell::get),
+        next_symbol_block_id: NEXT_SYMBOL_BLOCK_ID.with(std::cell::Cell::get),
         symbol_ids: SYMBOL_IDS.with(|ids| {
             let mut ids = ids.borrow_mut();
             // The copy has no ids of freed lineage chunks.
@@ -409,9 +452,11 @@ pub fn copy_symbol_ids() -> SymbolIdCarry {
     }
 }
 
-/// Makes `carry` the next symbol id and the lineage ids of this thread.
+/// Makes `carry` the next symbol id, the next block and the lineage ids of
+/// this thread.
 pub fn install_symbol_ids(carry: SymbolIdCarry) {
     NEXT_SYMBOL_ID.with(|next| next.set(carry.next_symbol_id));
+    NEXT_SYMBOL_BLOCK_ID.with(|next| next.set(carry.next_symbol_block_id));
     SYMBOL_IDS.with(|ids| *ids.borrow_mut() = carry.symbol_ids);
 }
 
@@ -419,6 +464,7 @@ pub fn install_symbol_ids(carry: SymbolIdCarry) {
 pub fn install_id_seed(seed: IdSeed) {
     NEXT_NODE_ID.with(|next| next.set(seed.next_node_id));
     NEXT_SYMBOL_ID.with(|next| next.set(seed.next_symbol_id));
+    NEXT_SYMBOL_BLOCK_ID.with(|next| next.set(seed.next_symbol_block_id));
     NODE_IDS.with(|ids| *ids.borrow_mut() = seed.node_ids);
     SYMBOL_IDS.with(|ids| *ids.borrow_mut() = seed.symbol_ids);
     OWN_SYMBOL_IDS.with(|own| *own.borrow_mut() = OwnSymbolIds::new());
@@ -432,6 +478,7 @@ pub fn install_id_seed(seed: IdSeed) {
 pub struct IdState {
     next_node_id: u64,
     next_symbol_id: u64,
+    next_symbol_block_id: u64,
     node_ids: PerFileMap<u64>,
     symbol_ids: LineageIds,
     own_symbol_ids: OwnSymbolIds,
@@ -444,6 +491,7 @@ impl From<IdSeed> for IdState {
         IdState {
             next_node_id: seed.next_node_id,
             next_symbol_id: seed.next_symbol_id,
+            next_symbol_block_id: seed.next_symbol_block_id,
             node_ids: seed.node_ids,
             symbol_ids: seed.symbol_ids,
             own_symbol_ids: OwnSymbolIds::new(),
@@ -457,6 +505,9 @@ impl From<IdSeed> for IdState {
 pub fn swap_id_state(state: &mut IdState) {
     NEXT_NODE_ID.with(|next| state.next_node_id = next.replace(state.next_node_id));
     NEXT_SYMBOL_ID.with(|next| state.next_symbol_id = next.replace(state.next_symbol_id));
+    NEXT_SYMBOL_BLOCK_ID.with(|next| {
+        state.next_symbol_block_id = next.replace(state.next_symbol_block_id);
+    });
     NODE_IDS.with(|ids| std::mem::swap(&mut *ids.borrow_mut(), &mut state.node_ids));
     SYMBOL_IDS.with(|ids| std::mem::swap(&mut *ids.borrow_mut(), &mut state.symbol_ids));
     OWN_SYMBOL_IDS.with(|own| std::mem::swap(&mut *own.borrow_mut(), &mut state.own_symbol_ids));
@@ -503,12 +554,54 @@ pub fn get_node_id(node: Node) -> u64 {
 // handle is an index into `symbols`, which gives the slot where the id is
 // kept (see `SymbolArena::id_slot`).
 pub fn get_symbol_id(symbols: &SymbolArena, symbol: SymbolId) -> u64 {
+    symbol_id_or(symbols, symbol, next_symbol_id)
+}
+
+/// The id of `symbol`, assigned now by `give` when it has none.
+#[inline(always)]
+fn symbol_id_or(symbols: &SymbolArena, symbol: SymbolId, give: impl FnOnce() -> u64) -> u64 {
     let slot = symbols.id_slot(symbol);
     let place = slot.place as usize;
     if slot.key == 0 {
-        SYMBOL_IDS.with(|ids| ids.borrow_mut().id(place))
+        SYMBOL_IDS.with(|ids| ids.borrow_mut().id(place, give))
     } else {
-        OWN_SYMBOL_IDS.with(|own| own.borrow_mut().id(slot.key, place))
+        OWN_SYMBOL_IDS.with(|own| own.borrow_mut().id(slot.key, place, give))
+    }
+}
+
+// Go: ast/utilities.go:74 SymbolIdGenerator
+/// The block ids of one link store (`checker::ValueSymbolLinkStore`). It
+/// takes a block of `BLOCK_ID_SIZE` ids from this thread's block counter
+/// when it has given the last one, and gives them in order. The rest of a
+/// block is lost with the store, as in Go.
+// PORT: `Cell`s, as the store's `TryGet` reads take `&self`.
+#[derive(Debug, Default)]
+pub struct SymbolIdGenerator {
+    next: std::cell::Cell<u64>,
+    last: std::cell::Cell<u64>,
+}
+
+impl SymbolIdGenerator {
+    // Go: ast/utilities.go:79 (*SymbolIdGenerator).GetSymbolId
+    /// The id of `symbol`: a block id of this generator when it has no id.
+    /// A symbol with an id (global or block) keeps it, and takes nothing.
+    // PERF: one call with the id path inlined, as `get_symbol_id`. Inlined
+    // into `ValueSymbolLinkStore::insert_new_by_id`, the path was split into
+    // 3 calls (hono +0.6% instructions).
+    #[inline(never)]
+    pub fn get_symbol_id(&self, symbols: &SymbolArena, symbol: SymbolId) -> u64 {
+        symbol_id_or(symbols, symbol, || self.next_id())
+    }
+
+    /// The next block id, from a new block when the last one is used up.
+    fn next_id(&self) -> u64 {
+        let mut next = self.next.get();
+        if next == self.last.get() {
+            next = NEXT_SYMBOL_BLOCK_ID.with(|block| block.replace(block.get() + BLOCK_ID_SIZE));
+            self.last.set(next + BLOCK_ID_SIZE);
+        }
+        self.next.set(next + 1);
+        BLOCK_ID_OFFSET + next
     }
 }
 
@@ -1954,6 +2047,50 @@ mod symbol_id_tests {
         assert_eq!(get_symbol_id(&second, shadow), id);
     }
 
+    /// linkids1: a block id lives in the 4-byte cell of a binder symbol
+    /// and of a checker symbol. The block counter comes with the ids to a
+    /// new thread (`id_seed`) and to the next program (`SymbolIdCarry`), so
+    /// a generator there takes the next block, not the block of an id that
+    /// a cell already holds. A thread with ids from 0 and no counter would
+    /// give `BLOCK_ID_OFFSET` to a second symbol.
+    #[test]
+    fn block_ids_come_with_the_block_counter() {
+        let mut binder = SymbolArena::new();
+        let [a, b] = ["a", "b"].map(|name| binder.new_symbol(SymbolFlags::NONE, name));
+        let mut checker = binder.for_checker();
+        let own = checker.new_symbol(SymbolFlags::NONE, "own");
+        let ids = SymbolIdGenerator::default();
+        assert_eq!(ids.get_symbol_id(&checker, a), BLOCK_ID_OFFSET);
+        assert_eq!(ids.get_symbol_id(&checker, own), BLOCK_ID_OFFSET + 1);
+        assert_eq!(get_symbol_id(&checker, own), BLOCK_ID_OFFSET + 1);
+        assert_eq!(own_symbol_id_count(), 0, "a block id is not a global id");
+        let seed = id_seed();
+        let carry = copy_symbol_ids();
+        let binder = std::sync::Arc::new(binder);
+        for start in [
+            Box::new(move || install_id_seed(seed)) as Box<dyn FnOnce() + Send>,
+            Box::new(move || install_symbol_ids(carry)),
+        ] {
+            let binder = std::sync::Arc::clone(&binder);
+            std::thread::spawn(move || {
+                start();
+                assert_eq!(get_symbol_id(&binder, a), BLOCK_ID_OFFSET);
+                let ids = SymbolIdGenerator::default();
+                assert_eq!(ids.get_symbol_id(&binder, b), BLOCK_ID_OFFSET + 256);
+            })
+            .join()
+            .unwrap();
+        }
+        // A global id and a block id past the cell range go to `big`.
+        let mut big = FxHashMap::default();
+        for id in [1, (1 << 31) - 1, 1 << 31, BLOCK_ID_OFFSET + (1 << 31)] {
+            let mut cell = 0;
+            assert_eq!(cell_id(&mut cell, &mut big, id, || id), id);
+            assert_eq!(cell_id(&mut cell, &mut big, id, || 0), id);
+        }
+        assert_eq!(big.len(), 2);
+    }
+
     /// An id chunk of `LineageIds` holds the symbols of one `SymbolArena`
     /// chunk, so a freed lineage range frees whole id chunks.
     #[test]
@@ -1975,18 +2112,18 @@ mod symbol_id_tests {
         // process frees this range.
         const START: usize = 1 << 26;
         let mut ids = LineageIds::new();
-        let kept = ids.id(START - 1);
-        let dying = ids.id(START + 5);
-        assert_eq!(ids.id(START + 5), dying);
+        let kept = ids.id(START - 1, next_symbol_id);
+        let dying = ids.id(START + 5, next_symbol_id);
+        assert_eq!(ids.id(START + 5, next_symbol_id), dying);
 
         free_lineage_symbol_ids(FILE, START..START + 2 * LINEAGE_ID_CHUNK);
         // Until the next new chunk the id stays.
-        assert_eq!(ids.id(START + 5), dying);
-        let later = ids.id(START + 2 * LINEAGE_ID_CHUNK);
+        assert_eq!(ids.id(START + 5, next_symbol_id), dying);
+        let later = ids.id(START + 2 * LINEAGE_ID_CHUNK, next_symbol_id);
         assert!(later > dying);
         assert!(ids.chunks[START >> LINEAGE_ID_SHIFT].is_none());
-        assert_eq!(ids.id(START - 1), kept);
-        ids.id(START + LINEAGE_ID_CHUNK + 1);
+        assert_eq!(ids.id(START - 1, next_symbol_id), kept);
+        ids.id(START + LINEAGE_ID_CHUNK + 1, next_symbol_id);
     }
 }
 

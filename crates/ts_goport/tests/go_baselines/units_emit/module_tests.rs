@@ -1968,6 +1968,50 @@ fn test_get_each_file_name_of_module_with_symlinks() {
     );
 }
 
+// followups74 (R226 reviewer item 2): Go getEachFileNameOfModule
+// (specifiers.go:311) stops at the importing file's own package by
+// `CaseSensitivity.ContainsFilePath`, which compares an encoded dynamic name
+// with case. On a case-insensitive host the importing file ".../real/main.ts"
+// is not in the real directory ".../Real", so the symlink path is found;
+// ".../Real/main.ts" is in it. Go answers from a probe with Go's mock host at
+// 3e9236361fa9 (target/continuation-r97-goport/after226/followups74/goprobe).
+#[test]
+fn test_get_each_file_name_of_module_own_package_dynamic_name() {
+    let real = "^/~ts-uri~/custom/authority/Real";
+    let imported = format!("{real}/file.ts");
+    let symlink_and_target = ["/project/symlink/file.ts", imported.as_str()];
+    for (importing, want) in [
+        (
+            "^/~ts-uri~/custom/authority/real/main.ts",
+            &symlink_and_target[..],
+        ),
+        (
+            "^/~ts-uri~/custom/authority/Real/main.ts",
+            &symlink_and_target[1..],
+        ),
+    ] {
+        let mut symlink_cache = KnownSymlinks::new("/project", false);
+        symlink_cache.set_directory(
+            "/project/symlink",
+            tspath::to_path("/project/symlink", "/project", false)
+                .ensure_trailing_directory_separator(),
+            Some(KnownDirectoryLink {
+                real: format!("{real}/"),
+                real_path: tspath::to_path(real, "/project", false)
+                    .ensure_trailing_directory_separator(),
+                ..Default::default()
+            }),
+        );
+        let host = MockModuleSpecifierGenerationHost {
+            use_case_sensitive_file_names: false,
+            ..mock_host(symlink_cache)
+        };
+        let result = get_each_file_name_of_module(importing, &imported, &host, true);
+        let names: Vec<&str> = result.iter().map(|path| path.file_name.as_str()).collect();
+        assert_eq!(names, want, "{importing}");
+    }
+}
+
 // Go: modulespecifiers/specifiers_test.go:292 TestModuleSpecifierContainsNodeModules (ts#64159
 // renames TestContainsNodeModules; ContainsNodeModules is moduleSpecifierContainsNodeModules)
 #[test]
