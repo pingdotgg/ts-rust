@@ -1817,8 +1817,18 @@ impl Checker {
             // `resolveStructuredTypeMembers` does nothing, so a hit skips
             // nothing else.
             if object_flags.intersects(ObjectFlags::WEAK_COMPUTED) && !self.weak_bits_off {
-                return object_flags.intersects(ObjectFlags::IS_WEAK);
+                let got = object_flags.intersects(ObjectFlags::IS_WEAK);
+                let want = self.is_weak_resolved_object_type(t);
+                if got != want {
+                    panic!(
+                        "memberflags1 proof: is_weak_type bit {got} formula {want} type {}",
+                        t.0
+                    );
+                }
+                mf_proof_count(1, true);
+                return got;
             }
+            mf_proof_count(1, false);
             return self.is_weak_resolved_object_type_stored(t);
         }
         if self.ty(t).flags.intersects(TypeFlags::SUBSTITUTION) {
@@ -1849,6 +1859,10 @@ impl Checker {
         self.is_weak_resolved_object_type(t)
     }
 
+    // memberflags1 proof only (never merged): counters, printed to stderr
+    // every 2^18 counts when MF_PROOF_LOG is set. Kind 0: maybe_type_of_kind
+    // (flag: union or intersection input). Kind 1: is_weak_type on a
+    // resolved object type (flag: bit hit). Kind 2: weak_bits_off set.
     /// `is_weak_resolved_object_type`, and keep the answer in the type's
     /// `ObjectFlags::WEAK_BITS` (unless `weak_bits_off` is set).
     #[inline(never)]
@@ -2368,5 +2382,42 @@ mod tests {
             let got = relation.get(key);
             assert_eq!(got, want.get(&key).copied().unwrap_or_default());
         }
+    }
+}
+
+static MF_PROOF: [std::sync::atomic::AtomicU64; 5] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+/// memberflags1 proof only.
+pub(crate) fn mf_proof_count(kind: usize, flag: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let log = *LOG.get_or_init(|| std::env::var_os("MF_PROOF_LOG").is_some());
+    if !log {
+        return;
+    }
+    let slot = match kind {
+        0 => 0,
+        1 => 2,
+        _ => 4,
+    };
+    let n = MF_PROOF[slot].fetch_add(1, Relaxed) + 1;
+    if flag {
+        MF_PROOF[slot + 1].fetch_add(1, Relaxed);
+    }
+    if kind == 2 || n % (1 << 18) == 0 {
+        eprintln!(
+            "MF_PROOF mtk_calls={} mtk_union_or_intersection={} weak_resolved_calls={} weak_hits={} weak_bits_off_sets={}",
+            MF_PROOF[0].load(Relaxed),
+            MF_PROOF[1].load(Relaxed),
+            MF_PROOF[2].load(Relaxed),
+            MF_PROOF[3].load(Relaxed),
+            MF_PROOF[4].load(Relaxed),
+        );
     }
 }

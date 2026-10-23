@@ -346,6 +346,7 @@ impl Checker {
                 && !self.sym(target).flags.intersects(SymbolFlags::OPTIONAL)
             {
                 self.weak_bits_off = true;
+                crate::checker::relater_p1::mf_proof_count(2, false);
             }
             self.sym_mut(target).flags |= merged_flags;
             let source_value_declaration = self.sym(source).value_declaration;

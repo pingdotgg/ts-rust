@@ -1168,7 +1168,40 @@ impl Checker {
     // walk is pure, so the order of its reads has no effect.
     pub fn maybe_type_of_kind(&self, t: TypeId, kind: TypeFlags) -> bool {
         let ty = self.ty(t);
-        ty.flags.intersects(kind) || ty.member_mask().is_some_and(|mask| mask.intersects(kind))
+        let got =
+            ty.flags.intersects(kind) || ty.member_mask().is_some_and(|mask| mask.intersects(kind));
+        let want = self.maybe_type_of_kind_walk(t, kind);
+        if got != want {
+            panic!(
+                "memberflags1 proof: maybe_type_of_kind mask {got} walk {want} type {} kind {:#x}",
+                t.0, kind.0
+            );
+        }
+        crate::checker::relater_p1::mf_proof_count(
+            0,
+            ty.flags.intersects(TypeFlags::UNION_OR_INTERSECTION),
+        );
+        got
+    }
+
+    /// memberflags1 proof only: the old walk (Go's maybeTypeOfKind).
+    fn maybe_type_of_kind_walk(&self, t: TypeId, kind: TypeFlags) -> bool {
+        let ty = self.ty(t);
+        if ty.flags.intersects(kind) {
+            return true;
+        }
+        if ty.flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+            for &m in ty.types() {
+                let flags = self.ty(m).flags;
+                if flags.intersects(kind)
+                    || (flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
+                        && self.maybe_type_of_kind_walk(m, kind))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     // Go: checker/checker.go:28225 maybeTypeOfKindConsideringBaseConstraint
