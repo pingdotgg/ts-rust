@@ -518,6 +518,18 @@ pub fn peek_next_symbol_id() -> u64 {
     NEXT_SYMBOL_ID.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    /// unionmemo1 verify (never merged): the block ids that link stores
+    /// gave on this thread (`SymbolIdGenerator::next_id`). A store gives
+    /// most ids from a block it already holds, which moves no thread counter.
+    static UMV_BLOCK_IDS_GIVEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// unionmemo1 verify (never merged): the block ids given on this thread.
+pub fn umv_block_ids_given() -> u64 {
+    UMV_BLOCK_IDS_GIVEN.with(std::cell::Cell::get)
+}
+
 /// The next symbol id of this thread (Go `nextSymbolId.Add(1)`).
 fn next_symbol_id() -> u64 {
     NEXT_SYMBOL_ID.with(|next| {
@@ -601,6 +613,8 @@ impl SymbolIdGenerator {
             self.last.set(next + BLOCK_ID_SIZE);
         }
         self.next.set(next + 1);
+        // unionmemo1 verify (never merged).
+        UMV_BLOCK_IDS_GIVEN.with(|given| given.set(given.get() + 1));
         BLOCK_ID_OFFSET + next
     }
 }

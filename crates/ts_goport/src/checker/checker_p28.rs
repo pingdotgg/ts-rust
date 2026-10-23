@@ -1270,7 +1270,8 @@ impl Checker {
     }
 
     /// unionmemo1 verify: the counts that a hit must not change.
-    fn umv_snapshot(&self) -> [u64; 10] {
+    fn umv_snapshot(&self) -> [u64; 13] {
+        use crate::ast::utilities_p1 as ids;
         [
             u64::from(self.type_count),
             u64::from(self.symbol_count),
@@ -1281,7 +1282,12 @@ impl Checker {
             self.union_types.len() as u64,
             self.union_of_union_types.len() as u64,
             self.intersection_types.len() as u64,
-            crate::ast::utilities_p1::peek_next_symbol_id(),
+            ids::peek_next_symbol_id(),
+            // The node id counter, the thread's block counter and the block
+            // ids that link stores gave (R229 reviewer, non-blocking item 5).
+            ids::next_ids().0,
+            ids::next_symbol_block_id(),
+            ids::umv_block_ids_given(),
         ]
     }
 
