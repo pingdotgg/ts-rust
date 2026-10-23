@@ -342,8 +342,8 @@ impl Checker {
 
     // Go: checker/nodebuilderimpl.go:147 checkTruncationLength
     pub fn check_truncation_length(&mut self, b: &Rc<RefCell<NodeBuilderImpl>>) -> bool {
-        let ctx = p1_ctx(b);
-        let mut c = ctx.borrow_mut();
+        let b = b.borrow();
+        let mut c = b.ctx.borrow_mut();
         if c.truncating {
             return c.truncating;
         }
@@ -365,10 +365,9 @@ impl Checker {
         &mut self,
         b: &Rc<RefCell<NodeBuilderImpl>>,
     ) -> bool {
-        let ctx = p1_ctx(b);
-        let max_expansion_depth = ctx.borrow().max_expansion_depth;
+        let max_expansion_depth = b.borrow().ctx.borrow().max_expansion_depth;
         if max_expansion_depth >= 0 && self.check_truncation_length(b) {
-            ctx.borrow_mut().expansion_truncated = true;
+            b.borrow().ctx.borrow_mut().expansion_truncated = true;
             return true;
         }
         false
@@ -417,8 +416,8 @@ impl Checker {
     // isTypeOnStack reports whether t is already being processed in the current expansion,
     // excluding the last element (which is the type currently being serialized by typeToTypeNode).
     pub fn is_type_on_stack(&mut self, b: &Rc<RefCell<NodeBuilderImpl>>, t: TypeId) -> bool {
-        let ctx = p1_ctx(b);
-        let c = ctx.borrow();
+        let b = b.borrow();
+        let c = b.ctx.borrow();
         let n = c.type_stack.len().saturating_sub(1);
         c.type_stack[..n].iter().any(|&s| s == t)
     }
@@ -436,8 +435,7 @@ impl Checker {
         t: TypeId,
         is_alias: bool,
     ) -> bool {
-        let ctx = p1_ctx(b);
-        if ctx.borrow().max_expansion_depth < 0 {
+        if b.borrow().ctx.borrow().max_expansion_depth < 0 {
             return false;
         }
         if !self.is_expandable_type(b, t, is_alias) {
@@ -446,7 +444,8 @@ impl Checker {
         if self.is_type_on_stack(b, t) {
             return false;
         }
-        let mut c = ctx.borrow_mut();
+        let b = b.borrow();
+        let mut c = b.ctx.borrow_mut();
         if c.depth < c.max_expansion_depth {
             return true;
         }
@@ -458,8 +457,8 @@ impl Checker {
     // isActivelyExpanding reports whether the current depth is below maxExpansionDepth,
     // meaning type-node reuse should be skipped so typeToTypeNode can expand named types.
     pub fn is_actively_expanding(&mut self, b: &Rc<RefCell<NodeBuilderImpl>>) -> bool {
-        let ctx = p1_ctx(b);
-        let c = ctx.borrow();
+        let b = b.borrow();
+        let c = b.ctx.borrow();
         c.max_expansion_depth > 0 && c.depth < c.max_expansion_depth
     }
 
@@ -469,13 +468,14 @@ impl Checker {
     // Delegates to shouldExpandType for the actual check, then recurses into type arguments
     // of reference types (e.g., Apple inside Promise<Apple>).
     pub fn check_type_expandability(&mut self, b: &Rc<RefCell<NodeBuilderImpl>>, t: TypeId) {
-        let ctx = p1_ctx(b);
         {
-            let c = ctx.borrow();
+            let b = b.borrow();
+            let c = b.ctx.borrow();
             if c.max_expansion_depth < 0 || t.is_nil() || c.can_increase_expansion_depth {
                 return;
             }
         }
+        let ctx = p1_ctx(b);
         // Push t onto the type stack so shouldExpandType's cycle detection works correctly.
         ctx.borrow_mut().type_stack.push(t);
         // PORT: Go pops t in a `defer`; every return below breaks out of this block.
