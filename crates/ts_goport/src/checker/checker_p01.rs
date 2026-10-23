@@ -933,6 +933,8 @@ pub struct Checker {
     pub iteration_types_cache: FxHashMap<IterationTypesKey, IterationTypes>,
     pub marker_types: FxHashSet<TypeId>,
     pub resolving_explicit_type_of_symbol: FxHashSet<SymbolId>,
+    // Go: checker/checker.go:653 constructorOrFunctionChecked (ts#64739)
+    pub constructor_or_function_checked: FxHashSet<SymbolId>,
     pub undefined_symbol: SymbolId,
     pub arguments_symbol: SymbolId,
     pub require_symbol: SymbolId,
@@ -1484,6 +1486,7 @@ impl Checker {
             iteration_types_cache: FxHashMap::default(),
             marker_types: FxHashSet::default(),
             resolving_explicit_type_of_symbol: FxHashSet::default(),
+            constructor_or_function_checked: FxHashSet::default(),
             undefined_symbol: SymbolId::NIL,
             arguments_symbol: SymbolId::NIL,
             require_symbol: SymbolId::NIL,
