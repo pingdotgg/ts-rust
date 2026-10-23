@@ -484,15 +484,253 @@ impl Checker {
     }
 
     // Go: checker/inference.go:1225 isTypeOrBaseIdenticalTo
-    pub fn is_type_or_base_identical_to(&mut self, s: TypeId, t: TypeId) -> bool {
+    // PORT: perf (identmatch1). Called only by `infer_from_identical_types`, with the slots of the pair (see
+    // `is_type_identical_in_matching`).
+    pub fn is_type_or_base_identical_to(
+        &mut self,
+        s: TypeId,
+        t: TypeId,
+        slots: (&mut TypeId, &mut TypeId),
+    ) -> bool {
         if t == self.missing_type {
             return s == t;
         }
-        self.is_type_identical_to(s, t)
+        self.is_type_identical_in_matching(s, t, slots)
             || self.ty(t).flags.intersects(TypeFlags::STRING)
                 && self.ty(s).flags.intersects(TypeFlags::STRING_LITERAL)
             || self.ty(t).flags.intersects(TypeFlags::NUMBER)
                 && self.ty(s).flags.intersects(TypeFlags::NUMBER_LITERAL)
+    }
+
+    // Go: checker/relater.go:117 isTypeIdenticalTo for one pair of inferFromMatchingTypes (inference.go:381).
+    // `slots` are the pair's source and target slots of `infer_from_identical_types`.
+    // PORT: perf (identmatch1). This is Go's isTypeRelatedTo (relater.go:169) with identityRelation. A pair that Go
+    // sends to isRelatedToEx's normalization (relater.go:2654) runs that part in
+    // `is_normalized_type_identical_in_matching`, without the relater, and with the slots in place of a repeat
+    // normalization.
+    pub fn is_type_identical_in_matching(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        slots: (&mut TypeId, &mut TypeId),
+    ) -> bool {
+        let mut source = source;
+        let mut target = target;
+        if self.is_fresh_literal_type(source) {
+            source = self.ty(source).as_literal_type().regular_type;
+        }
+        if self.is_fresh_literal_type(target) {
+            target = self.ty(target).as_literal_type().regular_type;
+        }
+        if source == target {
+            return true;
+        }
+        const MAY_SIMPLIFY: TypeFlags = TypeFlags::UNION_OR_INTERSECTION
+            .union(TypeFlags::INDEXED_ACCESS)
+            .union(TypeFlags::CONDITIONAL)
+            .union(TypeFlags::SUBSTITUTION);
+        let source_flags = self.ty(source).flags;
+        let target_flags = self.ty(target).flags;
+        if (source_flags | target_flags).intersects(MAY_SIMPLIFY) {
+            // One side has a MAY_SIMPLIFY flag. An object type has none of them, so the relation cache read below
+            // does not apply, and that side is structured or instantiable. So Go calls checkTypeRelatedTo, and
+            // isRelatedToEx normalizes both types unless its object to primitive test (relater.go:2640) applies.
+            if !(source_flags.intersects(TypeFlags::OBJECT)
+                && target_flags.intersects(TypeFlags::PRIMITIVE))
+            {
+                return self.is_normalized_type_identical_in_matching(source, target, slots);
+            }
+        } else {
+            // We have excluded types that may simplify to other forms, so types must have identical flags
+            if source_flags != target_flags {
+                return false;
+            }
+            if source_flags.intersects(TypeFlags::SINGLETON) {
+                return true;
+            }
+        }
+        if source_flags.intersects(TypeFlags::OBJECT) && target_flags.intersects(TypeFlags::OBJECT)
+        {
+            let (id, _) = self.get_relation_key(
+                source,
+                target,
+                IntersectionState::NONE,
+                true,  /*isIdentity*/
+                false, /*ignoreConstraints*/
+            );
+            let related = self.identity_relation.borrow().get(id);
+            if related != RelationComparisonResult::NONE {
+                return related.intersects(RelationComparisonResult::SUCCEEDED);
+            }
+        }
+        if (source_flags | target_flags).intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE) {
+            let relation = self.identity_relation.clone();
+            return self.check_type_related_to(
+                source,
+                target,
+                &relation,
+                Node::NIL, /*errorNode*/
+            );
+        }
+        false
+    }
+
+    // Go: checker/relater.go:358 checkTypeRelatedToEx and isRelatedToEx (:2634) with identityRelation and no error
+    // node, for a pair of `is_type_identical_in_matching` that Go normalizes. `source` and `target` are the pair
+    // after the fresh literal step.
+    // PORT: perf (identmatch1). Not inlined, so the entry above stays small for the pairs that end before it.
+    #[inline(never)]
+    fn is_normalized_type_identical_in_matching(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        (source_slot, target_slot): (&mut TypeId, &mut TypeId),
+    ) -> bool {
+        // Go: relater.go:369. checkTypeRelatedToEx reads the relation size before isRelatedToEx normalizes.
+        let relation_size = self.identity_relation.borrow().size();
+        // Go: relater.go:2654, the source before the target.
+        let normalized_source =
+            self.normalize_for_matching(source, false /*writing*/, source_slot);
+        let normalized_target =
+            self.normalize_for_matching(target, true /*writing*/, target_slot);
+        // Go: relater.go:2656-2665. These ends set no overflow and no error chain, so Go's checkTypeRelatedToEx
+        // only takes and puts back a relater.
+        if normalized_source == normalized_target {
+            return true;
+        }
+        let flags = self.ty(normalized_source).flags;
+        if flags != self.ty(normalized_target).flags {
+            return false;
+        }
+        if flags.intersects(TypeFlags::SINGLETON) {
+            return true;
+        }
+        self.check_normalized_type_identical_to(
+            source,
+            target,
+            normalized_source,
+            normalized_target,
+            relation_size,
+        )
+    }
+
+    // Go: checker/relater.go:2654 getNormalizedType (checker.go:28470) of one member of an identity pair of
+    // inferFromMatchingTypes, at Go's place in Go's order. `slot` is the member's slot in the current call.
+    // PORT: perf (identmatch1). Not in Go. Go normalizes a member again at each pair; a repeat gives the same
+    // type when it makes nothing: the steps of getNormalizedType read caches that only grow, or interned
+    // types. A repeat can still instantiate (the Index branch: isGenericMappedType and getIndexTypeForMappedType
+    // on a mapped type with an `as` clause), so a result is kept in `slot` only when its normalization changed no
+    // instantiation, type, symbol, signature or diagnostic count and started under the instantiation limits
+    // (checker.go:22608). The kept type is used only under the count limit; the stack depth is the same at each
+    // pair of one call.
+    fn normalize_for_matching(&mut self, t: TypeId, writing: bool, slot: &mut TypeId) -> TypeId {
+        let under_count_limit = self.instantiation_count < 5_000_000;
+        if slot.is_some() && under_count_limit {
+            return *slot;
+        }
+        let counts = |c: &Checker| {
+            (
+                c.total_instantiation_count,
+                c.type_count,
+                c.symbol_count,
+                c.signature_count,
+                c.diagnostics.count,
+            )
+        };
+        let can_keep = under_count_limit && self.instantiation_stack.len() < 100;
+        let before = counts(self);
+        let normalized = self.get_normalized_type(t, writing);
+        if can_keep && counts(self) == before {
+            *slot = normalized;
+        }
+        normalized
+    }
+
+    // Go: checker/relater.go:358 checkTypeRelatedToEx with identityRelation and no error node, from the end of
+    // isRelatedToEx's identity branch (relater.go:2666) on: `source` and `target` are the pair after the fresh
+    // literal step, `normalized_*` its normalized types, `relation_size` the size read before they were made.
+    // PORT: perf (identmatch1). Not in Go as a function. It saves the second normalization of the pair.
+    fn check_normalized_type_identical_to(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        normalized_source: TypeId,
+        normalized_target: TypeId,
+        relation_size: i32,
+    ) -> bool {
+        let r = self.get_relater();
+        {
+            let mut rb = r.borrow_mut();
+            rb.kind = RelationKind::Identity;
+            rb.error_node = Node::NIL;
+            rb.relation_count = (16_000_000 - relation_size) / 8;
+        }
+        self.trace_unions_or_intersections_too_large(&r, normalized_source, normalized_target);
+        let result = self.recursive_type_related_to(
+            &r,
+            normalized_source,
+            normalized_target,
+            false, /*reportErrors*/
+            IntersectionState::NONE,
+            RecursionFlags::BOTH,
+        );
+        let (overflow, has_error_chain) = {
+            let rb = r.borrow();
+            (rb.overflow, rb.error_chain.is_some())
+        };
+        if overflow {
+            // Record this relation as having failed such that we don't attempt the overflowing operation again.
+            let (id, _) = self.get_relation_key(
+                source,
+                target,
+                IntersectionState::NONE,
+                true,  /*isIdentity*/
+                false, /*ignoreConstraints*/
+            );
+            self.identity_relation.borrow_mut().set(
+                id,
+                RelationComparisonResult::FAILED | RelationComparisonResult::COMPLEXITY_OVERFLOW,
+            );
+            if let Some(tr) = self.tracer {
+                let (depth, target_depth) = {
+                    let rb = r.borrow();
+                    (rb.source_stack.len(), rb.target_stack.len())
+                };
+                tr.instant(
+                    crate::tracing::Phase::CheckTypes,
+                    "checkTypeRelatedTo_DepthLimit",
+                    vec![
+                        ("sourceId", source.into()),
+                        ("targetId", target.into()),
+                        ("depth", depth.into()),
+                        ("targetDepth", target_depth.into()),
+                    ],
+                );
+            }
+            let source_string = self.type_to_string(source);
+            let target_string = self.type_to_string(target);
+            let diagnostic = new_diagnostic_for_node(
+                self.current_node,
+                diag::Excessive_complexity_comparing_types_0_and_1,
+                args![source_string, target_string],
+            );
+            self.report_diagnostic(diagnostic, None);
+        } else if has_error_chain {
+            // Go's import retry needs a head message and an error node; there are none here.
+            let diagnostic = {
+                let rb = r.borrow();
+                create_diagnostic_chain_from_error_chain(
+                    rb.error_chain.as_deref(),
+                    rb.error_node,
+                    rb.related_info.as_slice(),
+                )
+            };
+            if let Some(diagnostic) = diagnostic {
+                self.report_diagnostic(diagnostic, None);
+            }
+        }
+        self.put_relater(r);
+        result != Ternary::FALSE
     }
 
     // Go: checker/inference.go:1234 isTypeCloselyMatchedBy
