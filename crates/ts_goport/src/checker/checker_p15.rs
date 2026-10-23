@@ -557,10 +557,11 @@ impl Checker {
             {
                 let left = self.symbols.get(props, &right_name);
                 if left.is_some() {
-                    let (left_value_declaration, left_name) = {
-                        let l = self.sym(left);
-                        (l.value_declaration, l.name.clone())
-                    };
+                    // PORT: a private name holds the key of its class, where
+                    // Go's `left.Name()` holds the class's symbol id, which
+                    // Go prints here (`go_symbol_name`).
+                    let left_value_declaration = self.sym(left).value_declaration;
+                    let left_name = go_symbol_name(&self.symbols, left);
                     // PORT: Go calls `c.error` (which adds the diagnostic) and then
                     // mutates the returned `*ast.Diagnostic` with `AddRelatedInfo`.
                     // Diagnostics are owned values here, so the related info is

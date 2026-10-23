@@ -1308,8 +1308,13 @@ impl Checker {
                     }
                     // PORT: a private name holds the key of its class, where
                     // Go's holds the class's symbol id, which Go prints here
-                    // (`go_private_name`).
-                    if let Some(go_name) = go_private_name(&self.symbols, symbol) {
+                    // (`go_private_name`). Only when an export matched: with
+                    // no match Go's `symbolName` stays empty and Go takes
+                    // `getNameOfSymbolAsWritten` below
+                    // (nodebuilderimpl.go:796-815).
+                    if !symbol_name.is_empty()
+                        && let Some(go_name) = go_private_name(&self.symbols, symbol)
+                    {
                         symbol_name = go_name;
                     }
                 }
