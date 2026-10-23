@@ -669,14 +669,15 @@ fn merge_symbol_ids(ids: &mut LineageIds, workers: &mut [WorkerSymbolIds]) {
         .chunk_by(|a, b| a.0 == b.0)
         .filter(|group| group.len() > 1)
     {
-        for place in 0..LINEAGE_ID_CHUNK {
-            let given = group
-                .iter()
-                .filter(|&&(_, worker, at)| workers[worker].chunks[at].1[place] != 0)
-                .count();
-            if given < 2 {
-                continue;
+        // PERF: the workers that have an id in each cell, counted chunk by
+        // chunk; only a cell that two have needs clocks.
+        let mut given = [0u16; LINEAGE_ID_CHUNK];
+        for &(_, worker, at) in group {
+            for (given, &cell) in given.iter_mut().zip(workers[worker].chunks[at].1.iter()) {
+                *given += u16::from(cell != 0);
             }
+        }
+        for place in (0..LINEAGE_ID_CHUNK).filter(|&place| given[place] > 1) {
             let index = (group[0].0 << LINEAGE_ID_SHIFT) | place;
             let mut first: Option<(u64, usize, usize)> = None;
             for &(_, worker, at) in group {
