@@ -42,7 +42,8 @@ pub const QUEUE_BATCH: u8 = 22;
 pub const META_OWN: u8 = 23;
 pub const RES_NOTE: u8 = 24;
 pub const RES_ADDS: u8 = 25;
-const KINDS: usize = 26;
+pub const C6_HASH: u8 = 26;
+const KINDS: usize = 27;
 const KIND_NAMES: [&str; KINDS] = [
     "load",
     "start",
@@ -70,6 +71,7 @@ const KIND_NAMES: [&str; KINDS] = [
     "meta_own",
     "res_note_logs",
     "res_adds",
+    "c6_hash",
 ];
 
 // Counts.
