@@ -472,7 +472,7 @@ jobs:
           [[ $(npx tsc --version) == "Version $tsc_version" ]]
           node -p 'require("typescript").version'
           [[ $(node -p 'require("typescript").version') == "$tsc_version" ]]
-          node --input-type=module -e 'await import("typescript/unstable/sync")'
+          node --input-type=module -e 'await import("typescript/sync")'
           echo 'const x: number = "a";' > bad.ts
           set +e
           npx tsc --noEmit bad.ts > check.txt

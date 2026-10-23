@@ -708,6 +708,9 @@ impl Decoder<'_> {
             js_global_augmentations: self.table()?,
             common_js_module_indicator: self.node()?,
             has_expando_assignments: self.r.u8()? != 0,
+            // A snapshot lib has no private class member (see the module
+            // docs), so the section does not keep the list.
+            private_name_classes: Vec::new(),
         })
     }
 }

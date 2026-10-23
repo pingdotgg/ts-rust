@@ -457,6 +457,8 @@ pub struct SymbolReferenceLinks {
 // Links for value symbols
 
 // Go: checker/types.go:183 ValueSymbolLinks
+// PORT: Go's write, name and containing types sit in a cold record
+// (`valueSymbolExtra`, ts#64797); here they stay in the record.
 #[derive(Clone, Debug, Default)]
 pub struct ValueSymbolLinks {
     pub resolved_type: TypeId, // Type of value symbol
@@ -465,16 +467,14 @@ pub struct ValueSymbolLinks {
     pub mapper: MapperId,
     pub name_type: TypeId,
     pub containing_type: TypeId, // Mapped type for mapped type property, containing union or intersection type for synthetic property
-    pub function_or_constructor_checked: bool,
     /// PORT: memo, no Go counterpart. The declaration test of Go
     /// `getTypeOfParameter` (initializer or question token on
     /// `value_declaration`), set on the first call for this symbol. It fits
-    /// in the padding after the bool.
+    /// in the padding after the type ids.
     pub optional_parameter: Tristate,
     /// PORT: no Go counterpart. The symbol has its id: a read of
-    /// `ValueSymbolLinkStore` gave it (Go keys the store by
-    /// `ast.GetSymbolId`), so later reads skip `get_symbol_id`. It fits in
-    /// the padding too.
+    /// `ValueSymbolLinkStore` gave it (Go keys the store by the symbol's
+    /// id), so later reads skip the id call. It fits in the padding too.
     pub has_id: bool,
 }
 
@@ -906,6 +906,21 @@ const _: () = assert!(std::mem::offset_of!(Type, data) == 24);
 const _: () = assert!(std::mem::offset_of!(TypeReference, object.mapper) + 4 <= 40);
 const _: () = assert!(std::mem::size_of::<TypeData>() == std::mem::size_of::<TypeReference>());
 
+// PERF: not in Go (memberflags1). The cached answer of `is_weak_type` for a
+// resolved object type. Go uses object flag bits up to 1 << 29
+// (types.go:677-733), so bits 30 and 31 are free for every kind; check
+// again at a pin bump. `is_weak_type` reads and writes them only when
+// `MEMBERS_RESOLVED` is set. Each write of properties, signatures or index
+// infos clears them (`Type::clear_weak_bits`), each copy of all object
+// flags from another type masks them, and `Type::object_flags()` hides
+// them.
+impl ObjectFlags {
+    /// `IS_WEAK` holds the answer.
+    pub const WEAK_COMPUTED: Self = Self(1 << 30);
+    pub const IS_WEAK: Self = Self(1 << 31);
+    pub const WEAK_BITS: Self = Self(Self::WEAK_COMPUTED.0 | Self::IS_WEAK.0);
+}
+
 /// Go's runtime panic for a failed type assertion `t.data.(*want)` on data
 /// of another struct (types.go:709-727).
 #[cold]
@@ -931,9 +946,33 @@ impl Type {
     }
 
     // Go: checker/types.go:835 Type.ObjectFlags
+    // PORT: without the port-only weak bits (`ObjectFlags::WEAK_BITS`), so
+    // the API returns Go's value.
     #[inline]
     pub fn object_flags(&self) -> ObjectFlags {
-        self.object_flags
+        self.object_flags.without(ObjectFlags::WEAK_BITS)
+    }
+
+    /// Clears the cached weak bit (`ObjectFlags::WEAK_BITS`). Call it after
+    /// each write of the properties, signatures or index infos of a
+    /// structured type, with no code between the write and the clear.
+    #[inline]
+    pub fn clear_weak_bits(&mut self) {
+        self.object_flags = self.object_flags.without(ObjectFlags::WEAK_BITS);
+    }
+
+    /// The member mask of a union or intersection: the OR of the flags of
+    /// its members and, for each member that is a union or intersection, of
+    /// that member's mask. `None` for other kinds. The constructors
+    /// (`new_union_type`, `new_intersection_type`) compute it once. Type
+    /// flags and member lists do not change after a type can be a member,
+    /// so it stays exact (memberflags1).
+    #[inline(always)]
+    pub fn member_mask(&self) -> Option<TypeFlags> {
+        match &self.data {
+            TypeData::Union(_, mask) | TypeData::Intersection(_, mask) => Some(*mask),
+            _ => None,
+        }
     }
 
     // Casts for concrete struct types
@@ -1086,14 +1125,14 @@ impl Type {
     #[inline]
     pub fn as_union_type(&self) -> &UnionType {
         match &self.data {
-            TypeData::Union(d) => d,
+            TypeData::Union(d, _) => d,
             other => type_cast_panic(other, "UnionType"),
         }
     }
     #[inline]
     pub fn as_union_type_mut(&mut self) -> &mut UnionType {
         match &mut self.data {
-            TypeData::Union(d) => d,
+            TypeData::Union(d, _) => d,
             other => type_cast_panic(other, "UnionType"),
         }
     }
@@ -1102,14 +1141,14 @@ impl Type {
     #[inline]
     pub fn as_intersection_type(&self) -> &IntersectionType {
         match &self.data {
-            TypeData::Intersection(d) => d,
+            TypeData::Intersection(d, _) => d,
             other => type_cast_panic(other, "IntersectionType"),
         }
     }
     #[inline]
     pub fn as_intersection_type_mut(&mut self) -> &mut IntersectionType {
         match &mut self.data {
-            TypeData::Intersection(d) => d,
+            TypeData::Intersection(d, _) => d,
             other => type_cast_panic(other, "IntersectionType"),
         }
     }
@@ -1574,8 +1613,10 @@ pub enum TypeData {
     Mapped(Box<MappedType>),
     ReverseMapped(Box<ReverseMappedType>),
     EvolvingArray(Box<EvolvingArrayType>),
-    Union(ArenaBox<UnionType>),
-    Intersection(ArenaBox<IntersectionType>),
+    /// The `TypeFlags` field is the member mask (`member_mask`).
+    Union(ArenaBox<UnionType>, TypeFlags),
+    /// The `TypeFlags` field is the member mask (`member_mask`).
+    Intersection(ArenaBox<IntersectionType>, TypeFlags),
 }
 
 impl TypeData {
@@ -1600,8 +1641,8 @@ impl TypeData {
             TypeData::Mapped(_) => "MappedType",
             TypeData::ReverseMapped(_) => "ReverseMappedType",
             TypeData::EvolvingArray(_) => "EvolvingArrayType",
-            TypeData::Union(_) => "UnionType",
-            TypeData::Intersection(_) => "IntersectionType",
+            TypeData::Union(..) => "UnionType",
+            TypeData::Intersection(..) => "IntersectionType",
         }
     }
 }
@@ -1642,8 +1683,10 @@ impl TypeData {
             TypeData::StringMapping(d) => Some(&mut d.constrained),
             TypeData::Substitution(d) => Some(&mut d.constrained),
             TypeData::Conditional(d) => Some(&mut d.constrained),
-            TypeData::Union(d) => Some(&mut d.union_or_intersection.structured.constrained),
-            TypeData::Intersection(d) => Some(&mut d.union_or_intersection.structured.constrained),
+            TypeData::Union(d, _) => Some(&mut d.union_or_intersection.structured.constrained),
+            TypeData::Intersection(d, _) => {
+                Some(&mut d.union_or_intersection.structured.constrained)
+            }
             TypeData::Object(d) => Some(&mut d.structured.constrained),
             TypeData::InstantiationExpression(d) => Some(&mut d.object.structured.constrained),
             TypeData::Mapped(d) => Some(&mut d.object.structured.constrained),
@@ -1675,8 +1718,8 @@ impl TypeData {
     #[inline(never)]
     fn as_structured_type_other(&self) -> Option<&StructuredType> {
         match self {
-            TypeData::Union(d) => Some(&d.union_or_intersection.structured),
-            TypeData::Intersection(d) => Some(&d.union_or_intersection.structured),
+            TypeData::Union(d, _) => Some(&d.union_or_intersection.structured),
+            TypeData::Intersection(d, _) => Some(&d.union_or_intersection.structured),
             _ => self.as_object_type().map(|o| &o.structured),
         }
     }
@@ -1684,8 +1727,8 @@ impl TypeData {
     #[inline]
     pub fn as_structured_type_mut(&mut self) -> Option<&mut StructuredType> {
         match self {
-            TypeData::Union(d) => Some(&mut d.union_or_intersection.structured),
-            TypeData::Intersection(d) => Some(&mut d.union_or_intersection.structured),
+            TypeData::Union(d, _) => Some(&mut d.union_or_intersection.structured),
+            TypeData::Intersection(d, _) => Some(&mut d.union_or_intersection.structured),
             TypeData::Object(d) => Some(&mut d.structured),
             TypeData::InstantiationExpression(d) => Some(&mut d.object.structured),
             TypeData::Mapped(d) => Some(&mut d.object.structured),
@@ -1768,8 +1811,8 @@ impl TypeData {
     #[inline]
     pub fn as_union_or_intersection_type(&self) -> Option<&UnionOrIntersectionType> {
         match self {
-            TypeData::Union(d) => Some(&d.union_or_intersection),
-            TypeData::Intersection(d) => Some(&d.union_or_intersection),
+            TypeData::Union(d, _) => Some(&d.union_or_intersection),
+            TypeData::Intersection(d, _) => Some(&d.union_or_intersection),
             _ => None,
         }
     }
@@ -1777,8 +1820,8 @@ impl TypeData {
     #[inline]
     pub fn as_union_or_intersection_type_mut(&mut self) -> Option<&mut UnionOrIntersectionType> {
         match self {
-            TypeData::Union(d) => Some(&mut d.union_or_intersection),
-            TypeData::Intersection(d) => Some(&mut d.union_or_intersection),
+            TypeData::Union(d, _) => Some(&mut d.union_or_intersection),
+            TypeData::Intersection(d, _) => Some(&mut d.union_or_intersection),
             _ => None,
         }
     }
@@ -2970,5 +3013,42 @@ impl<T> std::ops::IndexMut<usize> for ChunkedArena<T> {
     #[inline]
     fn index_mut(&mut self, i: usize) -> &mut T {
         &mut self.chunks[i >> ARENA_CHUNK_SHIFT][i & ARENA_CHUNK_MASK]
+    }
+}
+
+#[cfg(test)]
+mod member_mask_tests {
+    use super::*;
+
+    /// memberflags1: the member mask of a union or intersection is on the
+    /// first cache line of `Type`, with the flags, so `maybe_type_of_kind`
+    /// reads one line.
+    #[test]
+    fn member_mask_is_on_the_first_line() {
+        for data in [
+            TypeData::Union(ArenaBox::new(UnionType::default()), TypeFlags::STRING),
+            TypeData::Intersection(
+                ArenaBox::new(IntersectionType::default()),
+                TypeFlags::STRING,
+            ),
+        ] {
+            let ty = Type {
+                data,
+                ..Type::default()
+            };
+            let base = &ty as *const Type as usize;
+            let mask = match &ty.data {
+                TypeData::Union(_, mask) | TypeData::Intersection(_, mask) => {
+                    mask as *const TypeFlags as usize
+                }
+                _ => unreachable!(),
+            };
+            let offset = mask - base;
+            assert!(
+                offset + std::mem::size_of::<TypeFlags>() <= 64,
+                "offset {offset}"
+            );
+            assert_eq!(ty.member_mask(), Some(TypeFlags::STRING));
+        }
     }
 }

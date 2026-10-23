@@ -877,6 +877,8 @@ pub struct Checker {
     pub instantiation_count: u32,
     pub instantiation_stack: Vec<TypeId>,
     pub conditional_constraint_depth: u32,
+    /// PERF (constvar1, not in Go): see `ConstTypeVariableMemo`.
+    pub(crate) const_type_variable_memo: crate::checker::checker_p15::ConstTypeVariableMemo,
     pub inline_level: i32,
     pub serialization_level: i32,
     pub current_node: Node,
@@ -933,6 +935,8 @@ pub struct Checker {
     pub iteration_types_cache: FxHashMap<IterationTypesKey, IterationTypes>,
     pub marker_types: FxHashSet<TypeId>,
     pub resolving_explicit_type_of_symbol: FxHashSet<SymbolId>,
+    // Go: checker/checker.go:653 constructorOrFunctionChecked (ts#64739)
+    pub constructor_or_function_checked: FxHashSet<SymbolId>,
     pub undefined_symbol: SymbolId,
     pub arguments_symbol: SymbolId,
     pub require_symbol: SymbolId,
@@ -1244,6 +1248,10 @@ pub struct Checker {
     /// a merge adds knows when to read them again (`MatchingReferenceMemo`,
     /// `global_spelling_suggestions`).
     pub(crate) merge_version: u64,
+    /// PERF: not in Go (memberflags1). Set when `merge_symbol` makes a
+    /// transient property optional in place. From then on, `is_weak_type`
+    /// does not read or store `ObjectFlags::WEAK_BITS`.
+    pub(crate) weak_bits_off: bool,
     /// PERF: not in Go. See `is_type_subset_of_union`.
     pub(crate) union_subset_answers: FxHashMap<(TypeId, TypeId), bool>,
     /// nevfast1: `GOPORT_FAST_NEVER_ORDER=1` (`fast_never_order_from_env`).
@@ -1421,6 +1429,7 @@ impl Checker {
             instantiation_count: 0,
             instantiation_stack: Vec::new(),
             conditional_constraint_depth: 0,
+            const_type_variable_memo: Default::default(),
             inline_level: 0,
             serialization_level: 0,
             current_node: Node::NIL,
@@ -1484,6 +1493,7 @@ impl Checker {
             iteration_types_cache: FxHashMap::default(),
             marker_types: FxHashSet::default(),
             resolving_explicit_type_of_symbol: FxHashSet::default(),
+            constructor_or_function_checked: FxHashSet::default(),
             undefined_symbol: SymbolId::NIL,
             arguments_symbol: SymbolId::NIL,
             require_symbol: SymbolId::NIL,
@@ -1750,6 +1760,7 @@ impl Checker {
             matching_reference_memo: Default::default(),
             flow_skip: Default::default(),
             merge_version: 0,
+            weak_bits_off: false,
             union_subset_answers: FxHashMap::default(),
             fast_never_order: crate::checker::checker_p24::fast_never_order_from_env(),
             symbols,

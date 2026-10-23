@@ -1743,3 +1743,38 @@ child_test! {
         assert_eq!(exports[0].module_file_name, reexporter);
     }
 }
+
+child_test! {
+    // followups74 (R226 reviewer item 2): Go IsGlobalTypingsFile
+    // (program.go:1826) tests rooted paths (`CaseSensitivity.ContainsPath`).
+    // On a case-insensitive file system Go folds case with ToLower, which
+    // keeps 'ſ' (EqualFold would match it to 's'). Go answers from a probe
+    // at 3e9236361fa9 (target/continuation-r97-goport/after226/followups74/goprobe).
+    // The program has the typings location only with type acquisition
+    // (project.go:579).
+    fn global_typings_file_tests_rooted_paths_like_go() {
+        let (session, _) = projecttestutil::setup(files(&[
+            (
+                "/home/src/project/tsconfig.json",
+                r#"{"typeAcquisition":{"enable":true}}"#,
+            ),
+            ("/home/src/project/a.ts", "export {};"),
+        ]));
+        let a_uri = uri("file:///home/src/project/a.ts");
+        open_uri(&session, &a_uri, "export {};", lsproto::LanguageKind::TYPE_SCRIPT);
+        let snapshot = session.snapshot();
+        let project = snapshot.get_default_project(&a_uri).expect("default project");
+        let program = project.borrow().get_program().expect("project has a program");
+        let types = "Library/Caches/typescript/node_modules/@types/x/index.d.ts";
+        for (file, want) in [
+            (format!("/home/\u{17f}rc/{types}"), false),
+            (format!("/home/SRC/{}", types.to_lowercase()), true),
+        ] {
+            assert_eq!(
+                ts_goport::program::ls_program::is_global_typings_file(&program, &file),
+                want,
+                "{file}"
+            );
+        }
+    }
+}

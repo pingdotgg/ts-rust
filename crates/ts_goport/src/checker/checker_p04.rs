@@ -776,16 +776,10 @@ impl Checker {
     }
 
     // Go: checker/checker.go:3515 checkFunctionOrConstructorSymbol
+    // (ts#64739: a set, so the check reads no links and gives no id)
     pub fn check_function_or_constructor_symbol(&mut self, symbol: SymbolId) {
         // Only check the symbol once
-        if !self
-            .value_symbol_links
-            .get_by_id(&self.symbols, symbol)
-            .function_or_constructor_checked
-        {
-            self.value_symbol_links
-                .get_by_id(&self.symbols, symbol)
-                .function_or_constructor_checked = true;
+        if self.constructor_or_function_checked.insert(symbol) {
             self.check_function_or_constructor_symbol_worker(symbol);
         }
     }

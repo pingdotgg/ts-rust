@@ -1159,27 +1159,44 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   caches) is per thread. A worker starts from a copy of the loading
   thread's state (`WorkerSeed`), so each checker's results depend only on
   its own files, not on thread timing.
-- Symbol ids: the port gives a symbol its id where Go calls
-  `ast.GetSymbolId` (every `valueSymbolLinks` read through
-  `ValueSymbolLinkStore`, and the node builder, symbol accessibility, enum
-  relation and emit resolver maps), so one checker counts ids as Go does.
-  The store is a type of its own, so a read that gives no id does not
-  compile; the 2 reads of a pushed type resolution (`get_noted`) and the
-  parameter memo (`try_get_without_id`) are the named exceptions.
-  Late-bound names hold ids (`__@k@<id>`), and the node builder counts their
-  length toward truncation. Go's checkers share one counter: a worker skips
-  the ids that the other checkers' `NewChecker` gave to their own symbols
-  (`program::new_pool_checker`). It does not skip the ids of binder
-  symbols that `NewChecker` gave (merge error texts): Go gives each of those
-  once in the pool. It also does not skip the ids that other checkers give
-  while they check, which race in Go. Go also gives each class with private
-  names an id at bind time; the port does not
-  (`get_symbol_name_for_private_identifier`), so such a class gets its id
-  later, at its first id site. The 4 check-time private name sites give an
+- Symbol ids: Go has two kinds (ts#64711). A `valueSymbolLinks` read (Go
+  `symbolLinkStore`) gives a symbol that has no id a block id: 2^48 + n,
+  from a block of 256 ids that the store's generator takes from the block
+  counter (`ast::SymbolIdGenerator` in `ValueSymbolLinkStore`). An explicit
+  `ast.GetSymbolId` call (node builder, symbol accessibility, key builder,
+  enum relation key, emit resolver, `compareSymbols`, private names, LS,
+  API) gives a global id. A symbol keeps its first id, of either kind. The
+  port gives each kind where Go does, so one checker gives Go's ids. The
+  store is a type of its own, so a read that gives no id does not compile;
+  the 2 reads of a pushed type resolution (`get_noted`) and the parameter
+  memo (`try_get_without_id`) are the named exceptions. Ids reach output:
+  a late-bound name holds an id (`__@k@<id>`), the node builder counts its
+  length toward truncation, and `compareSymbols` compares names as text
+  before ids (the member order of a mapped type over unique symbols). So
+  the block offset is Go's (15 digits). Go's node link stores also give
+  block node ids; the port gives none, as no node id reaches output. Each
+  thread keeps both counters (`ast::id_seed`, `ast::SymbolIdCarry`): a
+  lineage cell can hold a block id, so a thread must not count blocks from
+  0 again. Go's checkers share the counters: a worker skips the global ids
+  that the other checkers' `NewChecker` gave to their own symbols
+  (`program::new_pool_checker`; none at the pin, as `initializeChecker`
+  reads links). It does not skip block ids: only their order and length
+  reach output. It does not skip the ids of binder symbols that
+  `NewChecker` gave (merge error texts): Go gives each of those once in the
+  pool. It also does not skip the ids that other checkers give while they
+  check, which race in Go (a symbol that another Go checker gave a block id
+  first gets no global id). Go also gives each class with private
+  names an id at bind time (binder.go:375). The port's binds give no ids:
+  the binder notes the class (`FileBindData::private_name_classes`), and
+  `program::bind_all` gives the ids on the loading thread after the binds,
+  before the checkers copy its ids, in Go's `--singleThreaded` bind order
+  (last file first; Go's parallel bind races). The names hold a class key,
+  and the node builder and the API print Go's id (`go_symbol_name`).
+  The 4 check-time private name sites give an
   id to the symbol that they look in, as Go does: the class, or the symbol
   of the type that the site looks in
   (`Checker::private_identifier_symbol_name`).
-- Several programs in one process: Go's one counter runs on from one
+- Several programs in one process: Go's counters run on from one
   program to the next, and a bound file keeps the ids of its symbols. The
   one-checker pool of a program with `singleThreaded` (on the command line
   or in the project tsconfig, `program::single_threaded`) hands the ids of

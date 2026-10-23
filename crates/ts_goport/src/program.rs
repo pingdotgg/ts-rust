@@ -342,11 +342,11 @@ struct CheckerPool {
     /// (`send_emit_pool_jobs`). It stops with the checkers. wasm has none.
     #[cfg(not(target_family = "wasm"))]
     emit: Option<EmitPool>,
-    /// `--singleThreaded`: the next symbol id of the loading thread when the
-    /// pool was made. The pool's checker hands its symbol ids to the next
-    /// pool (`symbol_id_carry_start`) or back to the loading thread when it
-    /// stops (`carry_symbol_ids`). None for other pools.
-    carry_from: Option<u64>,
+    /// `--singleThreaded`: the next symbol id and block of the loading
+    /// thread when the pool was made. The pool's checker hands its symbol
+    /// ids to the next pool (`symbol_id_carry_start`) or back to the loading
+    /// thread when it stops (`carry_symbol_ids`). None for other pools.
+    carry_from: Option<(u64, u64)>,
 }
 
 impl CheckerPool {
@@ -439,16 +439,17 @@ impl CheckerPool {
     /// next program's checker starts from them (`WorkerSeed`). When this
     /// thread gave ids after the pool was made, or took the ids of a later
     /// pool, it keeps its own.
-    // PORT: Go has one symbol id counter per process, so the ids of the next
-    // program (`tsc -b`, a watch cycle) count on from the last one, and a
-    // bound file keeps the ids of its symbols (`ast::SymbolIdCarry`). With
-    // more checkers Go's ids race, and each checker here counts on its own,
-    // so only a one-checker `--singleThreaded` pool hands its ids on.
+    // PORT: Go's symbol id counters (global and block) are per process, so
+    // the ids of the next program (`tsc -b`, a watch cycle) count on from the
+    // last one, and a bound file keeps the ids of its symbols
+    // (`ast::SymbolIdCarry`). With more checkers Go's ids race, and each
+    // checker here counts on its own, so only a one-checker
+    // `--singleThreaded` pool hands its ids on.
     fn carry_symbol_ids(&mut self) {
         let Some(from) = self.carry_from else {
             return;
         };
-        if next_ids().1 != from {
+        if (next_ids().1, next_symbol_block_id()) != from {
             return;
         }
         if let Some(carry) = self.symbol_ids() {
@@ -1788,11 +1789,18 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // its own arena (`bind_files_parallel`), and join the lineage in file order
 // with the ids a serial bind gives. With `--singleThreaded` they bind
 // last-queued-first (`bind_files_last_queued_first`). A file that an
-// earlier program version bound is not bound again.
+// earlier program version bound is not bound again. The binds give no
+// symbol ids; the ids that Go's binds give come after them
+// (`give_private_name_class_ids`).
 pub fn bind_all() {
     let program = prog();
     held_tables(program).bound_symbols.get_or_init(|| {
-        with_lineage(|lineage| {
+        let unbound: Vec<Node> = program
+            .source_files()
+            .filter(|file| file.file_bind.get().is_none())
+            .map(|file| file.root)
+            .collect();
+        let symbols = with_lineage(|lineage| {
             if program.single_threaded() {
                 bind_files_last_queued_first(lineage);
             } else {
@@ -1812,8 +1820,46 @@ pub fn bind_all() {
             // Checkers clone the arena. Each file published what it added
             // (`Lineage::add_file`).
             Arc::clone(&lineage.symbols)
-        })
+        });
+        give_private_name_class_ids(&symbols, &unbound, program.single_threaded());
+        symbols
     });
+}
+
+/// Go binder.go:375: Go's bind gives each class with private names its
+/// symbol id (`ast.GetSymbolId`) when it names the first private member.
+/// The port's names hold a class key instead
+/// (`get_symbol_name_for_private_identifier`), so this gives those ids on
+/// this thread after the bind of `files`, before a checker copies the ids
+/// (`WorkerSeed`): in Go's `--singleThreaded` bind order, last-queued-first
+/// (core/workgroup.go:67), and in binder order in each file
+/// (`FileBindData::private_name_classes`). Go's parallel bind races, and
+/// mostly takes the same order (2 files: 59 of 60 runs). With `carry` (a
+/// `--singleThreaded` program) this thread first takes the ids of the last
+/// one-checker pool (`CheckerPool::carry_symbol_ids`), as the pool would
+/// when it is made, so the ids count on from the last program as in Go.
+fn give_private_name_class_ids(symbols: &SymbolArena, files: &[Node], carry: bool) {
+    let has_classes = |file: &Node| {
+        crate::ast::go_file(file.file_index())
+            .file_bind
+            .get()
+            .is_some_and(|bind| !bind.private_name_classes.is_empty())
+    };
+    if !files.iter().any(has_classes) {
+        return;
+    }
+    if carry {
+        carry_last_pool_symbol_ids();
+    }
+    for file in files.iter().rev() {
+        let go_file = crate::ast::go_file(file.file_index());
+        let Some(bind) = go_file.file_bind.get() else {
+            continue;
+        };
+        for &class in &bind.private_name_classes {
+            crate::ast::get_symbol_id(symbols, class.symbol());
+        }
+    }
 }
 
 /// Go program.go:445 with `--singleThreaded`: `core.singleThreadedWorkGroup`
@@ -3032,7 +3078,17 @@ pub fn publish_parsed_files(cwd: &str) {
 /// includes (Go `BindOnce`: a program that includes it later does not bind
 /// it again). The file joins the binder lineage of the process.
 pub fn bind_file_outside_program(file: Node) {
-    with_lineage(|lineage| lineage.bind(file));
+    let unbound = crate::ast::go_file(file.file_index())
+        .file_bind
+        .get()
+        .is_none();
+    let symbols = with_lineage(|lineage| {
+        lineage.bind(file);
+        Arc::clone(&lineage.symbols)
+    });
+    if unbound {
+        give_private_name_class_ids(&symbols, &[file], false);
+    }
 }
 
 /// Frees what the loading thread keeps for `program`: it stops the checker
@@ -3935,16 +3991,18 @@ fn fast_cost_split(
 // Go: compiler/checkerpool.go:367 createCheckers (one `checker.NewChecker`)
 /// Makes checker `index` of a pool of `count` on this thread.
 // PORT: Go makes every checker of the pool before the first check, and the
-// checkers share one symbol id counter (`ast.GetSymbolId`). So the first
-// check of each checker comes after the ids that all `NewChecker` calls gave
-// (`initializeChecker` gives 4 checker symbols their ids). A worker here
-// counts its ids on its own (`ast::id_seed`), so it skips the ids that the
-// other checkers' `NewChecker` gave to their own symbols: each makes the
-// same calls. A binder symbol is shared, so Go gives it its id only once
-// in the pool (for example in the text of a merge error), and the worker
-// gave that id itself: it is not skipped. Late-bound names hold symbol ids
-// (`__@iterator@<id>`), and the node builder counts their length toward
-// truncation.
+// checkers share one global symbol id counter (`ast.GetSymbolId`). So the
+// first check of each checker comes after the global ids that all
+// `NewChecker` calls gave. A worker here counts its ids on its own
+// (`ast::id_seed`), so it skips the global ids that the other checkers'
+// `NewChecker` gave to their own symbols: each makes the same calls. The
+// link reads of `initializeChecker` (4 checker symbols) give block ids
+// (ts#64711), which count apart and are not skipped: so far no `NewChecker`
+// gives a global id. A binder symbol is shared, so Go gives it its id only
+// once in the pool (for example in the text of a merge error), and the
+// worker gave that id itself: it is not skipped. Late-bound names hold
+// symbol ids (`__@iterator@<id>`), and the node builder counts their length
+// toward truncation.
 fn new_pool_checker(index: usize, count: usize) -> Checker {
     let before = own_symbol_id_count();
     let checker = Checker::new(index);
@@ -3954,18 +4012,27 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
 }
 
 /// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id of this thread for a one-checker `--singleThreaded` pool
-/// (`singleThreaded` on the command line or in the project tsconfig).
+/// symbol id and block of this thread for a one-checker `--singleThreaded`
+/// pool (`singleThreaded` on the command line or in the project tsconfig).
 /// Watch mode makes the next program before it releases the last one, so
 /// the pool of the last program can still be here: its symbol ids become
 /// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
 /// builders the last pool can still be checking: the copy then waits for
 /// its jobs, so such projects check one after the other (PORTING.md,
 /// Threads).
-fn symbol_id_carry_start(count: usize) -> Option<u64> {
+fn symbol_id_carry_start(count: usize) -> Option<(u64, u64)> {
     if count != 1 || !single_threaded() {
         return None;
     }
+    carry_last_pool_symbol_ids();
+    Some((next_ids().1, next_symbol_block_id()))
+}
+
+/// The carry of `symbol_id_carry_start`: the last one-checker
+/// `--singleThreaded` pool of this thread hands its symbol ids to this
+/// thread (`CheckerPool::carry_symbol_ids`). The bind of the next program
+/// takes them before it gives ids (`give_private_name_class_ids`).
+fn carry_last_pool_symbol_ids() {
     POOLS.with(|pools| {
         let mut pools = pools.borrow_mut();
         let last = pools
@@ -3976,7 +4043,6 @@ fn symbol_id_carry_start(count: usize) -> Option<u64> {
             pool.carry_symbol_ids();
         }
     });
-    Some(next_ids().1)
 }
 
 /// Starts `count` checker workers, each on its own thread with its own
@@ -6659,6 +6725,129 @@ mod tests {
             [1, 2, 3, 4],
             "the serial fallback binds both pattern modules"
         );
+    }
+
+    // privname1 (Bun corpus case 05-P4): Go's bind gives each class with
+    // private names its symbol id when it names the first private member
+    // (binder.go:375), and the node builder prints that id in the name
+    // (`typeof D.\u{FFFD}#1@#d`). `bind_all` gives the ids after the bind,
+    // in Go's `--singleThreaded` order: b.ts first, then a.ts in binder
+    // order (function declarations first). The serial, parallel and
+    // `--singleThreaded` binds give the same ids. Go prints the two lines
+    // below with ids 1 and 4 in both modes.
+    #[test]
+    fn bind_all_gives_private_name_classes_go_bind_ids() {
+        let dir = std::env::temp_dir().join(format!("goport-private-ids-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let globals = "interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n\
+                       interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n\
+                       interface Number {}\ninterface Object {}\ninterface RegExp {}\n\
+                       interface String {}\n";
+        let files = [
+            ("globals.d.ts", globals),
+            (
+                "a.ts",
+                "class A { #a = 1; x = class B { static readonly #b: unique symbol; \
+                 static t() { const n: number = B.#b; } }; }\n\
+                 function f() { class C { #c = 1; } }\n",
+            ),
+            (
+                "b.ts",
+                "class D { static readonly #d: unique symbol; \
+                 static t() { const n: number = D.#d; } }\n",
+            ),
+        ];
+        for (name, text) in files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        // Loads, binds and checks the program on a new thread, with
+        // `threads` bind threads and `singleThreaded` as given. Returns the
+        // classes of each file with their ids from the thread's first id,
+        // and the TS2322 messages.
+        let run = |name: &str, threads: usize, single_threaded: bool| {
+            let config = dir.join(format!("{name}.json"));
+            std::fs::write(
+                &config,
+                format!(
+                    r#"{{ "compilerOptions": {{ "noLib": true, "types": [], "noEmit": true,
+                         "singleThreaded": {single_threaded} }},
+                         "files": ["globals.d.ts", "a.ts", "b.ts"] }}"#
+                ),
+            )
+            .unwrap();
+            std::thread::spawn(move || {
+                TEST_BIND_THREADS.set(Some(threads));
+                let program = try_load_version(&config.to_string_lossy(), |_| {})
+                    .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+                let scope = crate::core::enter_program(Some(program));
+                let start = next_ids().1;
+                bind_all();
+                let symbols = bound_symbols();
+                let classes: Vec<Vec<(String, u64)>> = program
+                    .source_files()
+                    .map(|file| {
+                        let bind = file.file_bind.get().expect("file is bound");
+                        bind.private_name_classes
+                            .iter()
+                            .map(|class| {
+                                let id = crate::ast::get_symbol_id(&symbols, class.symbol());
+                                (class.name().text().to_string(), id - start)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let messages: Vec<String> = program
+                    .source_files()
+                    .flat_map(|file| get_semantic_diagnostics(file.root))
+                    .map(|d| format_diagnostic(&d))
+                    .collect();
+                drop(symbols);
+                drop(scope);
+                release_program(program);
+                (classes, messages, start)
+            })
+            .join()
+            .unwrap()
+        };
+        let serial = run("serial", 1, false);
+        let parallel = run("parallel", 4, false);
+        let single = run("single", 1, true);
+        let _ = std::fs::remove_dir_all(&dir);
+        let named = |names: &[(&str, u64)]| -> Vec<(String, u64)> {
+            names.iter().map(|&(n, id)| (n.to_string(), id)).collect()
+        };
+        assert_eq!(
+            serial.0,
+            [
+                vec![],
+                named(&[("C", 2), ("A", 3), ("B", 4)]),
+                named(&[("D", 1)])
+            ],
+            "the classes in binder order, with Go's ids"
+        );
+        assert_eq!(parallel.0, serial.0, "a parallel bind gives the same ids");
+        assert_eq!(
+            single.0, serial.0,
+            "a --singleThreaded bind gives the same ids"
+        );
+        for (start, messages) in
+            [serial.2, parallel.2, single.2]
+                .into_iter()
+                .zip([&serial.1, &parallel.1, &single.1])
+        {
+            // The output writes the internal prefix as U+FFFD, as Go's does.
+            let (b, d) = (start + 4, start + 1);
+            assert!(
+                messages.len() == 2
+                    && messages[0].contains(&format!(
+                        "Type 'typeof B.\u{FFFD}#{b}@#b' is not assignable"
+                    ))
+                    && messages[1].contains(&format!(
+                        "Type 'typeof D.\u{FFFD}#{d}@#d' is not assignable"
+                    )),
+                "the node builder prints Go's ids: {messages:?}"
+            );
+        }
     }
 
     #[test]

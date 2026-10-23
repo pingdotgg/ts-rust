@@ -80,7 +80,7 @@ impl DeclarationTransformer {
         if self.needs_declare {
             ns_mods.push(ec.factory().new_modifier(SyntaxKind::DeclareKeyword));
         }
-        // PORT: `strip_declare_modifiers` is Go `stripDeclareModifiers` (transform.go:2624).
+        // PORT: `strip_declare_modifiers` is Go `stripDeclareModifiers` (transform.go:2689).
         members = with_tx_visitor(self, DeclarationTransformer::strip_declare_modifiers, |v| {
             v.visit_slice(&members).0
         });

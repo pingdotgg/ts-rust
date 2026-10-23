@@ -268,6 +268,8 @@ impl Checker {
         // cases we increment the tail recursion counter and stop after 1000 iterations.
         loop {
             if tail_count == 1000 {
+                // constvar1: `ConstTypeVariableMemo` (a guard that Go's model does not need).
+                self.const_type_variable_memo.mark += 1;
                 let current_node = self.current_node;
                 self.error(
                     current_node,
@@ -1605,7 +1607,8 @@ impl Checker {
         let object_flags = object_flags.without(
             ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES_COMPUTED
                 | ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES
-                | ObjectFlags::MEMBERS_RESOLVED,
+                | ObjectFlags::MEMBERS_RESOLVED
+                | ObjectFlags::WEAK_BITS,
         );
         self.types.push_with(move || Type {
             flags,

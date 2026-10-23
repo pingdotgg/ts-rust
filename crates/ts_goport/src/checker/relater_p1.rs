@@ -1806,10 +1806,20 @@ impl Checker {
         if ty.flags.intersects(TypeFlags::OBJECT) {
             // PERF: a resolved type reads its members here; the rest is out
             // of line (with the switch on, the Go body of #64475).
-            if !ty.object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
+            let object_flags = ty.object_flags;
+            if !object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED) {
                 return self.is_weak_unresolved_object_type(t);
             }
-            return self.is_weak_resolved_object_type(t);
+            // PERF: memberflags1. A resolved type keeps its answer in
+            // `ObjectFlags::WEAK_BITS`. Each write of its properties,
+            // signatures or index infos clears them, so a stored answer is
+            // Go's answer on the current members. On a resolved type, Go's
+            // `resolveStructuredTypeMembers` does nothing, so a hit skips
+            // nothing else.
+            if object_flags.intersects(ObjectFlags::WEAK_COMPUTED) && !self.weak_bits_off {
+                return object_flags.intersects(ObjectFlags::IS_WEAK);
+            }
+            return self.is_weak_resolved_object_type_stored(t);
         }
         if self.ty(t).flags.intersects(TypeFlags::SUBSTITUTION) {
             let base_type = self.ty(t).as_substitution_type().base_type;
@@ -1837,6 +1847,24 @@ impl Checker {
         }
         self.resolve_structured_type_members(t);
         self.is_weak_resolved_object_type(t)
+    }
+
+    /// `is_weak_resolved_object_type`, and keep the answer in the type's
+    /// `ObjectFlags::WEAK_BITS` (unless `weak_bits_off` is set).
+    #[inline(never)]
+    fn is_weak_resolved_object_type_stored(&mut self, t: TypeId) -> bool {
+        let weak = self.is_weak_resolved_object_type(t);
+        if !self.weak_bits_off {
+            let ty = self.ty_mut(t);
+            ty.object_flags = ty.object_flags.without(ObjectFlags::WEAK_BITS)
+                | ObjectFlags::WEAK_COMPUTED
+                | if weak {
+                    ObjectFlags::IS_WEAK
+                } else {
+                    ObjectFlags::NONE
+                };
+        }
+        weak
     }
 
     /// `is_weak_type` of a resolved object type.

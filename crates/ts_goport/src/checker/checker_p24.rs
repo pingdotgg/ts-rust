@@ -1437,6 +1437,10 @@ impl Checker {
                 {
                     let mapper = self.ty(t).as_type_reference().object.mapper;
                     let resolved = self.instantiate_types(&type_arguments, mapper);
+                    // constvar1: the instantiation can write the list first.
+                    let old = &self.ty(t).as_type_reference().resolved_type_arguments;
+                    let changed = !old.is_nil() && old[..] != resolved[..];
+                    self.const_type_variable_memo.overwrite(changed);
                     self.ty_mut(t)
                         .as_type_reference_mut()
                         .resolved_type_arguments = SharedList::non_nil(&resolved);
@@ -2064,6 +2068,8 @@ impl Checker {
         // We have reached 100 recursive type instantiations, or 5M type instantiations caused by the same statement
         // or expression. There is a very high likelihood we're dealing with a combination of infinite generic types
         // that perpetually generate new type identities, so we stop the recursion here by yielding the error type.
+        // constvar1: `ConstTypeVariableMemo` (a guard that Go's model does not need).
+        self.const_type_variable_memo.mark += 1;
         if let Some(tr) = self.tracer {
             tr.instant(
                 crate::tracing::Phase::CheckTypes,

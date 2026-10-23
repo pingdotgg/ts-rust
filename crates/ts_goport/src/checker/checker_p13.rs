@@ -616,8 +616,9 @@ impl Checker {
     /// here.
     // PORT: the key holds the key of the class node, or the arena index of
     // any other symbol (`get_symbol_name_for_private_identifier_of_symbol`);
-    // the id is only given, as Go gives it. The binder gives no id
-    // (PORTING.md, Threads).
+    // the id is only given, as Go gives it. A class with private members
+    // has its id from the bind already (`program::bind_all`, PORTING.md,
+    // Threads).
     pub fn private_identifier_symbol_name(
         &self,
         containing_class_symbol: SymbolId,

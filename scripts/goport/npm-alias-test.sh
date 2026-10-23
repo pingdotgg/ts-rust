@@ -21,7 +21,7 @@
 # Checks, per install:
 #   - node_modules/.bin/tsc --version, and require("typescript").version: the tsc version.
 #   - bin/tsc is the sh and JS polyglot when the postinstall ran (npm/install.js).
-#   - import("typescript/unstable/sync") gives the API class.
+#   - import("typescript/sync") gives the API class.
 #   - tsc -p on a tiny project: exit 2 with TS2322 for bad.ts, and the emit of ok.ts.
 #   - VS Code's resolver (resolveTsdkPathToExe, the JS copy below) on node_modules/typescript/lib
 #     finds lib/tsc of @tsc-rs/linux-x64, with the npm version as the version it shows.
@@ -300,10 +300,10 @@ checks() {
   [[ $v == "$tsc_version" ]]
   r=$?
   check "$tag require(\"typescript\").version: $tsc_version" $r "$v"
-  v=$(cd "$d" && node --input-type=module -e 'const m = await import("typescript/unstable/sync"); console.log(typeof m.API)' 2>&1)
+  v=$(cd "$d" && node --input-type=module -e 'const m = await import("typescript/sync"); console.log(typeof m.API)' 2>&1)
   [[ $v == function ]]
   r=$?
-  check "$tag import(\"typescript/unstable/sync\") gives the API class" $r "$v"
+  check "$tag import(\"typescript/sync\") gives the API class" $r "$v"
   mkdir -p "$d/tiny"
   echo 'export const x: number = 1;' > "$d/tiny/ok.ts"
   echo 'const y: number = "a";' > "$d/tiny/bad.ts"

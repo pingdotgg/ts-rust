@@ -87,7 +87,8 @@ impl Checker {
         let t_symbol = self.ty(t).symbol;
         let index_infos = self.get_index_infos_of_type(t).to_vec();
         let result = self.new_anonymous_type(t_symbol, members, &[], &[], &index_infos);
-        let object_flags = self.ty(t).object_flags;
+        // memberflags1: not the weak bit of `t`; `result` has more members.
+        let object_flags = self.ty(t).object_flags.without(ObjectFlags::WEAK_BITS);
         self.ty_mut(result).object_flags = object_flags;
         result
     }
@@ -817,6 +818,10 @@ impl Checker {
             } else {
                 self.get_union_type(&[true_constraint, false_constraint])
             };
+            // constvar1: the computation can write the field first.
+            let old = self.ty(t).as_conditional_type().resolved_default_constraint;
+            self.const_type_variable_memo
+                .overwrite(old.is_some() && old != resolved);
             self.ty_mut(t)
                 .as_conditional_type_mut()
                 .resolved_default_constraint = resolved;
@@ -874,6 +879,13 @@ impl Checker {
                         None,
                     );
                     if !self.ty(instantiated).flags.intersects(TypeFlags::NEVER) {
+                        // constvar1: the instantiation can write the field first.
+                        let old = self
+                            .ty(t)
+                            .as_conditional_type()
+                            .resolved_constraint_of_distributive;
+                        self.const_type_variable_memo
+                            .overwrite(old.is_some() && old != instantiated);
                         self.ty_mut(t)
                             .as_conditional_type_mut()
                             .resolved_constraint_of_distributive = instantiated;
@@ -882,6 +894,12 @@ impl Checker {
                 }
             }
             let no_constraint_type = self.no_constraint_type;
+            let old = self
+                .ty(t)
+                .as_conditional_type()
+                .resolved_constraint_of_distributive;
+            self.const_type_variable_memo
+                .overwrite(old.is_some() && old != no_constraint_type);
             self.ty_mut(t)
                 .as_conditional_type_mut()
                 .resolved_constraint_of_distributive = no_constraint_type;
