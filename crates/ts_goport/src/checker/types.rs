@@ -966,7 +966,8 @@ impl Type {
     /// that member's mask. `None` for other kinds. The constructors
     /// (`new_union_type`, `new_intersection_type`) compute it once. Type
     /// flags and member lists do not change after a type can be a member,
-    /// so it stays exact (memberflags1).
+    /// so it stays exact (memberflags1). That rule follows Go's code: a pin
+    /// bump checks it (UPSTREAM.md "Pin bump checks").
     #[inline(always)]
     pub fn member_mask(&self) -> Option<TypeFlags> {
         match &self.data {
