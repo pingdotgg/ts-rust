@@ -1919,8 +1919,10 @@ struct KeptUnionCall {
 ///   a new origin type on each such call). An `error_type` result is not
 ///   kept.
 ///
-/// Direct-mapped, at most 4096 slots. All calls go when the kept types pass
-/// 2^20.
+/// Direct-mapped, at most 4096 slots. The types of the kept calls take at
+/// most 2^16 places: when they are full, the types of overwritten calls go
+/// (`compact`), and all calls go when the rest fill half of them. A call
+/// with more than 2^14 types is not kept.
 pub(crate) struct UnionCalls {
     /// A power of two of slots.
     slots: Box<[KeptUnionCall]>,
@@ -1943,7 +1945,7 @@ impl Default for UnionCalls {
 
 impl UnionCalls {
     const MOST_SLOTS: usize = 1 << 12;
-    const MOST_TYPES: usize = 1 << 20;
+    const MOST_TYPES: usize = 1 << 16;
 
     fn with_slots(len: usize) -> Self {
         Self {
@@ -1979,11 +1981,14 @@ impl UnionCalls {
     fn put(&mut self, hash: u64, call: &UnionCall<'_>, answer: TypeId) {
         let args = call.alias_type_arguments();
         let len = call.types.len() + args.len();
-        if len > Self::MOST_TYPES {
+        if len > Self::MOST_TYPES / 4 {
             return;
         }
         if self.types.len() + len > Self::MOST_TYPES {
-            self.clear();
+            self.compact();
+            if self.types.len() + len > Self::MOST_TYPES / 2 {
+                self.clear();
+            }
         }
         if self.added == self.slots.len() && self.slots.len() < Self::MOST_SLOTS {
             self.grow();
@@ -2016,6 +2021,19 @@ impl UnionCalls {
             let slot = self.slot(kept.hash);
             self.slots[slot] = *kept;
         }
+    }
+
+    /// Keeps only the types of the calls in the slots.
+    #[cold]
+    fn compact(&mut self) {
+        let mut types = Vec::with_capacity(self.types.capacity());
+        for kept in self.slots.iter_mut().filter(|kept| kept.types != 0) {
+            let start = kept.start as usize;
+            let end = start + (kept.types + kept.alias_type_arguments) as usize;
+            kept.start = types.len() as u32;
+            types.extend_from_slice(&self.types[start..end]);
+        }
+        self.types = types;
     }
 
     #[cold]
