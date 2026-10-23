@@ -189,7 +189,8 @@ impl Checker {
             .as_type_reference()
             .resolved_type_arguments
             .clone();
-        self.ty_mut(t).object_flags = source_object_flags.without(ObjectFlags::MEMBERS_RESOLVED);
+        self.ty_mut(t).object_flags =
+            source_object_flags.without(ObjectFlags::MEMBERS_RESOLVED | ObjectFlags::WEAK_BITS);
         self.ty_mut(t).as_type_reference_mut().object.target = source_target;
         self.ty_mut(t)
             .as_type_reference_mut()
@@ -254,9 +255,14 @@ impl Checker {
         } else {
             self.get_named_members(members, t_symbol)
         };
-        let data = self.ty_mut(t).as_structured_type_mut();
+        let ty = self.ty_mut(t);
+        let data = ty.as_structured_type_mut();
         data.properties = properties;
         data.set_signatures(signatures, call_signature_count as i32, index_infos);
+        // memberflags1: after the last write. `get_named_members` above can
+        // resolve aliases and run relations, and a weak bit stored then saw
+        // the old properties.
+        ty.clear_weak_bits();
     }
 
     // Go: checker/checker.go:25756 newTypeParameter

@@ -1244,6 +1244,10 @@ pub struct Checker {
     /// a merge adds knows when to read them again (`MatchingReferenceMemo`,
     /// `global_spelling_suggestions`).
     pub(crate) merge_version: u64,
+    /// PERF: not in Go (memberflags1). Set when `merge_symbol` makes a
+    /// transient property optional in place. From then on, `is_weak_type`
+    /// does not read or store `ObjectFlags::WEAK_BITS`.
+    pub(crate) weak_bits_off: bool,
     /// PERF: not in Go. See `is_type_subset_of_union`.
     pub(crate) union_subset_answers: FxHashMap<(TypeId, TypeId), bool>,
     /// nevfast1: `GOPORT_FAST_NEVER_ORDER=1` (`fast_never_order_from_env`).
@@ -1750,6 +1754,7 @@ impl Checker {
             matching_reference_memo: Default::default(),
             flow_skip: Default::default(),
             merge_version: 0,
+            weak_bits_off: false,
             union_subset_answers: FxHashMap::default(),
             fast_never_order: crate::checker::checker_p24::fast_never_order_from_env(),
             symbols,

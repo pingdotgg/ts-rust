@@ -1605,7 +1605,8 @@ impl Checker {
         let object_flags = object_flags.without(
             ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES_COMPUTED
                 | ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES
-                | ObjectFlags::MEMBERS_RESOLVED,
+                | ObjectFlags::MEMBERS_RESOLVED
+                | ObjectFlags::WEAK_BITS,
         );
         self.types.push_with(move || Type {
             flags,

@@ -906,6 +906,21 @@ const _: () = assert!(std::mem::offset_of!(Type, data) == 24);
 const _: () = assert!(std::mem::offset_of!(TypeReference, object.mapper) + 4 <= 40);
 const _: () = assert!(std::mem::size_of::<TypeData>() == std::mem::size_of::<TypeReference>());
 
+// PERF: not in Go (memberflags1). The cached answer of `is_weak_type` for a
+// resolved object type. Go uses object flag bits up to 1 << 29
+// (types.go:677-733), so bits 30 and 31 are free for every kind; check
+// again at a pin bump. `is_weak_type` reads and writes them only when
+// `MEMBERS_RESOLVED` is set. Each write of properties, signatures or index
+// infos clears them (`Type::clear_weak_bits`), each copy of all object
+// flags from another type masks them, and `Type::object_flags()` hides
+// them.
+impl ObjectFlags {
+    /// `IS_WEAK` holds the answer.
+    pub const WEAK_COMPUTED: Self = Self(1 << 30);
+    pub const IS_WEAK: Self = Self(1 << 31);
+    pub const WEAK_BITS: Self = Self(Self::WEAK_COMPUTED.0 | Self::IS_WEAK.0);
+}
+
 /// Go's runtime panic for a failed type assertion `t.data.(*want)` on data
 /// of another struct (types.go:709-727).
 #[cold]
@@ -931,9 +946,19 @@ impl Type {
     }
 
     // Go: checker/types.go:835 Type.ObjectFlags
+    // PORT: without the port-only weak bits (`ObjectFlags::WEAK_BITS`), so
+    // the API returns Go's value.
     #[inline]
     pub fn object_flags(&self) -> ObjectFlags {
-        self.object_flags
+        self.object_flags.without(ObjectFlags::WEAK_BITS)
+    }
+
+    /// Clears the cached weak bit (`ObjectFlags::WEAK_BITS`). Call it after
+    /// each write of the properties, signatures or index infos of a
+    /// structured type, with no code between the write and the clear.
+    #[inline]
+    pub fn clear_weak_bits(&mut self) {
+        self.object_flags = self.object_flags.without(ObjectFlags::WEAK_BITS);
     }
 
     /// The member mask of a union or intersection: the OR of the flags of
