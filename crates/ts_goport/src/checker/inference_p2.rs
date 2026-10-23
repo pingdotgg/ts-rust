@@ -505,15 +505,15 @@ impl Checker {
     // Go: checker/relater.go:117 isTypeIdenticalTo for one pair of inferFromMatchingTypes (inference.go:381).
     // `slots` are the pair's source and target slots of `infer_from_identical_types`.
     // PORT: perf (identmatch1). A pair that Go sends to isRelatedToEx's normalization (relater.go:2654) runs that
-    // part here, without the relater, and with the slots in place of a repeat normalization. Every other pair runs
-    // Go's isTypeRelatedTo.
+    // part in `is_normalized_type_identical_in_matching`, without the relater, and with the slots in place of a
+    // repeat normalization. Every other pair runs Go's isTypeRelatedTo.
     pub fn is_type_identical_in_matching(
         &mut self,
         source: TypeId,
         target: TypeId,
-        (source_slot, target_slot): (&mut TypeId, &mut TypeId),
+        slots: (&mut TypeId, &mut TypeId),
     ) -> bool {
-        // Go: relater.go:169 isTypeRelatedTo, the steps up to `source == target`.
+        // Go: relater.go:169 isTypeRelatedTo with identityRelation, the steps up to the identity flags test (:183).
         let mut source = source;
         let mut target = target;
         if self.is_fresh_literal_type(source) {
@@ -525,22 +525,46 @@ impl Checker {
         if source == target {
             return true;
         }
-        // With one of these flags on either side, Go's identity flags test (relater.go:183) lets the pair through.
-        // An object type has none of them, so the relation cache read (:192) does not apply, and a type with one is
-        // structured or instantiable (:199). So Go calls checkTypeRelatedTo, and isRelatedToEx normalizes both
-        // types unless the object to primitive test (relater.go:2640) applies.
         const MAY_SIMPLIFY: TypeFlags = TypeFlags::UNION_OR_INTERSECTION
             .union(TypeFlags::INDEXED_ACCESS)
             .union(TypeFlags::CONDITIONAL)
             .union(TypeFlags::SUBSTITUTION);
         let source_flags = self.ty(source).flags;
         let target_flags = self.ty(target).flags;
-        if !(source_flags | target_flags).intersects(MAY_SIMPLIFY)
-            || source_flags.intersects(TypeFlags::OBJECT)
-                && target_flags.intersects(TypeFlags::PRIMITIVE)
+        if !(source_flags | target_flags).intersects(MAY_SIMPLIFY) {
+            // We have excluded types that may simplify to other forms, so types must have identical flags
+            if source_flags != target_flags {
+                return false;
+            }
+            if source_flags.intersects(TypeFlags::SINGLETON) {
+                return true;
+            }
+            // The rest of isTypeRelatedTo (relater.go:192). Its earlier steps give the same answers again.
+            return self.is_type_related_to_kind(source, target, RelationKind::Identity);
+        }
+        // Here one side has a MAY_SIMPLIFY flag. An object type has none of them, so the relation cache read
+        // (relater.go:192) does not apply, and that side is structured or instantiable (:199). So Go calls
+        // checkTypeRelatedTo, and isRelatedToEx normalizes both types unless the object to primitive test (:2640)
+        // applies.
+        if source_flags.intersects(TypeFlags::OBJECT)
+            && target_flags.intersects(TypeFlags::PRIMITIVE)
         {
             return self.is_type_related_to_kind(source, target, RelationKind::Identity);
         }
+        self.is_normalized_type_identical_in_matching(source, target, slots)
+    }
+
+    // Go: checker/relater.go:358 checkTypeRelatedToEx and isRelatedToEx (:2634) with identityRelation and no error
+    // node, for a pair of `is_type_identical_in_matching` that Go normalizes. `source` and `target` are the pair
+    // after the fresh literal step.
+    // PORT: perf (identmatch1). Not inlined, so the entry above stays small for the pairs that end before it.
+    #[inline(never)]
+    fn is_normalized_type_identical_in_matching(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        (source_slot, target_slot): (&mut TypeId, &mut TypeId),
+    ) -> bool {
         // Go: relater.go:369. checkTypeRelatedToEx reads the relation size before isRelatedToEx normalizes.
         let relation_size = self.identity_relation.borrow().size();
         // Go: relater.go:2654, the source before the target.
