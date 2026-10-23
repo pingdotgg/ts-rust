@@ -38,12 +38,13 @@ if [[ -n $undefined ]]; then
   echo "error: $out has undefined symbols: $undefined" >&2
   exit 1
 fi
-if objdump -d --no-show-raw-insn "$out" |
-  grep -qE $'\t(v[a-z0-9]+|andn|bextr|blsi|blsmsk|blsr|bzhi|pdep|pext|mulx|rorx|sarx|shlx|shrx) '; then
+# grep -c, not -q: with pipefail, a grep that stops early can fail the pipe (SIGPIPE).
+if [[ $(objdump -d --no-show-raw-insn "$out" |
+  grep -cE $'\t(v[a-z0-9]+|andn|bextr|blsi|blsmsk|blsr|bzhi|pdep|pext|mulx|rorx|sarx|shlx|shrx) ') != 0 ]]; then
   echo "error: $out has AVX or BMI code" >&2
   exit 1
 fi
 for n in "${names[@]}"; do
-  nm "$out" | grep -qE " T __wrap_$n\$" || { echo "error: $out has no __wrap_$n" >&2; exit 1; }
+  [[ $(nm "$out" | grep -cE " T __wrap_$n\$") == 1 ]] || { echo "error: $out has no __wrap_$n" >&2; exit 1; }
 done
 echo "-Clink-arg=-Wl,$wraps -Clink-arg=$out"

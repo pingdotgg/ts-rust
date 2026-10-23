@@ -42,7 +42,8 @@ llvm="${LLVM_BIN:-/usr/lib/llvm-23/bin}"
 [[ ! -e $out ]] || { echo "error: $out exists" >&2; exit 2; }
 mkdir -p "$out/counts" "$out/bin"
 out="$(cd -- "$out" && pwd)"
-readelf -SW "$tsc" | grep -q ' \.rela\.text ' ||
+# grep -c, not -q: with pipefail, a grep that stops early can fail the pipe (SIGPIPE).
+[[ $(readelf -SW "$tsc" | grep -c ' \.rela\.text ') != 0 ]] ||
   { echo "error: $tsc has no .rela.text (link it with --emit-relocs: build-pgo.sh PGO_EMIT_RELOCS=1)" >&2; exit 1; }
 
 # BOLT reads a symbol with ".cold" or ".warm" in it as a split part of another function and stops
@@ -72,7 +73,7 @@ echo "bolt training: $(find "$out/counts" -name 'tsc.*.fdata' | wc -l) count fil
   { tail -20 "$out/bolt.log" >&2; exit 1; }
 echo "bolt: $(grep -m1 -o '[0-9]* out of [0-9]* functions in the binary ([0-9.]*%) have non-empty execution profile' "$out/bolt.log" || true)"
 
-if nm "$out/bin/tsc" | grep -q '__bolt'; then
+if [[ $(nm "$out/bin/tsc" | grep -c '__bolt') != 0 ]]; then
   echo "error: $out/bin/tsc has BOLT runtime symbols (the counting copy?)" >&2
   exit 1
 fi
