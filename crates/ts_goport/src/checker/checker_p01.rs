@@ -956,6 +956,8 @@ pub struct Checker {
     pub tuple_types: CacheKeyMap<TypeId>,
     pub union_types: FxHashMap<CacheHashKey, TypeId>,
     pub union_of_union_types: FxHashMap<UnionOfUnionKey, TypeId>,
+    /// PERF (unionmemo1, not in Go): see `UnionCalls`.
+    pub(crate) union_calls: crate::checker::checker_p28::UnionCalls,
     pub intersection_types: CacheKeyMap<TypeId>,
     pub properties_types: FxHashMap<PropertiesTypesKey, TypeId>,
     pub diagnostics: DiagnosticsCollection,
@@ -1505,6 +1507,7 @@ impl Checker {
             tuple_types: CacheKeyMap::default(),
             union_types: FxHashMap::default(),
             union_of_union_types: FxHashMap::default(),
+            union_calls: Default::default(),
             intersection_types: CacheKeyMap::default(),
             properties_types: FxHashMap::default(),
             diagnostics: DiagnosticsCollection::default(),
