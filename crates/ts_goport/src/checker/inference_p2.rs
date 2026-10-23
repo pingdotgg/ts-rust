@@ -504,16 +504,16 @@ impl Checker {
 
     // Go: checker/relater.go:117 isTypeIdenticalTo for one pair of inferFromMatchingTypes (inference.go:381).
     // `slots` are the pair's source and target slots of `infer_from_identical_types`.
-    // PORT: perf (identmatch1). A pair that Go sends to isRelatedToEx's normalization (relater.go:2654) runs that
-    // part in `is_normalized_type_identical_in_matching`, without the relater, and with the slots in place of a
-    // repeat normalization. Every other pair runs Go's isTypeRelatedTo.
+    // PORT: perf (identmatch1). This is Go's isTypeRelatedTo (relater.go:169) with identityRelation. A pair that Go
+    // sends to isRelatedToEx's normalization (relater.go:2654) runs that part in
+    // `is_normalized_type_identical_in_matching`, without the relater, and with the slots in place of a repeat
+    // normalization.
     pub fn is_type_identical_in_matching(
         &mut self,
         source: TypeId,
         target: TypeId,
         slots: (&mut TypeId, &mut TypeId),
     ) -> bool {
-        // Go: relater.go:169 isTypeRelatedTo with identityRelation, the steps up to the identity flags test (:183).
         let mut source = source;
         let mut target = target;
         if self.is_fresh_literal_type(source) {
@@ -531,7 +531,16 @@ impl Checker {
             .union(TypeFlags::SUBSTITUTION);
         let source_flags = self.ty(source).flags;
         let target_flags = self.ty(target).flags;
-        if !(source_flags | target_flags).intersects(MAY_SIMPLIFY) {
+        if (source_flags | target_flags).intersects(MAY_SIMPLIFY) {
+            // One side has a MAY_SIMPLIFY flag. An object type has none of them, so the relation cache read below
+            // does not apply, and that side is structured or instantiable. So Go calls checkTypeRelatedTo, and
+            // isRelatedToEx normalizes both types unless its object to primitive test (relater.go:2640) applies.
+            if !(source_flags.intersects(TypeFlags::OBJECT)
+                && target_flags.intersects(TypeFlags::PRIMITIVE))
+            {
+                return self.is_normalized_type_identical_in_matching(source, target, slots);
+            }
+        } else {
             // We have excluded types that may simplify to other forms, so types must have identical flags
             if source_flags != target_flags {
                 return false;
@@ -539,19 +548,31 @@ impl Checker {
             if source_flags.intersects(TypeFlags::SINGLETON) {
                 return true;
             }
-            // The rest of isTypeRelatedTo (relater.go:192). Its earlier steps give the same answers again.
-            return self.is_type_related_to_kind(source, target, RelationKind::Identity);
         }
-        // Here one side has a MAY_SIMPLIFY flag. An object type has none of them, so the relation cache read
-        // (relater.go:192) does not apply, and that side is structured or instantiable (:199). So Go calls
-        // checkTypeRelatedTo, and isRelatedToEx normalizes both types unless the object to primitive test (:2640)
-        // applies.
-        if source_flags.intersects(TypeFlags::OBJECT)
-            && target_flags.intersects(TypeFlags::PRIMITIVE)
+        if source_flags.intersects(TypeFlags::OBJECT) && target_flags.intersects(TypeFlags::OBJECT)
         {
-            return self.is_type_related_to_kind(source, target, RelationKind::Identity);
+            let (id, _) = self.get_relation_key(
+                source,
+                target,
+                IntersectionState::NONE,
+                true,  /*isIdentity*/
+                false, /*ignoreConstraints*/
+            );
+            let related = self.identity_relation.borrow().get(id);
+            if related != RelationComparisonResult::NONE {
+                return related.intersects(RelationComparisonResult::SUCCEEDED);
+            }
         }
-        self.is_normalized_type_identical_in_matching(source, target, slots)
+        if (source_flags | target_flags).intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE) {
+            let relation = self.identity_relation.clone();
+            return self.check_type_related_to(
+                source,
+                target,
+                &relation,
+                Node::NIL, /*errorNode*/
+            );
+        }
+        false
     }
 
     // Go: checker/relater.go:358 checkTypeRelatedToEx and isRelatedToEx (:2634) with identityRelation and no error
