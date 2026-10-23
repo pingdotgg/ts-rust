@@ -406,22 +406,17 @@ pub fn get_each_file_name_of_module(
                 }
 
                 for target in &targets {
-                    if !tspath::starts_with_directory(
-                        target,
+                    // Go takes the rest of a target below the directory
+                    // (`CaseSensitivity.RelativeFilePathFromDirectory`,
+                    // :316): both are rooted and normalized, and a dynamic
+                    // name compares with case.
+                    let Some(relative) = tspath::relative_path_within_directory(
                         real_path_directory,
+                        target,
                         host.use_case_sensitive_file_names(),
-                    ) {
+                    ) else {
                         continue;
-                    }
-
-                    let relative = tspath::get_relative_path_from_directory(
-                        real_path_directory,
-                        target,
-                        &tspath::ComparePathsOptions {
-                            use_case_sensitive_file_names: host.use_case_sensitive_file_names(),
-                            current_directory: cwd.clone(),
-                        },
-                    );
+                    };
                     for symlink_directory in symlink_set {
                         let option = tspath::resolve_path(symlink_directory, &[&relative]);
                         results.push(ModulePath {
@@ -1016,20 +1011,18 @@ pub(crate) fn try_get_module_name_as_node_module(
     // root loop. ts#64159: the directory that holds the top-level node_modules
     // (`parts.TopLevelNodeModulesSearchRoot`, a root at least) must contain the
     // importing directory as a path; N tested a string prefix, so "/a" matched
-    // "/ab/src".
+    // "/ab/src". Go tests rooted paths (`CaseSensitivity.ContainsPath`,
+    // :766-767): the search root, the importing directory and the typings
+    // location are rooted and normalized.
     let search_root_end = (parts.top_level_node_modules_index as usize)
         .max(tspath::get_root_length(&path_obj.file_name));
     let search_root = &path_obj.file_name[..search_root_end];
-    let compare_options = tspath::ComparePathsOptions {
-        use_case_sensitive_file_names: case_sensitive,
-        current_directory: String::new(),
-    };
-    if !tspath::contains_path(search_root, &info.source_directory, &compare_options)
+    if !tspath::contains_rooted_path(search_root, &info.source_directory, case_sensitive)
         || !global_typings_cache_location.is_empty()
-            && tspath::contains_path(
+            && tspath::contains_rooted_path(
                 search_root,
                 &global_typings_cache_location,
-                &compare_options,
+                case_sensitive,
             )
     {
         return String::new();

@@ -925,9 +925,12 @@ impl ResolutionState<'_> {
             combine_paths(candidate, &["index"])
         };
 
+        // Go tests rooted paths without case (`tspath.CaseInsensitive.ContainsPath`,
+        // resolver.go:1879): the candidate and the package file are rooted
+        // and normalized.
         if version_paths.exists()
             && (package_file.is_empty()
-                || contains_path(candidate, &package_file, &ComparePathsOptions::default()))
+                || contains_rooted_path(candidate, &package_file, false /*CaseInsensitive*/))
         {
             let module_name = if !package_file.is_empty() {
                 get_relative_path_from_directory(

@@ -562,10 +562,17 @@ pub fn get_typings_locations_globs(
         current_directory: current_directory.to_string(),
         use_case_sensitive_file_names,
     };
+    // Go tests rooted paths (`CaseSensitivity.ContainsPath`, :396-398): the
+    // typings files, the typings location and the workspace are rooted and
+    // normalized.
     for file in typings_files {
-        if tspath::contains_path(typings_location, file, &compare_paths_options) {
+        if tspath::contains_rooted_path(typings_location, file, use_case_sensitive_file_names) {
             include_typings_location = true;
-        } else if !tspath::contains_path(workspace_directory, file, &compare_paths_options) {
+        } else if !tspath::contains_rooted_path(
+            workspace_directory,
+            file,
+            use_case_sensitive_file_names,
+        ) {
             let directory = tspath::get_directory_path(file);
             external_directories.insert(
                 tspath::to_path(&directory, current_directory, use_case_sensitive_file_names),
@@ -708,5 +715,41 @@ pub fn new_recursive_directory_watcher(
             ..Default::default()
         },
         kind: Some(kind),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // followups76 (R228 reviewer item 9): Go getTypingsLocationsGlobs tests
+    // rooted paths (`CaseSensitivity.ContainsPath`, watch.go:396-398). On a
+    // case-insensitive file system Go folds case with ToLower, which keeps
+    // 'ſ' (EqualFold would match it to 's'): the typings location
+    // "/cache/ſ" does not hold "/cache/s/...", so its directory is watched
+    // outside the workspace; "/cache/S" holds it. Go answers from a probe at
+    // 3e9236361fa9 (`TestF76WatchProbe`). Go collects the inside patterns
+    // from a map, so their order is not Go's: the test sorts them.
+    #[test]
+    fn typings_locations_globs_test_rooted_paths_like_go() {
+        let files = [
+            "/cache/s/node_modules/@types/a/index.d.ts".to_string(),
+            "/ws/node_modules/@types/b/index.d.ts".to_string(),
+        ];
+        for (location, outside, inside) in [
+            (
+                "/cache/\u{17f}",
+                &["/cache/s/node_modules/@types/a"][..],
+                &["/ws/**/*"][..],
+            ),
+            ("/cache/S", &[][..], &["/cache/S/**/*", "/ws/**/*"][..]),
+        ] {
+            let got = get_typings_locations_globs(&files, location, "/ws", "/ws", false);
+            let mut patterns = got.patterns_inside_workspace.clone();
+            patterns.sort();
+            assert_eq!(got.directories_outside_workspace, outside, "{location}");
+            assert_eq!(patterns, inside, "{location}");
+            assert!(got.ignored.is_empty(), "{location}");
+        }
     }
 }

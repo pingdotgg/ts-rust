@@ -1880,10 +1880,6 @@ impl ResolutionState<'_> {
         }
         let options = self.compiler_options.clone();
         let use_case_sensitive_file_names = self.resolver.host.fs().use_case_sensitive_file_names();
-        let compare_paths_options = ComparePathsOptions {
-            use_case_sensitive_file_names,
-            current_directory: self.resolver.host.get_current_directory().to_string(),
-        };
         // Replace any references to outputs for files in the program with the input files to support package self-names used with outDir
         // Go tests rooted paths (`CaseSensitivity.ContainsFilePath`, :1105):
         // the package path and the config file path are rooted and normalized.
@@ -1924,14 +1920,16 @@ impl ResolutionState<'_> {
 
             let candidate_directories = self.get_output_directories_for_base_directory(&root_dir);
             for candidate_dir in &candidate_directories {
-                if contains_path(candidate_dir, final_path, &compare_paths_options) {
+                // Go takes the rest of the path below the output directory
+                // (`CaseSensitivity.RelativeFilePathFromDirectory`, :1138):
+                // both are rooted and normalized.
+                if let Some(path_fragment) = relative_path_within_directory(
+                    candidate_dir,
+                    final_path,
+                    use_case_sensitive_file_names,
+                ) {
                     // The matched export is looking up something in either the out declaration or js dir, now map the written path back into the source dir and source extension
-                    let path_fragment = if final_path.len() > candidate_dir.len() {
-                        &final_path[candidate_dir.len() + 1..] // +1 to also remove directory separator
-                    } else {
-                        ""
-                    };
-                    let possible_input_base = combine_paths(&root_dir, &[path_fragment]);
+                    let possible_input_base = combine_paths(&root_dir, &[&path_fragment]);
                     let js_and_dts_extensions = [
                         EXTENSION_MJS,
                         EXTENSION_CJS,
@@ -2519,6 +2517,54 @@ mod internal_tests {
                 )
                 .map(|resolved| resolved.path);
             assert_eq!(got, want, "package {package}");
+        }
+    }
+
+    // followups76 (R228 reviewer item 9): Go tryLoadInputFileForPath maps an
+    // output path back to its input only when an output directory holds it
+    // (`CaseSensitivity.RelativeFilePathFromDirectory`, resolver.go:1138). On
+    // a case-insensitive file system Go folds case with ToLower, which keeps
+    // 'ς' (EqualFold would match it to 'σ'): the outDir "p/ς" does not hold
+    // "p/σ/index.js"; "p/D" holds "p/d/index.js", which maps to "p/index.ts".
+    // Go answers from a probe at 3e9236361fa9 (`TestF76ModuleProbe`).
+    #[test]
+    fn input_file_for_output_needs_the_output_directory_like_go() {
+        let dir = write_files("input_for_output_dir_case", &[("p/index.ts", "export {};")]);
+        for (out, final_dir, want) in [
+            ("\u{3c2}", "\u{3c3}", None),
+            ("D", "d", Some(format!("{dir}/p/index.ts"))),
+        ] {
+            let fs = crate::frontend::vfs::wrapvfs_wrap(
+                osvfs_fs(),
+                crate::frontend::vfs::Replacements {
+                    use_case_sensitive_file_names: Some(Box::new(|| false)),
+                    ..Default::default()
+                },
+            );
+            let host: Rc<dyn ResolutionHost> = Rc::new(TestHost {
+                fs,
+                current_directory: dir.clone(),
+            });
+            let resolver = new_resolver(ResolverOptions {
+                host: Some(host),
+                compiler_options: Some(Rc::new(CompilerOptions {
+                    out_dir: format!("{dir}/p/{out}"),
+                    config_file_path: format!("{dir}/p/tsconfig.json"),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            });
+            let mut state = ResolutionState::zero(&resolver, resolver.compiler_options.clone());
+            state.extensions = Extensions::TYPE_SCRIPT | Extensions::DECLARATION;
+            let got = state
+                .try_load_input_file_for_path(
+                    &format!("{dir}/p/{final_dir}/index.js"),
+                    "",
+                    &format!("{dir}/p/package.json"),
+                    false,
+                )
+                .map(|resolved| resolved.path);
+            assert_eq!(got, want, "outDir {out}");
         }
     }
 
