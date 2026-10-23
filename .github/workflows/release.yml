@@ -19,6 +19,8 @@
 # is experimental, macOS has no perf branch sampling for its profile, and BOLT has no PE support.
 # Linux is static musl and non-PIE, so it starts on any x86-64 or arm64 Linux, Alpine too
 # (npm/README.md, "Linux libc"). Each Linux tsc builds natively on a Blacksmith runner of its arch.
+# The linux-x64 PGO tsc links lust's memfast.c in place of musl's memcpy, memmove, memcmp, bcmp and
+# memchr (crates/ts_goport/scripts/memfast.sh): musl's memcmp and bcmp are byte loops.
 # Windows (x86_64-pc-windows-msvc, aarch64-pc-windows-msvc) builds in Git Bash, with the C runtime
 # linked in (+crt-static), so tsc.exe needs no Visual C++ redistributable. jemalloc does not build
 # there: it uses the system allocator. Each PGO tsc builds natively, so its training runs on its
@@ -42,6 +44,7 @@ on:
       - "scripts/goport/pgo-train.sh"
       - "crates/ts_goport/scripts/copy-libs.sh"
       - "crates/ts_goport/scripts/build-pgo.sh"
+      - "crates/ts_goport/scripts/memfast.*"
       - "LICENSE"
       - "NOTICE.md"
       - "licenses/**"
@@ -176,6 +179,13 @@ jobs:
           # jemalloc stops at start when the kernel page is bigger than its build page. arm64 kernels
           # use 4, 16 or 64 KiB pages; 2^16 covers all three.
           [[ $target != aarch64-* ]] || echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
+          # linux-x64: lust's memfast.c in place of musl's memcpy, memmove, memcmp, bcmp and memchr
+          # (memfast.sh), in the PGO build only. The plain tsc keeps musl's, so the PGO check below
+          # also checks memfast against them.
+          if [[ $target == x86_64-unknown-linux-musl ]]; then
+            flags=$(crates/ts_goport/scripts/memfast.sh "$RUNNER_TEMP/memfast-wrap.o")
+            echo "PGO_RUSTFLAGS=$flags" | tee -a "$GITHUB_ENV"
+          fi
       # The plain tsc: the reference of the PGO check below, or the shipped tsc with no-pgo. PGO_LINK is
       # the link mode of both builds (build-pgo.sh): static on Linux, crt-static on Windows.
       - name: Build
@@ -231,6 +241,12 @@ jobs:
           [[ $rc == 2 ]] && grep -q "error TS2322" check.txt
           if [[ $RUNNER_OS == Linux ]]; then
             file "$dir/tsc" | tee /dev/stderr | grep -q "statically linked"
+            # memfast (linux-x64): the five __wrap_ functions, and none of musl's.
+            if [[ ${PGO_RUSTFLAGS:-} == *--wrap=* ]]; then
+              syms=$(nm "$dir/tsc" | grep -E ' [Tt] (__wrap_)?(memcpy|memmove|memcmp|bcmp|memchr)$' | awk '{print $3}' | sort | xargs)
+              echo "mem functions: $syms"
+              [[ $syms == "__wrap_bcmp __wrap_memchr __wrap_memcmp __wrap_memcpy __wrap_memmove" ]]
+            fi
             # Static: it starts on musl (Alpine) too.
             docker run --rm -v "$dir:/t:ro" alpine:3 /t/tsc --version
           fi

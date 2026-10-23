@@ -179,6 +179,7 @@ function portNotice() {
         ...part("TypeScript third-party notices", tsNoticeFile),
         ...part("Go license", path.join(repoRoot, "licenses", "Go-LICENSE.txt")),
         ...part("Unicode license", path.join(repoRoot, "licenses", "Unicode-LICENSE.txt")),
+        ...part("memfast license", path.join(repoRoot, "licenses", "memfast-LICENSE.txt")),
     ].join("\n");
 }
 function writeLicense(dir) {

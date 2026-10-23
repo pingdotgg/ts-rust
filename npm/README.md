@@ -121,7 +121,9 @@ package.
 
 The CI builds (but darwin-x64 and win32-arm64) are PGO builds of the shipped profile (fat LTO):
 `build-pgo.sh` trains each platform's tsc on the set of `scripts/goport/pgo-train.sh`, and the job
-fails unless the PGO tsc gives the same output as a plain build on that set. They have no BOLT: BOLT
+fails unless the PGO tsc gives the same output as a plain build on that set. The Linux x64 PGO tsc
+links `crates/ts_goport/scripts/memfast.c` in place of musl's memcpy, memmove, memcmp, bcmp and
+memchr (`memfast.sh`); the plain build keeps musl's. They have no BOLT: BOLT
 refuses the static Linux bin, macOS has no perf branch sampling for its profile, and BOLT has no PE
 (Windows) support. To make the Linux x64 tsc by hand on zbook, use `RELEASE_FEATURES=noembed
 RELEASE_LIBC=musl RELEASE_PIE=0 crates/ts_goport/scripts/build-release.sh <out>/linux-x64` and pack
