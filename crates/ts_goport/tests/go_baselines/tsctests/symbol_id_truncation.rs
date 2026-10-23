@@ -237,6 +237,74 @@ fn ids_count_on_across_the_projects_of_tsc_b_single_threaded() {
     );
 }
 
+/// `class <name> { static readonly #<member>: unique symbol; ... }` with an
+/// error that prints the private name, one line.
+fn private_class(name: &str, member: &str) -> String {
+    format!(
+        "class {name} {{ static readonly #{member}: unique symbol; static t() {{ const n: number = {name}.#{member}; }} }}\n"
+    )
+}
+
+#[test]
+fn private_name_ids_count_on_across_the_projects_of_tsc_b_single_threaded() {
+    // linkids1 (privname1 open case L/c/build). A private name holds the
+    // symbol id of its class, which Go's bind gives (binder.go:375). p1's
+    // binds give A and B ids 1 and 2. Its check gives no global id: link
+    // reads give block ids (ts#64711), and the check of `t` reads no links
+    // (ts#64739). Its d.ts emit gives the two `t` methods ids 3 and 4
+    // (serializeReturnTypeForSignature). So p2's binds give C and D ids 5
+    // and 6. The texts are the output of `tsgo-oracle-3e9236361fa9 -b
+    // --pretty false --singleThreaded` on the same files.
+    let file = |name: &str, text: String| (format!("{PROJECT}/{name}"), text.into());
+    let config = r#"{"compilerOptions":{"composite":true,"noLib":true,"skipLibCheck":true,"strict":true,"outDir":"out"},"files":["globals.d.ts","a.ts"]}"#;
+    let input = TscInput {
+        files: [
+            file(
+                "tsconfig.json",
+                r#"{"files":[],"references":[{"path":"p1"},{"path":"p2"}]}"#.into(),
+            ),
+            file("p1/globals.d.ts", GLOBALS.into()),
+            file(
+                "p1/a.ts",
+                private_class("A", "a") + &private_class("B", "b"),
+            ),
+            file("p1/tsconfig.json", config.into()),
+            file("p2/globals.d.ts", GLOBALS.into()),
+            file(
+                "p2/a.ts",
+                private_class("C", "c") + &private_class("D", "d"),
+            ),
+            file("p2/tsconfig.json", config.into()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let sys = new_test_sys(&input, false);
+    let args = ["-b", "--pretty", "false", "--singleThreaded"].map(String::from);
+    let result = run_command_in_child(&sys, &args).unwrap_or_else(|err| panic!("tsgo: {err}"));
+    assert!(result.unported.is_none(), "unported {:?}", result.unported);
+    let diagnostics: String = sys
+        .output_text()
+        .lines()
+        .filter(|line| !line.starts_with("!!! List files"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    // The output writes the internal prefix as U+FFFD, as Go's does.
+    let error = |file: &str, line: usize, class: &str, id: usize, member: &str| {
+        format!(
+            "{file}({line},65): error TS2322: Type 'typeof {class}.\u{FFFD}#{id}@#{member}' is not assignable to type 'number'.\n"
+        )
+    };
+    assert_eq!(
+        diagnostics,
+        error("p1/a.ts", 1, "A", 1, "a")
+            + &error("p1/a.ts", 2, "B", 2, "b")
+            + &error("p2/a.ts", 1, "C", 5, "c")
+            + &error("p2/a.ts", 2, "D", 6, "d")
+    );
+}
+
 #[test]
 fn ids_count_on_across_watch_cycles_single_threaded() {
     run_test_in_child(
