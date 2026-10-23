@@ -289,6 +289,13 @@ Root decision of 2026-10-11 (state note `tbxperf0-result-2026-10-11`; data in `t
   is perf's own elapsed time in microseconds. `/usr/bin/time %e` had 10 ms steps (about a quarter of a Query run), and the
   sudo and perf start add 24 ms on mini-743d. `--mode st` runs `--singleThreaded`, `both` runs st and the
   default 4 checkers. `PERF_ROUNDS` or `--rounds` sets the rounds: 5 by default, 3 on a testbox.
+- cycles:u on a testbox: the Zen 5 guest counts only the first hardware event of a perf stat set, and the
+  second reads 0. A probe at the start of `perf.sh` finds this and counts cycles:u in a second run of each
+  cell (host.txt `cycles separate`), so a testbox run takes twice as long. dbook-lan counts both in one run
+  (`cycles joint`). Before this fix (perfcyc1, 2026-10-23), testbox runs had cycles:u 0, and a default-mode
+  run sometimes lost instructions:u (one thread counted them on the dead counter: -0.18% on effect, up to -27%
+  in `perf/gap1-cells`). st runs could lose them too (t3web-ne -8.85% in one `perf/int90-tbx-cells` round), so
+  older testbox instruction counts are not clean. Lane copies of the tool (`perf-cells.sh`) need the same fix.
 - Query runs for 45 ms, and its wall moved about 5% from run to run on mini-743d: use zod and effect for a wall
   claim.
 - dbook-lan is the only wall host since Theo retired alvin, cup2 and mini-743d (2026-10-12). Its A/A is not
