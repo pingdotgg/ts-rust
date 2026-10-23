@@ -628,13 +628,18 @@ impl FilesParser {
             use std::hash::BuildHasher;
             let keys = self.task_data_by_path.len();
             let hasher = self.task_data_by_path.hasher();
-            let begin = std::time::Instant::now();
-            let mut acc = 0u64;
-            for key in self.task_data_by_path.keys() {
-                acc ^= hasher.hash_one(key);
+            // The first pass reads the keys from memory, the second from
+            // the cache: the hash work alone.
+            let mut hash_ns = [0.0; 2];
+            for pass in &mut hash_ns {
+                let begin = std::time::Instant::now();
+                let mut acc = 0u64;
+                for key in self.task_data_by_path.keys() {
+                    acc ^= hasher.hash_one(key);
+                }
+                std::hint::black_box(acc);
+                *pass = begin.elapsed().as_nanos() as f64 / keys.max(1) as f64;
             }
-            std::hint::black_box(acc);
-            let hash_ns = begin.elapsed().as_nanos() as f64 / keys.max(1) as f64;
             crate::loadstamp::load_end(hash_ns, keys);
         }
         // Closes the queue, then waits for the workers.
@@ -723,9 +728,7 @@ impl FilesParser {
             // path. PORT: the tasks that Go gives a path when it makes them
             // and the port does not (root, lib, automatic type directive
             // and redirect tasks) get it here.
-            let ls = crate::loadstamp::span(crate::loadstamp::SET_PATH);
             set_task_path(loader, &mut task.borrow_mut());
-            drop(ls);
             let ls = crate::loadstamp::span(crate::loadstamp::C6_GET);
             let existing = self.task_data_by_path.get(&task.borrow().path).cloned();
             drop(ls);
