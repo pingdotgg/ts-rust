@@ -31,6 +31,8 @@ ITEM_NAME = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe|extern)\s+)*"
     r"(fn|mod|impl|struct|enum|trait|const|static|type|macro_rules!)\b\s*([\w<>:, &']*)"
 )
+# Lines that only hold structure (blank, an attribute, a mod header, a closing brace): not counted as helpers.
+STRUCTURE = re.compile(r"^\s*(?:#\[.*\]|(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{|\}[;,)]*)?\s*$")
 # A macro call that declares a test (Rust tests/go_baselines/project_lsp/mod.rs child_test).
 TEST_MACRO = re.compile(r"(?m)^\s*\w*test!\s*\{")
 # A #[cfg(test)] mod with a body: its items are the top test items.
@@ -310,10 +312,10 @@ def main(argv):
                 changed.append(f"{k} (-{r} +{a})")
         helpers = {}
         for k in test_removed:
-            if old.fn_at(k) is None and old.lines[k].strip():
+            if old.fn_at(k) is None and not STRUCTURE.match(old.lines[k]):
                 helpers.setdefault(old.top[k], [0, 0])[0] += 1
         for k in test_added:
-            if new.fn_at(k) is None and new.lines[k].strip():
+            if new.fn_at(k) is None and not STRUCTURE.match(new.lines[k]):
                 helpers.setdefault(new.top[k], [0, 0])[1] += 1
         if not (test_removed or test_added or new_tests or gone_tests) and not show_all:
             continue
