@@ -222,7 +222,9 @@ jobs:
           [[ $RUNNER_OS != Windows ]] || listed=$(cygpath -m "$listed")
           cd "$RUNNER_TEMP"
           echo 'const x: number = "a";' > a.ts
-          "$dir/tsc$EXE" --listFilesOnly --lib es5 a.ts | grep -qx "$listed"
+          # Not grep -q: it can end before the tsc does, and the tsc then dies of SIGPIPE (exit 141 with
+          # pipefail; seen on darwin-x64).
+          "$dir/tsc$EXE" --listFilesOnly --lib es5 a.ts | grep -x "$listed" > /dev/null
           set +e
           "$dir/tsc$EXE" --noEmit a.ts > check.txt
           rc=$?
