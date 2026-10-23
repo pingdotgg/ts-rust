@@ -462,6 +462,11 @@ pub fn swap_id_state(state: &mut IdState) {
     OWN_SYMBOL_IDS.with(|own| std::mem::swap(&mut *own.borrow_mut(), &mut state.own_symbol_ids));
 }
 
+/// unionmemo1 verify (never merged): the last symbol id given on this thread.
+pub fn peek_next_symbol_id() -> u64 {
+    NEXT_SYMBOL_ID.with(std::cell::Cell::get)
+}
+
 /// The next symbol id of this thread (Go `nextSymbolId.Add(1)`).
 fn next_symbol_id() -> u64 {
     NEXT_SYMBOL_ID.with(|next| {
