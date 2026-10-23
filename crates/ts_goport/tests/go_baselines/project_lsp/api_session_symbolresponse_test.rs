@@ -19,7 +19,7 @@ use ts_goport::api::{
 };
 use ts_goport::ast::ContentMapperSourceFileInfo;
 use ts_goport::checker::Checker;
-use ts_goport::core::{Node, Symbol};
+use ts_goport::core::{Node, Symbol, SymbolData};
 use ts_goport::flags::{ScriptKind, SymbolFlags};
 use ts_goport::frontend::json::json_marshal;
 use ts_goport::frontend::parser::{self, ParsedSourceFile, SourceFileParseOptions};
@@ -191,8 +191,11 @@ child_test! {
         let checker = session.checker();
         let symbol = checker.borrow_mut().symbols.push_symbol(Symbol {
             flags: SymbolFlags::CLASS | SymbolFlags::TRANSIENT,
-            name: "C".into(),
-            declarations: vec![class].into(),
+            data: SymbolData {
+                name: "C".into(),
+                declarations: vec![class].into(),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let sd = session.new_test_snapshot_data();
