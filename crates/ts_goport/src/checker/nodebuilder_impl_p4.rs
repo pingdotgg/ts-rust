@@ -9,8 +9,10 @@ use crate::prelude::*;
 use crate::printer::{EmitContext, EmitFlags};
 
 // PORT: private accessors for NodeBuilderImpl fields. They keep the field
-// shapes (owned by U11) in one place. Clone the handle out, then drop the
-// borrow before any Checker call.
+// shapes (owned by U11) in one place. `nb_ctx` clones the context handle out,
+// for a caller that keeps it across a Checker call. The field readers borrow
+// `b`, then `b.ctx`, in one expression (Go `b.ctx.<field>`; nbctx1: no `Rc`
+// clone).
 fn nb_ctx(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<RefCell<NodeBuilderContext>> {
     b.borrow().ctx.clone()
 }
@@ -20,19 +22,15 @@ fn nb_e(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<EmitContext> {
 }
 
 fn nb_tracker(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<dyn SymbolTracker> {
-    let ctx = nb_ctx(b);
-    let tracker = ctx.borrow().tracker.clone();
-    tracker
+    b.borrow().ctx.borrow().tracker.clone()
 }
 
 fn nb_flags(b: &Rc<RefCell<NodeBuilderImpl>>) -> NodeBuilderFlags {
-    let ctx = nb_ctx(b);
-    let flags = ctx.borrow().flags;
-    flags
+    b.borrow().ctx.borrow().flags
 }
 
 fn nb_add_length(b: &Rc<RefCell<NodeBuilderImpl>>, n: i32) {
-    nb_ctx(b).borrow_mut().approximate_length += n;
+    b.borrow().ctx.borrow_mut().approximate_length += n;
 }
 
 /// Go `transform func(b *NodeBuilderImpl, t *Type) *ast.TypeNode`.

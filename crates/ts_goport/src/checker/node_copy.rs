@@ -27,9 +27,7 @@ fn nb_e(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<EmitContext> {
 }
 
 fn nb_tracker(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<dyn SymbolTracker> {
-    let ctx = nb_ctx(b);
-    let tracker = ctx.borrow().tracker.clone();
-    tracker
+    b.borrow().ctx.borrow().tracker.clone()
 }
 
 impl Checker {

@@ -13,42 +13,44 @@ type Nb = Rc<RefCell<NodeBuilderImpl>>;
 
 // PORT: small readers for `b.ctx` and `b.e`. Each one takes and drops the
 // borrow, so callers never hold it across a Checker call.
-// Go `b.ctx`. The context is its own `Rc<RefCell<..>>`, so clone the handle
-// out and drop the `b` borrow first.
+// Go `b.ctx`. The context is its own `Rc<RefCell<..>>`. `nb_ctx` clones the
+// handle out, for a caller that keeps it across a Checker call. The field
+// readers below borrow `b`, then `b.ctx`, in one expression (nbctx1: no `Rc`
+// clone).
 fn nb_ctx(b: &Nb) -> Rc<RefCell<NodeBuilderContext>> {
     b.borrow().ctx.clone()
 }
 
 fn nb_flags(b: &Nb) -> NodeBuilderFlags {
-    nb_ctx(b).borrow().flags
+    b.borrow().ctx.borrow().flags
 }
 
 fn nb_clear_flags(b: &Nb, flags: NodeBuilderFlags) {
-    let ctx = nb_ctx(b);
-    let mut ctx = ctx.borrow_mut();
+    let b = b.borrow();
+    let mut ctx = b.ctx.borrow_mut();
     ctx.flags = ctx.flags.without(flags);
 }
 
 fn nb_enclosing_declaration(b: &Nb) -> Node {
-    nb_ctx(b).borrow().enclosing_declaration
+    b.borrow().ctx.borrow().enclosing_declaration
 }
 
 fn nb_enclosing_file(b: &Nb) -> Node {
-    nb_ctx(b).borrow().enclosing_file
+    b.borrow().ctx.borrow().enclosing_file
 }
 
 fn nb_mapper(b: &Nb) -> MapperId {
-    nb_ctx(b).borrow().mapper
+    b.borrow().ctx.borrow().mapper
 }
 
 fn nb_add_approximate_length(b: &Nb, n: i32) {
-    nb_ctx(b).borrow_mut().approximate_length += n;
+    b.borrow().ctx.borrow_mut().approximate_length += n;
 }
 
 // Go `b.ctx.tracker`. Clone the tracker out so no borrow is held across the
 // tracker call.
 fn nb_tracker(b: &Nb) -> Rc<dyn SymbolTracker> {
-    nb_ctx(b).borrow().tracker.clone()
+    b.borrow().ctx.borrow().tracker.clone()
 }
 
 // PORT: Go `b.e`. Node creation uses `b.e.factory` for Go `b.f`, since the

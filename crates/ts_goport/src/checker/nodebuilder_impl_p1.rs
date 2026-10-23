@@ -230,8 +230,10 @@ pub fn new_node_builder_impl(
     }
 }
 
-// PORT: private accessors. Clone the handle out, then drop the borrow before
-// any Checker or tracker call.
+// PORT: private accessors. `p1_ctx` clones the context handle out, for a
+// caller that keeps it across a Checker or tracker call. A reader of one
+// field (Go `b.ctx.<field>`) borrows `b`, then `b.ctx`, in one expression and
+// drops both borrows at its end (nbctx1: no `Rc` clone).
 fn p1_ctx(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<RefCell<NodeBuilderContext>> {
     b.borrow().ctx.clone()
 }
@@ -241,14 +243,11 @@ fn p1_e(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<EmitContext> {
 }
 
 fn p1_flags(b: &Rc<RefCell<NodeBuilderImpl>>) -> NodeBuilderFlags {
-    let ctx = p1_ctx(b);
-    let flags = ctx.borrow().flags;
-    flags
+    b.borrow().ctx.borrow().flags
 }
 
 fn p1_add_length(b: &Rc<RefCell<NodeBuilderImpl>>, n: usize) {
-    let ctx = p1_ctx(b);
-    ctx.borrow_mut().approximate_length += i32::try_from(n).unwrap_or(i32::MAX);
+    b.borrow().ctx.borrow_mut().approximate_length += i32::try_from(n).unwrap_or(i32::MAX);
 }
 
 // Go: checker/nodebuilderimpl.go:326 getAccessStack
