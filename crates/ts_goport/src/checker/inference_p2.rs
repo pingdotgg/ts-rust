@@ -508,6 +508,8 @@ impl Checker {
     // sends to isRelatedToEx's normalization (relater.go:2654) runs that part in
     // `is_normalized_type_identical_in_matching`, without the relater, and with the slots in place of a repeat
     // normalization.
+    // Second copy: this repeats Go's isTypeRelatedTo (relater.go:169), whose port is `is_type_related_to_kind`
+    // (relater_p1.rs). A pin bump that changes isTypeRelatedTo changes both (UPSTREAM.md, "Pin bump checks").
     pub fn is_type_identical_in_matching(
         &mut self,
         source: TypeId,
@@ -579,6 +581,9 @@ impl Checker {
     // node, for a pair of `is_type_identical_in_matching` that Go normalizes. `source` and `target` are the pair
     // after the fresh literal step.
     // PORT: perf (identmatch1). Not inlined, so the entry above stays small for the pairs that end before it.
+    // Second copy: this repeats the start of Go's isRelatedToEx (relater.go:2634-2665, the object to primitive
+    // test is in the entry above), whose port is `is_related_to_ex` (relater_p3.rs). A pin bump that changes that
+    // part changes both (UPSTREAM.md, "Pin bump checks").
     #[inline(never)]
     fn is_normalized_type_identical_in_matching(
         &mut self,
@@ -622,7 +627,9 @@ impl Checker {
     // on a mapped type with an `as` clause), so a result is kept in `slot` only when its normalization changed no
     // instantiation, type, symbol, signature or diagnostic count and started under the instantiation limits
     // (checker.go:22608). The kept type is used only under the count limit; the stack depth is the same at each
-    // pair of one call.
+    // pair of one call. With `--generateTrace` on, nothing is kept: a repeat can emit a tracer event and change
+    // no count (checkCrossProductUnion_DepthLimit, checker.go:27256, after the intern miss in
+    // getIntersectionTypeEx, which does not store the error type), and Go emits it at each repeat.
     fn normalize_for_matching(&mut self, t: TypeId, writing: bool, slot: &mut TypeId) -> TypeId {
         let under_count_limit = self.instantiation_count < 5_000_000;
         if slot.is_some() && under_count_limit {
@@ -637,7 +644,8 @@ impl Checker {
                 c.diagnostics.count,
             )
         };
-        let can_keep = under_count_limit && self.instantiation_stack.len() < 100;
+        let can_keep =
+            under_count_limit && self.instantiation_stack.len() < 100 && self.tracer.is_none();
         let before = counts(self);
         let normalized = self.get_normalized_type(t, writing);
         if can_keep && counts(self) == before {
@@ -650,6 +658,9 @@ impl Checker {
     // isRelatedToEx's identity branch (relater.go:2666) on: `source` and `target` are the pair after the fresh
     // literal step, `normalized_*` its normalized types, `relation_size` the size read before they were made.
     // PORT: perf (identmatch1). Not in Go as a function. It saves the second normalization of the pair.
+    // Second copy: this repeats Go's checkTypeRelatedToEx (relater.go:358, whose port is
+    // `check_type_related_to_ex` in relater_p1.rs) and the identity branch end of isRelatedToEx (relater.go:2666,
+    // `is_related_to_ex`). A pin bump that changes either changes both (UPSTREAM.md, "Pin bump checks").
     fn check_normalized_type_identical_to(
         &mut self,
         source: TypeId,

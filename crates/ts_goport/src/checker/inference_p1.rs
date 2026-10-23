@@ -1469,6 +1469,8 @@ impl Checker {
     // isRelatedToEx, and keeps nothing between pairs. This loop gives each source index and the current target a
     // slot for its normalized type (`normalize_for_matching`), used only inside this call. The pairs, their order,
     // the first normalization of each member and the inferences stay Go's.
+    // Second copy: this repeats the loop of Go's inferFromMatchingTypes, whose port is `infer_from_matching_types`
+    // (above). A pin bump that changes inferFromMatchingTypes changes both (UPSTREAM.md, "Pin bump checks").
     pub fn infer_from_identical_types(
         &mut self,
         n: &mut InferenceState,
