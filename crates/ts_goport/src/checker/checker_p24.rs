@@ -516,11 +516,15 @@ impl Checker {
                 let parent = self.sym(value_declaration.symbol()).parent;
                 self.sym_mut(clone).parent = parent;
             }
-            let write_type = self.get_write_type_of_symbol(single_prop);
+            // Go reads the links of `clone` before it gets the write type of
+            // `single_prop` (checker.go:22041-22044).
             let links = self.value_symbol_links.get_by_id(&self.symbols, clone);
             links.containing_type = containing_type;
             links.mapper = single_prop_mapper;
-            links.write_type = write_type;
+            let write_type = self.get_write_type_of_symbol(single_prop);
+            self.value_symbol_links
+                .get_by_id(&self.symbols, clone)
+                .write_type = write_type;
             return clone;
         }
         if prop_set.is_empty() {
