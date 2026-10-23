@@ -1967,6 +1967,53 @@ pub(crate) struct FilePrep {
     /// names and every answer is one that the loader adds without its own
     /// state. `None` with `GOPORT_LOAD_COMMIT=0` (an A/B switch).
     pub(crate) commit: Option<Box<PrepCommit>>,
+    /// muiload1 probe: why the worker made no commit (`loadstamp::NC_*`
+    /// bits), and the names with each bit.
+    pub(crate) nc_mask: u32,
+    pub(crate) nc_names: [u16; crate::loadstamp::NC_BITS],
+}
+
+/// muiload1 probe: why `PrepCommit::push` refuses `answer` (a
+/// `loadstamp::NC_*` bit), or `None` when it takes it. The same tests as
+/// `push`, in its order.
+fn mui_no_commit_bit(
+    answer: Option<&SharedResolution<Arc<ResolvedModule>>>,
+    options: &CompilerOptions,
+) -> Option<usize> {
+    use crate::loadstamp as ls;
+    let Some(answer) = answer else {
+        return Some(ls::NC_NO_ANSWER);
+    };
+    let resolved = &answer.value;
+    if !resolved.is_resolved() {
+        return None;
+    }
+    if resolved.resolved_using_extra_extensions {
+        return Some(ls::NC_EXTRA_EXT);
+    }
+    let ext = resolved.extension.as_str();
+    let bit = match ext {
+        EXTENSION_TS | EXTENSION_DTS | EXTENSION_MTS | EXTENSION_DMTS | EXTENSION_CTS
+        | EXTENSION_DCTS => None,
+        EXTENSION_TSX if options.jsx != JsxEmit::NONE => None,
+        EXTENSION_TSX => Some(ls::NC_TSX_NO_JSX),
+        EXTENSION_JSON if options.get_resolve_json_module() => None,
+        EXTENSION_JSON => Some(ls::NC_JSON_NO_RJM),
+        ".jsx" => Some(ls::NC_JSX),
+        ".js" | ".mjs" | ".cjs" if resolved.is_external_library_import => Some(ls::NC_JS_NM),
+        ".js" | ".mjs" | ".cjs" => Some(ls::NC_JS_LOCAL),
+        _ => Some(ls::NC_OTHER_EXT),
+    };
+    if bit.is_some() {
+        return bit;
+    }
+    if !file_extension_is_one_of(
+        &resolved.resolved_file_name,
+        SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT,
+    ) {
+        return Some(ls::NC_OTHER_EXT);
+    }
+    None
 }
 
 /// What the loader makes of the answers of the synthetic imports and the
@@ -4438,6 +4485,16 @@ impl WorkerResolver {
                     adds: Vec::new(),
                 })
             });
+        // muiload1 probe: the reasons for no commit, over all names.
+        let mui_classify = import_names.is_some() && config.commit && answers_from.is_some();
+        let mut nc_mask: u32 = 0;
+        let mut nc_names = [0u16; crate::loadstamp::NC_BITS];
+        if import_names.is_none() {
+            nc_mask |= 1 << crate::loadstamp::NC_NO_NAMES;
+        }
+        if !config.commit {
+            nc_mask |= 1 << crate::loadstamp::NC_CONFIG_OFF;
+        }
         let mut file_emit_mode = None;
         let specifiers = synthetic
             .iter()
@@ -4505,6 +4562,10 @@ impl WorkerResolver {
                     mode,
                     redirect_name.as_str(),
                 ));
+                if mui_classify && let Some(bit) = mui_no_commit_bit(answer.as_ref(), &options) {
+                    nc_mask |= 1 << bit;
+                    nc_names[bit] = nc_names[bit].saturating_add(1);
+                }
                 // The commit reads the stored answer, which the loader
                 // takes, not `resolved`.
                 if let Some(committed) = &mut commit {
@@ -4539,6 +4600,8 @@ impl WorkerResolver {
             answers,
             names: import_names,
             commit,
+            nc_mask,
+            nc_names,
         })
     }
 }

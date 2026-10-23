@@ -43,7 +43,10 @@ pub const META_OWN: u8 = 23;
 pub const RES_NOTE: u8 = 24;
 pub const RES_ADDS: u8 = 25;
 pub const C6_HASH: u8 = 26;
-const KINDS: usize = 27;
+// muiload1: the rest of the import block (after the commit decision) of a
+// file, by why it has no worker commit (`RC_*`, the `MC_*` classes).
+pub const RC_BASE: u8 = 27;
+const KINDS: usize = 27 + MC_CLASSES;
 const KIND_NAMES: [&str; KINDS] = [
     "load",
     "start",
@@ -72,7 +75,187 @@ const KIND_NAMES: [&str; KINDS] = [
     "res_note_logs",
     "res_adds",
     "c6_hash",
+    "rc_commit",
+    "rc_noprep",
+    "rc_unnamed",
+    "rc_trace",
+    "rc_js_only",
+    "rc_noanswer_only",
+    "rc_other_only",
+    "rc_mixed",
+    "rc_unknown",
 ];
+
+// muiload1: the classes of a file in the import block.
+pub const MC_COMMIT: usize = 0;
+pub const MC_NOPREP: usize = 1;
+pub const MC_UNNAMED: usize = 2;
+pub const MC_TRACE: usize = 3;
+pub const MC_JS: usize = 4;
+pub const MC_NOANS: usize = 5;
+pub const MC_OTHER: usize = 6;
+pub const MC_MIX: usize = 7;
+pub const MC_UNKNOWN: usize = 8;
+pub const MC_CLASSES: usize = 9;
+
+// muiload1: why a worker made no commit for a file (`FilePrep::nc_mask`
+// bits), in worker order of the checks.
+pub const NC_NO_NAMES: usize = 0;
+pub const NC_CONFIG_OFF: usize = 1;
+pub const NC_NO_ANSWER: usize = 2;
+pub const NC_JS_LOCAL: usize = 3;
+pub const NC_JS_NM: usize = 4;
+pub const NC_JSX: usize = 5;
+pub const NC_TSX_NO_JSX: usize = 6;
+pub const NC_JSON_NO_RJM: usize = 7;
+pub const NC_EXTRA_EXT: usize = 8;
+pub const NC_OTHER_EXT: usize = 9;
+pub const NC_BITS: usize = 10;
+const NC_NAMES: [&str; NC_BITS] = [
+    "no_names",
+    "config_off",
+    "no_answer",
+    "js_local",
+    "js_node_modules",
+    "jsx",
+    "tsx_no_jsx",
+    "json_no_resolve_json_module",
+    "extra_extensions",
+    "other_extension",
+];
+
+/// The class of a no-commit file of a named prep from its reason mask.
+pub fn class_of_mask(mask: u32) -> usize {
+    const JS: u32 = (1 << NC_JS_LOCAL) | (1 << NC_JS_NM) | (1 << NC_JSX);
+    if mask == 0 {
+        MC_UNKNOWN
+    } else if mask & !JS == 0 {
+        MC_JS
+    } else if mask == 1 << NC_NO_ANSWER {
+        MC_NOANS
+    } else if mask.count_ones() == 1 {
+        MC_OTHER
+    } else {
+        MC_MIX
+    }
+}
+
+/// muiload1 counts of the loading thread.
+#[derive(Default)]
+struct MuiCounts {
+    /// Per class: files, module names, subtasks added by the block.
+    class_files: [u64; MC_CLASSES],
+    class_names: [u64; MC_CLASSES],
+    class_adds: [u64; MC_CLASSES],
+    /// Per reason bit (named preps with no commit): files with the bit,
+    /// files with only that bit, names with the bit.
+    bit_files: [u64; NC_BITS],
+    bit_only: [u64; NC_BITS],
+    bit_names: [u64; NC_BITS],
+    /// Unnamed preps: the worker read no names, the count differs, the
+    /// loader keeps its own names.
+    unnamed_no_names: u64,
+    unnamed_len: u64,
+    unnamed_keeps: u64,
+    /// No-commit named preps whose own file is a JS file.
+    nc_js_container: u64,
+    /// Files of loads with project references (the mapper is not empty).
+    loads_with_references: u64,
+}
+
+thread_local! {
+    static MUI: RefCell<MuiCounts> = RefCell::new(MuiCounts::default());
+}
+
+/// muiload1: notes one file of the import block.
+#[allow(clippy::too_many_arguments)]
+pub fn mui_file(
+    class: usize,
+    names: u64,
+    adds: u64,
+    mask: u32,
+    bit_names: &[u16; NC_BITS],
+    js_container: bool,
+) {
+    if !(on() && ACTIVE.with(Cell::get)) {
+        return;
+    }
+    MUI.with(|m| {
+        let mut m = m.borrow_mut();
+        m.class_files[class] += 1;
+        m.class_names[class] += names;
+        m.class_adds[class] += adds;
+        if !matches!(class, MC_COMMIT | MC_NOPREP | MC_UNNAMED | MC_TRACE) {
+            for bit in 0..NC_BITS {
+                if mask & (1 << bit) != 0 {
+                    m.bit_files[bit] += 1;
+                    m.bit_names[bit] += u64::from(bit_names[bit]);
+                    if mask == 1 << bit {
+                        m.bit_only[bit] += 1;
+                    }
+                }
+            }
+            m.nc_js_container += u64::from(js_container);
+        }
+    });
+}
+
+/// muiload1: notes why a taken prep was not named (0: the worker read no
+/// names, 1: the count differs, 2: the loader keeps its own names).
+pub fn mui_unnamed(why: u8) {
+    if !(on() && ACTIVE.with(Cell::get)) {
+        return;
+    }
+    MUI.with(|m| {
+        let mut m = m.borrow_mut();
+        match why {
+            0 => m.unnamed_no_names += 1,
+            1 => m.unnamed_len += 1,
+            _ => m.unnamed_keeps += 1,
+        }
+    });
+}
+
+/// muiload1: notes a file of a load whose mapper has project references.
+pub fn mui_references() {
+    if on() && ACTIVE.with(Cell::get) {
+        MUI.with(|m| m.borrow_mut().loads_with_references += 1);
+    }
+}
+
+fn print_mui(m: &MuiCounts) {
+    const CLASS: [&str; MC_CLASSES] = [
+        "commit",
+        "noprep",
+        "unnamed",
+        "trace",
+        "js_only",
+        "noanswer_only",
+        "other_only",
+        "mixed",
+        "unknown",
+    ];
+    for c in 0..MC_CLASSES {
+        eprintln!(
+            "muiload class {} files={} names={} adds={}",
+            CLASS[c], m.class_files[c], m.class_names[c], m.class_adds[c]
+        );
+    }
+    for b in 0..NC_BITS {
+        eprintln!(
+            "muiload reason {} files={} only={} names={}",
+            NC_NAMES[b], m.bit_files[b], m.bit_only[b], m.bit_names[b]
+        );
+    }
+    eprintln!(
+        "muiload unnamed no_names={} len={} keeps={} nc_js_container={} files_with_references={}",
+        m.unnamed_no_names,
+        m.unnamed_len,
+        m.unnamed_keeps,
+        m.nc_js_container,
+        m.loads_with_references
+    );
+}
 
 // Counts.
 pub const N_TYPE_REFS: usize = 0;
@@ -274,6 +457,7 @@ struct Stash {
     last_worker: u64,
     hash_ns: [f64; 2],
     keys: usize,
+    mui: MuiCounts,
 }
 
 static STASH: std::sync::Mutex<Option<Stash>> = std::sync::Mutex::new(None);
@@ -304,6 +488,7 @@ pub fn load_end() {
         last_worker,
         hash_ns: [0.0; 2],
         keys: 0,
+        mui: MUI.with(|m| std::mem::take(&mut *m.borrow_mut())),
     });
 }
 
@@ -326,6 +511,7 @@ fn print_summary(stash: Stash) {
         last_worker,
         hash_ns,
         keys,
+        mui,
     } = stash;
     let tail_start = last_worker.clamp(load_begin, runq_end);
     // After the last wait of the loader for a worker, the loader does not
@@ -433,6 +619,7 @@ fn print_summary(stash: Stash) {
     for (index, value) in counts.iter().enumerate() {
         eprintln!("loadstamp count {} {}", COUNT_NAMES[index], value);
     }
+    print_mui(&mui);
 }
 
 /// Prints the marks once, after the first `bind_all` of the process.

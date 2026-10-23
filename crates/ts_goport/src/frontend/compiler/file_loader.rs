@@ -1837,6 +1837,43 @@ impl FileLoader {
             if named {
                 note_commit(commit.is_some());
             }
+            // muiload1 probe: the class of this file, and the reasons of the
+            // worker's prep, for the span of the rest of the block.
+            let (mui_class, mui_mask, mui_names) = {
+                use crate::loadstamp as ls;
+                let (mask, names) = prep.as_ref().map_or((0, [0u16; ls::NC_BITS]), |prep| {
+                    (prep.nc_mask, prep.nc_names)
+                });
+                let class = if prep.is_none() {
+                    ls::MC_NOPREP
+                } else if commit.is_some() {
+                    ls::MC_COMMIT
+                } else if !named {
+                    ls::mui_unnamed(if self.keeps_import_names {
+                        2
+                    } else if mask & (1 << ls::NC_NO_NAMES) != 0 {
+                        0
+                    } else {
+                        1
+                    });
+                    ls::MC_UNNAMED
+                } else if options_for_file.trace_resolution.is_true() {
+                    ls::MC_TRACE
+                } else {
+                    ls::class_of_mask(mask)
+                };
+                if !self
+                    .project_reference_file_mapper
+                    .borrow()
+                    .config_to_project_reference
+                    .is_empty()
+                {
+                    ls::mui_references();
+                }
+                (class, mask, names)
+            };
+            let mui_adds_before = t.sub_tasks.len();
+            let mui_span = crate::loadstamp::span(crate::loadstamp::RC_BASE + mui_class as u8);
             #[cfg(test)]
             if commit.is_some() {
                 PREPS_COMMITTED.with(|files| files.borrow_mut().push(file_name.to_string()));
@@ -2196,10 +2233,20 @@ impl FileLoader {
             t.resolutions_trace = resolutions_trace;
             // loadstamp1: the frees of the worker's prep and names, at the
             // end of the block as before.
-            let _ls = crate::loadstamp::span(crate::loadstamp::C5_FREE);
+            let c5 = crate::loadstamp::span(crate::loadstamp::C5_FREE);
             drop(resolved_ahead);
             drop(kept);
             drop(prep);
+            drop(c5);
+            drop(mui_span);
+            crate::loadstamp::mui_file(
+                mui_class,
+                module_names.len() as u64,
+                (t.sub_tasks.len() - mui_adds_before) as u64,
+                mui_mask,
+                &mui_names,
+                crate::frontend::tspath::extension::has_js_file_extension(file.file_name()),
+            );
         }
     }
 
