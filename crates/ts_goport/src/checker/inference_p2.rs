@@ -595,7 +595,9 @@ impl Checker {
         let can_keep = under_count_limit && self.instantiation_stack.len() < 100;
         let before = counts(self);
         let normalized = self.get_normalized_type(t, writing);
-        if can_keep && counts(self) == before {
+        // identmatch1 no-guard probe (never merge): Bun's rule, keep every normalization.
+        let _ = before;
+        if can_keep {
             *slot = normalized;
         }
         normalized
