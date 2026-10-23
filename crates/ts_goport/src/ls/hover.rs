@@ -150,7 +150,7 @@ impl LanguageService {
                     // shows the icon for whatever `x` actually is (const, function, ...) rather than a
                     // generic alias icon. GetSymbolModifiers already accounts for the alias target itself.
                     let mut icon_symbol = symbol;
-                    if c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+                    if c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
                         let resolved = c.get_aliased_symbol(symbol);
                         if resolved.is_some() && resolved != symbol {
                             icon_symbol = resolved;
@@ -432,7 +432,7 @@ pub fn documentation_from_alias(
     content_format: &lsproto::MarkupKind,
     comment_only: bool,
 ) -> String {
-    if symbol.is_nil() || !c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+    if symbol.is_nil() || !c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
         return String::new();
     }
 
@@ -978,7 +978,7 @@ impl QuickInfoWriter<'_> {
                 SymbolFlags::NONE,
                 SYMBOL_FORMAT_FLAGS,
             );
-            if self.c.sym(symbol).flags.intersects(SymbolFlags::OPTIONAL) {
+            if self.c.sym_flags(symbol).intersects(SymbolFlags::OPTIONAL) {
                 self.dpw.borrow_mut().write_punctuation("?");
             }
             self.write_signature_classified(
@@ -1029,7 +1029,7 @@ impl QuickInfoWriter<'_> {
         // Only offer symbol-level expansion for types that tryExpandSymbol handles:
         // class, interface, enum, namespace/module. For functions/variables/properties,
         // the node builder's probeTypeExpandability detects expandable type components.
-        let symbol_flags = self.c.sym(symbol).flags;
+        let symbol_flags = self.c.sym_flags(symbol);
         if !symbol_flags
             .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE | SymbolFlags::NAMESPACE)
         {
@@ -1084,7 +1084,7 @@ impl QuickInfoWriter<'_> {
     // Go: ls/hover.go:661 writeSymbol (closure)
     fn write_symbol(&mut self, symbol: SymbolId) {
         // Recursively write all meanings of alias
-        if self.c.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+        if self.c.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
             && self.visited_aliases.insert(symbol)
         {
             let aliased_symbol = self.c.get_aliased_symbol(symbol);
@@ -1094,7 +1094,7 @@ impl QuickInfoWriter<'_> {
                 self.alias_level -= 1;
             }
         }
-        let symbol_flags = self.c.sym(symbol).flags;
+        let symbol_flags = self.c.sym_flags(symbol);
         let mut flags = if self.meaning == SemanticMeaning::VALUE {
             symbol_flags & (SymbolFlags::VALUE | SymbolFlags::SIGNATURE)
         } else if self.meaning == SemanticMeaning::TYPE {
@@ -1134,8 +1134,7 @@ impl QuickInfoWriter<'_> {
             self.write_new_line();
             if !self
                 .c
-                .sym(symbol)
-                .check_flags
+                .sym_check_flags(symbol)
                 .intersects(CheckFlags::INDEX_SYMBOL)
             {
                 if flags.intersects(SymbolFlags::PROPERTY) {
@@ -1174,8 +1173,7 @@ impl QuickInfoWriter<'_> {
                     && symbol_parent.is_some()
                     && self
                         .c
-                        .sym(symbol_parent)
-                        .flags
+                        .sym_flags(symbol_parent)
                         .intersects(SymbolFlags::MODULE)
                 {
                     self.dpw.borrow_mut().write("exports");
@@ -1187,7 +1185,7 @@ impl QuickInfoWriter<'_> {
                         SYMBOL_FORMAT_FLAGS,
                     );
                 }
-                if self.c.sym(symbol).flags.intersects(SymbolFlags::OPTIONAL) {
+                if self.c.sym_flags(symbol).intersects(SymbolFlags::OPTIONAL) {
                     self.dpw.borrow_mut().write_punctuation("?");
                 }
                 self.dpw.borrow_mut().write_punctuation(": ");
@@ -1212,8 +1210,7 @@ impl QuickInfoWriter<'_> {
                 if t_symbol.is_some()
                     && self
                         .c
-                        .sym(t_symbol)
-                        .flags
+                        .sym_flags(t_symbol)
                         .intersects(SymbolFlags::TYPE_PARAMETER)
                     && self
                         .c

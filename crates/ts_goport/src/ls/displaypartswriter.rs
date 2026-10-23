@@ -273,7 +273,7 @@ pub fn classification_for_symbol(
     if symbol.is_nil() {
         return lsproto::ClassificationTypeName::TEXT;
     }
-    let flags = symbols.sym(symbol).flags;
+    let flags = symbols.sym_flags(symbol);
     if flags.intersects(SymbolFlags::VARIABLE) {
         if is_first_declaration_of_symbol_parameter(symbols, symbol) {
             return lsproto::ClassificationTypeName::PARAMETER_NAME;

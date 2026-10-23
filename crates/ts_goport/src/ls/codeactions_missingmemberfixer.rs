@@ -94,8 +94,7 @@ impl<'a> MissingMemberFixer<'a> {
         let signature_only = ambient || abstract_;
         let optional = self
             .type_checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::OPTIONAL);
         let mut kind = SyntaxKind::PropertySignature;
         if declaration.is_some() {
@@ -974,8 +973,7 @@ fn create_declaration_name(
 ) -> Node {
     if symbol.is_some()
         && type_checker
-            .sym(symbol)
-            .check_flags
+            .sym_check_flags(symbol)
             .intersects(CheckFlags::MAPPED)
     {
         let name_type = type_checker.get_name_type_of_symbol(symbol);

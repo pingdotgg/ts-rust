@@ -1588,14 +1588,13 @@ impl Checker {
         // project includes symbol named 'require' - make sure that it is ambient and local non-alias
         if resolved_require.is_nil()
             || self
-                .sym(resolved_require)
-                .flags
+                .sym_flags(resolved_require)
                 .intersects(SymbolFlags::ALIAS)
         {
             return false;
         }
 
-        let resolved_flags = self.sym(resolved_require).flags;
+        let resolved_flags = self.sym_flags(resolved_require);
         let target_declaration_kind = if resolved_flags.intersects(SymbolFlags::FUNCTION) {
             SyntaxKind::FunctionDeclaration
         } else if resolved_flags.intersects(SymbolFlags::VARIABLE) {
@@ -1846,7 +1845,7 @@ impl Checker {
         if symbol.is_some() && symbol != self.unknown_symbol {
             if !node_is_synthesized(name)
                 && is_entity_name(name)
-                && (self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+                && (self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
                     || name.parent().is_some()
                         && name.parent().kind() == SyntaxKind::ExportAssignment)
             {
@@ -1856,9 +1855,9 @@ impl Checker {
                 );
             }
             // We know a symbol with the given meaning exists along the alias chain, so resolve until we find it.
-            while !self.sym(symbol).flags.intersects(meaning)
+            while !self.sym_flags(symbol).intersects(meaning)
                 && !dont_resolve_alias
-                && self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+                && self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
             {
                 symbol = self.resolve_alias(symbol);
             }

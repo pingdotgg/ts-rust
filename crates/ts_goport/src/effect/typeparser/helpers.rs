@@ -84,7 +84,7 @@ impl TypeParser<'_> {
     pub fn resolve_aliased_symbol(&mut self, sym: SymbolId) -> SymbolId {
         let c = &mut *self.checker;
         let mut sym = sym;
-        while sym.is_some() && c.sym(sym).flags.intersects(SymbolFlags::ALIAS) {
+        while sym.is_some() && c.sym_flags(sym).intersects(SymbolFlags::ALIAS) {
             sym = c.get_aliased_symbol(sym);
         }
         sym

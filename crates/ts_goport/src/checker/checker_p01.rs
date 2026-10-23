@@ -1295,8 +1295,22 @@ pub struct Checker {
 impl Checker {
     #[must_use]
     #[inline(always)]
-    pub fn sym(&self, s: SymbolId) -> &Symbol {
+    pub fn sym(&self, s: SymbolId) -> SymRef<'_> {
         self.symbols.sym(s)
+    }
+
+    /// `sym(s).flags` with no data read (`SymbolArena::sym_flags`).
+    #[must_use]
+    #[inline(always)]
+    pub fn sym_flags(&self, s: SymbolId) -> SymbolFlags {
+        self.symbols.sym_flags(s)
+    }
+
+    /// `sym(s).check_flags` with no data read.
+    #[must_use]
+    #[inline(always)]
+    pub fn sym_check_flags(&self, s: SymbolId) -> CheckFlags {
+        self.symbols.sym_check_flags(s)
     }
 
     #[inline(always)]

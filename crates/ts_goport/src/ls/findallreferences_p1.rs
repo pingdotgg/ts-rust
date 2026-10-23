@@ -562,8 +562,7 @@ pub fn skip_past_export_or_import_specifier_or_union(
         let result = if decl.parent().is_nil() {
             // Ignore UMD module and global merge and CJS module end exports symbols
             if checker
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::TRANSIENT | SymbolFlags::MODULE_EXPORTS)
             {
                 SymbolId::NIL
@@ -2276,8 +2275,7 @@ impl<P: ProgramView> LanguageService<P> {
         if let Some(module_references) = &module_references
             && !checker
                 .borrow()
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::TRANSIENT)
         {
             return module_references.clone();

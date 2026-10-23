@@ -612,7 +612,7 @@ impl Checker {
         }
         let props = self.get_properties_of_type(object_type);
         for p in props {
-            if self.sym(p).flags.intersects(SymbolFlags::OPTIONAL) {
+            if self.sym_flags(p).intersects(SymbolFlags::OPTIONAL) {
                 let literal = self.get_literal_type_from_property(
                     p,
                     TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE,
@@ -1526,7 +1526,7 @@ impl Checker {
                     let target = get_leftmost_expression(binary.left(), false);
                     if !(is_identifier(target) && {
                         let s = self.get_resolved_symbol(target);
-                        self.sym(s).flags.intersects(SymbolFlags::MODULE_EXPORTS)
+                        self.sym_flags(s).intersects(SymbolFlags::MODULE_EXPORTS)
                     }) {
                         return self.get_contextual_type_for_assignment_expression(binary);
                     }
@@ -1573,8 +1573,7 @@ impl Checker {
                     let resolved = self.get_resolved_symbol(expr);
                     let symbol = self.get_export_symbol_of_value_symbol_if_exported(resolved);
                     if self
-                        .sym(symbol)
-                        .flags
+                        .sym_flags(symbol)
                         .intersects(SymbolFlags::MODULE_EXPORTS)
                     {
                         // No contextual type for an expression of the form 'module.exports = expr'.

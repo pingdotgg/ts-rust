@@ -38,10 +38,10 @@ impl Checker {
 
     // Go: checker/checker.go:5930 hasShadowedNamespace
     pub fn has_shadowed_namespace(&mut self, symbol: SymbolId) -> bool {
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         if flags.intersects(SymbolFlags::NAMESPACE_MODULE) && flags.intersects(SymbolFlags::ALIAS) {
             let target = self.resolve_alias(symbol);
-            if self.sym(target).flags.intersects(SymbolFlags::NAMESPACE)
+            if self.sym_flags(target).intersects(SymbolFlags::NAMESPACE)
                 && self.has_exported_members_of_kind(
                     target,
                     SymbolFlags::TYPE | SymbolFlags::NAMESPACE,
@@ -255,7 +255,7 @@ impl Checker {
         }
         // For a commonjs `const x = require`, validate the alias and exit
         let symbol = self.get_symbol_of_declaration(node);
-        if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+        if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
             && is_variable_declaration_initialized_to_require(node)
         {
             self.check_alias_symbol(node);
@@ -391,7 +391,7 @@ impl Checker {
             if !self.is_error_type(t)
                 && !self.is_error_type(declaration_type)
                 && !self.is_type_identical_to(t, declaration_type)
-                && !self.sym(symbol).flags.intersects(SymbolFlags::ASSIGNMENT)
+                && !self.sym_flags(symbol).intersects(SymbolFlags::ASSIGNMENT)
             {
                 let value_declaration = self.sym(symbol).value_declaration;
                 self.error_next_variable_or_property_declaration_must_have_same_type(
@@ -512,8 +512,7 @@ impl Checker {
         let symbol = self.get_symbol_of_declaration(node);
         let name = node.name();
         if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::FUNCTION_SCOPED_VARIABLE)
         {
             if !is_identifier(name) {
@@ -531,8 +530,7 @@ impl Checker {
             if local_declaration_symbol.is_some()
                 && local_declaration_symbol != symbol
                 && self
-                    .sym(local_declaration_symbol)
-                    .flags
+                    .sym_flags(local_declaration_symbol)
                     .intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
             {
                 if self
@@ -1326,7 +1324,7 @@ impl Checker {
     ) -> IterationTypes {
         let property_name = self.get_property_name_for_known_symbol_name(&r.iterator_symbol_name);
         let method = self.get_property_of_type(t, &property_name);
-        if method.is_some() && !self.sym(method).flags.intersects(SymbolFlags::OPTIONAL) {
+        if method.is_some() && !self.sym_flags(method).intersects(SymbolFlags::OPTIONAL) {
             let method_type = self.get_type_of_symbol(method);
             if self.is_type_any(method_type) {
                 return IterationTypes {
@@ -1510,7 +1508,7 @@ impl Checker {
         }
         let mut method_type = TypeId::NIL;
         if method.is_some()
-            && !(method_name == "next" && self.sym(method).flags.intersects(SymbolFlags::OPTIONAL))
+            && !(method_name == "next" && self.sym_flags(method).intersects(SymbolFlags::OPTIONAL))
         {
             if method_name == "next" {
                 method_type = self.get_type_of_symbol(method);

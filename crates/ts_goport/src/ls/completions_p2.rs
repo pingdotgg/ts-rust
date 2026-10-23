@@ -1202,8 +1202,7 @@ impl LanguageService {
 // that holds `symbol`.
 pub fn is_object_literal_method_symbol(symbols: &SymbolArena, symbol: SymbolId) -> bool {
     symbols
-        .sym(symbol)
-        .flags
+        .sym_flags(symbol)
         .intersects(SymbolFlags::PROPERTY | SymbolFlags::METHOD)
 }
 
@@ -1350,8 +1349,7 @@ impl LanguageService {
 
         let mut allowed_modifiers = modifiers | ModifierFlags::OVERRIDE | ModifierFlags::PUBLIC;
         if type_checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::METHOD)
         {
             allowed_modifiers |= ModifierFlags::ASYNC;
@@ -1606,8 +1604,7 @@ pub fn is_recommended_completion_match(
 ) -> bool {
     local_symbol == recommended_completion
         || type_checker
-            .sym(local_symbol)
-            .flags
+            .sym_flags(local_symbol)
             .intersects(SymbolFlags::EXPORT_VALUE)
             && type_checker.get_export_symbol_of_symbol(local_symbol) == recommended_completion
 }
@@ -1850,7 +1847,7 @@ pub fn is_class_like_member_completion(
         return false;
     }
     let member_flags = SymbolFlags::CLASS_MEMBER & SymbolFlags::ENUM_MEMBER_EXCLUDES;
-    symbols.sym(symbol).flags.intersects(member_flags)
+    symbols.sym_flags(symbol).intersects(member_flags)
         && (is_class_like(location)
             || (location.parent().is_some()
                 && location.parent().parent().is_some()
@@ -1885,7 +1882,7 @@ pub fn should_include_symbol(
     type_checker: &mut Checker,
     compiler_options: &CompilerOptions,
 ) -> bool {
-    let mut all_flags = type_checker.sym(symbol).flags;
+    let mut all_flags = type_checker.sym_flags(symbol);
     let location = data.location;
     // export = /**/ here we want to get all meanings, so any symbol is ok
     if location.parent().is_some() && is_export_assignment(location.parent()) {
@@ -1975,8 +1972,7 @@ pub fn should_include_symbol(
             .sym(symbol_origin)
             .combined_local_and_export_symbol_flags(&type_checker.symbols);
     if type_checker
-        .sym(symbol)
-        .flags
+        .sym_flags(symbol)
         .intersects(SymbolFlags::ALIAS)
     {
         all_flags = all_flags | type_checker.get_symbol_flags_exported(symbol);
@@ -2017,7 +2013,7 @@ pub fn get_completion_entry_display_name_for_symbol(
     } else {
         symbol_name(symbols, symbol)
     };
-    let flags = symbols.sym(symbol).flags;
+    let flags = symbols.sym_flags(symbol);
     if name.is_empty()
         // If the symbol is external module, don't show it in the completion list
         // (i.e declare module "http" { const x; } | // <= request completion here, "http" should not be there)
@@ -2347,7 +2343,7 @@ pub fn non_alias_can_be_referenced_at_type_location(
     type_checker: &mut Checker,
     mut seen_modules: SymbolIdSetValue,
 ) -> bool {
-    let flags = type_checker.sym(symbol).flags;
+    let flags = type_checker.sym_flags(symbol);
     flags.intersects(SymbolFlags::TYPE)
         || type_checker.is_unknown_symbol(symbol)
         || flags.intersects(SymbolFlags::MODULE)
@@ -2671,8 +2667,7 @@ pub fn get_recommended_completion(
         // Don't make a recommended completion for an abstract class.
         let result = if symbol.is_some()
             && type_checker
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::ENUM_MEMBER | SymbolFlags::ENUM | SymbolFlags::CLASS)
             && !is_abstract_constructor_symbol(&type_checker.symbols, symbol)
         {
@@ -2689,7 +2684,7 @@ pub fn get_recommended_completion(
 
 // Go: ls/completions.go:3602 isAbstractConstructorSymbol
 pub fn is_abstract_constructor_symbol(symbols: &SymbolArena, symbol: SymbolId) -> bool {
-    if symbols.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
+    if symbols.sym_flags(symbol).intersects(SymbolFlags::CLASS) {
         let declaration = get_class_like_declaration_of_symbol(symbols, symbol);
         return declaration.is_some()
             && has_syntactic_modifier(declaration, ModifierFlags::ABSTRACT);

@@ -173,15 +173,14 @@ impl Checker {
                     .unwrap_or(TypeId::NIL);
                 if t.is_nil() {
                     let mapper = nb_ctx(b, |c| c.mapper);
-                    if self.sym(symbol).flags.intersects(SymbolFlags::ACCESSOR)
+                    if self.sym_flags(symbol).intersects(SymbolFlags::ACCESSOR)
                         && declaration.kind() == SyntaxKind::SetAccessor
                     {
                         let write_type = self.get_write_type_of_symbol(symbol);
                         t = self.instantiate_type(write_type, mapper);
                     } else if symbol.is_some()
                         && !self
-                            .sym(symbol)
-                            .flags
+                            .sym_flags(symbol)
                             .intersects(SymbolFlags::TYPE_LITERAL | SymbolFlags::SIGNATURE)
                     {
                         let symbol_type = self.get_type_of_symbol(symbol);
@@ -365,8 +364,7 @@ impl Checker {
         // come from mappings over library functions.
         // Condition (3) limits printing of possibly infinitely deep reverse mapped types.
         if !self
-            .sym(property_symbol)
-            .check_flags
+            .sym_check_flags(property_symbol)
             .intersects(CheckFlags::REVERSE_MAPPED)
         {
             return false;
@@ -553,7 +551,7 @@ impl Checker {
                 break;
             }
         }
-        let is_method = self.sym(symbol).flags.intersects(SymbolFlags::METHOD);
+        let is_method = self.sym_flags(symbol).intersects(SymbolFlags::METHOD);
         let from_name_type = self.get_property_name_node_for_symbol_from_name_type(
             b,
             symbol,
@@ -700,8 +698,7 @@ impl Checker {
         mut type_elements: Vec<Node>,
     ) -> Vec<Node> {
         let property_is_reverse_mapped = self
-            .sym(property_symbol)
-            .check_flags
+            .sym_check_flags(property_symbol)
             .intersects(CheckFlags::REVERSE_MAPPED);
         let property_type = if self.should_use_placeholder_for_property(b, property_symbol) {
             self.any_type
@@ -765,8 +762,7 @@ impl Checker {
         let e = nb_e(b);
         let f = e.factory();
         if self
-            .sym(property_symbol)
-            .flags
+            .sym_flags(property_symbol)
             .intersects(SymbolFlags::ACCESSOR)
         {
             let write_type = self.get_write_type_of_symbol(property_symbol);
@@ -778,7 +774,7 @@ impl Checker {
                 );
                 let parent = self.sym(property_symbol).parent;
                 let parent_is_class =
-                    parent.is_some() && self.sym(parent).flags.intersects(SymbolFlags::CLASS);
+                    parent.is_some() && self.sym_flags(parent).intersects(SymbolFlags::CLASS);
                 if property_type != write_type || parent_is_class && prop_declaration.is_nil() {
                     let symbol_mapper = self
                         .value_symbol_links
@@ -894,8 +890,7 @@ impl Checker {
         }
 
         let optional_token = if self
-            .sym(property_symbol)
-            .flags
+            .sym_flags(property_symbol)
             .intersects(SymbolFlags::OPTIONAL)
         {
             f.new_token(SyntaxKind::QuestionToken)
@@ -903,8 +898,7 @@ impl Checker {
             Node::NIL
         };
         if self
-            .sym(property_symbol)
-            .flags
+            .sym_flags(property_symbol)
             .intersects(SymbolFlags::FUNCTION | SymbolFlags::METHOD)
             && self.get_properties_of_object_type(property_type).is_empty()
             && !self.is_readonly_symbol(property_symbol)
@@ -1073,8 +1067,7 @@ impl Checker {
         for &property_symbol in &properties {
             if nb_ctx(b, |c| is_expanding(c))
                 && self
-                    .sym(property_symbol)
-                    .flags
+                    .sym_flags(property_symbol)
                     .intersects(SymbolFlags::PROTOTYPE)
             {
                 continue;
@@ -1085,8 +1078,7 @@ impl Checker {
                     .intersects(NodeBuilderFlags::WRITE_CLASS_EXPRESSION_AS_TYPE_LITERAL)
             }) {
                 if self
-                    .sym(property_symbol)
-                    .flags
+                    .sym_flags(property_symbol)
                     .intersects(SymbolFlags::PROTOTYPE)
                 {
                     continue;
@@ -1214,7 +1206,7 @@ impl Checker {
             }) {
                 properties
                     .iter()
-                    .filter(|&&p| !self.sym(p).flags.intersects(SymbolFlags::PROTOTYPE))
+                    .filter(|&&p| !self.sym_flags(p).intersects(SymbolFlags::PROTOTYPE))
                     .count()
             } else {
                 properties.len()
@@ -1265,7 +1257,7 @@ impl Checker {
     pub fn get_type_alias_for_type_literal(&mut self, t: TypeId) -> SymbolId {
         let symbol = self.ty(t).symbol;
         if symbol.is_some()
-            && self.sym(symbol).flags.intersects(SymbolFlags::TYPE_LITERAL)
+            && self.sym_flags(symbol).intersects(SymbolFlags::TYPE_LITERAL)
             && !self.sym(symbol).declarations.is_empty()
         {
             let node = walk_up_parenthesized_types(self.sym(symbol).declarations[0].parent());
@@ -1286,7 +1278,7 @@ impl Checker {
         let declarations = self.sym(symbol).declarations.clone();
         let mut is_static_method_symbol = false;
         // `typeof C.name` can only be written when the member name is a valid identifier
-        if self.sym(symbol).flags.intersects(SymbolFlags::METHOD)
+        if self.sym_flags(symbol).intersects(SymbolFlags::METHOD)
             && is_identifier_text(&self.sym(symbol).name, LanguageVariant::STANDARD)
         {
             for &declaration in &declarations {
@@ -1300,7 +1292,7 @@ impl Checker {
         }
         let mut is_non_local_function_symbol = false;
         let mut is_function_expression_symbol = false;
-        if self.sym(symbol).flags.intersects(SymbolFlags::FUNCTION) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::FUNCTION) {
             if self.sym(symbol).parent.is_some() {
                 is_non_local_function_symbol = true;
             } else {
@@ -1373,7 +1365,7 @@ impl Checker {
         if force_expansion {
             return (false, symbol);
         }
-        let non_function_result = (self.sym(symbol).flags.intersects(SymbolFlags::CLASS)
+        let non_function_result = (self.sym_flags(symbol).intersects(SymbolFlags::CLASS)
             && !force_class_expansion
             && self.get_base_type_variable_of_class(symbol).is_nil()
             && !{
@@ -1397,8 +1389,7 @@ impl Checker {
                     })
             })
             || self
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::ENUM | SymbolFlags::VALUE_MODULE);
         if non_function_result {
             return (true, symbol);

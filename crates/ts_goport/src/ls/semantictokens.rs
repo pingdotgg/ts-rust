@@ -368,7 +368,7 @@ impl SemanticTokenCollector<'_> {
             let mut symbol = self.c.get_symbol_at_location_exported(node);
             if symbol.is_some() {
                 // Resolve aliases
-                if self.c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+                if self.c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
                     symbol = self.c.get_aliased_symbol(symbol);
                 }
 
@@ -414,8 +414,7 @@ impl SemanticTokenCollector<'_> {
                                 || node_flags.intersects(NodeFlags::CONST)
                                 || self
                                     .c
-                                    .sym(symbol)
-                                    .flags
+                                    .sym_flags(symbol)
                                     .intersects(SymbolFlags::ENUM_MEMBER)
                             {
                                 token_modifier |= TokenModifier::READONLY;
@@ -475,7 +474,7 @@ fn classify_symbol(
     symbol: SymbolId,
     meaning: SemanticMeaning,
 ) -> (TokenType, bool) {
-    let flags = symbols.sym(symbol).flags;
+    let flags = symbols.sym_flags(symbol);
     if flags.intersects(SymbolFlags::CLASS) {
         return (TokenType::CLASS, true);
     }

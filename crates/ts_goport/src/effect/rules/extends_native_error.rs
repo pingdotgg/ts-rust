@@ -95,8 +95,7 @@ fn check_extends_native_error(
         if resolved_symbol.is_some()
             && tp
                 .checker
-                .sym(resolved_symbol)
-                .flags
+                .sym_flags(resolved_symbol)
                 .intersects(SymbolFlags::ALIAS)
         {
             resolved_symbol = tp.checker.get_aliased_symbol(resolved_symbol);

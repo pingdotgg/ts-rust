@@ -1256,7 +1256,7 @@ impl Checker {
             return TypeId::NIL;
         }
         let prop_type = self.get_type_of_symbol(prop);
-        let is_optional = self.sym(prop).flags.intersects(SymbolFlags::OPTIONAL);
+        let is_optional = self.sym_flags(prop).intersects(SymbolFlags::OPTIONAL);
         self.remove_missing_type(prop_type, is_optional)
     }
 
@@ -1297,7 +1297,7 @@ impl Checker {
 
     // Go: checker/checker.go:31307 isCircularMappedProperty
     pub fn is_circular_mapped_property(&mut self, symbol: SymbolId) -> bool {
-        if self.sym(symbol).check_flags.intersects(CheckFlags::MAPPED) {
+        if self.sym_check_flags(symbol).intersects(CheckFlags::MAPPED) {
             let resolved_type = self
                 .value_symbol_links
                 .get_by_id(&self.symbols, symbol)
@@ -1473,7 +1473,7 @@ impl Checker {
             let node_members = self.sym(node.symbol()).members;
             for s in self.get_properties_of_type(contextual_type) {
                 let name = self.sym(s).name.clone();
-                if self.sym(s).flags.intersects(SymbolFlags::OPTIONAL)
+                if self.sym_flags(s).intersects(SymbolFlags::OPTIONAL)
                     && self.symbols.get_name(node_members, &name).is_nil()
                     && self.is_discriminant_property_key(contextual_type, TableKey::Name(&name))
                 {

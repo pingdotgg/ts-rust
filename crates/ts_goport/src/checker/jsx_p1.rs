@@ -464,7 +464,7 @@ impl Checker {
         }
         let mut discriminant_members: Vec<SymbolId> = Vec::new();
         for s in self.get_properties_of_type(contextual_type) {
-            let keep = if !self.sym(s).flags.intersects(SymbolFlags::OPTIONAL)
+            let keep = if !self.sym_flags(s).intersects(SymbolFlags::OPTIONAL)
                 || node.symbol().is_nil()
             {
                 false
@@ -922,14 +922,14 @@ impl Checker {
                             if p.is_nil() {
                                 p = self.unknown_symbol;
                             }
-                            self.sym(p).flags.intersects(SymbolFlags::OPTIONAL)
+                            self.sym_flags(p).intersects(SymbolFlags::OPTIONAL)
                         };
                         let source_is_optional = prop_name != INTERNAL_SYMBOL_NAME_MISSING && {
                             let mut p = self.get_property_of_type(source, &prop_name);
                             if p.is_nil() {
                                 p = self.unknown_symbol;
                             }
-                            self.sym(p).flags.intersects(SymbolFlags::OPTIONAL)
+                            self.sym_flags(p).intersects(SymbolFlags::OPTIONAL)
                         };
                         target_prop_type =
                             self.remove_missing_type(target_prop_type, target_is_optional);
@@ -1041,8 +1041,7 @@ impl Checker {
         }
         let mut resolved_alias = jsx_factory_symbol;
         if self
-            .sym(jsx_factory_symbol)
-            .flags
+            .sym_flags(jsx_factory_symbol)
             .intersects(SymbolFlags::ALIAS)
         {
             resolved_alias = self.resolve_alias(jsx_factory_symbol);
@@ -1392,7 +1391,7 @@ impl Checker {
                     let expr_type = self.check_jsx_attribute(attribute_decl, check_mode);
                     object_flags = object_flags
                         | (self.ty(expr_type).object_flags & ObjectFlags::PROPAGATING_FLAGS);
-                    let member_flags = self.sym(member).flags;
+                    let member_flags = self.sym_flags(member);
                     let member_name = self.sym(member).name.clone();
                     let attribute_symbol =
                         self.new_symbol(SymbolFlags::PROPERTY | member_flags, &member_name);

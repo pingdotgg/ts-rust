@@ -574,8 +574,7 @@ impl Checker {
             // Include parameter symbol instead of property symbol in the signature
             if param_symbol.is_some()
                 && self
-                    .sym(param_symbol)
-                    .flags
+                    .sym_flags(param_symbol)
                     .intersects(SymbolFlags::PROPERTY)
                 && !is_binding_pattern(param.name())
             {

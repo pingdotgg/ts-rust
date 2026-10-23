@@ -1217,7 +1217,7 @@ fn is_hintable_literal(node: Node) -> bool {
 // PORT: types and symbols live in the checker arenas, so the checker is a parameter.
 fn is_module_reference_type(c: &Checker, t: TypeId) -> bool {
     let symbol = c.ty(t).symbol();
-    symbol.is_some() && c.sym(symbol).flags.intersects(SymbolFlags::MODULE)
+    symbol.is_some() && c.sym_flags(symbol).intersects(SymbolFlags::MODULE)
 }
 
 // Go: ls/inlay_hints.go:901 getParameterDeclarationIdentifier

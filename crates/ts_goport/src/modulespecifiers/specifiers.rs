@@ -193,8 +193,7 @@ fn try_get_module_name_from_ambient_module(
         }
         if checker
             .symbols()
-            .sym(export_symbol)
-            .flags
+            .sym_flags(export_symbol)
             .intersects(SymbolFlags::ALIAS)
         {
             export_symbol = checker.get_aliased_symbol(export_symbol);

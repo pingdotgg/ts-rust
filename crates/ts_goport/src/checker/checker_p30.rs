@@ -243,8 +243,7 @@ impl Checker {
                     let index_symbol = self.ty(index_type).symbol;
                     let is_own_enum_access = object_symbol.is_some()
                         && self
-                            .sym(object_symbol)
-                            .flags
+                            .sym_flags(object_symbol)
                             .intersects(SymbolFlags::REGULAR_ENUM | SymbolFlags::CONST_ENUM)
                         && (index_symbol.is_some()
                             && self
@@ -297,7 +296,7 @@ impl Checker {
                         let exports = self.sym(global_this_symbol).exports;
                         let export = self.symbols.get_name(exports, &prop_name);
                         export.is_some()
-                            && self.sym(export).flags.intersects(SymbolFlags::BLOCK_SCOPED)
+                            && self.sym_flags(export).intersects(SymbolFlags::BLOCK_SCOPED)
                     };
                 if is_block_scoped_global_this_property {
                     let type_string = self.type_to_string_exported(object_type);
@@ -624,8 +623,7 @@ impl Checker {
                 let expression_symbol = self.get_resolved_symbol(node);
                 // CommonJS module.exports is never readonly
                 if self
-                    .sym(expression_symbol)
-                    .flags
+                    .sym_flags(expression_symbol)
                     .intersects(SymbolFlags::MODULE_EXPORTS)
                 {
                     return false;
@@ -634,7 +632,7 @@ impl Checker {
         }
         if self.is_readonly_symbol(symbol) {
             // Allow assignments to readonly properties within constructors of the same class declaration.
-            if self.sym(symbol).flags.intersects(SymbolFlags::PROPERTY)
+            if self.sym_flags(symbol).intersects(SymbolFlags::PROPERTY)
                 && is_access_expression(expr)
                 && expr.expression().kind() == SyntaxKind::ThisKeyword
             {
@@ -672,8 +670,7 @@ impl Checker {
             if is_identifier(node) {
                 let expression_symbol = self.get_resolved_symbol(node);
                 if self
-                    .sym(expression_symbol)
-                    .flags
+                    .sym_flags(expression_symbol)
                     .intersects(SymbolFlags::ALIAS)
                 {
                     let declaration = self.get_declaration_of_alias_symbol(expression_symbol);
@@ -1274,7 +1271,7 @@ impl Checker {
 
     // Go: checker/checker.go:28273 isConstEnumSymbol
     pub fn is_const_enum_symbol(&self, symbol: SymbolId) -> bool {
-        self.sym(symbol).flags.intersects(SymbolFlags::CONST_ENUM)
+        self.sym_flags(symbol).intersects(SymbolFlags::CONST_ENUM)
     }
 
     // Go: checker/checker.go:28277 compareProperties
@@ -1303,8 +1300,8 @@ impl Checker {
             if self.get_target_symbol(source_prop) != self.get_target_symbol(target_prop) {
                 return Ternary::FALSE;
             }
-        } else if (self.sym(source_prop).flags & SymbolFlags::OPTIONAL)
-            != (self.sym(target_prop).flags & SymbolFlags::OPTIONAL)
+        } else if (self.sym_flags(source_prop) & SymbolFlags::OPTIONAL)
+            != (self.sym_flags(target_prop) & SymbolFlags::OPTIONAL)
         {
             return Ternary::FALSE;
         }

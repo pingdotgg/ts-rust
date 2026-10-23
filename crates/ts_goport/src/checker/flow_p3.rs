@@ -488,7 +488,7 @@ impl Checker {
         symbol: SymbolId,
         mut diagnostic: Option<&mut Vec<Diagnostic>>,
     ) -> TypeId {
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         if flags.intersects(
             SymbolFlags::FUNCTION
                 | SymbolFlags::METHOD
@@ -498,7 +498,7 @@ impl Checker {
             return self.get_type_of_symbol(symbol);
         }
         if flags.intersects(SymbolFlags::VARIABLE | SymbolFlags::PROPERTY) {
-            if self.sym(symbol).check_flags.intersects(CheckFlags::MAPPED) {
+            if self.sym_check_flags(symbol).intersects(CheckFlags::MAPPED) {
                 let origin = self.mapped_symbol_links.get(symbol).synthetic_origin;
                 if origin.is_some()
                     && self

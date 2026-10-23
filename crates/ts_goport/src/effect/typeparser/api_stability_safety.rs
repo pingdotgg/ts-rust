@@ -368,7 +368,7 @@ impl ApiStabilityAnalysis {
         if symbol.is_nil() {
             return false;
         }
-        let flags = tp.checker.sym(symbol).flags;
+        let flags = tp.checker.sym_flags(symbol);
         if flags.intersects(SymbolFlags::ALIAS) {
             if has_alias_declaration(tp.checker, symbol) {
                 let target = api_stability_immediate_aliased_symbol(tp.checker, symbol);
@@ -791,7 +791,7 @@ impl ApiStabilitySafetyScan<'_> {
             return Unknown;
         }
         let arguments = node.type_argument_list();
-        let flags = tp.checker.sym(symbol).flags;
+        let flags = tp.checker.sym_flags(symbol);
         if flags.intersects(SymbolFlags::TYPE_PARAMETER) {
             return self.type_parameter_reference(tp, symbol, subst, bindings, project);
         }
@@ -836,7 +836,7 @@ impl ApiStabilitySafetyScan<'_> {
         bindings: Option<&Rc<ApiStabilitySafetyBinding>>,
         project: bool,
     ) -> ApiStabilitySafety {
-        let flags = tp.checker.sym(symbol).flags;
+        let flags = tp.checker.sym_flags(symbol);
         if flags.intersects(SymbolFlags::TYPE_ALIAS) {
             return self.alias_application(tp, symbol, arguments, subst, bindings, project);
         }
@@ -1298,8 +1298,7 @@ impl ApiStabilitySafetyScan<'_> {
             if symbol.is_some()
                 && tp
                     .checker
-                    .sym(symbol)
-                    .flags
+                    .sym_flags(symbol)
                     .intersects(SymbolFlags::TYPE_PARAMETER)
             {
                 self.a.note_materializing_symbol_read(
@@ -2012,8 +2011,7 @@ impl ApiStabilitySafetyScan<'_> {
                     if symbol.is_some()
                         && tp
                             .checker
-                            .sym(symbol)
-                            .flags
+                            .sym_flags(symbol)
                             .intersects(SymbolFlags::TYPE_PARAMETER)
                     {
                         self.a.note_materializing_symbol_read(
@@ -2580,8 +2578,7 @@ impl ApiStabilitySafetyScan<'_> {
                     if symbol.is_some()
                         && tp
                             .checker
-                            .sym(symbol)
-                            .flags
+                            .sym_flags(symbol)
                             .intersects(SymbolFlags::TYPE_PARAMETER)
                     {
                         self.a.note_materializing_symbol_read(

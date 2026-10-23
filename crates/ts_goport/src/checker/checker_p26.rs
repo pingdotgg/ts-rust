@@ -101,7 +101,7 @@ impl Checker {
         match node.kind() {
             SyntaxKind::TypeReference => {
                 let s = self.resolve_type_reference_name(node, SymbolFlags::TYPE, false);
-                self.sym(s).flags.intersects(SymbolFlags::TYPE_ALIAS)
+                self.sym_flags(s).intersects(SymbolFlags::TYPE_ALIAS)
             }
             SyntaxKind::TypeQuery => true,
             SyntaxKind::TypeOperator => {
@@ -582,8 +582,7 @@ impl Checker {
     pub fn get_type_from_type_alias_reference(&mut self, node: Node, symbol: SymbolId) -> TypeId {
         let type_arguments = node.type_arguments();
         if self
-            .sym(symbol)
-            .check_flags
+            .sym_check_flags(symbol)
             .intersects(CheckFlags::UNRESOLVED)
         {
             let mut alias_type_arguments = Vec::new();
@@ -653,7 +652,7 @@ impl Checker {
                 if alias_symbol.is_some() && alias_symbol != self.unknown_symbol {
                     let resolved = self.resolve_alias(alias_symbol);
                     if resolved.is_some()
-                        && self.sym(resolved).flags.intersects(SymbolFlags::TYPE_ALIAS)
+                        && self.sym_flags(resolved).intersects(SymbolFlags::TYPE_ALIAS)
                     {
                         new_alias_symbol = resolved;
                         alias_type_arguments = self.get_type_arguments_from_node(node);
@@ -762,7 +761,7 @@ impl Checker {
             // Go N' loads `symbol.Flags` (offset 0): addr=0x0 (checker.go:24204).
             crate::core::go_nil_dereference_at(0x0);
         }
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         if flags.intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE) {
             return self.get_declared_type_of_class_or_interface(symbol);
         } else if flags.intersects(SymbolFlags::TYPE_PARAMETER) {
@@ -852,8 +851,7 @@ impl Checker {
     // Returns the declaration used to obtain a class, interface, or function symbol's outer type parameters.
     pub fn get_class_or_interface_like_declaration(&self, symbol: SymbolId) -> Node {
         if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::CLASS | SymbolFlags::FUNCTION)
         {
             return self.sym(symbol).value_declaration;
@@ -973,8 +971,7 @@ impl Checker {
         // symbol table insertion order; the sort below gives Go's order.
         for symbol in self.symbols.values(node.locals()) {
             if self
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::TYPE_PARAMETER)
             {
                 let t = self.get_declared_type_of_symbol(symbol);
@@ -1377,7 +1374,7 @@ impl Checker {
                         );
                     }
                 }
-                if self.sym(symbol).flags.intersects(SymbolFlags::ENUM_MEMBER) {
+                if self.sym_flags(symbol).intersects(SymbolFlags::ENUM_MEMBER) {
                     if location.is_some() {
                         return self.evaluate_enum_member(expr, symbol, location);
                     }
@@ -1428,7 +1425,7 @@ impl Checker {
                         Node::NIL,
                     );
                     if root_symbol.is_some()
-                        && self.sym(root_symbol).flags.intersects(SymbolFlags::ENUM)
+                        && self.sym_flags(root_symbol).intersects(SymbolFlags::ENUM)
                     {
                         let name = expr.argument_expression().text();
                         let exports = self.sym(root_symbol).exports;

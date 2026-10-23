@@ -62,7 +62,7 @@ impl TypeParser<'_> {
             }
 
             // Module/namespace imports are safe
-            if self.checker.sym(sym).flags.intersects(
+            if self.checker.sym_flags(sym).intersects(
                 SymbolFlags::MODULE | SymbolFlags::NAMESPACE | SymbolFlags::VALUE_MODULE,
             ) {
                 return true;
@@ -93,7 +93,7 @@ impl TypeParser<'_> {
             }
 
             // Check if subject is a module/namespace
-            if self.checker.sym(sym).flags.intersects(
+            if self.checker.sym_flags(sym).intersects(
                 SymbolFlags::MODULE | SymbolFlags::NAMESPACE | SymbolFlags::VALUE_MODULE,
             ) {
                 return true;

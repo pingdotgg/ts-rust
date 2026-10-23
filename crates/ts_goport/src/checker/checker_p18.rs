@@ -101,7 +101,7 @@ impl Checker {
         let exports = self.get_exports_of_symbol(namespace);
         let s = self.get_symbol_key(exports, TableKey::Name(&right_name), meaning);
         let mut symbol = self.get_merged_symbol(s);
-        if symbol.is_nil() && self.sym(namespace).flags.intersects(SymbolFlags::ALIAS) {
+        if symbol.is_nil() && self.sym_flags(namespace).intersects(SymbolFlags::ALIAS) {
             // `namespace` can be resolved further if there was a symbol merge with a re-export
             let resolved = self.resolve_alias(namespace);
             let exports = self.get_exports_of_symbol(resolved);
@@ -232,7 +232,7 @@ impl Checker {
 
     // Go: checker/checker.go:16328 getExportsOfSymbol
     pub fn get_exports_of_symbol(&mut self, symbol: SymbolId) -> SymbolTable {
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         if flags.intersects(SymbolFlags::LATE_BINDING_CONTAINER) {
             return self.get_resolved_members_or_exports_of_symbol(
                 symbol,
@@ -257,7 +257,7 @@ impl Checker {
             let mut early_symbols = self.sym(symbol).exports;
             if !is_static {
                 early_symbols = self.sym(symbol).members;
-            } else if self.sym(symbol).flags.intersects(SymbolFlags::MODULE) {
+            } else if self.sym_flags(symbol).intersects(SymbolFlags::MODULE) {
                 early_symbols = self.get_exports_of_module_worker(symbol).0;
             }
             self.members_and_exports_links.get(symbol)[kind] = early_symbols;
@@ -358,7 +358,7 @@ impl Checker {
             };
             if self.is_type_usable_as_property_name(t) {
                 let member_name = self.get_property_name_from_type(t);
-                let symbol_flags = self.sym(decl.symbol()).flags;
+                let symbol_flags = self.sym_flags(decl.symbol());
                 // Get or add a late-bound symbol for the member. This allows us to merge late-bound accessor declarations.
                 let mut late_symbol = self.symbols.get(late_symbols, &member_name);
                 if late_symbol.is_nil() {
@@ -370,8 +370,7 @@ impl Checker {
                 // Report an error if there's a symbol declaration with the same name and conflicting flags.
                 let early_symbol = self.symbols.get(early_symbols, &member_name);
                 if self
-                    .sym(late_symbol)
-                    .flags
+                    .sym_flags(late_symbol)
                     .intersects(get_excluded_symbol_flags(symbol_flags))
                 {
                     // If we have an existing early-bound member, combine its declarations so that we can
@@ -398,7 +397,7 @@ impl Checker {
                     }
                     let location = if decl_name.is_some() { decl_name } else { decl };
                     self.error(location, diag::Duplicate_identifier_0, args![name]);
-                    let late_flags = self.sym(late_symbol).flags;
+                    let late_flags = self.sym_flags(late_symbol);
                     if late_flags.intersects(SymbolFlags::ACCESSOR)
                         && (late_flags & SymbolFlags::ACCESSOR)
                             != (symbol_flags & SymbolFlags::ACCESSOR)
@@ -451,8 +450,7 @@ impl Checker {
         // since that would point at an index symbol and not a single property symbol, like most consumers would expect)
         if self.sym(index_symbol).declarations.is_empty()
             || !self
-                .sym(decl.symbol())
-                .flags
+                .sym_flags(decl.symbol())
                 .intersects(SymbolFlags::REPLACEABLE_BY_METHOD)
         {
             self.sym_mut(index_symbol).declarations.push(decl);
@@ -463,8 +461,7 @@ impl Checker {
     // PORT: Go package function; it reads symbol flags, so it is a Checker method.
     pub fn is_not_replacable_by_method(&self, decl: Node) -> bool {
         !self
-            .sym(decl.symbol())
-            .flags
+            .sym_flags(decl.symbol())
             .intersects(SymbolFlags::REPLACEABLE_BY_METHOD)
     }
 
@@ -479,11 +476,11 @@ impl Checker {
         symbol_flags: SymbolFlags,
     ) {
         debug_assert!(
-            self.sym(symbol).check_flags.intersects(CheckFlags::LATE),
+            self.sym_check_flags(symbol).intersects(CheckFlags::LATE),
             "Expected a late-bound symbol."
         );
         self.late_bound_links.get(member.symbol()).late_symbol = symbol;
-        let member_symbol_flags = self.sym(member.symbol()).flags;
+        let member_symbol_flags = self.sym_flags(member.symbol());
         if self.sym(symbol).declarations.is_empty()
             || !member_symbol_flags.intersects(SymbolFlags::REPLACEABLE_BY_METHOD)
         {
@@ -491,8 +488,7 @@ impl Checker {
             s.flags |= symbol_flags;
             s.declarations.push(member);
         } else if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::REPLACEABLE_BY_METHOD)
             && member_symbol_flags.intersects(SymbolFlags::METHOD)
         {
@@ -503,11 +499,11 @@ impl Checker {
                 .filter(|&d| self.is_not_replacable_by_method(d))
                 .collect();
             declarations.push(member);
-            let old_flags = self.sym(symbol).flags;
+            let old_flags = self.sym_flags(symbol);
             // ts#64518 (Go N' checker.go:16492): the late-bound symbol stays transient.
             let mut flags = SymbolFlags::TRANSIENT;
             for &d in &declarations {
-                flags |= self.sym(d.symbol()).flags;
+                flags |= self.sym_flags(d.symbol());
             }
             if old_flags.intersects(SymbolFlags::ACCESSOR) {
                 flags |= SymbolFlags::ACCESSOR;
@@ -527,8 +523,7 @@ impl Checker {
     // For a description of late-binding, see `lateBindMember`.
     pub fn get_members_of_symbol(&mut self, symbol: SymbolId) -> SymbolTable {
         if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::LATE_BINDING_CONTAINER)
         {
             return self.get_resolved_members_or_exports_of_symbol(
@@ -787,7 +782,7 @@ impl Checker {
     // meaning. Pure aliases are eagerly resolved and any type-only markers are back-propagated to the original
     // symbol. The function panics if the argument is not a symbol with an alias meaning.
     pub fn resolve_alias(&mut self, symbol: SymbolId) -> SymbolId {
-        if !self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if !self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             panic!("Should only get alias here");
         }
         if self.alias_symbol_links.get(symbol).alias_target.is_nil() {
@@ -869,7 +864,7 @@ impl Checker {
         location: Node,
     ) -> SymbolId {
         let mut symbol = symbol;
-        if !self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+        if !self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
             || self.is_deprecated_symbol(symbol)
             || self.get_declaration_of_alias_symbol(symbol).is_nil()
         {
@@ -879,7 +874,7 @@ impl Checker {
         if target_symbol == self.unknown_symbol {
             return target_symbol;
         }
-        while self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        while self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             let target = self.get_immediate_aliased_symbol(symbol);
             if target.is_some() {
                 if target == target_symbol {
@@ -942,9 +937,9 @@ impl Checker {
         let mut seen_symbols: FxHashSet<SymbolId> = FxHashSet::default();
         let mut flags = SymbolFlags::NONE;
         if !exclude_local_meanings {
-            flags = self.sym(symbol).flags;
+            flags = self.sym_flags(symbol);
         }
-        while self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        while self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             if exclude_type_only_meanings && self.get_type_only_alias_declaration(symbol).is_some()
             {
                 break;
@@ -954,7 +949,7 @@ impl Checker {
             if target == self.unknown_symbol {
                 return SymbolFlags::ALL;
             }
-            if self.sym(target).flags.intersects(SymbolFlags::ALIAS) {
+            if self.sym_flags(target).intersects(SymbolFlags::ALIAS) {
                 // Optimization - try to avoid creating or adding to `seenSymbols` if possible
                 if target == symbol || seen_symbols.contains(&target) {
                     break;
@@ -964,7 +959,7 @@ impl Checker {
                 }
                 seen_symbols.insert(target);
             }
-            flags |= self.sym(target).flags;
+            flags |= self.sym_flags(target);
             symbol = target;
         }
         flags
@@ -1053,8 +1048,8 @@ impl Checker {
             // Go N' loads `symbol.CheckFlags` (offset 4): addr=0x4 (checker.go:16821).
             crate::core::go_nil_dereference_at(0x4);
         }
-        let check_flags = self.sym(symbol).check_flags;
-        let flags = self.sym(symbol).flags;
+        let check_flags = self.sym_check_flags(symbol);
+        let flags = self.sym_flags(symbol);
         if check_flags.intersects(CheckFlags::SYNTHETIC_PROPERTY) {
             if check_flags.intersects(CheckFlags::DEFERRED_TYPE) {
                 return self.get_write_type_of_symbol_with_deferred_type(symbol);
@@ -1146,8 +1141,7 @@ impl Checker {
             // Go N' loads `symbol.CheckFlags` (offset 4): addr=0x4 (checker.go:16880).
             crate::core::go_nil_dereference_at(0x4);
         }
-        let s = self.sym(symbol);
-        let (check_flags, flags) = (s.check_flags, s.flags);
+        let (flags, check_flags) = self.symbols.sym_head(symbol);
         if check_flags.intersects(CheckFlags::DEFERRED_TYPE) {
             return self.get_type_of_symbol_with_deferred_type(symbol);
         }
@@ -1187,7 +1181,7 @@ impl Checker {
     // Go: checker/checker.go:16932 getNonMissingTypeOfSymbol
     pub fn get_non_missing_type_of_symbol(&mut self, symbol: SymbolId) -> TypeId {
         let t = self.get_type_of_symbol(symbol);
-        let is_optional = self.sym(symbol).flags.intersects(SymbolFlags::OPTIONAL);
+        let is_optional = self.sym_flags(symbol).intersects(SymbolFlags::OPTIONAL);
         self.remove_missing_type(t, is_optional)
     }
 
@@ -1279,7 +1273,7 @@ impl Checker {
         symbol: SymbolId,
     ) -> TypeId {
         // Handle prototype property
-        if self.sym(symbol).flags.intersects(SymbolFlags::PROTOTYPE) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::PROTOTYPE) {
             return self.get_type_of_prototype_property(symbol);
         }
         // CommonsJS require and module both have type any.
@@ -1305,8 +1299,7 @@ impl Checker {
             return self.report_circularity_error(symbol);
         }
         if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::MODULE_EXPORTS)
         {
             if self.sym(symbol).name == "exports" {

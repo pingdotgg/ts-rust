@@ -588,7 +588,7 @@ impl Checker {
     // (utilities.go:1779) is already `Checker::skip_alias`, so this method
     // ends in `_exported`.
     pub fn skip_alias_exported(&mut self, symbol: SymbolId) -> SymbolId {
-        if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             return self.get_aliased_symbol(symbol);
         }
         symbol
@@ -618,8 +618,7 @@ impl Checker {
     // Go: checker/services.go:421 getImmediateRootSymbols
     pub fn get_immediate_root_symbols(&mut self, symbol: SymbolId) -> Vec<SymbolId> {
         if self
-            .sym(symbol)
-            .check_flags
+            .sym_check_flags(symbol)
             .intersects(CheckFlags::SYNTHETIC)
         {
             let containing_type = self
@@ -638,7 +637,7 @@ impl Checker {
             }
             return result;
         }
-        if self.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::TRANSIENT) {
             if self.spread_links.has(symbol) {
                 let left_spread = self.spread_links.get(symbol).left_spread;
                 let right_spread = self.spread_links.get(symbol).right_spread;

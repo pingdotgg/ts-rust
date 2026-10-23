@@ -123,7 +123,7 @@ impl<P: ProgramView> LanguageService<P> {
         source_files_set: &FxHashSet<String>,
     ) -> Option<Vec<Rc<RefCell<SymbolAndEntries>>>> {
         if symbol.is_nil()
-            || !(checker.sym(symbol).flags.intersects(SymbolFlags::MODULE)
+            || !(checker.sym_flags(symbol).intersects(SymbolFlags::MODULE)
                 && !checker.sym(symbol).declarations.is_empty())
         {
             return None;
@@ -156,8 +156,7 @@ impl<P: ProgramView> LanguageService<P> {
         );
         if export_equals.is_nil()
             || !checker
-                .sym(export_equals)
-                .flags
+                .sym_flags(export_equals)
                 .intersects(SymbolFlags::ALIAS)
             || !source_files_set.contains(module_source_file_name)
         {
@@ -1869,7 +1868,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
         reference_symbol: SymbolId,
         search: &RefSearch,
     ) {
-        let reference_flags = self.checker.sym(reference_symbol).flags;
+        let reference_flags = self.checker.sym_flags(reference_symbol);
         let value_declaration = self.checker.sym(reference_symbol).value_declaration;
         if reference_flags.intersects(SymbolFlags::TRANSIENT) || value_declaration.is_nil() {
             return;
@@ -1970,7 +1969,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
                 };
                 if search_sym.is_some() && (search.includes)(search_sym) {
                     if root_symbol.is_some()
-                        && !c.sym(sym).check_flags.intersects(CheckFlags::SYNTHETIC)
+                        && !c.sym_check_flags(sym).intersects(CheckFlags::SYNTHETIC)
                     {
                         return root_symbol;
                     }
@@ -2021,8 +2020,7 @@ impl<'c, P: ProgramView> RefState<'c, P> {
             if root_symbol_parent.is_some()
                 && self
                     .checker
-                    .sym(root_symbol_parent)
-                    .flags
+                    .sym_flags(root_symbol_parent)
                     .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE)
                 && allow_base_types(&mut *self, root_symbol)
             {
@@ -2173,21 +2171,18 @@ impl<'c, P: ProgramView> RefState<'c, P> {
                 .get_symbols_of_parameter_property_declaration(value_declaration, symbol_name);
             crate::go_assert!(
                 self.checker
-                    .sym(param_prop1)
-                    .flags
+                    .sym_flags(param_prop1)
                     .intersects(SymbolFlags::FUNCTION_SCOPED_VARIABLE)
                     && self
                         .checker
-                        .sym(param_prop2)
-                        .flags
+                        .sym_flags(param_prop2)
                         .intersects(SymbolFlags::CLASS_MEMBER),
                 "GetSymbolsOfParameterPropertyDeclaration must return (parameter, member) pair"
             );
             // core.IfElse
             let param_prop = if self
                 .checker
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::FUNCTION_SCOPED_VARIABLE)
             {
                 param_prop2

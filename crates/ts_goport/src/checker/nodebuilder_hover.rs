@@ -32,7 +32,7 @@ impl Checker {
         symbol: SymbolId,
     ) -> Vec<Node> {
         let mut results = Vec::new();
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         if flags.intersects(SymbolFlags::ENUM) {
             let node = self.expand_enum_decl(b, symbol);
             if node.is_some() {
@@ -73,7 +73,7 @@ impl Checker {
         let member_props: Vec<SymbolId> = self
             .get_properties_of_type(symbol_type)
             .into_iter()
-            .filter(|&p| self.sym(p).flags.intersects(SymbolFlags::ENUM_MEMBER))
+            .filter(|&p| self.sym_flags(p).intersects(SymbolFlags::ENUM_MEMBER))
             .collect();
         let mut members: Vec<Node> = Vec::new();
         for (i, &p) in member_props.iter().enumerate() {
@@ -244,7 +244,7 @@ impl Checker {
             .get_properties_of_type(static_type)
             .into_iter()
             .filter(|&p| {
-                !self.sym(p).flags.intersects(SymbolFlags::PROTOTYPE)
+                !self.sym_flags(p).intersects(SymbolFlags::PROTOTYPE)
                     && self.sym(p).name != "prototype"
                     && !self.is_namespace_member(p)
             })
@@ -461,7 +461,7 @@ impl Checker {
     ) -> Vec<Node> {
         let properties: Vec<SymbolId> = properties
             .into_iter()
-            .filter(|&p| !self.sym(p).flags.intersects(SymbolFlags::PROTOTYPE))
+            .filter(|&p| !self.sym_flags(p).intersects(SymbolFlags::PROTOTYPE))
             .collect();
         for (i, &p) in properties.iter().enumerate() {
             if self.check_truncation_length_if_expanding(b) && i + 3 < properties.len() - 1 {
@@ -620,7 +620,7 @@ impl Checker {
         resolved: SymbolId,
         name: &str,
     ) -> Node {
-        let flags = self.sym(resolved).flags;
+        let flags = self.sym_flags(resolved);
         if flags.intersects(SymbolFlags::TYPE_ALIAS) {
             self.serialize_type_alias_for_namespace(b, resolved, name)
         } else if flags.intersects(SymbolFlags::ENUM) {
@@ -716,13 +716,13 @@ impl Checker {
             }
 
             // Handle alias/re-export symbols
-            if self.sym(m).flags.intersects(SymbolFlags::ALIAS) {
+            if self.sym_flags(m).intersects(SymbolFlags::ALIAS) {
                 let alias_decl = self.get_declaration_of_alias_symbol(m);
                 let alias_target = self.get_target_of_alias_declaration(alias_decl);
                 let target = self.get_merged_symbol(alias_target);
                 if target.is_some() {
                     // If the alias target is a local symbol (not itself an export), emit its declaration first
-                    if self.sym(target).flags.intersects(
+                    if self.sym_flags(target).intersects(
                         SymbolFlags::BLOCK_SCOPED_VARIABLE
                             | SymbolFlags::FUNCTION_SCOPED_VARIABLE
                             | SymbolFlags::PROPERTY,
@@ -790,8 +790,7 @@ impl Checker {
 
             // Handle functions as function declarations
             if self
-                .sym(resolved)
-                .flags
+                .sym_flags(resolved)
                 .intersects(SymbolFlags::FUNCTION | SymbolFlags::METHOD)
             {
                 let t = self.get_type_of_symbol(resolved);
@@ -817,8 +816,7 @@ impl Checker {
                 let merged = self.get_merged_symbol(resolved);
                 let merged_exports = self.sym(merged).exports;
                 let has_module_exports = self
-                    .sym(merged)
-                    .flags
+                    .sym_flags(merged)
                     .intersects(SymbolFlags::VALUE_MODULE | SymbolFlags::NAMESPACE_MODULE)
                     && merged_exports.is_some()
                     && self.symbols.len(merged_exports) != 0;

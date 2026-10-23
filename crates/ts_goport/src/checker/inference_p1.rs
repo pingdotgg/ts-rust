@@ -2266,14 +2266,12 @@ impl Checker {
             {
                 let source_type = self.get_type_of_symbol(source_prop);
                 let source_optional = self
-                    .sym(source_prop)
-                    .flags
+                    .sym_flags(source_prop)
                     .intersects(SymbolFlags::OPTIONAL);
                 let s = self.remove_missing_type(source_type, source_optional);
                 let target_type = self.get_type_of_symbol(target_prop);
                 let target_optional = self
-                    .sym(target_prop)
-                    .flags
+                    .sym_flags(target_prop)
                     .intersects(SymbolFlags::OPTIONAL);
                 let t = self.remove_missing_type(target_type, target_optional);
                 self.infer_from_types(n, s, t);
@@ -2447,7 +2445,7 @@ impl Checker {
                     );
                     if self.is_applicable_index_type(literal, target_key_type) {
                         let mut prop_type = self.get_type_of_symbol(prop);
-                        if self.sym(prop).flags.intersects(SymbolFlags::OPTIONAL) {
+                        if self.sym_flags(prop).intersects(SymbolFlags::OPTIONAL) {
                             prop_type = self.remove_missing_or_undefined_type(prop_type);
                         }
                         prop_types.push(prop_type);

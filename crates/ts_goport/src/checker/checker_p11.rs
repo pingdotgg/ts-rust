@@ -1181,8 +1181,7 @@ impl Checker {
             let resolved_symbol = self.get_resolved_symbol_or_nil(error_target);
             if resolved_symbol.is_some()
                 && self
-                    .sym(resolved_symbol)
-                    .flags
+                    .sym_flags(resolved_symbol)
                     .intersects(SymbolFlags::GET_ACCESSOR)
             {
                 head_message = diag::This_expression_is_not_callable_because_it_is_a_get_accessor_Did_you_mean_to_use_it_without;

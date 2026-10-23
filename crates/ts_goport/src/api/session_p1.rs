@@ -90,7 +90,7 @@ pub fn get_source_file_symbol_index(
             let mut add_symbols = |work: &mut Vec<SymbolId>| {
                 while let Some(symbol) = work.pop() {
                     if symbol.is_nil()
-                        || symbols.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT)
+                        || symbols.sym_flags(symbol).intersects(SymbolFlags::TRANSIENT)
                     {
                         continue;
                     }
@@ -741,7 +741,7 @@ pub fn program_base_directory(program: &compiler::NewProgram) -> String {
 // addressed by file key, so their binder symbols remain snapshot-owned.
 // PORT: `symbols` is the arena that holds `symbol`; nil is `Node::NIL`.
 pub fn symbol_owner_file(symbols: &SymbolArena, symbol: SymbolId) -> Option<Node> {
-    if symbols.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT) {
+    if symbols.sym_flags(symbol).intersects(SymbolFlags::TRANSIENT) {
         return None;
     }
     let file = get_source_file_of_symbol(symbols, symbol);
@@ -1053,7 +1053,7 @@ fn shadow_of(
     if let Some(found) = to.symbol_at_slot(origin) {
         return found;
     }
-    let shadow = to.push_shadow(from.sym(symbol).clone(), origin);
+    let shadow = to.push_shadow(from.sym(symbol).to_symbol(), origin);
     work.push((shadow, symbol));
     shadow
 }

@@ -1062,8 +1062,7 @@ impl LanguageService {
                 match parameter_list.last() {
                     Some(&last) => {
                         last.is_some()
-                            && c.sym(last)
-                                .check_flags
+                            && c.sym_check_flags(last)
                                 .intersects(CheckFlags::REST_PARAMETER)
                     }
                     None => false,
@@ -1096,7 +1095,7 @@ impl LanguageService {
         c: &mut Checker,
         doc_format: &lsproto::MarkupKind,
     ) -> SignatureHelpParameter {
-        let check_flags = c.sym(parameter).check_flags;
+        let check_flags = c.sym_check_flags(parameter);
         let is_optional = check_flags.intersects(CheckFlags::OPTIONAL_PARAMETER);
         let is_rest = check_flags.intersects(CheckFlags::REST_PARAMETER);
         let mut documentation: Option<lsproto::StringOrMarkupContent> = None;

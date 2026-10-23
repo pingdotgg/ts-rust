@@ -666,8 +666,7 @@ fn is_unique_local_name(name: &str, container: Node) -> bool {
             let local = symbols.get(locals, name);
             if local.is_some()
                 && symbols
-                    .sym(local)
-                    .flags
+                    .sym_flags(local)
                     .intersects(SymbolFlags::VALUE | SymbolFlags::EXPORT_VALUE | SymbolFlags::ALIAS)
             {
                 return false;

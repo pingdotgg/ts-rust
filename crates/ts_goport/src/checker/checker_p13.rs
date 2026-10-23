@@ -233,7 +233,7 @@ impl Checker {
                     );
                 }
             } else {
-                let prop_flags = self.sym(prop).flags;
+                let prop_flags = self.sym_flags(prop);
                 let is_setonly_accessor = prop_flags.intersects(SymbolFlags::SET_ACCESSOR)
                     && !prop_flags.intersects(SymbolFlags::GET_ACCESSOR);
                 if is_setonly_accessor && assignment_kind != AssignmentKind::DEFINITE {
@@ -296,8 +296,7 @@ impl Checker {
                     let global_symbol = self.symbols.get(global_exports, right.text());
                     if global_symbol.is_some()
                         && self
-                            .sym(global_symbol)
-                            .flags
+                            .sym_flags(global_symbol)
                             .intersects(SymbolFlags::BLOCK_SCOPED)
                     {
                         let type_string = self.type_to_string(left_type);
@@ -420,11 +419,11 @@ impl Checker {
         let assignment_kind = get_assignment_target_kind(node);
         if assignment_kind == AssignmentKind::DEFINITE {
             let is_optional =
-                prop.is_some() && self.sym(prop).flags.intersects(SymbolFlags::OPTIONAL);
+                prop.is_some() && self.sym_flags(prop).intersects(SymbolFlags::OPTIONAL);
             return self.remove_missing_type(prop_type, is_optional);
         }
         if prop.is_some() {
-            let prop_flags = self.sym(prop).flags;
+            let prop_flags = self.sym_flags(prop);
             if !prop_flags
                 .intersects(SymbolFlags::VARIABLE | SymbolFlags::PROPERTY | SymbolFlags::ACCESSOR)
                 && !(prop_flags.intersects(SymbolFlags::METHOD)
@@ -1070,8 +1069,7 @@ impl Checker {
     // Go: checker/checker.go:11928 isUncalledFunctionReference
     pub fn is_uncalled_function_reference(&mut self, node: Node, symbol: SymbolId) -> bool {
         if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::FUNCTION | SymbolFlags::METHOD)
         {
             let mut parent = find_ancestor(node.parent(), |n| !is_access_expression(n));
@@ -1162,7 +1160,7 @@ impl Checker {
     // Go: checker/checker.go:11970 isPropertyDeclaredInAncestorClass
     pub fn is_property_declared_in_ancestor_class(&mut self, prop: SymbolId) -> bool {
         let parent = self.sym(prop).parent;
-        if self.sym(parent).flags.intersects(SymbolFlags::CLASS) {
+        if self.sym_flags(parent).intersects(SymbolFlags::CLASS) {
             let declared_type = self.get_declared_type_of_symbol(parent);
             let base_types = self.get_base_types(declared_type);
             if !base_types.is_empty() {
@@ -1293,7 +1291,7 @@ impl Checker {
         {
             let parent_symbol = self.get_parent_of_symbol(prop);
             if parent_symbol.is_some()
-                && self.sym(parent_symbol).flags.intersects(SymbolFlags::CLASS)
+                && self.sym_flags(parent_symbol).intersects(SymbolFlags::CLASS)
                 && self.is_node_used_during_class_initialization(location)
             {
                 if error_node.is_some() {
@@ -1420,7 +1418,7 @@ impl Checker {
     // Go: checker/checker.go:12136 symbolHasNonMethodDeclaration
     pub fn symbol_has_non_method_declaration(&mut self, symbol: SymbolId) -> bool {
         self.for_each_property(symbol, &mut |c: &mut Checker, prop: SymbolId| {
-            !c.sym(prop).flags.intersects(SymbolFlags::METHOD)
+            !c.sym_flags(prop).intersects(SymbolFlags::METHOD)
         })
     }
 
@@ -1432,7 +1430,7 @@ impl Checker {
         prop: SymbolId,
         callback: &mut dyn FnMut(&mut Checker, SymbolId) -> bool,
     ) -> bool {
-        if !self.sym(prop).check_flags.intersects(CheckFlags::SYNTHETIC) {
+        if !self.sym_check_flags(prop).intersects(CheckFlags::SYNTHETIC) {
             return callback(self, prop);
         }
         let containing_type = self
@@ -1454,7 +1452,7 @@ impl Checker {
     // Return the declaring class type of a property or undefined if property not declared in class
     pub fn get_declaring_class(&mut self, prop: SymbolId) -> TypeId {
         let parent = self.sym(prop).parent;
-        if parent.is_some() && self.sym(parent).flags.intersects(SymbolFlags::CLASS) {
+        if parent.is_some() && self.sym_flags(parent).intersects(SymbolFlags::CLASS) {
             let parent_of_symbol = self.get_parent_of_symbol(prop);
             return self.get_declared_type_of_symbol(parent_of_symbol);
         }
@@ -1664,8 +1662,7 @@ impl Checker {
                         {
                             let resolved = self.get_resolved_symbol(expression);
                             if self
-                                .sym(resolved)
-                                .flags
+                                .sym_flags(resolved)
                                 .intersects(SymbolFlags::MODULE_EXPORTS)
                             {
                                 return TypeId::NIL;

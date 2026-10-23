@@ -113,8 +113,7 @@ fn local_export_target(ctx: &mut RuleContext<'_, '_>, export_symbol: SymbolId) -
     if ctx
         .tp
         .checker
-        .sym(target)
-        .flags
+        .sym_flags(target)
         .intersects(SymbolFlags::ALIAS)
     {
         target = ctx.tp.checker.get_aliased_symbol(target);

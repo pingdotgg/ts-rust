@@ -69,7 +69,7 @@ impl SymbolTracker for SymbolTrackerImpl {
                 }
             }
             // Skip recording type parameters as they dont contribute to late painted statements
-            if !c.sym(symbol).flags.intersects(SymbolFlags::TYPE_PARAMETER) {
+            if !c.sym_flags(symbol).intersects(SymbolFlags::TYPE_PARAMETER) {
                 self.context()
                     .borrow_mut()
                     .tracked_symbols

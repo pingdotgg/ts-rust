@@ -740,12 +740,12 @@ impl Checker {
         target: SymbolId,
         mut error_reporter: Option<&mut dyn FnMut(&mut Checker, &'static Message, Vec<String>)>,
     ) -> bool {
-        let source_symbol = if self.sym(source).flags.intersects(SymbolFlags::ENUM_MEMBER) {
+        let source_symbol = if self.sym_flags(source).intersects(SymbolFlags::ENUM_MEMBER) {
             self.get_parent_of_symbol(source)
         } else {
             source
         };
-        let target_symbol = if self.sym(target).flags.intersects(SymbolFlags::ENUM_MEMBER) {
+        let target_symbol = if self.sym_flags(target).intersects(SymbolFlags::ENUM_MEMBER) {
             self.get_parent_of_symbol(target)
         } else {
             target
@@ -755,12 +755,10 @@ impl Checker {
         }
         if self.sym(source_symbol).name != self.sym(target_symbol).name
             || !self
-                .sym(source_symbol)
-                .flags
+                .sym_flags(source_symbol)
                 .intersects(SymbolFlags::REGULAR_ENUM)
             || !self
-                .sym(target_symbol)
-                .flags
+                .sym_flags(target_symbol)
                 .intersects(SymbolFlags::REGULAR_ENUM)
         {
             return false;
@@ -784,8 +782,7 @@ impl Checker {
         let source_enum_type = self.get_type_of_symbol(source_symbol);
         for source_property in self.get_properties_of_type(source_enum_type) {
             if self
-                .sym(source_property)
-                .flags
+                .sym_flags(source_property)
                 .intersects(SymbolFlags::ENUM_MEMBER)
             {
                 let source_property_name = self.sym(source_property).name.clone();
@@ -793,8 +790,7 @@ impl Checker {
                     self.get_property_of_type(target_enum_type, &source_property_name);
                 if target_property.is_nil()
                     || !self
-                        .sym(target_property)
-                        .flags
+                        .sym_flags(target_property)
                         .intersects(SymbolFlags::ENUM_MEMBER)
                 {
                     if let Some(reporter) = error_reporter.as_mut() {
@@ -1555,16 +1551,14 @@ impl Checker {
                 target_prop = self.unknown_symbol;
             }
             let target_is_optional = self
-                .sym(target_prop)
-                .flags
+                .sym_flags(target_prop)
                 .intersects(SymbolFlags::OPTIONAL);
             let mut source_prop = self.get_property_of_type(source, &prop_name);
             if source_prop.is_nil() {
                 source_prop = self.unknown_symbol;
             }
             let source_is_optional = self
-                .sym(source_prop)
-                .flags
+                .sym_flags(source_prop)
                 .intersects(SymbolFlags::OPTIONAL);
             target_prop_type = self.remove_missing_type(target_prop_type, target_is_optional);
             source_prop_type = self
@@ -1878,7 +1872,7 @@ impl Checker {
             && resolved
                 .properties
                 .iter()
-                .all(|&p| self.sym(p).flags.intersects(SymbolFlags::OPTIONAL))
+                .all(|&p| self.sym_flags(p).intersects(SymbolFlags::OPTIONAL))
     }
 
     // Go: checker/relater.go:695 hasCommonProperties
@@ -2223,7 +2217,7 @@ impl Checker {
             }
             if symbol.is_some()
                 && !(object_flags.intersects(ObjectFlags::ANONYMOUS)
-                    && self.sym(symbol).flags.intersects(SymbolFlags::CLASS))
+                    && self.sym_flags(symbol).intersects(SymbolFlags::CLASS))
                 && !object_flags.intersects(ObjectFlags::FROM_TYPE_NODE)
             {
                 // We track object types that have a symbol by that symbol (representing the origin of the type), but

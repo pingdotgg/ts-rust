@@ -175,8 +175,7 @@ impl Checker {
         // We need to filter out partial properties in union types
         if prop.is_some()
             && self
-                .sym(prop)
-                .check_flags
+                .sym_check_flags(prop)
                 .intersects(CheckFlags::READ_PARTIAL)
         {
             return SymbolId::NIL;
@@ -228,7 +227,7 @@ impl Checker {
             self.symbols.set(cache, &name, prop);
             // Propagate an entry from the non-augmented cache to the augmented cache unless the property is partial.
             if skip_object_function_property_augment
-                && !self.sym(prop).check_flags.intersects(CheckFlags::PARTIAL)
+                && !self.sym_check_flags(prop).intersects(CheckFlags::PARTIAL)
             {
                 let augmented_cache = self.property_cache_table(t, false);
                 // PORT: Go `if augmentedCache[name] == nil { ... = prop }` in
@@ -320,7 +319,7 @@ impl Checker {
                     modifiers = self.get_declaration_modifier_flags_from_symbol(prop);
                     let write_modifiers = self
                         .get_declaration_modifier_flags_from_symbol_ex(prop, true /*isWrite*/);
-                    let prop_symbol_flags = self.sym(prop).flags;
+                    let prop_symbol_flags = self.sym_flags(prop);
                     if prop_symbol_flags.intersects(SymbolFlags::CLASS_MEMBER) {
                         if is_union {
                             optional_flag |= prop_symbol_flags & SymbolFlags::OPTIONAL;
@@ -500,8 +499,7 @@ impl Checker {
             let mut single_prop_type = TypeId::NIL;
             let mut single_prop_mapper = MapperId::NIL;
             if self
-                .sym(single_prop)
-                .flags
+                .sym_flags(single_prop)
                 .intersects(SymbolFlags::TRANSIENT)
             {
                 let links = self
@@ -648,7 +646,7 @@ impl Checker {
     pub fn get_target_symbol(&mut self, s: SymbolId) -> SymbolId {
         // if symbol is instantiated its flags are not copied from the 'target'
         // so we'll need to get back original 'target' symbol to work with correct set of flags
-        if s.is_some() && self.sym(s).check_flags.intersects(CheckFlags::INSTANTIATED) {
+        if s.is_some() && self.sym_check_flags(s).intersects(CheckFlags::INSTANTIATED) {
             return self.value_symbol_links.get_by_id(&self.symbols, s).target;
         }
         s
@@ -660,9 +658,9 @@ impl Checker {
      */
     // Go: checker/checker.go:22137 isPrototypeProperty
     pub fn is_prototype_property(&self, symbol: SymbolId) -> bool {
-        let s = self.sym(symbol);
-        s.flags.intersects(SymbolFlags::METHOD)
-            || s.check_flags.intersects(CheckFlags::SYNTHETIC_METHOD)
+        let (flags, check_flags) = self.symbols.sym_head(symbol);
+        flags.intersects(SymbolFlags::METHOD)
+            || check_flags.intersects(CheckFlags::SYNTHETIC_METHOD)
     }
 
     // Go: checker/checker.go:22141 hasCommonDeclaration
@@ -1126,7 +1124,7 @@ impl Checker {
         let symbol = self.sym(prop);
         symbol.flags & (SymbolFlags::METHOD | SymbolFlags::PROPERTY) == SymbolFlags::METHOD
             && !(symbol.parent.is_some()
-                && self.sym(symbol.parent).flags.intersects(SymbolFlags::CLASS)
+                && self.sym_flags(symbol.parent).intersects(SymbolFlags::CLASS)
                 && self
                     .get_declaration_modifier_flags_from_symbol(prop)
                     .intersects(ModifierFlags::PRIVATE))
@@ -1246,10 +1244,7 @@ impl Checker {
     pub fn is_discriminant_with_never_type(&mut self, prop: SymbolId) -> bool {
         // Return true for a synthetic non-optional property with non-uniform types, where at least one is
         // a literal type and none is never, that reduces to never.
-        let (flags, check_flags) = {
-            let s = self.sym(prop);
-            (s.flags, s.check_flags)
-        };
+        let (flags, check_flags) = self.symbols.sym_head(prop);
         if flags.intersects(SymbolFlags::OPTIONAL) {
             return false;
         }
@@ -1716,8 +1711,7 @@ impl Checker {
         );
         let is_class_or_interface_container = container.is_some()
             && self
-                .sym(container)
-                .flags
+                .sym_flags(container)
                 .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE);
         // `is_declaration_contained_by` reads the container's declaration
         // ranges for each member. They do not change during the loop, so they
@@ -1823,7 +1817,7 @@ impl Checker {
         let len = self.symbols.len(members);
         let mut positions_of: FxHashMap<SymbolId, u32> = FxHashMap::default();
         for (position, (_, symbol)) in self.symbols.iter_names(members).enumerate() {
-            if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+            if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
                 || positions_of
                     .insert(symbol, u32::try_from(position).ok()?)
                     .is_some()
@@ -1833,8 +1827,7 @@ impl Checker {
         }
         let is_class_or_interface_container = container.is_some()
             && self
-                .sym(container)
-                .flags
+                .sym_flags(container)
                 .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE);
         let container_ranges: Vec<TextRange> = if is_class_or_interface_container {
             self.sym(container)
@@ -1925,7 +1918,7 @@ impl Checker {
         symbol: SymbolId,
         include_type_only_members: bool,
     ) -> bool {
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         flags.intersects(SymbolFlags::VALUE)
             || flags.intersects(SymbolFlags::ALIAS)
                 && self
@@ -2217,7 +2210,7 @@ impl Checker {
                         // PORT: Go `t.symbol.Declarations != nil`; a nil
                         // declaration list is empty here.
                         symbol.is_some()
-                            && self.sym(symbol).flags.intersects(
+                            && self.sym_flags(symbol).intersects(
                                 SymbolFlags::FUNCTION
                                     | SymbolFlags::METHOD
                                     | SymbolFlags::CLASS
@@ -2780,7 +2773,7 @@ type I = A & M;
                 .collect();
             let u = types[0];
             let a = c.get_union_or_intersection_property(u, "a", false);
-            let partial = c.sym(a).check_flags & CheckFlags::PARTIAL;
+            let partial = c.sym_check_flags(a) & CheckFlags::PARTIAL;
             let a_type = c.get_type_of_symbol(a);
             (same, partial, c.type_to_string(a_type))
         });

@@ -225,7 +225,7 @@ fn resolved_symbol_type(c: &mut Checker, symbol: SymbolId, location: Node) -> Ty
         return TypeId::NIL;
     }
 
-    if c.sym(symbol).flags.intersects(SymbolFlags::TYPE) {
+    if c.sym_flags(symbol).intersects(SymbolFlags::TYPE) {
         let declared_type = c.get_declared_type_of_symbol_exported(symbol);
         if declared_type.is_some() {
             return declared_type;
@@ -237,7 +237,7 @@ fn resolved_symbol_type(c: &mut Checker, symbol: SymbolId, location: Node) -> Ty
 
 // Go: rules/unnecessary_typeof_type.go resolveAliasSymbol
 fn resolve_alias_symbol(c: &mut Checker, mut symbol: SymbolId) -> SymbolId {
-    while symbol.is_some() && c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+    while symbol.is_some() && c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
         symbol = c.get_aliased_symbol(symbol);
     }
     symbol

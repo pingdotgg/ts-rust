@@ -201,7 +201,7 @@ impl Checker {
 
     // Go: checker/checker.go:17321 getTypeOfFuncClassEnumModuleWorker
     pub fn get_type_of_func_class_enum_module_worker(&mut self, symbol: SymbolId) -> TypeId {
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         let value_declaration = self.sym(symbol).value_declaration;
         if flags.intersects(SymbolFlags::MODULE) && self.is_shorthand_ambient_module_symbol(symbol)
         {
@@ -703,7 +703,7 @@ impl Checker {
         symbol: SymbolId,
     ) -> Vec<TypeId> {
         if !self.is_error_type(t) {
-            if self.sym(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS) {
+            if self.sym_flags(symbol).intersects(SymbolFlags::TYPE_ALIAS) {
                 let type_parameters = self.type_alias_links.get(symbol).type_parameters.clone();
                 if !type_parameters.is_empty() {
                     return type_parameters;
@@ -900,7 +900,7 @@ impl Checker {
     // Go: checker/checker.go:17728 getDeclaredTypeOfClassOrInterface
     pub fn get_declared_type_of_class_or_interface(&mut self, symbol: SymbolId) -> TypeId {
         if self.declared_type_links.get(symbol).declared_type.is_nil() {
-            let kind = if self.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
+            let kind = if self.sym_flags(symbol).intersects(SymbolFlags::CLASS) {
                 ObjectFlags::CLASS
             } else {
                 ObjectFlags::INTERFACE
@@ -975,8 +975,7 @@ impl Checker {
                         );
                         if base_symbol.is_nil()
                             || !self
-                                .sym(base_symbol)
-                                .flags
+                                .sym_flags(base_symbol)
                                 .intersects(SymbolFlags::INTERFACE)
                         {
                             return false;

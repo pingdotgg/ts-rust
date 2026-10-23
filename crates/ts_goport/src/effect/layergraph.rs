@@ -431,7 +431,7 @@ pub fn extract_layer_graph(
         if current_depth > 0 && is_simple_identifier(current) {
             let mut sym = tp.get_symbol_at_location(current);
             if sym.is_some() {
-                if tp.checker.sym(sym).flags.intersects(SymbolFlags::ALIAS) {
+                if tp.checker.sym_flags(sym).intersects(SymbolFlags::ALIAS) {
                     let resolved = tp.checker.skip_alias(sym);
                     if resolved.is_some() {
                         sym = resolved;

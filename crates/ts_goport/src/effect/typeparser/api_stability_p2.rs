@@ -803,7 +803,7 @@ impl ApiStabilityAnalysis {
     ) -> ApiStabilitySurface {
         let mut surface = new_api_stability_surface();
         let empty = ApiStabilitySubstitution::default();
-        let flags = tp.checker.sym(symbol).flags;
+        let flags = tp.checker.sym_flags(symbol);
         let mut handled = false;
 
         // A default (or `export =`) assignment of an inline expression has no alias
@@ -1044,7 +1044,7 @@ impl ApiStabilityAnalysis {
     /// is bounded. It is only called for symbols with a value side, so a type-only
     /// export is never forced into a value lookup.
     pub fn value_type_of_symbol(&mut self, tp: &mut TypeParser<'_>, symbol: SymbolId) -> TypeId {
-        if symbol.is_nil() || !tp.checker.sym(symbol).flags.intersects(SymbolFlags::VALUE) {
+        if symbol.is_nil() || !tp.checker.sym_flags(symbol).intersects(SymbolFlags::VALUE) {
             return TypeId::NIL;
         }
         self.type_of_symbol_safely(tp, symbol)
@@ -1725,7 +1725,7 @@ impl ApiStabilityAnalysis {
         }
         if flags.intersects(ObjectFlags::ANONYMOUS) {
             let symbol = tp.checker.ty(t).symbol();
-            if symbol.is_some() && tp.checker.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
+            if symbol.is_some() && tp.checker.sym_flags(symbol).intersects(SymbolFlags::CLASS) {
                 self.collect_class_static_surface(tp, surface, t, inspect, subst);
                 return;
             }
@@ -1736,7 +1736,7 @@ impl ApiStabilityAnalysis {
         // rule enumerates namespace members explicitly.
         let symbol = tp.checker.ty(t).symbol();
         if symbol.is_some()
-            && tp.checker.sym(symbol).flags.intersects(
+            && tp.checker.sym_flags(symbol).intersects(
                 SymbolFlags::MODULE | SymbolFlags::VALUE_MODULE | SymbolFlags::NAMESPACE_MODULE,
             )
         {
@@ -1861,8 +1861,7 @@ impl ApiStabilityAnalysis {
                     if member.is_nil()
                         || tp
                             .checker
-                            .sym(member)
-                            .flags
+                            .sym_flags(member)
                             .intersects(SymbolFlags::TYPE_PARAMETER)
                         || api_stability_symbol_is_non_public(tp.checker, member)
                     {
@@ -1988,8 +1987,7 @@ impl ApiStabilityAnalysis {
             if member.is_nil()
                 || tp
                     .checker
-                    .sym(member)
-                    .flags
+                    .sym_flags(member)
                     .intersects(SymbolFlags::TYPE_PARAMETER)
                 || api_stability_symbol_is_non_public(tp.checker, member)
             {

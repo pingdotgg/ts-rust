@@ -195,8 +195,7 @@ impl ApiStabilityWalker {
         if ctx
             .tp
             .checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::MODULE)
         {
             self.inspect_module(ctx, symbol);
@@ -455,7 +454,7 @@ fn api_stability_export_declaration_forwards(
             return false;
         }
         let mut module_symbol = c.get_symbol_at_location_exported(module_specifier);
-        if module_symbol.is_some() && c.sym(module_symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if module_symbol.is_some() && c.sym_flags(module_symbol).intersects(SymbolFlags::ALIAS) {
             module_symbol = c.get_aliased_symbol(module_symbol);
         }
         if module_symbol.is_nil() {
@@ -702,8 +701,7 @@ fn api_stability_import_target_is_internal(
         || !ctx
             .tp
             .checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::ALIAS)
     {
         return false;
@@ -766,8 +764,7 @@ fn api_stability_import_equals_target_is_internal(
         || !ctx
             .tp
             .checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::ALIAS)
     {
         return false;
@@ -931,8 +928,7 @@ fn api_stability_aliased_target_is_internal(
         || !ctx
             .tp
             .checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::ALIAS)
     {
         return false;
@@ -1076,7 +1072,7 @@ fn api_stability_module_of_entity(ctx: &mut RuleContext<'_, '_>, entity: Node) -
     if module.is_nil() {
         return SymbolId::NIL;
     }
-    if c.sym(module).flags.intersects(SymbolFlags::ALIAS) {
+    if c.sym_flags(module).intersects(SymbolFlags::ALIAS) {
         module = c.get_aliased_symbol(module);
     }
     if module.is_nil() || api_stability_module_source_files(c, module).is_empty() {
@@ -1105,7 +1101,7 @@ fn api_stability_reexport_location(ctx: &mut RuleContext<'_, '_>, export_symbol:
         if module_symbol.is_nil() {
             continue;
         }
-        if c.sym(module_symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if c.sym_flags(module_symbol).intersects(SymbolFlags::ALIAS) {
             module_symbol = c.get_aliased_symbol(module_symbol);
         }
         if module_symbol.is_nil() {

@@ -361,7 +361,7 @@ fn has_leakable_service_annotation(c: &mut Checker, t: TypeId) -> bool {
     }
 
     // Resolve aliases
-    if c.sym(sym).flags.intersects(SymbolFlags::ALIAS) {
+    if c.sym_flags(sym).intersects(SymbolFlags::ALIAS) {
         let resolved = c.get_aliased_symbol(sym);
         if resolved.is_some() {
             sym = resolved;

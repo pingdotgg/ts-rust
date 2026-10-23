@@ -279,7 +279,7 @@ impl Checker {
         let source_flags = self.ty(source).object_flags;
         if !source_flags.intersects(ObjectFlags::CLASS_OR_INTERFACE)
             || source_flags.intersects(ObjectFlags::TUPLE)
-            || symbol.is_some() && self.sym(symbol).flags.intersects(SymbolFlags::VALUE_MODULE)
+            || symbol.is_some() && self.sym_flags(symbol).intersects(SymbolFlags::VALUE_MODULE)
         {
             return None;
         }
@@ -546,7 +546,7 @@ impl Checker {
         }
         let base_types = lm.ready().base_types.clone();
         for &base_type in base_types.iter() {
-            if result.is_some() && self.sym(result).flags.intersects(SymbolFlags::VALUE) {
+            if result.is_some() && self.sym_flags(result).intersects(SymbolFlags::VALUE) {
                 break;
             }
             // PERF: by the key's own type, so `create_union_or_intersection_property`
@@ -589,8 +589,7 @@ impl Checker {
             if !include_type_only_members
                 && t_symbol.is_some()
                 && self
-                    .sym(t_symbol)
-                    .flags
+                    .sym_flags(t_symbol)
                     .intersects(SymbolFlags::VALUE_MODULE)
                 && self
                     .module_symbol_links
@@ -683,7 +682,7 @@ impl Checker {
     pub(crate) fn every_property_of_structured_type(
         &mut self,
         t: TypeId,
-        f: fn(&Symbol) -> bool,
+        f: fn(SymRef<'_>) -> bool,
     ) -> bool {
         if let Some(lm) = self.get_ready_lazy_member_table(t) {
             let mut seen = FxHashSet::default();
@@ -707,7 +706,7 @@ impl Checker {
         t: TypeId,
         lm: &LazyMemberTable,
         seen: &mut FxHashSet<u32>,
-        f: fn(&Symbol) -> bool,
+        f: fn(SymRef<'_>) -> bool,
     ) -> bool {
         let source = self.ty(t).target();
         let declared_members = self.resolve_declared_members_lazy(source).declared_members;
@@ -718,7 +717,7 @@ impl Checker {
         // a snapshot of the rest from there.
         let mut alias_at = None;
         for (position, (id, symbol)) in self.symbols.iter_names(declared_members).enumerate() {
-            let flags = self.sym(symbol).flags;
+            let flags = self.sym_flags(symbol);
             let named = if id.is_internal() && is_reserved_member_name(id.as_str()) {
                 false
             } else if flags.intersects(SymbolFlags::VALUE) {
@@ -791,7 +790,7 @@ impl Checker {
         // be affected by instantiation, simply return the symbol itself.
         if links_resolved_type.is_some() && !self.could_contain_type_variables(links_resolved_type)
         {
-            if !self.sym(symbol).flags.intersects(SymbolFlags::SET_ACCESSOR) {
+            if !self.sym_flags(symbol).intersects(SymbolFlags::SET_ACCESSOR) {
                 return true;
             }
             // If we're a setter, check writeType.
@@ -812,8 +811,8 @@ impl Checker {
         let mut symbol = symbol;
         let mut m = m;
         if self
-            .sym(symbol)
-            .check_flags
+            .symbols
+            .sym_check_flags(symbol)
             .intersects(CheckFlags::INSTANTIATED)
         {
             // If symbol being instantiated is itself a instantiation, fetch the original target and combine the
@@ -823,10 +822,11 @@ impl Checker {
             m = self.combine_type_mappers(links_mapper, m);
         }
         // Create a new transient symbol that shares the underlying data with the original symbol.
-        // PORT: as in `instantiate_symbol`, the full symbol is pushed once.
-        let full = crate::checker::checker_p23::instantiated_symbol_of(self.sym(symbol));
+        // PORT: as in `instantiate_symbol`.
+        let (flags, check_flags) =
+            crate::checker::checker_p23::instance_head(self.symbols.sym_head(symbol));
         self.symbol_count += 1;
-        let result = self.symbols.push_symbol(full);
+        let result = self.symbols.push_instance(flags, check_flags, symbol);
         self.value_symbol_links.insert_new_by_id(
             &self.symbols,
             result,

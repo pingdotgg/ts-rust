@@ -568,7 +568,7 @@ impl BoundFile {
 impl Binder {
     /// Go `symbol` field reads: `self.sym(s).flags`.
     pub fn sym(&self, symbol: SymbolId) -> &Symbol {
-        self.symbols.sym(symbol)
+        self.symbols.sym_full(symbol)
     }
 
     /// Go `symbol` field writes: `self.sym_mut(s).flags |= ...`.

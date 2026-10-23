@@ -1582,8 +1582,7 @@ impl GetCompletionDataState<'_> {
                 let symbol = self.type_checker.skip_alias(symbol);
                 if self
                     .type_checker
-                    .sym(symbol)
-                    .flags
+                    .sym_flags(symbol)
                     .intersects(SymbolFlags::MODULE | SymbolFlags::ENUM)
                 {
                     let value_access_node = if is_import_type { node } else { node.parent() };
@@ -1935,8 +1934,7 @@ impl GetCompletionDataState<'_> {
                 }
                 if self
                     .type_checker
-                    .sym(member)
-                    .flags
+                    .sym_flags(member)
                     .intersects(SymbolFlags::OPTIONAL)
                 {
                     if !self.symbol_to_sort_text_map.contains_key(&symbol_id) {
@@ -2462,8 +2460,7 @@ impl GetCompletionDataState<'_> {
             }
             if self
                 .type_checker
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::OPTIONAL)
             {
                 if !self.symbol_to_sort_text_map.contains_key(&symbol_id) {
@@ -2579,8 +2576,7 @@ impl GetCompletionDataState<'_> {
             if type_only_alias_needs_promotion
                 && !self
                     .type_checker
-                    .sym(symbol)
-                    .flags
+                    .sym_flags(symbol)
                     .intersects(SymbolFlags::VALUE)
             {
                 // Go: core.Find

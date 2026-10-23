@@ -414,7 +414,7 @@ impl Checker {
         }
         let t_symbol = self.ty(t).symbol;
         let symbol = self.get_merged_symbol(t_symbol);
-        if self.sym(symbol).flags.intersects(SymbolFlags::TYPE_LITERAL) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::TYPE_LITERAL) {
             self.set_structured_type_members(t, SymbolTable::NIL, &[], &[], &[]);
             let members = self.get_members_of_symbol(symbol);
             let call_symbol = self.symbols.get(members, INTERNAL_SYMBOL_NAME_CALL);
@@ -453,7 +453,7 @@ impl Checker {
         }
         let mut base_constructor_index_info = IndexInfoId::NIL;
         self.set_structured_type_members(t, members, &[], &[], &[]);
-        if self.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::CLASS) {
             let class_type = self.get_declared_type_of_class_or_interface(symbol);
             let base_constructor_type = self.get_base_constructor_type_of_class(class_type);
             if self
@@ -478,7 +478,7 @@ impl Checker {
             if base_constructor_index_info.is_some() {
                 index_infos.push(base_constructor_index_info);
             }
-            if self.sym(symbol).flags.intersects(SymbolFlags::ENUM) {
+            if self.sym_flags(symbol).intersects(SymbolFlags::ENUM) {
                 let declared_type = self.get_declared_type_of_symbol(symbol);
                 let is_enum = self.ty(declared_type).flags.intersects(TypeFlags::ENUM) || {
                     let properties = self.ty(t).as_object_type().structured.properties.clone();
@@ -507,8 +507,7 @@ impl Checker {
         // in the process of resolving (see issue #6072). The temporarily empty signature list
         // will never be observed because a qualified name can't reference signatures.
         if self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::FUNCTION | SymbolFlags::METHOD)
         {
             let signatures = self.get_signatures_of_symbol(symbol);
@@ -520,7 +519,7 @@ impl Checker {
             ty.clear_weak_bits();
         }
         // And likewise for construct signatures for classes
-        if self.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::CLASS) {
             let class_type = self.get_declared_type_of_class_or_interface(symbol);
             let symbol_members = self.sym(symbol).members;
             let constructor_symbol = self
@@ -604,7 +603,7 @@ impl Checker {
         // be affected by instantiation, simply return the symbol itself.
         if links_resolved_type.is_some() && !self.could_contain_type_variables(links_resolved_type)
         {
-            if !self.sym(symbol).flags.intersects(SymbolFlags::SET_ACCESSOR) {
+            if !self.sym_flags(symbol).intersects(SymbolFlags::SET_ACCESSOR) {
                 return symbol;
             }
             // If we're a setter, check writeType.
@@ -613,21 +612,22 @@ impl Checker {
             }
         }
         // Create a new transient symbol that shares the underlying data with the original symbol.
-        // PERF (instfast1): the source symbol is read once for the test and
-        // the copy when it is not an instantiation itself (99% of the calls).
-        let source = self.sym(symbol);
-        let full = if source.check_flags.intersects(CheckFlags::INSTANTIATED) {
+        // PERF (instfast1): the source head is read once for the test and
+        // the new head when it is not an instantiation itself (99% of the
+        // calls).
+        let source = self.symbols.sym_head(symbol);
+        let (flags, check_flags) = if source.1.intersects(CheckFlags::INSTANTIATED) {
             // If symbol being instantiated is itself a instantiation, fetch the original target and combine the
             // type mappers. This ensures that original type identities are properly preserved and that aliases
             // always reference a non-aliases.
             symbol = links_target;
             m = self.combine_type_mappers(links_mapper, m);
-            instantiated_symbol_of(self.sym(symbol))
+            instance_head(self.symbols.sym_head(symbol))
         } else {
-            instantiated_symbol_of(source)
+            instance_head(source)
         };
         self.symbol_count += 1;
-        let result = self.symbols.push_symbol(full);
+        let result = self.symbols.push_instance(flags, check_flags, symbol);
         // PERF: Go `Get` and then sets three fields. `result` is new, so its
         // record is added once with every field set.
         self.value_symbol_links.insert_new_by_id(
@@ -676,37 +676,28 @@ impl Checker {
     }
 }
 
-/// The new symbol of Go `instantiateSymbol` for source `s`: its flags with
-/// TRANSIENT, the check flags it keeps with INSTANTIATED, and the data that
-/// Go `newSharedDataSymbol` (checker.go:14346, #64691) shares with `s`: name,
-/// declarations, value declaration, parent, members, exports and export
-/// symbol. Go calls newSharedDataSymbol and then sets the check flags; the
-/// port builds the full symbol and pushes it once.
-/// PORT: Go shares one `symbolData`, so a later set on either symbol writes
-/// both. Here the instance gets a copy (a `SymbolTable` is an id, so the
-/// tables themselves are shared). The copy reads the same as the shared data
-/// because no Go setter writes these fields of a symbol after it can be
-/// instantiated: every setter writes a symbol that its own function made,
-/// or a merge or late-bind target before its members are resolved (the
-/// #64691 setter audit, bump E lane L3 report).
+/// The head of the new symbol of Go `instantiateSymbol` for source head
+/// `(flags, check_flags)`: its flags with TRANSIENT (Go
+/// `newSharedDataSymbol`, checker.go:14346, #64691), and the check flags it
+/// keeps with INSTANTIATED (:21226). Its data is the source's
+/// (`SymbolArena::push_instance`), so a later write to the source's data
+/// shows through, as in Go (symdata1 note 2.4: a late-bound member merged
+/// into an early one, and the merges of `initializeChecker` after the
+/// global types). The head is a copy: Go's later flag writes to the source
+/// do not reach the instance.
 #[inline(always)]
-pub(crate) fn instantiated_symbol_of(s: &Symbol) -> Symbol {
-    Symbol {
-        flags: s.flags | SymbolFlags::TRANSIENT,
-        check_flags: CheckFlags::INSTANTIATED
-            | s.check_flags
+pub(crate) fn instance_head(
+    (flags, check_flags): (SymbolFlags, CheckFlags),
+) -> (SymbolFlags, CheckFlags) {
+    (
+        flags | SymbolFlags::TRANSIENT,
+        CheckFlags::INSTANTIATED
+            | check_flags
                 & (CheckFlags::READONLY
                     | CheckFlags::LATE
                     | CheckFlags::OPTIONAL_PARAMETER
                     | CheckFlags::REST_PARAMETER),
-        name: s.name.clone(),
-        declarations: s.declarations.clone(),
-        value_declaration: s.value_declaration,
-        members: s.members,
-        exports: s.exports,
-        parent: s.parent,
-        export_symbol: s.export_symbol,
-    }
+    )
 }
 
 // A variable-like declaration is free of this references if it has a type annotation
@@ -943,8 +934,7 @@ impl Checker {
                                 || !template_modifiers
                                     .intersects(MappedTypeModifiers::EXCLUDE_OPTIONAL)
                                     && modifiers_prop.is_some()
-                                    && c.sym(modifiers_prop)
-                                        .flags
+                                    && c.sym_flags(modifiers_prop)
                                         .intersects(SymbolFlags::OPTIONAL);
                             let is_readonly = template_modifiers
                                 .intersects(MappedTypeModifiers::INCLUDE_READONLY)
@@ -955,12 +945,11 @@ impl Checker {
                             let strip_optional = c.strict_null_checks
                                 && !is_optional
                                 && modifiers_prop.is_some()
-                                && c.sym(modifiers_prop)
-                                    .flags
+                                && c.sym_flags(modifiers_prop)
                                     .intersects(SymbolFlags::OPTIONAL);
                             let mut late_flag = CheckFlags::NONE;
                             if modifiers_prop.is_some() {
-                                late_flag = c.sym(modifiers_prop).check_flags & CheckFlags::LATE;
+                                late_flag = c.sym_check_flags(modifiers_prop) & CheckFlags::LATE;
                             }
                             let prop = c.new_symbol(
                                 SymbolFlags::PROPERTY
@@ -1115,13 +1104,12 @@ impl Checker {
             // type, we include 'undefined' in the type. Similarly, when creating a non-optional property in strictNullChecks
             // mode, if the underlying property is optional we remove 'undefined' from the type.
             if self.strict_null_checks
-                && self.sym(symbol).flags.intersects(SymbolFlags::OPTIONAL)
+                && self.sym_flags(symbol).intersects(SymbolFlags::OPTIONAL)
                 && !self.maybe_type_of_kind(prop_type, TypeFlags::UNDEFINED | TypeFlags::VOID)
             {
                 prop_type = self.get_optional_type(prop_type, true /*isProperty*/);
             } else if self
-                .sym(symbol)
-                .check_flags
+                .sym_check_flags(symbol)
                 .intersects(CheckFlags::STRIP_OPTIONAL)
             {
                 prop_type = self.remove_missing_or_undefined_type(prop_type);
@@ -1468,8 +1456,7 @@ impl Checker {
         let last_param = params.last().copied().unwrap_or(SymbolId::NIL);
         if last_param.is_some()
             && self
-                .sym(last_param)
-                .check_flags
+                .sym_check_flags(last_param)
                 .intersects(CheckFlags::REST_PARAMETER)
         {
             flags |= SignatureFlags::HAS_REST_PARAMETER;

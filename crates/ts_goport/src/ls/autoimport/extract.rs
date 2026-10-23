@@ -436,8 +436,7 @@ impl SymbolExtractor<'_> {
             if syntax == ExportSyntax::EQUALS
                 && self
                     .checker
-                    .sym(target)
-                    .flags
+                    .sym_flags(target)
                     .intersects(SymbolFlags::NAMESPACE)
             {
                 let target_exports_table = self.checker.sym(target).exports;
@@ -534,8 +533,7 @@ impl SymbolExtractor<'_> {
         let mut target_symbol = SymbolId::NIL;
         if self
             .checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::ALIAS)
         {
             target_symbol = self.try_resolve_symbol(symbol, syntax, checker_lease);
@@ -545,8 +543,7 @@ impl SymbolExtractor<'_> {
                     decl = self.checker.sym(target_symbol).declarations[0];
                 } else if self
                     .checker
-                    .sym(target_symbol)
-                    .check_flags
+                    .sym_check_flags(target_symbol)
                     .intersects(CheckFlags::MAPPED)
                 {
                     let mapped_decl = checker_lease
@@ -574,7 +571,7 @@ impl SymbolExtractor<'_> {
                         .is_some();
                     parent = checker.get_merged_symbol_exported(parent);
                 } else {
-                    export.flags = self.checker.sym(target_symbol).flags;
+                    export.flags = self.checker.sym_flags(target_symbol);
                     // Go: core.Some(symbol.Declarations, ast.IsPartOfTypeOnlyImportOrExportDeclaration)
                     export.is_type_only = self
                         .checker
@@ -765,7 +762,7 @@ impl SymbolExtractor<'_> {
 // Go: ls/autoimport/extract.go:410 shouldIgnoreSymbol
 // PORT: the arena parameter as in `try_get_module_id_and_file_name_of_module_symbol`.
 pub fn should_ignore_symbol(symbols: &SymbolArena, symbol: SymbolId) -> bool {
-    if symbols.sym(symbol).flags.intersects(SymbolFlags::PROTOTYPE) {
+    if symbols.sym_flags(symbol).intersects(SymbolFlags::PROTOTYPE) {
         return true;
     }
     false

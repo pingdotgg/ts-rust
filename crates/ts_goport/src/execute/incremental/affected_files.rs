@@ -596,8 +596,7 @@ impl<'a> AffectedFilesHandler<'a> {
                         .collect();
                     for exported in exports {
                         if type_checker
-                            .sym(exported)
-                            .flags
+                            .sym_flags(exported)
                             .intersects(SymbolFlags::CONST_ENUM)
                         {
                             return true;
@@ -607,8 +606,7 @@ impl<'a> AffectedFilesHandler<'a> {
                             continue;
                         }
                         if type_checker
-                            .sym(aliased)
-                            .flags
+                            .sym_flags(aliased)
                             .intersects(SymbolFlags::CONST_ENUM)
                             && type_checker
                                 .sym(aliased)

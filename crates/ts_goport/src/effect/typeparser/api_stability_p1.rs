@@ -890,7 +890,7 @@ pub fn declared_stability_of_symbol_chain(
                 };
             }
         }
-        if !c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if !c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             break;
         }
         // The checker synthesizes a declaration-less `default` alias for `export =`
@@ -923,7 +923,7 @@ pub fn has_alias_declaration(c: &Checker, symbol: SymbolId) -> bool {
 /// Neither operation resolves or instantiates types.
 pub fn api_stability_immediate_aliased_symbol(c: &mut Checker, symbol: SymbolId) -> SymbolId {
     if symbol.is_nil()
-        || !c.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+        || !c.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
         || !has_alias_declaration(c, symbol)
     {
         return SymbolId::NIL;

@@ -1838,7 +1838,7 @@ impl Checker {
                 declaration = sym.value_declaration;
             }
             let flags = get_combined_modifier_flags(declaration);
-            if sym.parent.is_some() && self.sym(sym.parent).flags.intersects(SymbolFlags::CLASS) {
+            if sym.parent.is_some() && self.sym_flags(sym.parent).intersects(SymbolFlags::CLASS) {
                 return flags;
             }
             return flags.without(ModifierFlags::ACCESSIBILITY_MODIFIER);

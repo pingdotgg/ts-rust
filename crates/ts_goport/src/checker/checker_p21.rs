@@ -353,7 +353,7 @@ impl Checker {
                     args![name],
                 );
             }
-        } else if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        } else if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             let node = self.get_declaration_of_alias_symbol(symbol);
             if node.is_some() {
                 let name = self.symbol_to_string(symbol);
@@ -539,8 +539,7 @@ impl Checker {
                 if !include_type_only_members
                     && t_symbol.is_some()
                     && self
-                        .sym(t_symbol)
-                        .flags
+                        .sym_flags(t_symbol)
                         .intersects(SymbolFlags::VALUE_MODULE)
                     && self
                         .module_symbol_links
@@ -1371,14 +1370,13 @@ impl Checker {
                 self.ty_mut(t).as_interface_type_mut().resolved_base_types =
                     SharedList::from(&[base][..]);
             } else if self
-                .sym(t_symbol)
-                .flags
+                .sym_flags(t_symbol)
                 .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE)
             {
-                if self.sym(t_symbol).flags.intersects(SymbolFlags::CLASS) {
+                if self.sym_flags(t_symbol).intersects(SymbolFlags::CLASS) {
                     self.resolve_base_types_of_class(t);
                 }
-                if self.sym(t_symbol).flags.intersects(SymbolFlags::INTERFACE) {
+                if self.sym_flags(t_symbol).intersects(SymbolFlags::INTERFACE) {
                     self.resolve_base_types_of_interface(t);
                 }
             } else {
@@ -1458,8 +1456,7 @@ impl Checker {
         }
         if base_constructor_symbol.is_some()
             && self
-                .sym(base_constructor_symbol)
-                .flags
+                .sym_flags(base_constructor_symbol)
                 .intersects(SymbolFlags::CLASS)
             && self.are_all_outer_type_parameters_applied(original_base_type)
         {

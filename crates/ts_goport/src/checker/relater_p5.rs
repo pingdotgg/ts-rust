@@ -664,7 +664,7 @@ impl Checker {
         let numeric_names_only = self.is_tuple_type(source) && self.is_tuple_type(target);
         for target_prop in self.exclude_properties(properties, excluded_properties) {
             let name = self.sym(target_prop).name.clone();
-            let target_prop_flags = self.sym(target_prop).flags;
+            let target_prop_flags = self.sym_flags(target_prop);
             if !target_prop_flags.intersects(SymbolFlags::PROTOTYPE)
                 && (!numeric_names_only || is_numeric_literal_name(&name) || name == "length")
                 && (!optionals_only || target_prop_flags.intersects(SymbolFlags::OPTIONAL))
@@ -814,8 +814,8 @@ impl Checker {
             return Ternary::FALSE;
         }
         // When checking for comparability, be more lenient with optional properties.
-        let source_flags = self.sym(source_prop).flags;
-        let target_flags = self.sym(target_prop).flags;
+        let source_flags = self.sym_flags(source_prop);
+        let target_flags = self.sym_flags(target_prop);
         if !skip_optional
             && source_flags.intersects(SymbolFlags::OPTIONAL)
             && target_flags.intersects(SymbolFlags::CLASS_MEMBER)
@@ -856,8 +856,7 @@ impl Checker {
         let relation = r.borrow().kind;
         let target_is_optional = self.strict_null_checks
             && self
-                .sym(target_prop)
-                .check_flags
+                .sym_check_flags(target_prop)
                 .intersects(CheckFlags::PARTIAL);
         let target_type = self.get_non_missing_type_of_symbol(target_prop);
         let effective_target =
@@ -899,7 +898,7 @@ impl Checker {
             && value_declaration.name().is_some()
             && is_private_identifier(value_declaration.name())
             && source_symbol.is_some()
-            && self.sym(source_symbol).flags.intersects(SymbolFlags::CLASS)
+            && self.sym_flags(source_symbol).intersects(SymbolFlags::CLASS)
         {
             let private_identifier_description = value_declaration.name().text().to_string();
             let symbol_table_key =
@@ -1470,13 +1469,13 @@ impl Checker {
         let symbol = self.ty(t).symbol;
         let object_flags = self.ty(t).object_flags;
         symbol.is_some()
-            && self.sym(symbol).flags.intersects(
+            && self.sym_flags(symbol).intersects(
                 SymbolFlags::OBJECT_LITERAL
                     | SymbolFlags::TYPE_LITERAL
                     | SymbolFlags::ENUM
                     | SymbolFlags::VALUE_MODULE,
             )
-            && !self.sym(symbol).flags.intersects(SymbolFlags::CLASS)
+            && !self.sym_flags(symbol).intersects(SymbolFlags::CLASS)
             && !self.type_has_call_or_construct_signatures(t)
             || object_flags.intersects(ObjectFlags::JS_LITERAL | ObjectFlags::OBJECT_REST_TYPE)
             || object_flags.intersects(ObjectFlags::REVERSE_MAPPED) && {
@@ -1519,7 +1518,7 @@ impl Checker {
                 if self.exact_optional_property_types
                     || self.ty(prop_type).flags.intersects(TypeFlags::UNDEFINED)
                     || key_type == self.number_type
-                    || !self.sym(prop).flags.intersects(SymbolFlags::OPTIONAL)
+                    || !self.sym_flags(prop).intersects(SymbolFlags::OPTIONAL)
                 {
                     t = prop_type;
                 } else {

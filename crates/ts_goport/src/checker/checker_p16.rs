@@ -143,8 +143,7 @@ impl Checker {
         let declarations = self.sym(symbol).declarations.clone();
         if parent_symbol.is_some() && declarations.len() > 1 {
             if self
-                .sym(parent_symbol)
-                .flags
+                .sym_flags(parent_symbol)
                 .intersects(SymbolFlags::INTERFACE)
             {
                 for &d in &declarations {
@@ -271,7 +270,7 @@ impl Checker {
                 // When merging the module augmentation into a.ts, the symbol for `A` will itself be merged, so its parent
                 // should be the merged module symbol. But the symbol for `B` has only one declaration, so its parent should
                 // be the module augmentation symbol, which contains its only declaration.
-                if self.sym(merged).flags.intersects(SymbolFlags::TRANSIENT) {
+                if self.sym_flags(merged).intersects(SymbolFlags::TRANSIENT) {
                     self.sym_mut(merged).parent = merged_parent;
                 }
             }
@@ -291,8 +290,8 @@ impl Checker {
         unidirectional: bool,
     ) -> SymbolId {
         self.merge_version += 1;
-        let source_flags = self.sym(source).flags;
-        let target_flags = self.sym(target).flags;
+        let source_flags = self.sym_flags(source);
+        let target_flags = self.sym_flags(target);
         if !target_flags.intersects(get_excluded_symbol_flags(source_flags))
             || (source_flags | target_flags).intersects(SymbolFlags::ASSIGNMENT)
         {
@@ -308,7 +307,7 @@ impl Checker {
                 if resolved_target == self.unknown_symbol {
                     return source;
                 }
-                let resolved_flags = self.sym(resolved_target).flags;
+                let resolved_flags = self.sym_flags(resolved_target);
                 if !resolved_flags.intersects(get_excluded_symbol_flags(source_flags))
                     || (source_flags | resolved_flags).intersects(SymbolFlags::ASSIGNMENT)
                 {
@@ -319,7 +318,7 @@ impl Checker {
                 }
             }
             // Javascript static-property-assignment declarations always merge, even though they are also values
-            let target_flags = self.sym(target).flags;
+            let target_flags = self.sym_flags(target);
             if source_flags.intersects(SymbolFlags::VALUE_MODULE)
                 && target_flags.intersects(SymbolFlags::VALUE_MODULE)
                 && target_flags.intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE)
@@ -331,8 +330,7 @@ impl Checker {
             }
             let mut merged_flags = source_flags;
             if !self
-                .sym(target)
-                .flags
+                .sym_flags(target)
                 .intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE)
             {
                 merged_flags = merged_flags.without(SymbolFlags::CONST_ENUM_ONLY_MODULE);
@@ -343,7 +341,7 @@ impl Checker {
             // off for the rest of this checker (`weak_bits_off`).
             if in_place
                 && merged_flags.intersects(SymbolFlags::OPTIONAL)
-                && !self.sym(target).flags.intersects(SymbolFlags::OPTIONAL)
+                && !self.sym_flags(target).intersects(SymbolFlags::OPTIONAL)
             {
                 self.weak_bits_off = true;
             }
@@ -395,8 +393,8 @@ impl Checker {
 
     // Go: checker/checker.go:14477 reportMergeSymbolError
     pub fn report_merge_symbol_error(&mut self, target: SymbolId, source: SymbolId) {
-        let target_flags = self.sym(target).flags;
-        let source_flags = self.sym(source).flags;
+        let target_flags = self.sym_flags(target);
+        let source_flags = self.sym_flags(source);
         let is_either_enum = target_flags.intersects(SymbolFlags::ENUM)
             || source_flags.intersects(SymbolFlags::ENUM);
         let is_either_block_scoped = target_flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
@@ -631,7 +629,7 @@ fn maps_clone_symbol_table(symbols: &mut SymbolArena, table: SymbolTable) -> Sym
 impl Checker {
     // Go: checker/checker.go:14613 cloneSymbol
     pub fn clone_symbol(&mut self, symbol: SymbolId) -> SymbolId {
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         let name = self.sym(symbol).name.clone();
         let result = self.new_symbol(flags, &name);
         // Force reallocation if anything is ever appended to declarations
@@ -700,7 +698,7 @@ impl Checker {
     // Go: checker/checker.go:14657 getExportSymbolOfValueSymbolIfExported
     pub fn get_export_symbol_of_value_symbol_if_exported(&self, mut symbol: SymbolId) -> SymbolId {
         if symbol.is_some()
-            && self.sym(symbol).flags.intersects(SymbolFlags::EXPORT_VALUE)
+            && self.sym_flags(symbol).intersects(SymbolFlags::EXPORT_VALUE)
             && self.sym(symbol).export_symbol.is_some()
         {
             symbol = self.sym(symbol).export_symbol;
@@ -1401,7 +1399,7 @@ impl Checker {
         symbol: SymbolId,
         name: impl Into<TableKey<'a>>,
     ) -> SymbolId {
-        if self.sym(symbol).flags.intersects(SymbolFlags::VARIABLE) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::VARIABLE) {
             let type_annotation = self.sym(symbol).value_declaration.type_();
             if type_annotation.is_some() {
                 let t = self.get_type_from_type_node(type_annotation);
@@ -1439,17 +1437,16 @@ impl Checker {
         if value_symbol == self.unknown_symbol && type_symbol == self.unknown_symbol {
             return self.unknown_symbol;
         }
-        if self.sym(type_symbol).flags.intersects(SymbolFlags::VALUE) {
+        if self.sym_flags(type_symbol).intersects(SymbolFlags::VALUE) {
             return type_symbol;
         }
         if self
-            .sym(value_symbol)
-            .flags
+            .sym_flags(value_symbol)
             .intersects(SymbolFlags::TYPE | SymbolFlags::NAMESPACE)
         {
             return value_symbol;
         }
-        let flags = self.sym(value_symbol).flags | self.sym(type_symbol).flags;
+        let flags = self.sym_flags(value_symbol) | self.sym_flags(type_symbol);
         let name = self.sym(value_symbol).name.clone();
         let result = self.new_symbol(flags, &name);
         go_assert!(
@@ -1487,7 +1484,7 @@ impl Checker {
         specifier: Node,
         dont_resolve_alias: bool,
     ) -> SymbolId {
-        if self.sym(symbol).flags.intersects(SymbolFlags::MODULE) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::MODULE) {
             let name: TableKey<'a> = name.into();
             let name_text = name.text();
             let exports = self.get_exports_of_symbol(symbol);

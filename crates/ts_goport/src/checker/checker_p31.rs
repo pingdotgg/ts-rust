@@ -794,7 +794,7 @@ impl Checker {
         }
         if !(prop.is_some()
             && (self.is_const_enum_or_const_enum_only_module(prop)
-                || self.sym(prop).flags.intersects(SymbolFlags::ENUM_MEMBER)
+                || self.sym_flags(prop).intersects(SymbolFlags::ENUM_MEMBER)
                     && location.parent().kind() == SyntaxKind::EnumMember))
         {
             self.mark_alias_referenced(parent_symbol, location);
@@ -889,8 +889,7 @@ impl Checker {
             // If react/jsxFactory symbol is alias, mark it as referenced
             if self.can_collect_symbol_alias_accessibility_data
                 && self
-                    .sym(jsx_factory_sym)
-                    .flags
+                    .sym_flags(jsx_factory_sym)
                     .intersects(SymbolFlags::ALIAS)
                 && self
                     .get_type_only_alias_declaration(jsx_factory_sym)
@@ -966,7 +965,7 @@ impl Checker {
                 // Do nothing, non-local symbol
             } else {
                 let mut target = symbol;
-                if target.is_some() && self.sym(target).flags.intersects(SymbolFlags::ALIAS) {
+                if target.is_some() && self.sym_flags(target).intersects(SymbolFlags::ALIAS) {
                     target = self.resolve_alias(target);
                 }
                 if target.is_nil() || self.get_symbol_flags(target).intersects(SymbolFlags::VALUE) {
@@ -1399,7 +1398,7 @@ impl Checker {
             false, /*excludeGlobals*/
         );
 
-        if root_symbol.is_some() && self.sym(root_symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if root_symbol.is_some() && self.sym_flags(root_symbol).intersects(SymbolFlags::ALIAS) {
             if self.can_collect_symbol_alias_accessibility_data
                 && self.symbol_is_value(root_symbol)
                 && {

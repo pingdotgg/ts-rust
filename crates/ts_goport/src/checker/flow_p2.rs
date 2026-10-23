@@ -107,8 +107,8 @@ impl Checker {
     ) -> bool {
         let prop = self.get_property_of_type(t, prop_name);
         if prop.is_some() {
-            return self.sym(prop).flags.intersects(SymbolFlags::OPTIONAL)
-                || self.sym(prop).check_flags.intersects(CheckFlags::PARTIAL)
+            return self.sym_flags(prop).intersects(SymbolFlags::OPTIONAL)
+                || self.sym_check_flags(prop).intersects(CheckFlags::PARTIAL)
                 || assume_true;
         }
         self.get_applicable_index_info_for_name(t, prop_name)
@@ -1651,7 +1651,7 @@ impl Checker {
         );
         if symbol.is_nil()
             || !(self.is_constant_variable(symbol)
-                || self.sym(symbol).flags.intersects(SymbolFlags::ENUM_MEMBER))
+                || self.sym_flags(symbol).intersects(SymbolFlags::ENUM_MEMBER))
         {
             return (Cow::Borrowed(""), false);
         }

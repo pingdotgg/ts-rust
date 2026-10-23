@@ -1301,7 +1301,7 @@ pub fn is_non_local_alias(symbols: &SymbolArena, symbol: SymbolId, excludes: Sym
     if symbol.is_nil() {
         return false;
     }
-    let flags = symbols.sym(symbol).flags;
+    let flags = symbols.sym_flags(symbol);
     flags & (SymbolFlags::ALIAS | excludes) == SymbolFlags::ALIAS
         || flags.intersects(SymbolFlags::ALIAS) && flags.intersects(SymbolFlags::ASSIGNMENT)
 }

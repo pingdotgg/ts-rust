@@ -191,8 +191,7 @@ impl Checker {
         let declared_managed_type = self.get_declared_type_of_symbol(managed_sym);
         // fetches interface type, or initializes symbol links type parameters
         if self
-            .sym(managed_sym)
-            .flags
+            .sym_flags(managed_sym)
             .intersects(SymbolFlags::TYPE_ALIAS)
         {
             let params = self

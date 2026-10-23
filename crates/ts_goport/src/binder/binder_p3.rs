@@ -1469,10 +1469,13 @@ impl Binder {
         };
         let symbol = self.symbols.push_symbol(Symbol {
             flags,
-            name,
-            declarations,
-            value_declaration,
-            parent,
+            data: SymbolData {
+                name,
+                declarations,
+                value_declaration,
+                parent,
+                ..SymbolData::default()
+            },
             ..Symbol::default()
         });
         if const_enum_reset {

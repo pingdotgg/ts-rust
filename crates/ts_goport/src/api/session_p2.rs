@@ -1159,7 +1159,7 @@ impl Session {
         {
             let c = setup.checker.borrow();
             for symbol in [unknown, undefined, arguments] {
-                go_assert!(c.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT));
+                go_assert!(c.sym_flags(symbol).intersects(SymbolFlags::TRANSIENT));
             }
         }
         let (unknown, _) = setup
@@ -2088,8 +2088,7 @@ impl Session {
             setup
                 .checker
                 .borrow()
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::ALIAS),
             "Should only get Alias here."
         );

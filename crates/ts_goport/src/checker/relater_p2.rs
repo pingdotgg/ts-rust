@@ -366,19 +366,16 @@ impl Checker {
             );
             if prop.is_some()
                 && self
-                    .sym(prop)
-                    .check_flags
+                    .sym_check_flags(prop)
                     .intersects(CheckFlags::SYNTHETIC_PROPERTY)
             {
                 if !self
-                    .sym(prop)
-                    .check_flags
+                    .sym_check_flags(prop)
                     .intersects(CheckFlags::IS_DISCRIMINANT_COMPUTED)
                 {
                     self.sym_mut(prop).check_flags |= CheckFlags::IS_DISCRIMINANT_COMPUTED;
                     if self
-                        .sym(prop)
-                        .check_flags
+                        .sym_check_flags(prop)
                         .contains(CheckFlags::NON_UNIFORM_AND_LITERAL)
                         && {
                             let prop_type = self.get_type_of_symbol(prop);
@@ -389,8 +386,7 @@ impl Checker {
                     }
                 }
                 return self
-                    .sym(prop)
-                    .check_flags
+                    .sym_check_flags(prop)
                     .intersects(CheckFlags::IS_DISCRIMINANT);
             }
         }
@@ -927,7 +923,7 @@ impl Checker {
             return t;
         }
         let result: TypeId;
-        if self.sym(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::TYPE_ALIAS) {
             let type_parameters = self.type_alias_links.get(symbol).type_parameters.clone();
             let type_arguments = self.instantiate_types(&type_parameters, mapper);
             result = self.get_type_alias_instantiation(symbol, &type_arguments, None);

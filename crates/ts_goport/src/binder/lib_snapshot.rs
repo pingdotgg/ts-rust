@@ -562,13 +562,15 @@ impl Decoder<'_> {
         Some(Symbol {
             flags,
             check_flags,
-            name,
-            declarations,
-            value_declaration,
-            members,
-            exports,
-            parent,
-            export_symbol,
+            data: SymbolData {
+                name,
+                declarations,
+                value_declaration,
+                members,
+                exports,
+                parent,
+                export_symbol,
+            },
         })
     }
 
@@ -1069,7 +1071,7 @@ fn encode(
         name_list: Vec::new(),
     };
     for index in 1..arena.symbol_count() {
-        e.symbol_value(arena.sym(SymbolId(index as u32)))?;
+        e.symbol_value(arena.sym_full(SymbolId(index as u32)))?;
     }
     for index in 1..arena.table_count() {
         let table = SymbolTable(index as u32);

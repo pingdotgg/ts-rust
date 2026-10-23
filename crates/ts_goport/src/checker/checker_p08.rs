@@ -292,7 +292,7 @@ impl Checker {
             }
             return;
         }
-        let symbol_flags = self.sym(symbol).flags;
+        let symbol_flags = self.sym_flags(symbol);
         let excluded_meanings =
             (if symbol_flags.intersects(SymbolFlags::VALUE | SymbolFlags::EXPORT_VALUE) {
                 SymbolFlags::VALUE
@@ -694,7 +694,7 @@ impl Checker {
                 // Export assigned entity name expressions act as aliases and should fall through, otherwise they export values.
                 if !is_entity_name_expression(expression) || {
                     let s = self.get_symbol_of_declaration(node);
-                    !self.sym(s).flags.intersects(SymbolFlags::ALIAS)
+                    !self.sym_flags(s).intersects(SymbolFlags::ALIAS)
                 } {
                     return DeclarationSpaces::EXPORT_VALUE;
                 }
@@ -909,8 +909,7 @@ impl Checker {
                 | SyntaxKind::SetAccessor => {
                     if is_set_accessor_declaration(member)
                         && self
-                            .sym(member.symbol())
-                            .flags
+                            .sym_flags(member.symbol())
                             .intersects(SymbolFlags::GET_ACCESSOR)
                     {
                         continue; // Already would have reported an error on the getter.
@@ -970,7 +969,7 @@ impl Checker {
         let mut import_clauses: IndexMap<Node, Vec<Node>> = IndexMap::new();
         for local in self.symbols.values(node.locals()) {
             let reference_kinds = self.symbol_reference_links.get(local).reference_kinds;
-            let local_flags = self.sym(local).flags;
+            let local_flags = self.sym_flags(local);
             let local_export_symbol = self.sym(local).export_symbol;
             if local_flags.intersects(SymbolFlags::TYPE_PARAMETER)
                 && (!local_flags.intersects(SymbolFlags::VARIABLE)

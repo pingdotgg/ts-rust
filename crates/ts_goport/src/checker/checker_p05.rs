@@ -648,7 +648,7 @@ impl Checker {
                         let block_local = self.symbols.get(block_locals, &caught_name);
                         if block_local.is_some() {
                             let value_declaration = self.sym(block_local).value_declaration;
-                            let flags = self.sym(block_local).flags;
+                            let flags = self.sym_flags(block_local);
                             if value_declaration.is_some()
                                 && flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
                             {
@@ -827,8 +827,7 @@ impl Checker {
                 let static_base_symbol = self.ty(static_base_type).symbol;
                 if !(static_base_symbol.is_some()
                     && self
-                        .sym(static_base_symbol)
-                        .flags
+                        .sym_flags(static_base_symbol)
                         .intersects(SymbolFlags::CLASS))
                     && !self
                         .ty(base_constructor_type)
@@ -881,7 +880,7 @@ impl Checker {
                 if self.is_valid_base_type(t) {
                     let t_symbol = self.ty(t).symbol;
                     let generic_diag = if t_symbol.is_some()
-                        && self.sym(t_symbol).flags.intersects(SymbolFlags::CLASS)
+                        && self.sym_flags(t_symbol).intersects(SymbolFlags::CLASS)
                     {
                         diag::Class_0_incorrectly_implements_class_1_Did_you_mean_to_extend_1_and_inherit_its_members_as_a_subclass
                     } else {
@@ -1239,7 +1238,7 @@ impl Checker {
         let mut not_implemented_info: IndexMap<Node, MemberInfo> = IndexMap::new();
         'base_property_check: for base_property in self.get_properties_of_type(base_type) {
             let base = self.get_target_symbol(base_property);
-            if self.sym(base).flags.intersects(SymbolFlags::PROTOTYPE) {
+            if self.sym_flags(base).intersects(SymbolFlags::PROTOTYPE) {
                 continue;
             }
             let base_name = self.sym(base).name.clone();
@@ -1307,14 +1306,14 @@ impl Checker {
                     continue;
                 }
                 let error_message: &'static Message;
-                let base_flags = self.sym(base).flags;
-                let derived_flags = self.sym(derived).flags;
+                let base_flags = self.sym_flags(base);
+                let derived_flags = self.sym_flags(derived);
                 let base_property_flags = base_flags & SymbolFlags::PROPERTY_OR_ACCESSOR;
                 let derived_property_flags = derived_flags & SymbolFlags::PROPERTY_OR_ACCESSOR;
                 let derived_value_declaration = self.sym(derived).value_declaration;
                 if !base_property_flags.is_empty() && !derived_property_flags.is_empty() {
                     // property/accessor is overridden with property/accessor
-                    if self.sym(base).check_flags.intersects(CheckFlags::MAPPED)
+                    if self.sym_check_flags(base).intersects(CheckFlags::MAPPED)
                         || derived_value_declaration.is_some()
                             && is_binary_expression(derived_value_declaration)
                         || self.are_properties_abstract_or_interface(base, base_declaration_flags)
@@ -1790,7 +1789,7 @@ impl Checker {
             return;
         }
         for prop in self.get_properties_of_object_type(t) {
-            if !(is_static_index && self.sym(prop).flags.intersects(SymbolFlags::PROTOTYPE)) {
+            if !(is_static_index && self.sym_flags(prop).intersects(SymbolFlags::PROTOTYPE)) {
                 let prop_name_type = self.get_literal_type_from_property(
                     prop,
                     TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE,

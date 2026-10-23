@@ -594,8 +594,7 @@ fn attach_symbol_visitor_func(node: Node, v: &mut AttachSymbolVisitor<'_>) -> No
             let type_ = st.c.get_declared_type_of_symbol(st.sym);
             if st
                 .c
-                .sym(st.sym)
-                .flags
+                .sym_flags(st.sym)
                 .intersects(SymbolFlags::TYPE_PARAMETER)
             {
                 name = st.c.type_parameter_to_name(st.b, type_);
@@ -714,8 +713,7 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
                 && self
                     .ctx
                     .c
-                    .sym(sym)
-                    .flags
+                    .sym_flags(sym)
                     .intersects(SymbolFlags::TYPE_PARAMETER))
         {
             sym = self
@@ -880,8 +878,7 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
         if self
             .ctx
             .c
-            .sym(s)
-            .flags
+            .sym_flags(s)
             .intersects(SymbolFlags::TYPE_PARAMETER)
         {
             let declared_type = self.ctx.c.get_declared_type_of_symbol(s);

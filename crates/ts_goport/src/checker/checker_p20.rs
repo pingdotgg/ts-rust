@@ -1197,7 +1197,7 @@ impl Checker {
         prop: SymbolId,
         context: Option<Rc<RefCell<WideningContext>>>,
     ) -> SymbolId {
-        if !self.sym(prop).flags.intersects(SymbolFlags::PROPERTY) {
+        if !self.sym_flags(prop).intersects(SymbolFlags::PROPERTY) {
             // Since get accessors already widen their return value there is no need to
             // widen accessor based properties here.
             return prop;

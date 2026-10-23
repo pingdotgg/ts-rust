@@ -395,7 +395,7 @@ fn trim_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
 pub fn resolve_stability_alias(c: &mut Checker, symbol: SymbolId) -> SymbolId {
     let mut symbol = symbol;
     let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
-    while symbol.is_some() && c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+    while symbol.is_some() && c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
         if !seen.insert(symbol) {
             return SymbolId::NIL;
         }

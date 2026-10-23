@@ -254,7 +254,7 @@ impl Checker {
                 {
                     name_type = computed_name_type;
                 }
-                let member_flags = self.sym(member).flags;
+                let member_flags = self.sym_flags(member);
                 let prop = if name_type.is_some() {
                     let name = self.get_property_name_from_type(name_type);
                     self.new_symbol_ex(
@@ -286,7 +286,7 @@ impl Checker {
                     let member_name = self.sym(member).name.clone();
                     let implied_prop = self.get_property_of_type(contextual_type, &member_name);
                     if implied_prop.is_some() {
-                        let implied_flags = self.sym(implied_prop).flags;
+                        let implied_flags = self.sym_flags(implied_prop);
                         self.sym_mut(prop).flags |= implied_flags & SymbolFlags::OPTIONAL;
                     } else {
                         let string_type = self.string_type;
@@ -697,11 +697,11 @@ impl Checker {
             if self.symbols.get_name(members, &left_name).is_some() {
                 let right_prop = self.symbols.get_name(members, &left_name);
                 let right_type = self.get_type_of_symbol(right_prop);
-                if self.sym(right_prop).flags.intersects(SymbolFlags::OPTIONAL) {
+                if self.sym_flags(right_prop).intersects(SymbolFlags::OPTIONAL) {
                     let mut declarations: Vec<Node> = self.sym(left_prop).declarations.to_vec();
                     declarations.extend(self.sym(right_prop).declarations.iter().copied());
                     let flags =
-                        SymbolFlags::PROPERTY | (self.sym(left_prop).flags & SymbolFlags::OPTIONAL);
+                        SymbolFlags::PROPERTY | (self.sym_flags(left_prop) & SymbolFlags::OPTIONAL);
                     let result = self.new_symbol(flags, &left_name);
                     // Go `links := c.valueSymbolLinks.Get(result)` gives the id here.
                     self.value_symbol_links.get_by_id(&self.symbols, result);
@@ -1132,7 +1132,7 @@ impl Checker {
                         Node::NIL,
                     );
                 }
-                symbol.is_some() && self.sym(symbol).flags.intersects(SymbolFlags::ENUM)
+                symbol.is_some() && self.sym_flags(symbol).intersects(SymbolFlags::ENUM)
             }
             _ => false,
         }
@@ -1507,10 +1507,7 @@ impl Checker {
         // Enum members
         // Object.defineProperty assignments with writable false or no setter
         // Unions and intersections of the above (unions and intersections eagerly set isReadonly on creation)
-        let (flags, check_flags) = {
-            let s = self.sym(symbol);
-            (s.flags, s.check_flags)
-        };
+        let (flags, check_flags) = self.symbols.sym_head(symbol);
         if check_flags.intersects(CheckFlags::READONLY) {
             return true;
         }

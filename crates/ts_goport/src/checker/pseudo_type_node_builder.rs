@@ -629,8 +629,7 @@ impl Checker {
                         }
                     }
                     let target_is_optional = self
-                        .sym(target_prop)
-                        .flags
+                        .sym_flags(target_prop)
                         .intersects(SymbolFlags::OPTIONAL);
                     if elem.optional != target_is_optional {
                         if report_errors {

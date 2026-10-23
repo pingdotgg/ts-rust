@@ -1054,7 +1054,7 @@ fn may_have_enum_declaration(source_file: Node) -> bool {
         return true;
     };
     let is_enum = |symbol: SymbolId| {
-        symbol.is_some() && symbols.sym(symbol).flags.intersects(SymbolFlags::ENUM)
+        symbol.is_some() && symbols.sym_flags(symbol).intersects(SymbolFlags::ENUM)
     };
     crate::ast::frozen_store_any_symbol(file, is_enum).unwrap_or(true)
         || node_bind

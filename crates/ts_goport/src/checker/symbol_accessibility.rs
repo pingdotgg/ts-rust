@@ -180,7 +180,7 @@ impl Checker {
             self.get_variable_declaration_of_object_literal(container, meaning);
         let left_meaning = get_qualified_left_meaning(meaning);
         if enclosing_declaration.is_some()
-            && self.sym(container).flags.intersects(left_meaning)
+            && self.sym_flags(container).intersects(left_meaning)
             && !self
                 .get_accessible_symbol_chain(
                     container,
@@ -202,7 +202,7 @@ impl Checker {
         // we potentially have a symbol which is a member of the instance side of something - look for a variable in scope with the container's type
         // which may be acting like a namespace (eg, `Symbol` acts like a namespace when looking up `Symbol.toStringTag`)
         let mut variable_matches: Vec<SymbolId> = Vec::new();
-        let container_flags = self.sym(container).flags;
+        let container_flags = self.sym_flags(container);
         if (meaning == SymbolFlags::VALUE && !container_flags.intersects(left_meaning))
             && container_flags.intersects(SymbolFlags::TYPE)
             && {
@@ -213,7 +213,7 @@ impl Checker {
             self.some_symbol_table_in_scope(enclosing_declaration, &mut |c, t, _, _, _, _| {
                 let mut found = false;
                 for s in c.symbols.values(t) {
-                    if c.sym(s).flags.intersects(left_meaning) {
+                    if c.sym_flags(s).intersects(left_meaning) {
                         let st = c.get_type_of_symbol(s);
                         let dt = c.get_declared_type_of_symbol(container);
                         if st == dt {
@@ -504,8 +504,7 @@ impl Checker {
         // Type parameters end up in the `members` lists but are not externally visible
         if container.is_some()
             && !self
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::TYPE_PARAMETER)
         {
             return self.get_with_alternative_containers(
@@ -793,7 +792,7 @@ impl Checker {
         }
         let mut aliases = Vec::new();
         for sym in self.symbols.values(symbols) {
-            if self.sym(sym).flags.intersects(SymbolFlags::ALIAS) {
+            if self.sym_flags(sym).intersects(SymbolFlags::ALIAS) {
                 aliases.push(sym);
             }
         }
@@ -968,8 +967,7 @@ impl Checker {
         if !like_symbols
             && resolved_alias_symbol.is_some()
             && self
-                .sym(resolved_alias_symbol)
-                .flags
+                .sym_flags(resolved_alias_symbol)
                 .intersects(SymbolFlags::ALIAS)
         {
             let mut resolved_alias_symbol = resolved_alias_symbol;
@@ -978,8 +976,7 @@ impl Checker {
             // only guards the read.
             while resolved_alias_symbol.is_some()
                 && self
-                    .sym(resolved_alias_symbol)
-                    .flags
+                    .sym_flags(resolved_alias_symbol)
                     .intersects(SymbolFlags::ALIAS)
                 && seen_aliases.insert(resolved_alias_symbol)
             {
@@ -1059,8 +1056,7 @@ impl Checker {
 
                 // Qualify if the symbol from symbol table has same meaning as expected
                 let should_resolve_alias = c
-                    .sym(symbol_from_symbol_table)
-                    .flags
+                    .sym_flags(symbol_from_symbol_table)
                     .intersects(SymbolFlags::ALIAS)
                     && get_declaration_of_kind(
                         &c.symbols,
@@ -1071,7 +1067,7 @@ impl Checker {
                 if should_resolve_alias {
                     symbol_from_symbol_table = c.resolve_alias(symbol_from_symbol_table);
                 }
-                let mut flags = c.sym(symbol_from_symbol_table).flags;
+                let mut flags = c.sym_flags(symbol_from_symbol_table);
                 if should_resolve_alias {
                     flags = c.get_symbol_flags(symbol_from_symbol_table);
                 }
@@ -1152,8 +1148,7 @@ impl Checker {
                     // fresh table to the symbol arena.
                     for (key, member_symbol) in self.symbols.entries(self.sym(sym).members) {
                         if self
-                            .sym(member_symbol)
-                            .flags
+                            .sym_flags(member_symbol)
                             .intersects(SymbolFlags::TYPE.without(SymbolFlags::ASSIGNMENT))
                         {
                             if table.is_nil() {

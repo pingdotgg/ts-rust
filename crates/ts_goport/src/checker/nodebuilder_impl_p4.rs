@@ -72,7 +72,7 @@ impl Checker {
         };
         let is_constructor_object = t_object_flags.intersects(ObjectFlags::ANONYMOUS)
             && t_symbol.is_some()
-            && self.sym(t_symbol).flags.intersects(SymbolFlags::CLASS);
+            && self.sym_flags(t_symbol).intersects(SymbolFlags::CLASS);
         let id: Option<CompositeSymbolIdentity> = if is_array_or_tuple {
             // Do not bound finite container nesting by the shared Array symbol or tuple origin.
             None
@@ -369,8 +369,7 @@ impl Checker {
         if t_flags.intersects(TypeFlags::ENUM_LIKE) {
             let t_symbol = self.ty(t).symbol;
             if self
-                .sym(t_symbol)
-                .flags
+                .sym_flags(t_symbol)
                 .intersects(SymbolFlags::ENUM_MEMBER)
             {
                 let parent_symbol = self.get_parent_of_symbol(t_symbol);
@@ -553,7 +552,7 @@ impl Checker {
                             false, /*isBareList*/
                         );
                         if is_reserved_member_name(&self.sym(sym).name)
-                            && !self.sym(sym).flags.intersects(SymbolFlags::CLASS)
+                            && !self.sym_flags(sym).intersects(SymbolFlags::CLASS)
                         {
                             return f.new_type_reference_node(
                                 f.new_identifier(""),
@@ -902,15 +901,14 @@ impl Checker {
             let symbol = chain[index];
             let next_symbol = chain[index + 1];
             if !self
-                .sym(next_symbol)
-                .check_flags
+                .sym_check_flags(next_symbol)
                 .intersects(CheckFlags::INSTANTIATED)
             {
                 return NodeList::NIL;
             }
 
             let mut target_symbol = symbol;
-            if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
+            if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
                 && !self.can_get_type_parameters_of_class_or_interface(symbol)
             {
                 target_symbol = self.resolve_alias(symbol);

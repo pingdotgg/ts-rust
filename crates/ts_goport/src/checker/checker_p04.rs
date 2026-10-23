@@ -806,7 +806,7 @@ impl Checker {
         let mut last_seen_non_ambient_declaration = Node::NIL;
         let mut previous_declaration = Node::NIL;
         let declarations = self.sym(symbol).declarations.clone();
-        let is_constructor = self.sym(symbol).flags.intersects(SymbolFlags::CONSTRUCTOR);
+        let is_constructor = self.sym_flags(symbol).intersects(SymbolFlags::CONSTRUCTOR);
         let mut duplicate_function_declaration = false;
         let mut multiple_constructor_implementation = false;
         let mut has_non_ambient_class = false;
@@ -1089,7 +1089,7 @@ impl Checker {
         }
         if has_non_ambient_class
             && !is_constructor
-            && self.sym(symbol).flags.intersects(SymbolFlags::FUNCTION)
+            && self.sym_flags(symbol).intersects(SymbolFlags::FUNCTION)
             && !declarations.is_empty()
         {
             let mut related_diagnostics: Vec<Diagnostic> = Vec::new();
@@ -1427,8 +1427,7 @@ impl Checker {
             && {
                 let resolved = self.get_resolved_symbol_or_nil(location.expression());
                 let unknown_symbol = self.unknown_symbol;
-                self.sym(or_else_symbol_p04(resolved, unknown_symbol))
-                    .flags
+                self.sym_flags(or_else_symbol_p04(resolved, unknown_symbol))
                     .intersects(SymbolFlags::ENUM)
             }
         {

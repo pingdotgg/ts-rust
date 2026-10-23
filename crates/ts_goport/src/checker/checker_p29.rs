@@ -666,7 +666,7 @@ impl Checker {
             && (object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED)
                 && self.is_empty_resolved_type(t)
                 || symbol.is_some()
-                    && self.sym(symbol).flags.intersects(SymbolFlags::TYPE_LITERAL)
+                    && self.sym_flags(symbol).intersects(SymbolFlags::TYPE_LITERAL)
                     && {
                         let members = self.get_members_of_symbol(symbol);
                         self.symbols.len(members) == 0

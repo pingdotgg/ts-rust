@@ -112,8 +112,7 @@ impl Checker {
                     } else {
                         let target_symbol = self.ty(target).symbol;
                         if self
-                            .sym(target_symbol)
-                            .flags
+                            .sym_flags(target_symbol)
                             .intersects(SymbolFlags::METHOD | SymbolFlags::TYPE_LITERAL)
                         {
                             let t_symbol = self.ty(t).symbol;
@@ -1565,7 +1564,7 @@ impl Checker {
         if symbol == self.unknown_symbol {
             return self.error_type;
         }
-        let flags = self.sym(symbol).flags;
+        let flags = self.sym_flags(symbol);
         if flags.intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE) {
             return self.get_type_from_class_or_interface_reference(node, symbol);
         }

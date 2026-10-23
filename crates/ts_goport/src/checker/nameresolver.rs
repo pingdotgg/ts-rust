@@ -274,7 +274,7 @@ impl NameResolver {
                         // - parameters are only in the scope of function body
                         // This restriction does not apply to JSDoc comment types because they are parented
                         // at a higher level than type parameters would normally be
-                        let result_flags = c.symbol_arena().sym(result).flags;
+                        let result_flags = c.symbol_arena().sym_flags(result);
                         if (meaning & result_flags).intersects(SymbolFlags::TYPE)
                             && last_location.kind() != SyntaxKind::JsDoc
                         {
@@ -360,7 +360,7 @@ impl NameResolver {
                                 let local_symbol =
                                     get_local_symbol_for_export_default(c.symbol_arena(), result);
                                 if local_symbol.is_some()
-                                    && c.symbol_arena().sym(result).flags.intersects(meaning)
+                                    && c.symbol_arena().sym_flags(result).intersects(meaning)
                                     && c.symbol_arena().sym(local_symbol).name == name_key
                                 {
                                     break 'loop_;
@@ -381,7 +381,7 @@ impl NameResolver {
                             let module_export =
                                 c.symbol_arena().get_name(module_exports, &name_key);
                             if module_export.is_some()
-                                && c.symbol_arena().sym(module_export).flags == SymbolFlags::ALIAS
+                                && c.symbol_arena().sym_flags(module_export) == SymbolFlags::ALIAS
                                 && (get_declaration_of_kind(
                                     c.symbol_arena(),
                                     module_export,
@@ -413,8 +413,7 @@ impl NameResolver {
                                     .is_some()
                                     && !c
                                         .symbol_arena()
-                                        .sym(result)
-                                        .flags
+                                        .sym_flags(result)
                                         .intersects(SymbolFlags::TYPE)
                                 {
                                     result = SymbolId::NIL;
@@ -920,7 +919,7 @@ impl NameResolver {
         if meaning != SymbolFlags::NONE {
             let symbol = c.symbol_arena().get_name(symbols, name);
             if symbol.is_some() {
-                if c.symbol_arena().sym(symbol).flags.intersects(meaning) {
+                if c.symbol_arena().sym_flags(symbol).intersects(meaning) {
                     return symbol;
                 }
             }

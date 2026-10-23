@@ -116,7 +116,7 @@ impl Checker {
                     .is_nil()
         {
             let t_symbol = self.ty(t).symbol;
-            debug_assert!(self.sym(t_symbol).flags.intersects(SymbolFlags::CONST_ENUM));
+            debug_assert!(self.sym_flags(t_symbol).intersects(SymbolFlags::CONST_ENUM));
             let const_enum_declaration = self.sym(t_symbol).value_declaration;
             // PORT: Go `c.program.GetProjectReferenceFromOutputDts(file.Path())` is a
             // Program method, ported as a free function; `Path()` reads the
@@ -1114,7 +1114,7 @@ impl Checker {
         let e = skip_parentheses(expr);
         if is_identifier(e) {
             let symbol = self.get_resolved_symbol(e);
-            if self.sym(symbol).flags.intersects(SymbolFlags::VARIABLE) {
+            if self.sym_flags(symbol).intersects(SymbolFlags::VARIABLE) {
                 let mut child = expr;
                 let mut node = expr.parent();
                 while node.is_some() {

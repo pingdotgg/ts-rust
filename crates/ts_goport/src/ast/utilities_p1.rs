@@ -226,8 +226,11 @@ struct OwnSymbolIds {
     /// its own tail. After that, each odd chunk that the lineage passed is a
     /// gap of 256 places (1 KiB) here.
     ids: Vec<IdCell>,
-    /// The ids of the other arenas.
-    others: FxHashMap<u32, Vec<IdCell>>,
+    /// The ids of the arena's instantiated symbols, by record (place
+    /// `INST_BIT | record`, `SymbolArena::id_slot`).
+    inst_ids: Vec<IdCell>,
+    /// The ids of the other arenas (`ids`, `inst_ids`).
+    others: FxHashMap<u32, (Vec<IdCell>, Vec<IdCell>)>,
     /// The ids from `BIG_ID` on, by arena and place.
     big: FxHashMap<(u32, usize), u64>,
     /// The arenas whose ids stay after the arena drops
@@ -240,6 +243,7 @@ impl OwnSymbolIds {
         Self {
             key: 0,
             ids: Vec::new(),
+            inst_ids: Vec::new(),
             others: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
             big: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
             kept: Vec::new(),
@@ -253,31 +257,46 @@ impl OwnSymbolIds {
         if self.key != key {
             self.switch_to(key);
         }
-        match self.ids.get_mut(place) {
+        let inst = place & INST_BIT as usize;
+        let ids = if inst != 0 {
+            &mut self.inst_ids
+        } else {
+            &mut self.ids
+        };
+        match ids.get_mut(place ^ inst) {
             Some(cell) => cell_id(cell, &mut self.big, (key, place)),
             None => self.id_past_end(key, place),
         }
     }
 
-    /// `id` for a place past the end of `ids`: grows it to twice its length
-    /// or more (zero cells have no id), so a run of new symbols grows it
-    /// rarely.
+    /// `id` for a place past the end of `ids` (or `inst_ids`): grows it to
+    /// twice its length or more (zero cells have no id), so a run of new
+    /// symbols grows it rarely.
     #[cold]
     #[inline(never)]
     fn id_past_end(&mut self, key: u32, place: usize) -> u64 {
-        let len = (place + 1).max(self.ids.len() * 2).max(LINEAGE_ID_CHUNK);
-        self.ids.resize(len, 0);
-        cell_id(&mut self.ids[place], &mut self.big, (key, place))
+        let inst = place & INST_BIT as usize;
+        let ids = if inst != 0 {
+            &mut self.inst_ids
+        } else {
+            &mut self.ids
+        };
+        let len = ((place ^ inst) + 1)
+            .max(ids.len() * 2)
+            .max(LINEAGE_ID_CHUNK);
+        ids.resize(len, 0);
+        cell_id(&mut ids[place ^ inst], &mut self.big, (key, place))
     }
 
-    /// Makes arena `key` the one in `ids`.
+    /// Makes arena `key` the one in `ids` and `inst_ids`.
     #[cold]
     #[inline(never)]
     fn switch_to(&mut self, key: u32) {
-        let ids = self.others.remove(&key).unwrap_or_default();
+        let (ids, inst_ids) = self.others.remove(&key).unwrap_or_default();
         let previous = std::mem::replace(&mut self.ids, ids);
+        let previous_inst = std::mem::replace(&mut self.inst_ids, inst_ids);
         if self.key != 0 {
-            self.others.insert(self.key, previous);
+            self.others.insert(self.key, (previous, previous_inst));
         }
         self.key = key;
     }
@@ -295,6 +314,7 @@ pub(crate) fn forget_own_symbol_ids(key: u32) {
         if own.key == key {
             own.key = 0;
             own.ids = Vec::new();
+            own.inst_ids = Vec::new();
         } else {
             own.others.remove(&key);
         }
@@ -378,7 +398,13 @@ pub fn own_symbol_id_count() -> u64 {
     OWN_SYMBOL_IDS.with(|own| {
         let own = own.borrow();
         let given = |ids: &[IdCell]| ids.iter().filter(|&&id| id != 0).count() as u64;
-        given(&own.ids) + own.others.values().map(|ids| given(ids)).sum::<u64>()
+        given(&own.ids)
+            + given(&own.inst_ids)
+            + own
+                .others
+                .values()
+                .map(|(ids, inst_ids)| given(ids) + given(inst_ids))
+                .sum::<u64>()
     })
 }
 
@@ -1930,7 +1956,7 @@ mod symbol_id_tests {
         let own = first.new_symbol(SymbolFlags::TRANSIENT, "own");
 
         let origin = first.id_slot(own);
-        let shadow = second.push_shadow(first.sym(own).clone(), origin);
+        let shadow = second.push_shadow(first.sym(own).to_symbol(), origin);
         assert_eq!(second.symbol_at_slot(origin), Some(shadow));
         assert_eq!(first.symbol_at_slot(second.id_slot(shadow)), Some(own));
         let id = get_symbol_id(&second, shadow);
@@ -1939,7 +1965,7 @@ mod symbol_id_tests {
         let lineage = second.id_slot(later);
         assert_eq!(lineage.key, 0, "a binder symbol has the shared slot");
         assert_eq!(first.symbol_at_slot(lineage), None);
-        let shadow_later = first.push_shadow(second.sym(later).clone(), lineage);
+        let shadow_later = first.push_shadow(second.sym(later).to_symbol(), lineage);
         assert_eq!(
             get_symbol_id(&first, shadow_later),
             get_symbol_id(&binder, later)

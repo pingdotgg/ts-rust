@@ -29,8 +29,7 @@ impl ApiStabilityAnalysis {
             if current.is_nil()
                 || !tp
                     .checker
-                    .sym(current)
-                    .flags
+                    .sym_flags(current)
                     .intersects(SymbolFlags::INTERFACE | SymbolFlags::CLASS)
                 || tp.checker.sym(current).declarations.is_empty()
                 || !self.consume_work()
@@ -41,7 +40,7 @@ impl ApiStabilityAnalysis {
                 continue;
             }
             let is_class_with_heritage =
-                tp.checker.sym(current).flags.intersects(SymbolFlags::CLASS)
+                tp.checker.sym_flags(current).intersects(SymbolFlags::CLASS)
                     && api_stability_symbol_declares_heritage(tp.checker, current);
             if is_class_with_heritage {
                 let declared =
@@ -103,7 +102,7 @@ impl ApiStabilityAnalysis {
                     let mut base = self.symbol_at_type_name_node(tp, name);
                     let mut aliases: FxHashSet<SymbolId> = FxHashSet::default();
                     while base.is_some()
-                        && tp.checker.sym(base).flags.intersects(SymbolFlags::ALIAS)
+                        && tp.checker.sym_flags(base).intersects(SymbolFlags::ALIAS)
                         && aliases.insert(base)
                     {
                         base = api_stability_immediate_aliased_symbol(tp.checker, base);

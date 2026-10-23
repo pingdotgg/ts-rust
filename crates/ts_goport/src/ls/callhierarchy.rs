@@ -598,7 +598,7 @@ pub fn resolve_call_hierarchy_declaration(
         if !following_symbol {
             let mut symbol = c.get_symbol_at_location_exported(location);
             if symbol.is_some() {
-                if c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+                if c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
                     symbol = c.get_aliased_symbol(symbol);
                 }
                 let value_declaration = c.sym(symbol).value_declaration;

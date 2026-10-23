@@ -211,7 +211,7 @@ impl Checker {
 
     // Go: checker/checker.go:1238 GetTypeAliasTypeParameters
     pub fn get_type_alias_type_parameters(&mut self, symbol: SymbolId) -> Vec<TypeId> {
-        if !self.sym(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS) {
+        if !self.sym_flags(symbol).intersects(SymbolFlags::TYPE_ALIAS) {
             panic!("Attempted to fetch type alias parameters for non-type-alias symbol");
         }
         self.get_declared_type_of_symbol(symbol);
@@ -231,8 +231,7 @@ impl Checker {
         );
         if symbol.is_some() {
             if self
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE)
             {
                 let t = self.get_declared_type_of_symbol(symbol);
@@ -410,7 +409,7 @@ impl Checker {
                 for symbol in self.symbols.values(file.locals()) {
                     // We defer merging of global ambient module declarations since they may require other global symbols
                     // and types to be resolved. See https://github.com/microsoft/typescript-go/issues/2953.
-                    if self.sym(symbol).flags.intersects(SymbolFlags::MODULE)
+                    if self.sym_flags(symbol).intersects(SymbolFlags::MODULE)
                         && is_ambient_module_symbol_name(&self.sym(symbol).name)
                     {
                         ambient_module_symbols.push(symbol);
@@ -645,8 +644,7 @@ impl Checker {
             main_module =
                 self.resolve_external_module_symbol(main_module, false /*dontResolveAlias*/);
             if self
-                .sym(main_module)
-                .flags
+                .sym_flags(main_module)
                 .intersects(SymbolFlags::NAMESPACE)
             {
                 // If we're merging an augmentation to a pattern ambient module, we want to
@@ -1369,7 +1367,7 @@ impl Checker {
                 false, /*excludeGlobals*/
             );
             let symbol = self.resolve_symbol(resolved);
-            if symbol.is_some() && !self.sym(symbol).flags.intersects(SymbolFlags::NAMESPACE) {
+            if symbol.is_some() && !self.sym_flags(symbol).intersects(SymbolFlags::NAMESPACE) {
                 self.error(
                     error_location,
                     diag::X_0_refers_to_a_value_but_is_being_used_as_a_type_here_Did_you_mean_typeof_0,
@@ -1628,12 +1626,12 @@ impl Checker {
         {
             return "";
         }
-        if self.sym(candidate).flags.intersects(meaning) {
+        if self.sym_flags(candidate).intersects(meaning) {
             return candidate_name;
         }
-        if self.sym(candidate).flags.intersects(SymbolFlags::ALIAS) {
+        if self.sym_flags(candidate).intersects(SymbolFlags::ALIAS) {
             let alias = self.try_resolve_alias(candidate);
-            if alias.is_some() && self.sym(alias).flags.intersects(meaning) {
+            if alias.is_some() && self.sym_flags(alias).intersects(meaning) {
                 return candidate_name;
             }
             // `try_resolve_alias` gives nil only while the alias is being resolved.
@@ -1673,7 +1671,7 @@ impl Checker {
                     && (meaning & SymbolFlags::VALUE) == SymbolFlags::VALUE)
         {
             let export_or_local_symbol = self.get_export_symbol_of_value_symbol_if_exported(result);
-            if self.sym(export_or_local_symbol).flags.intersects(
+            if self.sym_flags(export_or_local_symbol).intersects(
                 SymbolFlags::BLOCK_SCOPED_VARIABLE | SymbolFlags::CLASS | SymbolFlags::ENUM,
             ) {
                 self.check_resolved_block_scoped_variable(export_or_local_symbol, error_location);
@@ -1740,8 +1738,8 @@ impl Checker {
         }
         if error_location.is_some()
             && meaning.intersects(SymbolFlags::VALUE)
-            && self.sym(result).flags.intersects(SymbolFlags::ALIAS)
-            && !self.sym(result).flags.intersects(SymbolFlags::VALUE)
+            && self.sym_flags(result).intersects(SymbolFlags::ALIAS)
+            && !self.sym_flags(result).intersects(SymbolFlags::VALUE)
             && !is_valid_type_only_alias_use_site(error_location)
         {
             let type_only_declaration =
@@ -1815,7 +1813,7 @@ impl Checker {
 
     // Go: checker/checker.go:1955 checkResolvedBlockScopedVariable
     pub fn check_resolved_block_scoped_variable(&mut self, result: SymbolId, error_location: Node) {
-        let result_flags = self.sym(result).flags;
+        let result_flags = self.sym_flags(result);
         debug_assert!(
             result_flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
                 || result_flags.intersects(SymbolFlags::CLASS)

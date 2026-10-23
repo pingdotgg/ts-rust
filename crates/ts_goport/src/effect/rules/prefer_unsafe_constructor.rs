@@ -362,7 +362,7 @@ fn returns_mutually_assignable(c: &mut Checker, ret: TypeId, success_type: TypeI
 /// resolveAliasedSymbol follows import/export aliases to the original symbol.
 // Go: rules/prefer_unsafe_constructor.go resolveAliasedSymbol
 fn resolve_aliased_symbol(c: &mut Checker, mut sym: SymbolId) -> SymbolId {
-    while sym.is_some() && c.sym(sym).flags.intersects(SymbolFlags::ALIAS) {
+    while sym.is_some() && c.sym_flags(sym).intersects(SymbolFlags::ALIAS) {
         sym = c.get_aliased_symbol(sym);
     }
     sym

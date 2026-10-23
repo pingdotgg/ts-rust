@@ -345,8 +345,7 @@ fn get_symbol_kind_of_constructor_property_method_accessor_function_or_var(
     if roots.len() == 1
         && type_checker
             .symbols()
-            .sym(roots[0])
-            .flags
+            .sym_flags(roots[0])
             .intersects(SymbolFlags::METHOD)
         && match type_checker.checker() {
             None => true,
@@ -424,16 +423,14 @@ fn get_symbol_kind_of_constructor_property_method_accessor_function_or_var(
         if matches!(type_checker, TypeChecker::Checker(_))
             && flags.intersects(SymbolFlags::TRANSIENT)
             && symbols
-                .sym(symbol)
-                .check_flags
+                .sym_check_flags(symbol)
                 .intersects(CheckFlags::SYNTHETIC)
         {
             // If union property is result of union of non method (property/accessors/variables), it is labeled as property
             let mut union_property_kind = ScriptElementKind::UNKNOWN;
             for &root_symbol in &roots {
                 if symbols
-                    .sym(root_symbol)
-                    .flags
+                    .sym_flags(root_symbol)
                     .intersects(SymbolFlags::PROPERTY_OR_ACCESSOR | SymbolFlags::VARIABLE)
                 {
                     union_property_kind = ScriptElementKind::MEMBER_VARIABLE_ELEMENT;
@@ -531,8 +528,7 @@ pub fn get_symbol_modifiers<'a>(
     let mut modifiers = get_normalized_symbol_modifiers(&mut type_checker, symbol);
     if type_checker
         .symbols()
-        .sym(symbol)
-        .flags
+        .sym_flags(symbol)
         .intersects(SymbolFlags::ALIAS)
         && matches!(type_checker, TypeChecker::Checker(_))
     {
@@ -546,8 +542,7 @@ pub fn get_symbol_modifiers<'a>(
     }
     if type_checker
         .symbols()
-        .sym(symbol)
-        .flags
+        .sym_flags(symbol)
         .intersects(SymbolFlags::OPTIONAL)
     {
         modifiers |= ScriptElementKindModifier::OPTIONAL;

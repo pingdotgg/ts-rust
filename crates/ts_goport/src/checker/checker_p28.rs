@@ -921,7 +921,7 @@ impl Checker {
         let flags = self.ty(t).flags;
         let symbol = self.ty(t).symbol;
         if flags.intersects(TypeFlags::ENUM_LIKE)
-            && self.sym(symbol).flags.intersects(SymbolFlags::ENUM_MEMBER)
+            && self.sym_flags(symbol).intersects(SymbolFlags::ENUM_MEMBER)
         {
             let parent = self.get_parent_of_symbol(symbol);
             return self.get_declared_type_of_symbol(parent);

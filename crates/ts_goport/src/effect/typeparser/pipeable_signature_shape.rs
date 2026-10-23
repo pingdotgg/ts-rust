@@ -228,7 +228,7 @@ impl SignatureTypeMatcher {
 // PORT: Go reads `symbol.Flags` without a checker; the symbol arena is on
 // the checker here.
 pub fn symbol_is_optional(c: &Checker, symbol: SymbolId) -> bool {
-    symbol.is_some() && c.sym(symbol).flags.intersects(SymbolFlags::OPTIONAL)
+    symbol.is_some() && c.sym_flags(symbol).intersects(SymbolFlags::OPTIONAL)
 }
 
 impl SignatureTypeMatcher {

@@ -871,8 +871,7 @@ impl DeclarationTransformer {
         // binder symbols (`program::bound_symbols`).
         if symbol.is_nil()
             || !crate::program::bound_symbols()
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::ASSIGNMENT)
         {
             return;

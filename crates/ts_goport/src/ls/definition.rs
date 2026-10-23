@@ -264,7 +264,7 @@ impl LanguageService {
                     Feature::TYPE_DEFINITION,
                 );
             }
-            let flags = c.sym(symbol).flags;
+            let flags = c.sym_flags(symbol);
             if !flags.intersects(SymbolFlags::VALUE) && flags.intersects(SymbolFlags::TYPE) {
                 let declarations = c.sym(symbol).declarations.to_vec();
                 return self.create_definition_locations(
@@ -576,7 +576,7 @@ pub fn get_declarations_from_location(c: &mut Checker, node: Node) -> Vec<Node> 
     let node = get_declaration_name_for_keyword(node);
     let mut symbol = c.get_symbol_at_location_exported(node);
     if symbol.is_some() {
-        let flags = c.sym(symbol).flags;
+        let flags = c.sym_flags(symbol);
         if flags.intersects(SymbolFlags::CLASS)
             && !flags.intersects(SymbolFlags::FUNCTION | SymbolFlags::VARIABLE)
             && node.kind() == SyntaxKind::ConstructorKeyword
@@ -588,7 +588,7 @@ pub fn get_declarations_from_location(c: &mut Checker, node: Node) -> Vec<Node> 
                 symbol = constructor;
             }
         }
-        if c.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if c.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             let (resolved, ok) = c.resolve_alias_exported(symbol);
             if ok {
                 symbol = resolved;

@@ -401,7 +401,7 @@ impl Checker {
         }
         if object_flags.intersects(ObjectFlags::ANONYMOUS)
             && ty.symbol.is_some()
-            && self.sym(ty.symbol).flags.intersects(
+            && self.sym_flags(ty.symbol).intersects(
                 SymbolFlags::CLASS
                     | SymbolFlags::ENUM
                     | SymbolFlags::VALUE_MODULE
@@ -575,7 +575,7 @@ impl Checker {
             (ty.symbol, ty.flags, ty.object_flags)
         };
         symbol.is_some()
-            && self.sym(symbol).flags.intersects(SymbolFlags::CLASS)
+            && self.sym_flags(symbol).intersects(SymbolFlags::CLASS)
             && (t == self.get_declared_type_of_class_or_interface(symbol)
                 || (flags.intersects(TypeFlags::OBJECT)
                     && object_flags.intersects(ObjectFlags::IS_CLASS_INSTANCE_CLONE)))
@@ -749,7 +749,7 @@ impl Checker {
         }
 
         let mut resolved_symbol = symbol;
-        if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             resolved_symbol = self.resolve_alias(symbol);
         }
 
@@ -1489,7 +1489,7 @@ impl Checker {
 
         let mut expression = Node::NIL;
         if starts_with_single_or_double_quote(&symbol_name)
-            && !self.sym(symbol).flags.intersects(SymbolFlags::ENUM_MEMBER)
+            && !self.sym_flags(symbol).intersects(SymbolFlags::ENUM_MEMBER)
         {
             let literal_text = unquote_string(&symbol_name);
             p1_add_length(b, go_len(&literal_text) + 2);
@@ -1606,7 +1606,7 @@ impl Checker {
                 // 	return symbol.Name
                 // }
                 if is_computed_property_name(name)
-                    && !self.sym(symbol).check_flags.intersects(CheckFlags::LATE)
+                    && !self.sym_check_flags(symbol).intersects(CheckFlags::LATE)
                 {
                     if self.value_symbol_links.has_by_id(&self.symbols, symbol) {
                         let name_type = self

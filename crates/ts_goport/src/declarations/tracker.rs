@@ -427,7 +427,7 @@ impl SymbolTracker for SymbolTrackerImpl {
         enclosing_declaration: Node,
         meaning: SymbolFlags,
     ) -> bool {
-        if c.sym(symbol).flags.intersects(SymbolFlags::TYPE_PARAMETER) {
+        if c.sym_flags(symbol).intersects(SymbolFlags::TYPE_PARAMETER) {
             return false;
         }
         // When watching for a class expression symbol, record its usage without

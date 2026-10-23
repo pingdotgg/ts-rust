@@ -175,7 +175,7 @@ pub fn get_default_like_export_name_from_declaration(
         }
         // "export { ~ as default }"
         if is_export_specifier(d)
-            && symbols.sym(d.symbol()).flags == SymbolFlags::ALIAS
+            && symbols.sym_flags(d.symbol()) == SymbolFlags::ALIAS
             && d.property_name().is_some()
         {
             if d.property_name().kind() == SyntaxKind::Identifier {

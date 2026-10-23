@@ -292,11 +292,10 @@ impl LanguageService {
             );
             if display_name == item_data.name
                 && (item_data.source == COMPLETION_SOURCE_CLASS_MEMBER_SNIPPET
-                    && ch.sym(symbol).flags.intersects(SymbolFlags::CLASS_MEMBER)
+                    && ch.sym_flags(symbol).intersects(SymbolFlags::CLASS_MEMBER)
                     || item_data.source == COMPLETION_SOURCE_OBJECT_LITERAL_METHOD_SNIPPET
                         && ch
-                            .sym(symbol)
-                            .flags
+                            .sym_flags(symbol)
                             .intersects(SymbolFlags::PROPERTY | SymbolFlags::METHOD)
                     || get_source_from_origin(origin) == item_data.source
                     || item_data.source == COMPLETION_SOURCE_OBJECT_LITERAL_MEMBER_WITH_COMMA)

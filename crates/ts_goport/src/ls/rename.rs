@@ -391,7 +391,7 @@ impl<P: ProgramView> LanguageService<P> {
         if is_identifier(node)
             && node.text() == "default"
             && symbol_parent.is_some()
-            && ch.sym(symbol_parent).flags.intersects(SymbolFlags::MODULE)
+            && ch.sym_flags(symbol_parent).intersects(SymbolFlags::MODULE)
         {
             return Some(diag::You_cannot_rename_this_element);
         }
@@ -425,7 +425,7 @@ pub fn would_rename_in_other_node_modules(
 ) -> Option<&'static Message> {
     let mut sym = symbol;
     if !preferences.use_aliases_for_rename.is_true_or_unknown()
-        && ch.sym(sym).flags.intersects(SymbolFlags::ALIAS)
+        && ch.sym_flags(sym).intersects(SymbolFlags::ALIAS)
     {
         let import_specifier = ch
             .sym(sym)

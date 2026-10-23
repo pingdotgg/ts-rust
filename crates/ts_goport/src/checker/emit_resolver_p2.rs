@@ -894,7 +894,7 @@ impl EmitResolver {
             let value_symbol =
                 c.resolve_entity_name(type_name, SymbolFlags::VALUE, true, true, location);
             let mut resolved_value_symbol = value_symbol;
-            if value_symbol.is_some() && c.sym(value_symbol).flags.intersects(SymbolFlags::ALIAS) {
+            if value_symbol.is_some() && c.sym_flags(value_symbol).intersects(SymbolFlags::ALIAS) {
                 resolved_value_symbol = c.resolve_alias(value_symbol);
             }
 
@@ -907,7 +907,7 @@ impl EmitResolver {
             let type_symbol =
                 c.resolve_entity_name(type_name, SymbolFlags::TYPE, true, true, location);
             let mut resolved_type_symbol = type_symbol;
-            if type_symbol.is_some() && c.sym(type_symbol).flags.intersects(SymbolFlags::ALIAS) {
+            if type_symbol.is_some() && c.sym_flags(type_symbol).intersects(SymbolFlags::ALIAS) {
                 resolved_type_symbol = c.resolve_alias(type_symbol);
             }
             // In case the value symbol can't be resolved (e.g. because of missing declarations), use type symbol for reachability check.
@@ -1061,15 +1061,14 @@ impl EmitResolver {
                 if base_prop.is_nil() {
                     continue;
                 }
-                if c.sym(base_prop)
-                    .flags
+                if c.sym_flags(base_prop)
                     .intersects(SymbolFlags::ACCESSOR | SymbolFlags::METHOD | SymbolFlags::FUNCTION)
                 {
                     return true;
                 }
                 if c.is_readonly_symbol(base_prop) == c.is_readonly_symbol(s)
-                    && (c.sym(s).flags & SymbolFlags::OPTIONAL)
-                        == (c.sym(base_prop).flags & SymbolFlags::OPTIONAL)
+                    && (c.sym_flags(s) & SymbolFlags::OPTIONAL)
+                        == (c.sym_flags(base_prop) & SymbolFlags::OPTIONAL)
                 {
                     let s_type = c.get_type_of_symbol(s);
                     let base_type = c.get_type_of_symbol(base_prop);
@@ -1125,7 +1124,7 @@ impl Checker {
                 Node::NIL, /*location*/
             );
         }
-        if symbol.is_some() && self.sym(symbol).flags.intersects(SymbolFlags::ENUM_MEMBER) {
+        if symbol.is_some() && self.sym_flags(symbol).intersects(SymbolFlags::ENUM_MEMBER) {
             // inline property\index accesses only for const enums
             let member = self.sym(symbol).value_declaration;
             if is_enum_const(member.parent()) {

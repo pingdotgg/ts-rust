@@ -424,8 +424,7 @@ impl<F: FnMut(Node) -> bool> ImportersForExport<'_, F> {
         }
         crate::go_assert!(
             self.checker
-                .sym(module_symbol)
-                .flags
+                .sym_flags(module_symbol)
                 .intersects(SymbolFlags::MODULE)
         );
         for direct_import in self.get_direct_imports(module_symbol) {
@@ -999,7 +998,7 @@ pub fn get_import_or_export_symbol(
         }
         // JS destructuring from `require(...)` is import-like for references, but the binding element
         // itself is still a local variable symbol rather than an alias.
-        let mut imported_symbol = if checker.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        let mut imported_symbol = if checker.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             checker.get_immediate_aliased_symbol_exported(symbol)
         } else {
             get_property_symbol_of_object_binding_pattern_without_property_name(symbol, checker)
@@ -1158,8 +1157,7 @@ pub fn get_export_equals_local_symbol(
     checker: &mut Checker,
 ) -> SymbolId {
     if checker
-        .sym(imported_symbol)
-        .flags
+        .sym_flags(imported_symbol)
         .intersects(SymbolFlags::ALIAS)
     {
         return checker.get_immediate_aliased_symbol_exported(imported_symbol);

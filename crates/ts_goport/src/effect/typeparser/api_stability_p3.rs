@@ -654,8 +654,7 @@ impl ApiStabilityAnalysis {
                     if member.is_nil()
                         || tp
                             .checker
-                            .sym(member)
-                            .flags
+                            .sym_flags(member)
                             .intersects(SymbolFlags::TYPE_PARAMETER)
                         || api_stability_symbol_is_non_public(tp.checker, member)
                     {
@@ -871,7 +870,7 @@ impl ApiStabilityAnalysis {
                 .get(tp.checker.sym(symbol).members, internal);
             if member.is_nil()
                 && kind == SignatureKind::CALL
-                && tp.checker.sym(symbol).flags.intersects(
+                && tp.checker.sym_flags(symbol).intersects(
                     SymbolFlags::FUNCTION
                         | SymbolFlags::METHOD
                         | SymbolFlags::GET_ACCESSOR
@@ -1061,7 +1060,7 @@ impl ApiStabilityAnalysis {
             return surface;
         }
         let symbol = tp.checker.ty(t).symbol();
-        if symbol.is_some() && tp.checker.sym(symbol).flags.intersects(SymbolFlags::CLASS) {
+        if symbol.is_some() && tp.checker.sym_flags(symbol).intersects(SymbolFlags::CLASS) {
             self.collect_class_static_surface(tp, &mut surface, t, inspect, subst);
             return surface;
         }
@@ -1395,8 +1394,7 @@ impl ApiStabilityAnalysis {
         if symbol.is_nil()
             || !tp
                 .checker
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::TYPE_PARAMETER)
         {
             return TypeId::NIL;
@@ -3141,8 +3139,7 @@ impl ApiStabilityAnalysis {
                 if symbol.is_some()
                     && tp
                         .checker
-                        .sym(symbol)
-                        .flags
+                        .sym_flags(symbol)
                         .intersects(SymbolFlags::TYPE_PARAMETER)
                 {
                     return true;

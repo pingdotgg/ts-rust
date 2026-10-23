@@ -674,7 +674,7 @@ impl Checker {
         self.check_exports_on_merged_declarations(node);
         let symbol = self.get_symbol_of_declaration(node);
         // The following checks only apply on a non-ambient instantiated module declaration.
-        if self.sym(symbol).flags.intersects(SymbolFlags::VALUE_MODULE)
+        if self.sym_flags(symbol).intersects(SymbolFlags::VALUE_MODULE)
             && !in_ambient_context
             && is_instantiated_module(node, self.compiler_options.should_preserve_const_enums())
         {
@@ -755,7 +755,7 @@ impl Checker {
                 // - augmentation for some external module is applied if symbol for augmentation is merged (it was combined with target module).
                 let check_body = is_global_augmentation || {
                     let s = self.get_symbol_of_declaration(node);
-                    self.sym(s).flags.intersects(SymbolFlags::TRANSIENT)
+                    self.sym_flags(s).intersects(SymbolFlags::TRANSIENT)
                 };
                 if check_body && node.body().is_some() {
                     for statement in node.body().statements() {
@@ -1291,7 +1291,7 @@ impl Checker {
                             false,
                             Node::NIL,
                         );
-                        if !self.sym(resolved).flags.intersects(SymbolFlags::NAMESPACE) {
+                        if !self.sym_flags(resolved).intersects(SymbolFlags::NAMESPACE) {
                             self.error(
                                 module_name,
                                 diag::Module_0_is_hidden_by_a_local_declaration_with_the_same_name,
@@ -1603,13 +1603,13 @@ impl Checker {
                 if !is_illegal_export_default_in_cjs
                     && !node.flags().intersects(NodeFlags::AMBIENT)
                     && self.compiler_options.get_isolated_modules()
-                    && !self.sym(sym).flags.intersects(SymbolFlags::VALUE)
+                    && !self.sym_flags(sym).intersects(SymbolFlags::VALUE)
                 {
                     let non_local_meanings = self.get_symbol_flags_ex(
                         sym, false, /*excludeTypeOnlyMeanings*/
                         true,  /*excludeLocalMeanings*/
                     );
-                    if self.sym(sym).flags.intersects(SymbolFlags::ALIAS)
+                    if self.sym_flags(sym).intersects(SymbolFlags::ALIAS)
                         && non_local_meanings.intersects(SymbolFlags::TYPE)
                         && !non_local_meanings.intersects(SymbolFlags::VALUE)
                         && (type_only_declaration.is_nil()
@@ -1767,8 +1767,7 @@ impl Checker {
                 // ECMA262: 15.2.1.1 It is a Syntax Error if the ExportedNames of ModuleItemList contains any duplicate entries.
                 // (TS Exceptions: namespaces, function overloads, enums, and interfaces)
                 if self
-                    .sym(symbol)
-                    .flags
+                    .sym_flags(symbol)
                     .intersects(SymbolFlags::NAMESPACE | SymbolFlags::ENUM)
                 {
                     continue;
@@ -1780,7 +1779,7 @@ impl Checker {
                         is_not_overload(d) && !is_accessor(d) && !is_interface_declaration(d)
                     })
                     .count();
-                if self.sym(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS)
+                if self.sym_flags(symbol).intersects(SymbolFlags::TYPE_ALIAS)
                     && exported_declarations_count <= 2
                 {
                     // it is legal to merge type alias with other values

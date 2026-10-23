@@ -107,7 +107,7 @@ impl Checker {
     // Go: checker/checker.go:2200 getTypeOnlyAliasDeclaration
     // Return the type-only declaration node (if any) for the given alias symbol (non-transitively)
     pub fn get_type_only_alias_declaration(&mut self, symbol: SymbolId) -> Node {
-        if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             self.resolve_alias(symbol);
             return self.alias_symbol_links.get(symbol).type_only_declaration;
         }
@@ -123,8 +123,8 @@ impl Checker {
         meaning: SymbolFlags,
     ) -> Node {
         let mut symbol = symbol;
-        while self.sym(symbol).flags.intersects(SymbolFlags::ALIAS)
-            && !self.sym(symbol).flags.intersects(meaning)
+        while self.sym_flags(symbol).intersects(SymbolFlags::ALIAS)
+            && !self.sym_flags(symbol).intersects(meaning)
         {
             let resolved = self.resolve_alias(symbol);
             let type_only_declaration = self.alias_symbol_links.get(symbol).type_only_declaration;
@@ -139,7 +139,7 @@ impl Checker {
     // Go: checker/checker.go:2222 getImmediateAliasedSymbol
     pub fn get_immediate_aliased_symbol(&mut self, symbol: SymbolId) -> SymbolId {
         debug_assert!(
-            self.sym(symbol).flags.intersects(SymbolFlags::ALIAS),
+            self.sym_flags(symbol).intersects(SymbolFlags::ALIAS),
             "Should only get Alias here."
         );
         if self
@@ -209,10 +209,10 @@ impl Checker {
             let found = self.symbols.get(symbols, name);
             let symbol = self.get_merged_symbol(found);
             if symbol.is_some() {
-                if self.sym(symbol).flags.intersects(meaning) {
+                if self.sym_flags(symbol).intersects(meaning) {
                     return symbol;
                 }
-                if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+                if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
                     let target_flags = self.get_symbol_flags(symbol);
                     // `targetFlags` will be `SymbolFlags.All` if an error occurred in alias resolution; this avoids cascading errors
                     if target_flags.intersects(meaning) {
@@ -762,7 +762,7 @@ impl Checker {
                 let symbol = self.resolve_js_doc_member_name(name.left());
                 if symbol.is_some() {
                     let mut t = TypeId::NIL;
-                    if self.sym(symbol).flags.intersects(SymbolFlags::VALUE) {
+                    if self.sym_flags(symbol).intersects(SymbolFlags::VALUE) {
                         let symbol_type = self.get_type_of_symbol(symbol);
                         let proto = self.get_property_of_type(symbol_type, "prototype");
                         if proto.is_some() {

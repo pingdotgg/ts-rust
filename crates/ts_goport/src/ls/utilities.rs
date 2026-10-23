@@ -1290,8 +1290,7 @@ pub fn get_parent_symbols_of_property_access(
             let t_symbol = ch.ty(t).symbol;
             if t_symbol.is_some()
                 && ch
-                    .sym(t_symbol)
-                    .flags
+                    .sym_flags(t_symbol)
                     .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE)
             {
                 return Some(t_symbol);
@@ -1329,8 +1328,7 @@ pub fn get_property_symbols_from_base_types(
         //          /*findRef*/propName: string;
         //      }
         if !checker
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE)
             || !seen.insert(symbol)
         {

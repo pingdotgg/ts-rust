@@ -146,7 +146,7 @@ pub fn get_resolved_declared_type_of_symbol_if_materialized(
     if symbol.is_nil() {
         return TypeId::NIL;
     }
-    let flags = c.sym(symbol).flags;
+    let flags = c.sym_flags(symbol);
     if flags.intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE | SymbolFlags::ALIAS) {
         if let Some(links) = c.declared_type_links.try_get(symbol) {
             return links.declared_type;
@@ -375,8 +375,7 @@ pub fn get_resolved_index_infos_of_type_if_materialized(
 pub fn get_instantiated_symbol_mapper(c: &Checker, symbol: SymbolId) -> MapperId {
     if symbol.is_nil()
         || !c
-            .sym(symbol)
-            .check_flags
+            .sym_check_flags(symbol)
             .intersects(CheckFlags::INSTANTIATED)
     {
         return MapperId::NIL;

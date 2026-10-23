@@ -447,8 +447,7 @@ impl Checker {
 
         if symbol.is_some()
             && self
-                .sym(symbol)
-                .flags
+                .sym_flags(symbol)
                 .intersects(SymbolFlags::TYPE_PARAMETER)
             && meaning.intersects(SymbolFlags::TYPE)
         {
@@ -520,7 +519,7 @@ impl Checker {
                 }
             };
 
-        let symbol_flags = self.sym(symbol).flags;
+        let symbol_flags = self.sym_flags(symbol);
         let declarations = self.sym(symbol).declarations.clone();
         for declaration in declarations {
             if is_identifier(declaration) {
@@ -623,7 +622,7 @@ impl Checker {
                 }
                 let t = self.get_type_of_symbol(symbol);
                 let _ = self.mapped_symbol_links.has(symbol);
-                let flags = self.sym(symbol).flags;
+                let flags = self.sym_flags(symbol);
                 flags.intersects(SymbolFlags::PROPERTY)
                     && flags.intersects(SymbolFlags::OPTIONAL)
                     && is_optional_declaration(declaration)
@@ -1210,7 +1209,7 @@ impl crate::printer::EmitResolver for EmitResolver {
             if symbol.is_nil() {
                 return false;
             }
-            c.sym(symbol).check_flags.intersects(CheckFlags::LATE)
+            c.sym_check_flags(symbol).intersects(CheckFlags::LATE)
         })
     }
 

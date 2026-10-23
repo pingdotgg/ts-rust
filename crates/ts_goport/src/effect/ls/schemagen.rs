@@ -1218,8 +1218,7 @@ impl<'f, 'a, 'c> StructuralSchemaGen<'f, 'a, 'c> {
             let is_optional = self
                 .tp
                 .checker
-                .sym(prop)
-                .flags
+                .sym_flags(prop)
                 .intersects(SymbolFlags::OPTIONAL);
 
             let schema_expr = if is_optional {

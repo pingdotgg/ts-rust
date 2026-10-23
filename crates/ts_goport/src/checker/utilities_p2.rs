@@ -179,7 +179,7 @@ pub fn is_infinity_or_nan_string(name: &str) -> bool {
 impl Checker {
     // Go: checker/utilities.go:1162 isConstantVariable
     pub fn is_constant_variable(&mut self, symbol: SymbolId) -> bool {
-        self.sym(symbol).flags.intersects(SymbolFlags::VARIABLE)
+        self.sym_flags(symbol).intersects(SymbolFlags::VARIABLE)
             && self
                 .get_declaration_node_flags_from_symbol(symbol)
                 .intersects(NodeFlags::CONSTANT)
@@ -1305,7 +1305,7 @@ impl Checker {
 
     // Go: checker/utilities.go:1779 SkipAlias
     pub fn skip_alias(&mut self, symbol: SymbolId) -> SymbolId {
-        if self.sym(symbol).flags.intersects(SymbolFlags::ALIAS) {
+        if self.sym_flags(symbol).intersects(SymbolFlags::ALIAS) {
             return self.get_aliased_symbol(symbol);
         }
         symbol
@@ -1425,7 +1425,7 @@ impl Checker {
                     && is_global_source_file(declaration_file))
                     && !(exclude_classes
                         && suggestion.is_some()
-                        && self.sym(suggestion).flags.intersects(SymbolFlags::CLASS)
+                        && self.sym_flags(suggestion).intersects(SymbolFlags::CLASS)
                         && suggestion_has_no_extends_or_decorators)
                     && !(node.is_some()
                         && exclude_classes

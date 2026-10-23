@@ -42,8 +42,7 @@ impl Checker {
     pub fn is_const_enum_or_const_enum_only_module(&self, s: SymbolId) -> bool {
         self.is_const_enum_symbol(s)
             || self
-                .sym(s)
-                .flags
+                .sym_flags(s)
                 .intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE)
     }
 

@@ -31,7 +31,7 @@ pub fn get_source_file_of_symbol(symbols: &SymbolArena, symbol: SymbolId) -> Nod
             "File-bound symbol has no declarations"
         );
         go_assert!(
-            s.parent.is_some() && symbols.sym(s.parent).flags.intersects(SymbolFlags::CLASS),
+            s.parent.is_some() && symbols.sym_flags(s.parent).intersects(SymbolFlags::CLASS),
             "Prototype has no declaring class"
         );
         s = symbols.sym(s.parent);
@@ -49,7 +49,7 @@ pub fn get_source_file_of_symbol(symbols: &SymbolArena, symbol: SymbolId) -> Nod
     file
 }
 
-impl Symbol {
+impl SymRef<'_> {
     // Go: ast/symbol.go:146 IsExternalModule
     #[must_use]
     pub fn is_external_module(&self) -> bool {
@@ -73,7 +73,7 @@ impl Symbol {
     #[must_use]
     pub fn combined_local_and_export_symbol_flags(&self, symbols: &SymbolArena) -> SymbolFlags {
         if self.export_symbol.is_some() {
-            return self.flags | symbols.sym(self.export_symbol).flags;
+            return self.flags | symbols.sym_flags(self.export_symbol);
         }
         self.flags
     }

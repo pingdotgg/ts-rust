@@ -587,8 +587,7 @@ fn needs_jsx_namespace_fix(jsx_namespace: &str, symbol_token: Node, ch: &mut Che
         .any(|&d| is_type_only_import_or_export_declaration(d))
     {
         return !ch
-            .sym(namespace_symbol)
-            .flags
+            .sym_flags(namespace_symbol)
             .intersects(SymbolFlags::VALUE);
     }
     false

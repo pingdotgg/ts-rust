@@ -1252,11 +1252,20 @@ impl<'a> IntoIterator for &'a Declarations {
     }
 }
 
-/// Go `*ast.Symbol`. Field names follow Go.
+/// Go `*ast.Symbol`: the head (flags and check flags) and the data
+/// (`SymbolData`, Go `symbolData`), in one value as Go `SymbolWithData`.
+/// Field names follow Go. The data fields read and write through `Deref`.
 #[derive(Clone, Debug, Default)]
 pub struct Symbol {
     pub flags: SymbolFlags,
     pub check_flags: CheckFlags,
+    pub data: SymbolData,
+}
+
+/// Go `ast.symbolData` (ast/symbol.go:23) with its `symbolExtra`: the fields
+/// that an instantiated symbol shares with its target (`InstSymbol`).
+#[derive(Clone, Debug, Default)]
+pub struct SymbolData {
     pub name: Name,
     pub declarations: Declarations,
     pub value_declaration: Node,
@@ -1266,10 +1275,91 @@ pub struct Symbol {
     pub export_symbol: SymbolId,
 }
 
+impl std::ops::Deref for Symbol {
+    type Target = SymbolData;
+    #[inline(always)]
+    fn deref(&self) -> &SymbolData {
+        &self.data
+    }
+}
+
+impl std::ops::DerefMut for Symbol {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut SymbolData {
+        &mut self.data
+    }
+}
+
 // PERF (memper1): a checker makes millions of symbols, in chunks of
 // `COW_CHUNK_LEN` (14 KiB at 56 bytes, a jemalloc size class).
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<Symbol>() == 56);
+
+/// Go `newSharedDataSymbol` (checker.go:14346): an instantiated symbol, a
+/// head of its own whose data is the data of `target`
+/// (`SymbolArena::push_instance`). The target is never an instance.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InstSymbol {
+    pub flags: SymbolFlags,
+    pub check_flags: CheckFlags,
+    pub target: SymbolId,
+}
+
+// PERF (symdata1): 12 bytes in place of a 56-byte `Symbol` per instance
+// (77.5% of the checker-made symbols on VS Code, 97.1% on hono).
+const _: () = assert!(std::mem::size_of::<InstSymbol>() == 12);
+
+/// A read of a symbol (`SymbolArena::sym`): its head, and its data, which
+/// for an instantiated symbol is the data of its target, as Go's shared
+/// `symbolData`. `SymbolData` has no flags, so a data read never reads the
+/// target's head.
+#[derive(Clone, Copy, Debug)]
+pub struct SymRef<'a> {
+    pub flags: SymbolFlags,
+    pub check_flags: CheckFlags,
+    pub data: &'a SymbolData,
+}
+
+impl<'a> SymRef<'a> {
+    #[inline(always)]
+    fn of(symbol: &'a Symbol) -> Self {
+        SymRef {
+            flags: symbol.flags,
+            check_flags: symbol.check_flags,
+            data: &symbol.data,
+        }
+    }
+
+    /// A full copy of the symbol: its head and its (shared) data.
+    #[must_use]
+    pub fn to_symbol(self) -> Symbol {
+        Symbol {
+            flags: self.flags,
+            check_flags: self.check_flags,
+            data: self.data.clone(),
+        }
+    }
+}
+
+impl std::ops::Deref for SymRef<'_> {
+    type Target = SymbolData;
+    #[inline(always)]
+    fn deref(&self) -> &SymbolData {
+        self.data
+    }
+}
+
+/// The index bit of an instantiated symbol (`SymbolArena::push_instance`):
+/// its id is `INST_BIT | c`, with `c` its record in `SymbolArena::insts`.
+/// Other symbol indexes stay below it.
+pub const INST_BIT: u32 = 1 << 31;
+
+/// Whether `symbol` is an instantiated symbol (`InstSymbol`).
+#[inline(always)]
+#[must_use]
+pub const fn is_instance(symbol: SymbolId) -> bool {
+    symbol.0 & INST_BIT != 0
+}
 
 /// A growable array split into fixed-size chunks that clones share. Index
 /// `i` is value `i % COW_CHUNK_LEN` of chunk `i / COW_CHUNK_LEN`. The values
@@ -2320,6 +2410,68 @@ mod hole_tests {
         assert_eq!(checker.sym(early).name.as_str(), "early");
         assert_eq!(checker.sym(own).name.as_str(), "own");
     }
+
+    // symdata1: an instantiated symbol has a head of its own and reads its
+    // target's data, also a write to the target after it was made (Go
+    // `newSharedDataSymbol`). It has an id slot of its own, which
+    // `symbol_at_slot` maps back, and a write through it panics.
+    #[test]
+    fn an_instance_shares_its_targets_data() {
+        let mut lineage = SymbolArena::new();
+        let early = lineage.new_symbol(SymbolFlags::PROPERTY, "p");
+        let mut checker = lineage.for_checker();
+        let own = checker.new_symbol(SymbolFlags::PROPERTY | SymbolFlags::TRANSIENT, "own");
+        let first = checker.push_instance(
+            SymbolFlags::PROPERTY | SymbolFlags::TRANSIENT,
+            CheckFlags::INSTANTIATED,
+            early,
+        );
+        let second = checker.push_instance(
+            SymbolFlags::PROPERTY | SymbolFlags::TRANSIENT,
+            CheckFlags::INSTANTIATED | CheckFlags::READONLY,
+            own,
+        );
+        assert!(is_instance(first) && is_instance(second) && !is_instance(own));
+        assert_eq!(checker.sym(first).name.as_str(), "p");
+        assert_eq!(checker.sym(second).name.as_str(), "own");
+        assert_eq!(
+            checker.sym_head(second),
+            (
+                SymbolFlags::PROPERTY | SymbolFlags::TRANSIENT,
+                CheckFlags::INSTANTIATED | CheckFlags::READONLY
+            )
+        );
+        assert_eq!(
+            checker.sym(second).check_flags,
+            checker.sym_check_flags(second)
+        );
+        assert_eq!(checker.sym_flags(early), SymbolFlags::PROPERTY);
+
+        // A data write to the target shows through; a head write does not.
+        let declaration = Node(1 << 32 | 5);
+        checker.sym_mut(own).declarations = Declarations::from(vec![declaration]);
+        checker.sym_mut(own).flags |= SymbolFlags::OPTIONAL;
+        assert_eq!(checker.sym(second).declarations[..], [declaration]);
+        assert!(!checker.sym_flags(second).intersects(SymbolFlags::OPTIONAL));
+        assert_eq!(checker.sym(second).to_symbol().name.as_str(), "own");
+
+        // Ids: each instance has its own slot, under the arena's key.
+        let slots = [first, second, own].map(|symbol| checker.id_slot(symbol));
+        assert!(slots[0] != slots[1] && slots[1] != slots[2] && slots[0].key == slots[2].key);
+        for (symbol, slot) in [first, second, own].into_iter().zip(slots) {
+            assert_eq!(checker.symbol_at_slot(slot), Some(symbol));
+        }
+        assert_eq!(
+            checker.own_symbols().collect::<Vec<_>>(),
+            [own, first, second]
+        );
+
+        let mut writable = checker.clone();
+        let write = std::panic::AssertUnwindSafe(move || {
+            writable.sym_mut(first).flags = SymbolFlags::NONE;
+        });
+        assert!(std::panic::catch_unwind(write).is_err());
+    }
 }
 
 /// `vec![T::default(); len]` for a large table that a probe reads before it
@@ -2685,6 +2837,9 @@ impl Table {
 #[derive(Clone, Debug)]
 pub struct SymbolArena {
     symbols: CowChunks<Symbol>,
+    /// The instantiated symbols that this checker arena made
+    /// (`push_instance`), by `INST_BIT` index. Empty in a binder arena.
+    insts: CowChunks<InstSymbol>,
     tables: CowChunks<Table>,
     /// The names that the binder gave private identifier symbols
     /// (`get_symbol_name_for_private_identifier`), as intern ids, for the
@@ -2864,6 +3019,7 @@ impl SymbolArena {
         tables.push(Table::default());
         Self {
             symbols,
+            insts: CowChunks::new(),
             tables,
             private_names: Vec::new(),
             ids: SymbolIds::SHARED,
@@ -2893,6 +3049,7 @@ impl SymbolArena {
         let own_base = u32::try_from(symbols.chunks.len() >> 1).expect("symbol overflow");
         SymbolArena {
             symbols,
+            insts: CowChunks::new(),
             tables: self.tables.for_checker(),
             private_names: self.private_names.clone(),
             ids: SymbolIds::own(own_base, self.symbols.len(), self.tables.len()),
@@ -2950,13 +3107,20 @@ impl SymbolArena {
     /// Where `crate::ast::get_symbol_id` keeps the id of `symbol`: the
     /// shared slot of its index for a binder symbol, else a slot of this
     /// arena's own ids. A shadow (`push_shadow`) uses the slot of its
-    /// origin.
+    /// origin. An instantiated symbol (`push_instance`) keeps its id under
+    /// this arena's key at place `INST_BIT | c`, its own index.
     #[inline]
     #[must_use]
     pub fn id_slot(&self, symbol: SymbolId) -> IdSlot {
-        if symbol.0 & self.ids.own_bit == 0 {
+        if symbol.0 & (self.ids.own_bit | INST_BIT) == 0 {
             return IdSlot {
                 key: 0,
+                place: symbol.0,
+            };
+        }
+        if is_instance(symbol) {
+            return IdSlot {
+                key: self.ids.key,
                 place: symbol.0,
             };
         }
@@ -2987,6 +3151,9 @@ impl SymbolArena {
             return Some(SymbolId(slot.place));
         }
         if slot.key != 0 && slot.key == self.ids.key {
+            if slot.place & INST_BIT != 0 {
+                return Some(SymbolId(slot.place));
+            }
             return Some(SymbolId(self.ids.own_index(slot.place)));
         }
         let shadows = self.ids.shadows.as_ref()?;
@@ -3026,13 +3193,18 @@ impl SymbolArena {
     }
 
     /// The symbols that this checker arena made (`is_own_index`), in
-    /// order. None in a binder arena.
+    /// order, then its instantiated symbols (`push_instance`). None in a
+    /// binder arena.
     pub fn own_symbols(&self) -> impl Iterator<Item = SymbolId> + '_ {
         let own = self.ids.key != 0;
         self.symbols
             .odd_indexes()
             .filter(move |_| own)
             .map(|index| SymbolId(u32::try_from(index).expect("symbol overflow")))
+            .chain(
+                (0..self.insts.len())
+                    .map(|c| SymbolId(INST_BIT | u32::try_from(c).expect("symbol overflow"))),
+            )
     }
 
     // The dump and load API of the lib bind snapshot
@@ -3170,7 +3342,10 @@ impl SymbolArena {
     pub fn new_symbol(&mut self, flags: SymbolFlags, name: impl Into<Name>) -> SymbolId {
         self.push_symbol(Symbol {
             flags,
-            name: name.into(),
+            data: SymbolData {
+                name: name.into(),
+                ..SymbolData::default()
+            },
             ..Symbol::default()
         })
     }
@@ -3184,7 +3359,32 @@ impl SymbolArena {
     #[inline]
     pub fn push_symbol(&mut self, symbol: Symbol) -> SymbolId {
         self.symbols.push(symbol);
-        SymbolId(u32::try_from(self.symbols.len() - 1).expect("symbol overflow"))
+        let index = u32::try_from(self.symbols.len() - 1).expect("symbol overflow");
+        assert!(index & INST_BIT == 0, "symbol overflow");
+        SymbolId(index)
+    }
+
+    /// Go `newSharedDataSymbol(target)` (checker.go:14346) with the head
+    /// that `instantiateSymbol` gives it: a symbol with head `flags` and
+    /// `check_flags` whose data is the data of `target` (`sym`). Only a
+    /// checker arena makes one.
+    #[inline]
+    pub fn push_instance(
+        &mut self,
+        flags: SymbolFlags,
+        check_flags: CheckFlags,
+        target: SymbolId,
+    ) -> SymbolId {
+        debug_assert!(self.ids.key != 0, "an instance goes into a checker arena");
+        debug_assert!(!is_instance(target), "the target of an instance");
+        self.insts.push(InstSymbol {
+            flags,
+            check_flags,
+            target,
+        });
+        let c = u32::try_from(self.insts.len() - 1).expect("symbol overflow");
+        assert!(c & INST_BIT == 0, "symbol overflow");
+        SymbolId(INST_BIT | c)
     }
 
     fn push_table(&mut self, table: Table) -> SymbolTable {
@@ -3304,6 +3504,7 @@ impl SymbolArena {
     pub fn prepare_file_arena(self, offsets: ArenaOffsets, freeable: bool) -> PreparedFileArena {
         let SymbolArena {
             symbols,
+            insts: _,
             tables,
             private_names: _,
             ids: _,
@@ -3359,16 +3560,90 @@ impl SymbolArena {
         self.push_table(cloned)
     }
 
+    /// The head and data of `symbol` (Go `*ast.Symbol` reads). The data of
+    /// an instantiated symbol is its target's (`push_instance`).
+    // PERF (symdata1): an instance index is far past the chunk list, so a
+    // read of a symbol in a chunk takes the same path as before; the
+    // instance test is only in the arm that misses the chunk list.
     #[inline(always)]
     #[must_use]
-    pub fn sym(&self, symbol: SymbolId) -> &Symbol {
+    pub fn sym(&self, symbol: SymbolId) -> SymRef<'_> {
         debug_assert!(symbol.is_some(), "nil symbol dereference");
+        let i = symbol.index();
+        let symbols = &self.symbols;
+        match symbols.chunks.get(i >> COW_CHUNK_SHIFT) {
+            Some(Chunk::Fixed(values)) => SymRef::of(&values.values()[i & COW_CHUNK_MASK]),
+            Some(_) => SymRef::of(symbols.get_other(i)),
+            None if is_instance(symbol) => self.sym_instance(symbol),
+            None => SymRef::of(&symbols.tail[i - symbols.tail_start()]),
+        }
+    }
+
+    /// `sym` of an instantiated symbol: its head, and its target's data.
+    #[inline(never)]
+    fn sym_instance(&self, symbol: SymbolId) -> SymRef<'_> {
+        let inst = self.insts.get((symbol.0 ^ INST_BIT) as usize);
+        SymRef {
+            flags: inst.flags,
+            check_flags: inst.check_flags,
+            data: &self.symbols.get(inst.target.index()).data,
+        }
+    }
+
+    /// The flags of `symbol` (`sym(symbol).flags`). An instance reads only
+    /// its head, as Go's `Flags()`.
+    #[inline(always)]
+    #[must_use]
+    pub fn sym_flags(&self, symbol: SymbolId) -> SymbolFlags {
+        self.sym_head(symbol).0
+    }
+
+    /// The check flags of `symbol` (`sym(symbol).check_flags`).
+    #[inline(always)]
+    #[must_use]
+    pub fn sym_check_flags(&self, symbol: SymbolId) -> CheckFlags {
+        self.sym_head(symbol).1
+    }
+
+    /// The head (flags, check flags) of `symbol`, with no data read.
+    #[inline(always)]
+    #[must_use]
+    pub fn sym_head(&self, symbol: SymbolId) -> (SymbolFlags, CheckFlags) {
+        let i = symbol.index();
+        let symbols = &self.symbols;
+        let s = match symbols.chunks.get(i >> COW_CHUNK_SHIFT) {
+            Some(Chunk::Fixed(values)) => &values.values()[i & COW_CHUNK_MASK],
+            Some(_) => symbols.get_other(i),
+            None if is_instance(symbol) => return self.inst_head(symbol),
+            None => &symbols.tail[i - symbols.tail_start()],
+        };
+        (s.flags, s.check_flags)
+    }
+
+    #[inline(never)]
+    fn inst_head(&self, symbol: SymbolId) -> (SymbolFlags, CheckFlags) {
+        let inst = self.insts.get((symbol.0 ^ INST_BIT) as usize);
+        (inst.flags, inst.check_flags)
+    }
+
+    /// The `Symbol` of a symbol that is not an instance (`push_instance`):
+    /// binder code and the lib bind snapshot, which read whole symbols.
+    #[inline(always)]
+    #[must_use]
+    pub fn sym_full(&self, symbol: SymbolId) -> &Symbol {
+        debug_assert!(symbol.is_some(), "nil symbol dereference");
+        debug_assert!(!is_instance(symbol), "a whole-symbol read of an instance");
         self.symbols.get(symbol.index())
     }
 
+    /// Go never writes a field through an instantiated symbol (#64691 setter
+    /// audit), so a write to one panics: it would be a port write that Go
+    /// does not make. (In a release build too: an instance index is past
+    /// the chunk list and the tail.)
     #[inline]
     pub fn sym_mut(&mut self, symbol: SymbolId) -> &mut Symbol {
         debug_assert!(symbol.is_some(), "nil symbol dereference");
+        debug_assert!(!is_instance(symbol), "a write to an instantiated symbol");
         self.symbols.get_mut(symbol.index())
     }
 
@@ -3437,7 +3712,7 @@ impl SymbolArena {
         table: SymbolTable,
         name: &Name,
         symbol: SymbolId,
-        replace: impl FnOnce(&Symbol) -> bool,
+        replace: impl FnOnce(SymRef<'_>) -> bool,
     ) -> bool {
         assert!(table.is_some(), "assignment to entry in nil map");
         let hash = name.table_hash();
@@ -4004,6 +4279,13 @@ impl LinkKey for SymbolId {
     }
 }
 
+/// `INST_BIT` as a `LinkSlot::Lineage` index: an instantiated symbol keeps
+/// its records in the store's instance table (`LinkStore::insts`), by
+/// record. Lineage indexes stay below it.
+// PERF (symdata1): an instance index fails the flat test, so a flat lineage
+// read takes the same path as before.
+const INST_INDEX: usize = INST_BIT as usize;
+
 /// Lineage indexes below this use the flat arena table of a dense store in
 /// a CLI build (`LinkPage::CLI_FLAT_IDS`): at most 2 MiB of page pointers
 /// per store. Go `core.PagedLinkStore` keeps keys below 2^24 in its page
@@ -4292,6 +4574,8 @@ pub struct LinkStore<K: LinkKey, V: Default, P: LinkPage<V> = DenseLinkPage<V>> 
     /// Page tables of file keys, by file. A store of lineage keys has no
     /// file keys: it keeps the page tables of its blocks here (`far_slot`).
     files: Vec<PageTable<P>>,
+    /// Page table of instantiated symbol keys (`INST_BIT`), by record.
+    insts: PageTable<P>,
     map: FxHashMap<K, V>,
     /// The flat bound of lineage keys (`link_flat_ids` when the store was
     /// made).
@@ -4309,6 +4593,7 @@ impl<K: LinkKey, V: Default, P: LinkPage<V>> Default for LinkStore<K, V, P> {
         Self {
             arena: Vec::new(),
             files: Vec::new(),
+            insts: Vec::new(),
             map: FxHashMap::default(),
             flat_ids: link_flat_ids::<V, P>(),
         }
@@ -4324,6 +4609,9 @@ impl<K: LinkKey, V: Default, P: LinkPage<V>> LinkStore<K, V, P> {
             LinkSlot::Arena(index) => (&self.arena, index),
             LinkSlot::Lineage(index) if index / LINK_PAGE_SIZE < self.arena.len() => {
                 (&self.arena, index)
+            }
+            LinkSlot::Lineage(index) if index & INST_INDEX != 0 => {
+                (&self.insts, index ^ INST_INDEX)
             }
             LinkSlot::Lineage(index) => return self.far_page(index),
             LinkSlot::File(file, index) => (self.files.get(file)?, index),
@@ -4376,6 +4664,19 @@ impl<K: LinkKey, V: Default, P: LinkPage<V>> LinkStore<K, V, P> {
         if let LinkSlot::Lineage(index) = slot
             && index / LINK_PAGE_SIZE >= self.arena.len()
         {
+            if index & INST_INDEX != 0 {
+                let index = index ^ INST_INDEX;
+                if self
+                    .insts
+                    .get(index / LINK_PAGE_SIZE)
+                    .is_none_or(Option::is_none)
+                {
+                    return self.add_page(key);
+                }
+                return self.insts[index / LINK_PAGE_SIZE]
+                    .as_deref_mut()
+                    .expect("link page");
+            }
             return self.far_page_mut(key, index);
         }
         if self.page(slot).is_none() {
@@ -4399,6 +4700,9 @@ impl<K: LinkKey, V: Default, P: LinkPage<V>> LinkStore<K, V, P> {
     fn add_page(&mut self, key: K) -> &mut P {
         let (file, index) = match key.link_slot() {
             LinkSlot::Arena(index) => return Self::table_page(&mut self.arena, index),
+            LinkSlot::Lineage(index) if index & INST_INDEX != 0 => {
+                return Self::table_page(&mut self.insts, index ^ INST_INDEX);
+            }
             LinkSlot::Lineage(index) if index < self.flat_ids => {
                 // The flat table stops at `flat_ids`; so does its capacity.
                 let pages = index / LINK_PAGE_SIZE + 1;
@@ -4735,6 +5039,27 @@ mod link_store_tests {
         *sparse.get(node(66)) = 1;
         assert_eq!(sparse.try_get(node(66)), Some(&1));
         assert_eq!(sparse.try_get(node(70)), Some(&70));
+    }
+
+    // symdata1: an instantiated symbol (`INST_BIT`) keeps its records in the
+    // instance table by record, apart from the lineage index of the same
+    // record number.
+    #[test]
+    fn link_store_keeps_instance_records_apart() {
+        let mut store = LinkStore::<SymbolId, u32>::default();
+        let instance = |c: u32| SymbolId(INST_BIT | c);
+        for c in [0, 1, 63, 64, 5000] {
+            *store.get(SymbolId(c + 1)) = c + 1;
+            assert!(!store.has(instance(c)));
+            assert_eq!(*store.insert_new(instance(c), c + 100), c + 100);
+        }
+        for c in [0, 1, 63, 64, 5000] {
+            assert_eq!(store.try_get(SymbolId(c + 1)), Some(&(c + 1)));
+            assert_eq!(store.try_get(instance(c)), Some(&(c + 100)));
+        }
+        assert_eq!(store.remove(instance(63)), Some(163));
+        assert!(!store.has(instance(63)) && store.has(instance(64)));
+        assert!(store.files.is_empty() && store.insts.len() == 5000 / LINK_PAGE_SIZE + 1);
     }
 }
 

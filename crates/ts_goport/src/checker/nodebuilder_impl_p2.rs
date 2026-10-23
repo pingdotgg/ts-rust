@@ -185,8 +185,7 @@ impl Checker {
         // Try to get qualified name if the symbol is not a type parameter and there is an enclosing declaration.
         let mut chain: Vec<SymbolId> = Vec::new();
         let is_type_parameter = self
-            .sym(symbol)
-            .flags
+            .sym_flags(symbol)
             .intersects(SymbolFlags::TYPE_PARAMETER);
         let (has_enclosing, flags, internal_flags) = {
             let ctx = nb_ctx(b);
@@ -319,7 +318,7 @@ impl Checker {
         if !accessible_symbol_chain.is_empty() {
             return accessible_symbol_chain;
         }
-        let symbol_flags = self.sym(symbol).flags;
+        let symbol_flags = self.sym_flags(symbol);
         // If this is the last part of outputting the symbol, always output. The cases apply only to parent symbols.
         if end_of_chain
             // If a parent symbol is an anonymous type, don't write it.
@@ -781,8 +780,7 @@ impl Checker {
         let result = self.resolve_name(enclosing, name, SymbolFlags::TYPE, None, false, false);
         if result.is_some()
             && self
-                .sym(result)
-                .flags
+                .sym_flags(result)
                 .intersects(SymbolFlags::TYPE_PARAMETER)
         {
             return result != self.ty(type_parameter).symbol;
@@ -1166,7 +1164,7 @@ impl Checker {
         symbol: SymbolId,
     ) -> Vec<Node> {
         let target_symbol = self.get_target_symbol(symbol);
-        let target_flags = self.sym(target_symbol).flags;
+        let target_flags = self.sym_flags(target_symbol);
         if target_flags.intersects(SymbolFlags::CLASS | SymbolFlags::INTERFACE | SymbolFlags::ALIAS)
         {
             let mut results = Vec::new();
@@ -1195,7 +1193,7 @@ impl Checker {
         if parameter_declaration.is_some() {
             return parameter_declaration;
         }
-        if !self.sym(symbol).flags.intersects(SymbolFlags::TRANSIENT) {
+        if !self.sym_flags(symbol).intersects(SymbolFlags::TRANSIENT) {
             return get_declaration_of_kind(&self.symbols, symbol, SyntaxKind::JsDocParameterTag);
         }
         Node::NIL
@@ -1235,7 +1233,7 @@ impl Checker {
                 modifiers = e.factory.new_modifier_list(&clones);
             }
         }
-        let check_flags = self.sym(parameter_symbol).check_flags;
+        let check_flags = self.sym_check_flags(parameter_symbol);
         let is_rest = parameter_declaration.is_some() && is_rest_parameter(parameter_declaration)
             || check_flags.intersects(CheckFlags::REST_PARAMETER);
         let mut dot_dot_dot_token = Node::NIL;
@@ -1471,8 +1469,7 @@ impl Checker {
         let has_non_trailing_rest = expanded_params.iter().any(|&p| {
             p != expanded_params[expanded_params.len() - 1]
                 && self
-                    .sym(p)
-                    .check_flags
+                    .sym_check_flags(p)
                     .intersects(CheckFlags::REST_PARAMETER)
         });
         let source_params = if has_non_trailing_rest {
