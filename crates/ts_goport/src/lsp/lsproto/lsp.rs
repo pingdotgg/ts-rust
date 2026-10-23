@@ -573,9 +573,11 @@ pub fn json_object_raw_field(data: &[u8], field: &str) -> JsonValue {
 ///
 /// PORT: Go keeps each earlier member as its name and raw value
 /// (`deferredStructField`); here each is the raw name (with quotes) and the
-/// raw value. `disc_start` and `disc_end` are the decoder offsets of the
-/// discriminator value: an error that Go makes while its decoder stands just
-/// after that value gets them (Go keeps the decoder state).
+/// raw value. `last_start` and `last_end` are the decoder offsets of the last
+/// token or value that the scan read (Go `PreviousTokenOrValue`): the
+/// discriminator value, or with no discriminator the closing `}`. Go decodes
+/// the discriminator and the members before it while its decoder stands
+/// there, so their errors get this position (Go keeps the decoder state).
 #[derive(Debug, Default)]
 pub struct DiscriminatedStructDecoder {
     type_name: &'static str,
@@ -584,8 +586,8 @@ pub struct DiscriminatedStructDecoder {
     has_discriminator: bool,
     deferred: Vec<(Vec<u8>, Vec<u8>)>,
     closed: bool,
-    disc_start: usize,
-    disc_end: usize,
+    last_start: usize,
+    last_end: usize,
 }
 
 // Go: structcodec.go:184 scanDiscriminatedStruct
@@ -612,8 +614,8 @@ pub fn scan_discriminated_struct(
         if json_key_check(&raw_name, discriminator) {
             state.discriminator_value = dec.read_value()?.to_vec();
             state.has_discriminator = true;
-            state.disc_end = dec.input_offset();
-            state.disc_start = state.disc_end - state.discriminator_value.len();
+            state.last_end = dec.input_offset();
+            state.last_start = state.last_end - state.discriminator_value.len();
             return Ok(state);
         }
 
@@ -622,6 +624,8 @@ pub fn scan_discriminated_struct(
     }
     dec.read_token()?;
     state.closed = true;
+    state.last_end = dec.input_offset();
+    state.last_start = state.last_end - 1;
     Ok(state)
 }
 
@@ -660,21 +664,36 @@ impl DiscriminatedStructDecoder {
             json_value: String::new(),
             go_type: String::new(),
             pointer: None,
-            byte_offset: self.disc_start,
+            byte_offset: self.last_start,
             pos: ErrorPos::Ambiguous,
             err,
         }
         .into_json_error()
     }
 
+    /// The JSON pointer in `input` and the byte offset of Go's decoder while
+    /// Go decodes the discriminator and the members before it. With a
+    /// discriminator the decoder stands inside the object, just after the
+    /// discriminator value (Go `where` = 0). With none, the scan read the
+    /// closing `}`, so the decoder stands just after the object (`where` = -1).
+    fn deferred_position(&self, input: &[u8]) -> (String, usize) {
+        let pos = if self.has_discriminator {
+            ErrorPos::Ambiguous
+        } else {
+            ErrorPos::AfterEnd
+        };
+        (error_pointer(input, self.last_end, pos), self.last_start)
+    }
+
     /// Go's position of `err`, an error of the arm decoder at offset `end` of
     /// the joined object `object` (see `unmarshal_discriminated_arm`). Go
     /// decodes the discriminator and each member before it with
     /// `json.Unmarshal(value)`: an error keeps its pointer inside the value,
-    /// and an error at the value itself gets the position of Go's decoder,
-    /// just after the discriminator value. Go decodes each later member on
-    /// its decoder: the pointer starts at the root of `input`. A missing
-    /// property (after the closing `}`) keeps its place: `dec` stands there.
+    /// and an error at the value itself, or a null member (`errNull`), gets
+    /// the position of Go's decoder (`deferred_position`). Go decodes each
+    /// later member on its decoder: the pointer starts at the root of
+    /// `input`. A missing property (after the closing `}`) keeps its place:
+    /// `dec` stands there.
     fn arm_error(
         &self,
         err: JsonError,
@@ -693,15 +712,20 @@ impl DiscriminatedStructDecoder {
             return err;
         };
         if !s.wrapped {
-            // Go `errNull` from `structDecoder.field`, after the member name.
-            return match m.outer {
-                None => self.error_after_discriminator(s.err),
+            // Go `errNull` from `structDecoder.field`. For a later member Go's
+            // decoder stands after the member name.
+            match m.outer {
+                None => {
+                    let (pointer, offset) = self.deferred_position(input);
+                    s.pointer = Some(pointer);
+                    s.byte_offset = offset;
+                }
                 Some((name_end, _)) => {
                     s.pointer = Some(error_pointer(input, name_end, ErrorPos::Ambiguous));
-                    s.pos = ErrorPos::Ambiguous;
-                    s.into_json_error()
                 }
-            };
+            }
+            s.pos = ErrorPos::Ambiguous;
+            return s.into_json_error();
         }
         if s.pointer.is_some() {
             return err;
@@ -715,8 +739,9 @@ impl DiscriminatedStructDecoder {
                     // Go `cmp.Or(serr.ByteOffset, offset)` and the pointer
                     // of its decoder.
                     let offset = error_offset(value, inner, s.pos);
-                    s.byte_offset = if offset > 0 { offset } else { self.disc_start };
-                    s.pointer = Some(error_pointer(input, self.disc_end, ErrorPos::Ambiguous));
+                    let (outer, last_start) = self.deferred_position(input);
+                    s.byte_offset = if offset > 0 { offset } else { last_start };
+                    s.pointer = Some(outer);
                 } else {
                     s.pointer = Some(pointer);
                 }
@@ -1492,5 +1517,108 @@ mod unmarshal_error_tests {
             err.error(),
             r#"InvalidParams: json: cannot unmarshal into Go lsproto.SignatureHelpContext within "/context/activeSignatureHelp": null value is not allowed for field "activeSignatureHelp""#
         );
+    }
+
+    // A null member before the discriminator, and any member of an object
+    // with no discriminator (the TextDocumentEdit arm), fail while Go's
+    // decoder stands after the discriminator value or after the closing `}`:
+    // the pointer names the union element and the root error has that offset.
+    // Expected texts come from Go at 3e9236361fa9: the probe in
+    // target/continuation-r97-goport/after226/followups74/goprobe.
+    #[test]
+    fn deferred_member_error_positions_match_go() {
+        let doc_changes =
+            |elems: &str| format!(r#"{{"title":"t","edit":{{"documentChanges":[{elems}]}}}}"#);
+        let union = "lsproto.TextDocumentEditOrCreateFileOrRenameFileOrDeleteFile";
+        let at = |pos: &str, err: &str| {
+            format!("InvalidParams: json: cannot unmarshal into Go {union} {pos}: {err}")
+        };
+        let not_object = |pos: &str| {
+            format!(
+                "InvalidParams: json: cannot unmarshal into Go lsproto.OptionalVersionedTextDocumentIdentifier {pos}: expected object start, but encountered number"
+            )
+        };
+        let null_options = r#"null value is not allowed for field "options""#;
+        let null_edits = r#"null value is not allowed for field "edits""#;
+        let def_null = r#"{"options":null,"kind":"create","uri":"a"}"#;
+        let closed_bad = r#"{"textDocument":5,"edits":[]}"#;
+        let closed_null = r#"{"textDocument":{"uri":"a","version":null},"edits":null}"#;
+        let first = r#"{"kind":"create","uri":"z"},"#;
+        let root = [
+            (
+                "r-def-null",
+                def_null.to_string(),
+                at("after offset 23", null_options),
+            ),
+            (
+                "r-def-null-ws",
+                r#"{ "options" : null , "kind" : "create" , "uri":"a"}"#.to_string(),
+                at("after offset 30", null_options),
+            ),
+            (
+                "r-closed-bad",
+                closed_bad.to_string(),
+                not_object("after offset 28"),
+            ),
+            (
+                "r-closed-bad-ws",
+                r#" { "textDocument" : 5 , "edits":[] } "#.to_string(),
+                not_object("after offset 35"),
+            ),
+            (
+                "r-closed-null",
+                closed_null.to_string(),
+                at("after offset 55", null_edits),
+            ),
+        ];
+        let nested = [
+            (
+                "n0-def-null",
+                doc_changes(def_null),
+                at(r#"within "/edit/documentChanges/0""#, null_options),
+            ),
+            (
+                "n1-def-null",
+                doc_changes(&format!("{first}{def_null}")),
+                at(r#"within "/edit/documentChanges/1""#, null_options),
+            ),
+            (
+                "n0-closed-bad",
+                doc_changes(closed_bad),
+                not_object(r#"within "/edit/documentChanges/0""#),
+            ),
+            (
+                "n1-closed-bad",
+                doc_changes(&format!("{first}{closed_bad}")),
+                not_object(r#"within "/edit/documentChanges/1""#),
+            ),
+            (
+                "n0-closed-null",
+                doc_changes(closed_null),
+                at(r#"within "/edit/documentChanges/0""#, null_edits),
+            ),
+            (
+                "n1-closed-null",
+                doc_changes(&format!("{first}{closed_null}")),
+                at(r#"within "/edit/documentChanges/1""#, null_edits),
+            ),
+        ];
+        fn rows<'a>(
+            cases: &'a [(&'static str, String, String)],
+        ) -> Vec<(&'static str, &'a str, String)> {
+            cases
+                .iter()
+                .map(|(n, d, w)| (*n, d.as_str(), w.clone()))
+                .collect()
+        }
+        let mut bad = go_mismatches(
+            &rows(&root),
+            params_result_text::<TextDocumentEditOrCreateFileOrRenameFileOrDeleteFile>,
+        );
+        bad.extend(go_mismatches(
+            &rows(&nested),
+            params_result_text::<CodeAction>,
+        ));
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 }
