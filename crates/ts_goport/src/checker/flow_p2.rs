@@ -1425,7 +1425,8 @@ pub struct MatchingReferenceMemo {
 /// names another node while the checker lives (`ast::synthetic`).
 #[derive(Clone, Debug)]
 pub struct SyntheticAccessMemo {
-    /// The synthetic property access; nil when the memo is empty.
+    /// The synthetic property access (so its kind is
+    /// `PropertyAccessExpression`); nil when the memo is empty.
     pub node: Node,
     /// Go `node.Name().Text()`, interned.
     pub name: Name,
@@ -1810,10 +1811,16 @@ impl Checker {
 
     // Go: checker/flow.go:1841 containsMatchingReference
     // PERF: synthref1. The first step of a synthetic property access
-    // `source` reads its expression from the memo (`SyntheticAccessMemo`),
-    // and the kind of each `source` is read once.
+    // `source` reads its kind and expression from the memo
+    // (`SyntheticAccessMemo`), and the kind of each `source` is read once.
     pub fn contains_matching_reference(&mut self, mut source: Node, target: Node) -> bool {
-        let mut source_kind = source.kind();
+        let mut source_kind =
+            if is_synthetic_node(source) && self.matching_reference_memo.access.node == source {
+                debug_assert_eq!(source.kind(), SyntaxKind::PropertyAccessExpression);
+                SyntaxKind::PropertyAccessExpression
+            } else {
+                source.kind()
+            };
         while matches!(
             source_kind,
             SyntaxKind::PropertyAccessExpression | SyntaxKind::ElementAccessExpression
