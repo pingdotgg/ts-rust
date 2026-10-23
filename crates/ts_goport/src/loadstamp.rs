@@ -5,9 +5,9 @@
 //! with parse workers keeps one event per span (begin, end, kind) from the
 //! first `start` to the end of `run_queue`, the parse workers note the end
 //! of each job (`worker_done`), and one-shot marks note the phases after
-//! the load (`mark`). The loader prints its span summary on stderr when the
-//! pool is joined (`load_end`), and the marks after the first `bind_all`
-//! (`print_marks`). Lines start with `loadstamp `. Without the variable a
+//! the load (`mark`). The marks and the span summary are printed on stderr
+//! after the first `bind_all` (`print_marks`), so the summary adds no time
+//! to the window. Lines start with `loadstamp `. Without the variable a
 //! stamp is one relaxed load. No stamp changes what the program does.
 
 use std::cell::{Cell, RefCell};
@@ -113,7 +113,9 @@ pub const M_BIND_B: usize = 21;
 pub const M_BIND_PAR_E: usize = 22;
 pub const M_BIND_E: usize = 23;
 pub const M_LAST_WORKER: usize = 24;
-const MARKS: usize = 25;
+pub const M_STAMP_B: usize = 25;
+pub const M_STAMP_E: usize = 26;
+const MARKS: usize = 27;
 const MARK_NAMES: [&str; MARKS] = [
     "papf_b",
     "parse_b",
@@ -140,6 +142,8 @@ const MARK_NAMES: [&str; MARKS] = [
     "bind_parallel_e",
     "bind_e",
     "last_worker_job_e",
+    "stamp_b",
+    "stamp_e",
 ];
 
 static ON: AtomicU8 = AtomicU8::new(2);
@@ -259,11 +263,22 @@ fn calibrate() -> (f64, f64) {
     (inner[rounds / 2] as f64, whole)
 }
 
-/// Ends the stamped part of the load (after `run_queue`) and prints the
-/// span summary. `hash_ns`: the mean time of one hash of a
-/// `task_data_by_path` key, measured after the load (first pass, second
-/// pass).
-pub fn load_end(hash_ns: [f64; 2], keys: usize) {
+/// What `load_end` keeps for the summary that `print_marks` prints.
+struct Stash {
+    events: Vec<(u64, u64, u8)>,
+    counts: [u64; COUNTS],
+    load_begin: u64,
+    runq_end: u64,
+    last_worker: u64,
+    hash_ns: [f64; 2],
+    keys: usize,
+}
+
+static STASH: std::sync::Mutex<Option<Stash>> = std::sync::Mutex::new(None);
+
+/// Ends the stamped part of the load (after `run_queue`). The summary is
+/// made after the bind (`print_marks`), so it adds no time to the window.
+pub fn load_end() {
     if !on() || !ACTIVE.with(Cell::get) {
         return;
     }
@@ -277,10 +292,41 @@ pub fn load_end(hash_ns: [f64; 2], keys: usize) {
         Ordering::Relaxed,
         Ordering::Relaxed,
     );
-    let load_begin = MARK_AT[M_PARSE_B].load(Ordering::Relaxed);
+    let events = EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+    let counts = COUNT.with(|count| std::mem::take(&mut *count.borrow_mut()));
+    *STASH.lock().unwrap() = Some(Stash {
+        events,
+        counts,
+        load_begin: MARK_AT[M_PARSE_B].load(Ordering::Relaxed),
+        runq_end,
+        last_worker,
+        hash_ns: [0.0; 2],
+        keys: 0,
+    });
+}
+
+/// Keeps the hash replay of the `task_data_by_path` keys (the mean ns of
+/// one hash: first pass, second pass).
+pub fn set_hash(hash_ns: [f64; 2], keys: usize) {
+    if let Some(stash) = STASH.lock().unwrap().as_mut() {
+        stash.hash_ns = hash_ns;
+        stash.keys = keys;
+    }
+}
+
+/// Prints the span summary of the stamped load.
+fn print_summary(stash: Stash) {
+    let Stash {
+        mut events,
+        counts,
+        load_begin,
+        runq_end,
+        last_worker,
+        hash_ns,
+        keys,
+    } = stash;
     let tail_start = last_worker.clamp(load_begin, runq_end);
     let (inner, whole) = calibrate();
-    let mut events = EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
     // Parents end after their children; sort by begin, longer first.
     events.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     let overlap = |b: u64, e: u64| e.min(runq_end).saturating_sub(b.max(tail_start));
@@ -318,15 +364,18 @@ pub fn load_end(hash_ns: [f64; 2], keys: usize) {
         stack.push((e, kind));
     }
     let ms = |ns: f64| ns / 1e6;
-    let counts = COUNT.with(|count| std::mem::take(&mut *count.borrow_mut()));
+    let events_tail: u64 = n_tail.iter().sum();
     eprintln!(
-        "loadstamp load begin_ms={:.3} runq_end_ms={:.3} last_worker_ms={:.3} load_ms={:.3} tail_ms={:.3} events={} inner_ns={:.1} whole_ns={:.1} hash_cold_ns={:.2} hash_warm_ns={:.2} keys={}",
+        "loadstamp load begin_ms={:.3} runq_end_ms={:.3} last_worker_ms={:.3} load_ms={:.3} tail_ms={:.3} events={} events_tail={} overhead_ms={:.3} overhead_tail_ms={:.3} inner_ns={:.1} whole_ns={:.1} hash_cold_ns={:.2} hash_warm_ns={:.2} keys={}",
         ms(load_begin as f64),
         ms(runq_end as f64),
         ms(last_worker as f64),
         ms((runq_end - load_begin) as f64),
         ms((runq_end - tail_start) as f64),
         events.len(),
+        events_tail,
+        ms(events.len() as f64 * whole),
+        ms(events_tail as f64 * whole),
         inner,
         whole,
         hash_ns[0],
@@ -366,6 +415,7 @@ pub fn print_marks() {
     }
     mark(M_BIND_E);
     let base = MARK_AT[M_PAPF_B].load(Ordering::Relaxed);
+    let stash = STASH.lock().unwrap().take();
     let mut line = String::from("loadstamp marks");
     for (index, name) in MARK_NAMES.iter().enumerate() {
         let at = MARK_AT[index].load(Ordering::Relaxed);
@@ -376,4 +426,7 @@ pub fn print_marks() {
         }
     }
     eprintln!("{line}");
+    if let Some(stash) = stash {
+        print_summary(stash);
+    }
 }

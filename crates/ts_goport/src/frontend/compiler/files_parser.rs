@@ -624,8 +624,16 @@ impl FilesParser {
         // The root jobs are queued now, so the added workers start at once.
         pool.add_workers(extra_worker_count(large));
         self.run_queue(loader, Some(&mut pool));
+        crate::loadstamp::load_end();
+        // Closes the queue, then waits for the workers.
+        drop(prefetch);
+        let shared = Arc::clone(&pool.shared);
+        drop(pool);
+        crate::loadstamp::mark(crate::loadstamp::M_POOL_E);
+        // loadstamp1: the hash replay, after the pool join (marks stamp_b, stamp_e).
         if crate::loadstamp::on() {
             use std::hash::BuildHasher;
+            crate::loadstamp::mark(crate::loadstamp::M_STAMP_B);
             let keys = self.task_data_by_path.len();
             let hasher = self.task_data_by_path.hasher();
             // The first pass reads the keys from memory, the second from
@@ -640,13 +648,9 @@ impl FilesParser {
                 std::hint::black_box(acc);
                 *pass = begin.elapsed().as_nanos() as f64 / keys.max(1) as f64;
             }
-            crate::loadstamp::load_end(hash_ns, keys);
+            crate::loadstamp::set_hash(hash_ns, keys);
+            crate::loadstamp::mark(crate::loadstamp::M_STAMP_E);
         }
-        // Closes the queue, then waits for the workers.
-        drop(prefetch);
-        let shared = Arc::clone(&pool.shared);
-        drop(pool);
-        crate::loadstamp::mark(crate::loadstamp::M_POOL_E);
         // The program keeps the lookups of the plain OS host's load for the
         // thread that finishes its symlink cache (`HostStatCache`). A `tsc
         // -b` host keeps its own (`CompilerHost::stat_cache`).
