@@ -1,30 +1,29 @@
 //! Port-only test of the symbol ids that late-bound property names hold
 //! (trunc1, from the infmemo1 skeptic fuzz case g106-36).
 //!
-//! Go gives a symbol its id on first use (`ast.GetSymbolId`): each read of
-//! `valueSymbolLinks` (checker/links.go:33) and of a few node builder maps.
-//! The checkers of a pool share one counter, and each `NewChecker` gives 4
-//! checker symbols their ids before the first check
-//! (checker/checker.go:1358 initializeChecker). The property name of a
-//! unique symbol holds its id (`<prefix>@k4@<id>`, checker/checker.go:23470
-//! getESSymbolLikeTypeForNode), and the node builder counts the length of
-//! that name toward truncation (checker/nodebuilderimpl.go:2617
-//! addPropertyToElementList). So the digits of the id move where
-//! `... N more ...` starts (`ValueSymbolLinkStore`,
-//! `program::new_pool_checker`).
+//! The property name of a unique symbol holds its id (`<prefix>@k4@<id>`,
+//! checker/checker.go:23519 getESSymbolLikeTypeForNode), and the node
+//! builder counts the length of that name toward truncation
+//! (checker/nodebuilderimpl.go:2630 addPropertyToElementList). So the
+//! digits of the id move where `... N more ...` starts.
 //!
-//! Here `k4` has id 13 with the 2 checkers of the default pool (8 ids from
-//! `NewChecker`, then `a0` to `a3` and `k4`) and id 9 with `--checkers 1`.
-//! `skipLibCheck` leaves `globals.d.ts` unchecked, so only the checker of
-//! `a.ts` gives ids after the pool is made, and the Go ids do not race. The
-//! expected texts are the output of `tsgo-oracle-673a5f17d713 -p
-//! tsconfig.json --pretty false` (with and without `--checkers 1`) on the
-//! same files.
+//! At the Go pin (ts#64711) a `valueSymbolLinks` read gives a symbol that
+//! has no id a block id (2^48 + n, 15 digits); only explicit
+//! `ast.GetSymbolId` calls give global ids (`ValueSymbolLinkStore`,
+//! `ast::SymbolIdGenerator`). The first id of `k4` (and of `u` and `C.s`
+//! below) comes from a link read, so its name always has 15 digits, and
+//! every case here shows the members up to `w12`. Before ts#64711 the key
+//! had a global id of 1 to 3 digits, and its digits (which the order of
+//! other id sites set) showed 1 or 2 more members. The expected texts are
+//! the output of `tsgo-oracle-3e9236361fa9 --pretty false` on the same
+//! files (linkids1, `bunsteal3/linkids1/lane/symtrunc`). A key that got a
+//! global id first (an explicit site before its first link read, or a link
+//! read that gives a global id) would show more members.
 //!
-//! followups38 adds the ids that `NewChecker` gives to binder symbols (merge
-//! errors), which Go gives once in a pool, and the programs of one process
-//! with `--singleThreaded` (`tsc -b`, watch): Go's counter runs on from one
-//! program to the next (`program::CheckerPool::carry_symbol_ids`).
+//! followups38 added the ids that `NewChecker` gives to binder symbols
+//! (merge errors) and the programs of one process with `--singleThreaded`
+//! (`tsc -b`, watch), whose counters run on from one program to the next
+//! (`program::CheckerPool::carry_symbol_ids`).
 
 use ts_goport::execute::tsc::ExitStatus;
 use ts_goport::fswatch::{Event, EventKind};
@@ -126,6 +125,7 @@ fn check(extra: &[&str]) -> String {
 }
 
 /// Go's error with the members up to `w{shown - 1}` and `more` hidden.
+/// At the Go pin the key always has a block id: `expected(13, 7)`.
 fn expected(shown: usize, more: usize) -> String {
     expected_with_pad(9, shown, more)
 }
@@ -141,13 +141,15 @@ fn expected_with_pad(pad: usize, shown: usize, more: usize) -> String {
 
 #[test]
 fn unique_symbol_ids_count_as_go_in_the_default_pool() {
-    // Id 13: the name is one byte longer than with id 9, so w14 goes.
-    assert_eq!(check(&[]), expected(14, 6));
+    // The type of `k4` reads its links first: a block id. Go 673a5f17d713
+    // gave it the global id 13 and showed w13.
+    assert_eq!(check(&[]), expected(13, 7));
 }
 
 #[test]
 fn unique_symbol_ids_count_as_go_with_one_checker() {
-    assert_eq!(check(&["--checkers", "1"]), expected(15, 5));
+    // Go 673a5f17d713: global id 9, w14 showed.
+    assert_eq!(check(&["--checkers", "1"]), expected(13, 7));
 }
 
 /// `declare let d0: number;` to `d{count - 1}`, one per line.
@@ -160,25 +162,24 @@ fn lets(count: usize) -> String {
 #[test]
 fn pool_checkers_skip_only_the_ids_of_their_own_symbols() {
     // Each `NewChecker` merges the globals, and its merge errors (TS2451,
-    // hidden by skipLibCheck) give `d0` to `d25` their ids. They are binder
-    // symbols, so Go gives each id once in the pool of 4 checkers: k4 gets
-    // id 47 (4 * 4 + 26 + 5), not 125 ((4 + 26) * 4 + 5), and with a pad
-    // of 8 w14 stays. Go's merge errors race in the pool, so a few ids can
-    // burn (k4 49), but k4 keeps 2 digits.
+    // hidden by skipLibCheck) give `d0` to `d25` global ids. They are
+    // binder symbols, so Go gives each id once in the pool of 4 checkers.
+    // `k4` gets a block id. Go 673a5f17d713 gave it the global id 47 (4 * 4
+    // + 26 + 5), not 125, and w14 showed with a pad of 8.
     let files = [
         ("globals.d.ts", format!("{GLOBALS}{}", lets(26))),
         ("dup1.d.ts", lets(26)),
         ("dup2.d.ts", "declare const z: number;\n".into()),
     ];
-    assert_eq!(check_files(&files, 8, &[]), expected_with_pad(8, 15, 5));
+    assert_eq!(check_files(&files, 8, &[]), expected_with_pad(8, 13, 7));
 }
 
 #[test]
 fn merge_error_texts_give_ids_with_one_checker() {
-    // The node builder gives `d0` to `d25` their ids as it writes their
+    // The node builder gives `d0` to `d25` global ids as it writes their
     // names in the merge errors (nodebuilderimpl.go:975
-    // getNameOfSymbolAsWritten), before `NewChecker` gives its 4 ids. So
-    // with one checker k4 gets id 35, not 9, and w14 goes.
+    // getNameOfSymbolAsWritten). `k4` gets a block id. Go 673a5f17d713 gave
+    // it the global id 35 and showed w13.
     let files = [
         ("globals.d.ts", format!("{GLOBALS}{}", lets(26))),
         ("dup1.d.ts", lets(26)),
@@ -186,7 +187,7 @@ fn merge_error_texts_give_ids_with_one_checker() {
     ];
     assert_eq!(
         check_files(&files, 9, &["--checkers", "1"]),
-        expected(14, 6)
+        expected(13, 7)
     );
 }
 
@@ -198,8 +199,8 @@ fn expected_in(file: &str, shown: usize, more: usize) -> String {
 
 #[test]
 fn ids_count_on_across_the_projects_of_tsc_b_single_threaded() {
-    // Go: k4 gets id 9 in p1 and 44 in p2 (p1 gave 35 ids), so p2 shows one
-    // member less. Each program counted from the start before.
+    // Go: k4 gets a block id in p1 and in p2. Go 673a5f17d713 gave it the
+    // global ids 9 and 44 (p1 gave 35 ids), and p2 showed one member less.
     let file = |name: &str, text: String| (format!("{PROJECT}/{name}"), text.into());
     let config = r#"{"compilerOptions":{"composite":true,"noLib":true,"skipLibCheck":true,"strict":true,"outDir":"out"},"files":["globals.d.ts","a.ts"]}"#;
     let input = TscInput {
@@ -232,7 +233,7 @@ fn ids_count_on_across_the_projects_of_tsc_b_single_threaded() {
         .collect();
     assert_eq!(
         diagnostics,
-        expected_in("p1/a.ts", 15, 5) + &expected_in("p2/a.ts", 14, 6)
+        expected_in("p1/a.ts", 13, 7) + &expected_in("p2/a.ts", 13, 7)
     );
 }
 
@@ -241,12 +242,9 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
     run_test_in_child(
         "tsctests::symbol_id_truncation::ids_count_on_across_watch_cycles_single_threaded",
         || {
-            // Go: k4 gets id 9 in the first build, which gives 35 ids. The
-            // edit adds e1, and the next build counts on from there: after
-            // the 4 ids of `NewChecker`, the d.ts signature of the changed
-            // a.ts gives k4 its id before the check (the declaration
-            // transform asks `EmitResolver.IsLateBound`). k4 gets 40, so
-            // one member less shows.
+            // Go: k4 gets a block id in both builds. Go 673a5f17d713 gave
+            // it the global ids 9 and 40 (the next build counts on from the
+            // first), and the second build showed one member less.
             let file = |name: &str, text: String| (format!("{PROJECT}/{name}"), text.into());
             let input = TscInput {
                 files: [
@@ -268,7 +266,7 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
                 .watcher
                 .expect("expected Watcher to be non-nil in watch mode");
             assert!(
-                sys.output_text().contains(&expected(15, 5)),
+                sys.output_text().contains(&expected(13, 7)),
                 "first build: {}",
                 sys.output_text()
             );
@@ -282,7 +280,7 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
                 path: a,
             }]);
             w.do_cycle();
-            let expected = expected(14, 6).replacen("(7,7)", "(8,7)", 1);
+            let expected = expected(13, 7).replacen("(7,7)", "(8,7)", 1);
             assert!(
                 sys.output_text().contains(&expected),
                 "second build: {}",
@@ -299,12 +297,13 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
 // `binder.GetSymbolNameForPrivateIdentifier` gives an id to the symbol that
 // it gets: the class, or the symbol of the type that the site looks in. Each
 // test below puts the first id of `u` on the right side of one such site
-// (or after the private name site), with Go's id of `u` at a digit boundary
-// (10 or 100, `--checkers 1`). With the old order `u` gets one id less, so
-// its late-bound name is one byte shorter and one more member shows. The
-// expected texts are the output of `tsgo-oracle-673a5f17d713 -p
-// tsconfig.json --pretty false --checkers 1` on the same files, and a debug
-// build of Go at the same pin gave the id of `u`.
+// (or after the private name site). At Go 673a5f17d713 the global id of `u`
+// was at a digit boundary (10 or 100, `--checkers 1`), so the old order
+// showed one more member. At the Go pin `u` gets a block id at its first
+// link read, so both orders give the same text: the tests now check that
+// no site gives `u` a global id first. The expected texts are the output of
+// `tsgo-oracle-3e9236361fa9 -p tsconfig.json --pretty false --checkers 1`
+// on the same files.
 //
 // The other sites have no case that changes the output:
 // - padObjectLiteralType: the implied type of the binding pattern
@@ -367,20 +366,20 @@ fn check_site(
     tsc_p(&files, &["--checkers", "1"])
 }
 
-/// Go's error on `xq` at `line` of `a.ts` (`check_site`): with the id of
-/// the key at the boundary, the members up to `w13` show.
+/// Go's error on `xq` at `line` of `a.ts` (`check_site`): with a block id
+/// for the key, the members up to `w12` show.
 fn site_error(line: usize, key: &str, pad: usize) -> String {
     format!(
-        "a.ts({line},7): error TS2322: Type '{{ [{key}]: void; {}: number; {}... 6 more ...; q: string; }}' is not assignable to type 'number'.\n",
+        "a.ts({line},7): error TS2322: Type '{{ [{key}]: void; {}: number; {}... 7 more ...; q: string; }}' is not assignable to type 'number'.\n",
         "p".repeat(pad),
-        members(14)
+        members(13)
     )
 }
 
 #[test]
 fn binding_pattern_symbols_get_ids_before_their_types() {
-    // getTypeFromObjectBindingPattern: `b` gets id 9, then its default `u`
-    // gets 10.
+    // getTypeFromObjectBindingPattern: `b` gets its id, then its default
+    // `u` (Go 673a5f17d713: 9 and 10).
     let site = "function f({ a, b = u }) { return [a, b]; }\n";
     assert_eq!(
         check_site("", site, None, "u", 2, 11),
@@ -473,8 +472,8 @@ a.ts(4,38): error TS2858: Import attribute values must be string literal express
 fn private_name_lookups_give_the_class_its_id() {
     // The return type of `m` checks `this.#x`
     // (lookupSymbolForPrivateIdentifierDeclaration), which gives `C` its id
-    // before `u`. Go gives `C` its id when it binds `z.ts`; the port does
-    // not, so the class must get it at this site. `C` is checked after `u`.
+    // before `u`. Go gives `C` its id when it binds `z.ts`. `C` is checked
+    // after `u`.
     let after = "class C {\n  #x = 1;\n  m() { return this.#x; }\n}\n";
     assert_eq!(
         check_site(
