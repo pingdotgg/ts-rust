@@ -32,11 +32,19 @@
 # perf: the first of PERF_BIN, `perf`, /usr/lib/linux-tools/*/perf that runs (Ubuntu's /usr/bin/perf fails on
 # a testbox kernel). perf_event_paranoid 3 or more (mini-743d: 4): perf runs under `sudo -n` and the binary
 # under setpriv as this user.
+# cycles:u: a probe at the start picks the mode, and host.txt records it (`cycles joint` or `cycles separate`).
+# joint: one perf stat run counts instructions:u and cycles:u (dbook-lan). separate: the run counts
+# instructions:u alone, and a second run of the same command right after it counts cycles:u alone, so each
+# cell takes two runs. The testbox guest (Zen 5) counts only the first hardware event of a set: the second
+# reads 0, and in a multi-threaded run a thread can put instructions:u on the dead counter (perfcyc1: joint
+# runs lost up to 27 percent of their instructions:u in the default mode). PERF_CYCLES=joint or separate
+# skips the probe. `compare` warns when the two runs used different modes.
 # The script refuses to start when the 1-minute load is over PERF_MAX_LOAD (default 1.5). PERF_WAIT=1 waits up
 # to 30 minutes for a quiet host instead. zbook is rarely quiet while agents build: time on mini-743d through
 # remote.sh (dbook-lan is kept for revision evidence), every side on the same host.
 # Output: target/continuation-r97-goport/perf/<label>/ (must not exist): summary.txt, host.txt, bins.txt,
-# runs.tsv (one row per run), raw/ (perf, time and stderr files per run).
+# runs.tsv (one row per run), raw/ (perf, time and stderr files per run; .cyc.perf and .cyc.err of the
+# separate cycles:u runs).
 set -uo pipefail
 ROOT=/home/theo/Code/sandbox/ts-rust
 PERF_DIR=$ROOT/target/continuation-r97-goport/perf
@@ -69,6 +77,20 @@ find_perf() {
   return 1
 }
 
+# cycles_mode: print joint when cycles:u counts next to instructions:u in 3 probe runs, else separate (uses
+# P, PREFIX and INNER). No CPU retires 64 instructions a cycle (the probe runs at about 5 on dbook-lan), so a
+# lower cycles:u reading is a dead counter (the testbox reads 0, or a few thousand now and then).
+cycles_mode() {
+  local _ ins cyc
+  for _ in 1 2 3; do
+    read -r ins cyc < <("${PREFIX[@]}" "$P" stat -x, -e instructions:u,cycles:u -- "${INNER[@]}" \
+      awk 'BEGIN {for (i = 0; i < 1e6; i++) s += i}' 2>&1 > /dev/null |
+      awk -F, '$3 ~ /^instructions/ {i = $1} $3 ~ /^cycles/ {c = $1} END {print i + 0, c + 0}')
+    ((ins > 0 && cyc * 64 >= ins)) || { echo separate; return; }
+  done
+  echo joint
+}
+
 # host_line PERF: the facts that two runs must share before their counts compare.
 host_line() {
   local cpu thp balloon=none d
@@ -95,6 +117,7 @@ def load(d):
     info = dict(l.rstrip("\n").split(" ", 1) for l in open(os.path.join(d, "host.txt")) if " " in l)
     info.setdefault("args", "none")
     info.setdefault("env", "none")
+    info.setdefault("cycles", "joint")
     cells = {}
     for r in csv.DictReader(open(os.path.join(d, "runs.tsv")), delimiter="\t"):
         cells.setdefault((r["mode"], r["project"], r["bin"]), []).append(r)
@@ -134,6 +157,8 @@ hdr = f"{'project':8} {'mode':8} {'bin':5}" + "".join(f" {t:>24}" for _, t, _, _
 print(hdr)
 keys = sorted({(m, p) for (m, p, _) in cells}, key=lambda k: (k[0], order.get(k[1], 9), k[1]))
 warn = []
+if bi["cycles"] != ni["cycles"]:
+    warn.append(f"cycles:u {bi['cycles']} in the base, {ni['cycles']} here: joint runs on a testbox can lose default-mode instructions:u")
 for mode, proj in keys:
     rcs = {r["rc"] for b in nbins for r in cells.get((mode, proj, b[0]), [])}
     if len(rcs) > 1:
@@ -233,6 +258,13 @@ if (($(cat /proc/sys/kernel/perf_event_paranoid) > 2)); then
   PREFIX=(sudo -n env LC_ALL=C)
   INNER=(setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups "${TENV[@]}")
 fi
+case ${PERF_CYCLES:-auto} in
+  auto) CYC=$(cycles_mode) ;;
+  joint | separate) CYC=$PERF_CYCLES ;;
+  *) die "PERF_CYCLES must be auto, joint or separate: $PERF_CYCLES" ;;
+esac
+EVENTS=instructions:u,cycles:u,task-clock
+[[ $CYC == joint ]] || EVENTS=instructions:u,task-clock
 PAIRS=("query:target/project-inputs/query/source/packages/query-core/tsconfig.prod.json"
   "hono:target/project-inputs/hono/source/tsconfig.build.json"
   "zod:target/project-inputs/zod/source/packages/zod/tsconfig.json"
@@ -265,6 +297,7 @@ mkdir -p "$O/raw"
   echo "args ${TARGS[*]:-none}"
   echo "env ${PASS[*]:-none}"
   echo "perf $P$([[ ${PREFIX[0]} == sudo ]] && echo " (sudo -n, setpriv)")"
+  echo "cycles $CYC"
   echo "start $(date -u +%FT%TZ) load $(load)"
 } > "$O/host.txt"
 for k in "${!BINS[@]}"; do echo "$k $(sha256sum < "${BINS[k]}" | cut -d' ' -f1) ${BINS[k]}"; done > "$O/bins.txt"
@@ -286,7 +319,7 @@ for ((r = 1; r <= rounds; r++)); do
         f=$O/raw/$n-$m-bin$k-$r
         l=$(load)
         rc=0
-        /usr/bin/time -f %M -o "$f.time" "${PREFIX[@]}" "$P" stat -o "$f.perf" -e instructions:u,cycles:u,task-clock -- \
+        /usr/bin/time -f %M -o "$f.time" "${PREFIX[@]}" "$P" stat -o "$f.perf" -e "$EVENTS" -- \
           "${INNER[@]}" "${BINS[k]}" -p "$c" "${flags[@]}" "${TARGS[@]}" > /dev/null 2> "$f.err" || rc=$?
         # perf's human output: "<value> [unit] <event>" and "<seconds> seconds time elapsed". -x drops the
         # elapsed line, and duration_time reads 0 next to other events in perf 7.2. The task-clock unit: perf 7.0
@@ -297,6 +330,14 @@ for ((r = 1; r <= rounds; r++)); do
           / seconds time elapsed/ {w = $1}
           END {printf "%s %s %s %d\n", i, c == "" ? "-" : c, t == "" ? "-" : t, w * 1e6}' "$f.perf")
         [[ $ins =~ ^[0-9]+$ && $wall -gt 0 ]] || die "no counters in $f.perf (rc $rc): $(head -3 "$f.err")"
+        if [[ $CYC == separate ]]; then
+          # The same command again, with cycles:u alone in its set. RSS, wall and task-clock stay from the first run.
+          crc=0
+          "${PREFIX[@]}" "$P" stat -o "$f.cyc.perf" -e cycles:u -- \
+            "${INNER[@]}" "${BINS[k]}" -p "$c" "${flags[@]}" "${TARGS[@]}" > /dev/null 2> "$f.cyc.err" || crc=$?
+          cyc=$(awk '$2 ~ /^cycles/ && $1 ~ /^[0-9]+$/ {c = $1} END {print c == "" ? "-" : c}' "$f.cyc.perf")
+          ((crc == rc)) || echo "perf.sh: $f: exit code $rc, then $crc in the cycles:u run" >&2
+        fi
         printf '%d\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%d\t%s\n' "$r" "$m" "$n" "$k" "$i" "$wall" "$(tail -1 "$f.time")" \
           "$ins" "$cyc" "$task" "$rc" "$l" >> "$O/runs.tsv"
       done
