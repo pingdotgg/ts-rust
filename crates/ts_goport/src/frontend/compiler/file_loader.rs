@@ -1914,10 +1914,13 @@ impl FileLoader {
                             commit.adds.iter().map(|add| add.index).collect();
                         assert_eq!(adds, committed, "commit of {}", file.file_name());
                     }
+                    let ls = crate::loadstamp::span(crate::loadstamp::RES_NOTE);
                     for answer in prep.answers().iter().flatten() {
                         self.note_worker_logs(&answer.package_jsons, &answer.lookups);
                         names_taken += 1;
                     }
+                    drop(ls);
+                    let _adds = crate::loadstamp::span(crate::loadstamp::RES_ADDS);
                     let commit = *commit;
                     for add in commit.adds {
                         let import_index = add.index as i32 - imports_start;

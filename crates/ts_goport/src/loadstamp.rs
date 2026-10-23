@@ -40,8 +40,9 @@ pub const C6_GET: u8 = 20;
 pub const C6_INSERT: u8 = 21;
 pub const QUEUE_BATCH: u8 = 22;
 pub const META_OWN: u8 = 23;
-pub const SET_PATH: u8 = 24;
-const KINDS: usize = 25;
+pub const RES_NOTE: u8 = 24;
+pub const RES_ADDS: u8 = 25;
+const KINDS: usize = 26;
 const KIND_NAMES: [&str; KINDS] = [
     "load",
     "start",
@@ -67,7 +68,8 @@ const KIND_NAMES: [&str; KINDS] = [
     "c6_insert",
     "queue_batch",
     "meta_own",
-    "set_task_path",
+    "res_note_logs",
+    "res_adds",
 ];
 
 // Counts.
@@ -259,8 +261,9 @@ fn calibrate() -> (f64, f64) {
 
 /// Ends the stamped part of the load (after `run_queue`) and prints the
 /// span summary. `hash_ns`: the mean time of one hash of a
-/// `task_data_by_path` key, measured after the load.
-pub fn load_end(hash_ns: f64, keys: usize) {
+/// `task_data_by_path` key, measured after the load (first pass, second
+/// pass).
+pub fn load_end(hash_ns: [f64; 2], keys: usize) {
     if !on() || !ACTIVE.with(Cell::get) {
         return;
     }
@@ -317,7 +320,7 @@ pub fn load_end(hash_ns: f64, keys: usize) {
     let ms = |ns: f64| ns / 1e6;
     let counts = COUNT.with(|count| std::mem::take(&mut *count.borrow_mut()));
     eprintln!(
-        "loadstamp load begin_ms={:.3} runq_end_ms={:.3} last_worker_ms={:.3} load_ms={:.3} tail_ms={:.3} events={} inner_ns={:.1} whole_ns={:.1} hash_ns={:.2} keys={}",
+        "loadstamp load begin_ms={:.3} runq_end_ms={:.3} last_worker_ms={:.3} load_ms={:.3} tail_ms={:.3} events={} inner_ns={:.1} whole_ns={:.1} hash_cold_ns={:.2} hash_warm_ns={:.2} keys={}",
         ms(load_begin as f64),
         ms(runq_end as f64),
         ms(last_worker as f64),
@@ -326,7 +329,8 @@ pub fn load_end(hash_ns: f64, keys: usize) {
         events.len(),
         inner,
         whole,
-        hash_ns,
+        hash_ns[0],
+        hash_ns[1],
         keys
     );
     for k in 0..KINDS {
