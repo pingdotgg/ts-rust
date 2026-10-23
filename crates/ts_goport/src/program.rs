@@ -1832,8 +1832,12 @@ pub fn bind_all() {
 /// this thread after the bind of `files`, before a checker copies the ids
 /// (`WorkerSeed`): in Go's `--singleThreaded` bind order, last-queued-first
 /// (core/workgroup.go:67), and in binder order in each file
-/// (`FileBindData::private_name_classes`). Go's parallel bind races, and
-/// mostly takes the same order (2 files: 59 of 60 runs). With `carry` (a
+/// (`FileBindData::private_name_classes`). The port always takes this order,
+/// also for a parallel bind. Go's default parallel bind races, so its order
+/// changes from run to run, and more often with more files (R227 reviewer,
+/// at pin 3e9236361fa9: 2 files took this order in 114 of 120 runs, 4 files
+/// in 4 of 60 runs). No fixed order can equal every run of Go's parallel
+/// bind; the `--singleThreaded` order is Go's one fixed order. With `carry` (a
 /// `--singleThreaded` program) this thread first takes the ids of the last
 /// one-checker pool (`CheckerPool::carry_symbol_ids`), as the pool would
 /// when it is made, so the ids count on from the last program as in Go.
@@ -6730,8 +6734,10 @@ mod tests {
     // (`typeof D.\u{FFFD}#1@#d`). `bind_all` gives the ids after the bind,
     // in Go's `--singleThreaded` order: b.ts first, then a.ts in binder
     // order (function declarations first). The serial, parallel and
-    // `--singleThreaded` binds give the same ids. Go prints the two lines
-    // below with ids 1 and 4 in both modes.
+    // `--singleThreaded` binds of the port give the same ids. Go with
+    // `--singleThreaded` prints the two lines below with ids 1 and 4. Go's
+    // default parallel bind races: it printed other ids (B=3, D=4) in 6 of
+    // 120 runs (R227 reviewer).
     #[test]
     fn bind_all_gives_private_name_classes_go_bind_ids() {
         let dir = std::env::temp_dir().join(format!("goport-private-ids-{}", std::process::id()));
