@@ -337,10 +337,12 @@ impl Checker {
             {
                 merged_flags = merged_flags.without(SymbolFlags::CONST_ENUM_ONLY_MODULE);
             }
-            // memberflags1: an in-place merge (`combine_symbol_tables`) can
-            // make a property in a resolved `properties` list optional, and
-            // then a stored weak bit can be wrong. Rare: turn the weak bits
-            // off for the rest of this checker (`weak_bits_off`).
+            // memberflags1: an in-place merge (a transient target: the
+            // global and module augmentation merges of `initialize_checker`,
+            // and `combine_symbol_tables` at check time) can make a property
+            // in a resolved `properties` list optional, and then a stored
+            // weak bit can be wrong. Rare: turn the weak bits off for the
+            // rest of this checker (`weak_bits_off`).
             if in_place
                 && merged_flags.intersects(SymbolFlags::OPTIONAL)
                 && !self.sym(target).flags.intersects(SymbolFlags::OPTIONAL)

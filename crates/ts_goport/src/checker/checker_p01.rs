@@ -1244,9 +1244,13 @@ pub struct Checker {
     /// a merge adds knows when to read them again (`MatchingReferenceMemo`,
     /// `global_spelling_suggestions`).
     pub(crate) merge_version: u64,
-    /// PERF: not in Go (memberflags1). Set when `merge_symbol` makes a
-    /// transient property optional in place. From then on, `is_weak_type`
-    /// does not read or store `ObjectFlags::WEAK_BITS`.
+    /// PERF: not in Go (memberflags1). Set when `merge_symbol` adds
+    /// `OPTIONAL` in place to a transient target. The test looks at any
+    /// transient symbol, not only a property, so it can turn the bits off
+    /// when no property changed. From then on, `is_weak_type` does not read
+    /// or store `ObjectFlags::WEAK_BITS`. It never resets: a long-lived
+    /// checker (an editor session) then runs without the cache. That costs
+    /// only speed.
     pub(crate) weak_bits_off: bool,
     /// PERF: not in Go. See `is_type_subset_of_union`.
     pub(crate) union_subset_answers: FxHashMap<(TypeId, TypeId), bool>,
