@@ -14,8 +14,9 @@ use std::borrow::Cow;
 use crate::scanner_util::push_js_string_rune;
 
 use super::scanner_p1::{
-    EscapeSequenceScanningFlags, IdentifierVariant, RUNE_SELF, Scanner, intern_token_value,
-    rune_to_char, rune_to_string, utf8_decode_last_rune_in_string, utf8_decode_rune_in_string,
+    EscapeSequenceScanningFlags, IdentifierVariant, RUNE_SELF, Scanner, TEXT_TO_KEYWORD,
+    intern_token_value, rune_to_char, rune_to_string, utf8_decode_last_rune_in_string,
+    utf8_decode_rune_in_string,
 };
 
 /// Go `strconv.ParseInt(s, base, bitSize)` with the error ignored, as the
@@ -92,6 +93,118 @@ static ASCII_IDENT_START: [bool; 256] = {
 
 /// The bytes that `Scanner::scan_ascii_identifier` reads in one window.
 const IDENT_WINDOW: usize = 16;
+
+/// Go `GetIdentifierToken` of the ASCII identifier of `len` bytes at the
+/// start of `window` (`len` is at least 1, and more than 16 only when the
+/// name runs past the window).
+// PERF: scanintern1 C2. One probe of `KEYWORD_SLOTS` with the name's bytes
+// as two zero-padded words, in place of the `text_to_keyword` compare chain
+// (26 instructions per call on the VS Code load).
+#[inline(always)]
+fn window_identifier_token(window: &[u8; IDENT_WINDOW], len: usize) -> SyntaxKind {
+    // Go: `len(str) >= 2 && len(str) <= 12 && str[0] >= 'a' && str[0] <= 'z'`,
+    // then `textToKeyword[str]`.
+    if !(2..=12).contains(&len) || !window[0].is_ascii_lowercase() {
+        return SyntaxKind::Identifier;
+    }
+    let (lo_mask, hi_mask) = KEYWORD_WORD_MASKS[len];
+    let lo = u64::from_le_bytes(window[..8].try_into().unwrap_or_default()) & lo_mask;
+    let hi = u64::from_le_bytes(window[8..].try_into().unwrap_or_default()) & hi_mask;
+    let slot = &KEYWORD_SLOTS[keyword_slot(lo)];
+    // A name has no zero byte, so equal padded words mean an equal text.
+    if slot.lo == lo && slot.hi == hi {
+        slot.kind
+    } else {
+        SyntaxKind::Identifier
+    }
+}
+
+/// A `KEYWORD_SLOTS` entry: the keyword's bytes as two zero-padded
+/// little-endian words (bytes 0 to 7, bytes 8 to 15) and its kind. An empty
+/// slot has `lo` 0, which no name of 2 or more bytes has.
+#[derive(Clone, Copy)]
+struct KeywordSlot {
+    lo: u64,
+    hi: u64,
+    kind: SyntaxKind,
+}
+
+/// `log2` of the `KEYWORD_SLOTS` length.
+const KEYWORD_SLOT_BITS: u32 = 8;
+
+/// The multiplier of `keyword_slot`. A search found that it gives each of
+/// the 86 keywords its own slot. The build of `KEYWORD_SLOTS` checks this,
+/// so a new keyword that shares a slot stops the compile (search again).
+const KEYWORD_SLOT_MUL: u64 = 0x686a_c588_6dd9_fa39;
+
+/// The `KEYWORD_SLOTS` index of the padded first word `lo` of a text.
+#[inline(always)]
+const fn keyword_slot(lo: u64) -> usize {
+    (lo.wrapping_mul(KEYWORD_SLOT_MUL) >> (64 - KEYWORD_SLOT_BITS)) as usize
+}
+
+/// The two padded words of `text` (`KeywordSlot`), at most 16 bytes.
+const fn keyword_words(text: &[u8]) -> (u64, u64) {
+    let (mut lo, mut hi) = (0u64, 0u64);
+    let mut i = 0;
+    while i < text.len() {
+        if i < 8 {
+            lo |= (text[i] as u64) << (8 * i);
+        } else {
+            hi |= (text[i] as u64) << (8 * (i - 8));
+        }
+        i += 1;
+    }
+    (lo, hi)
+}
+
+/// Go `textToKeyword` as a table with one slot per keyword
+/// (`keyword_slot`).
+static KEYWORD_SLOTS: [KeywordSlot; 1 << KEYWORD_SLOT_BITS] = {
+    let empty = KeywordSlot {
+        lo: 0,
+        hi: 0,
+        kind: SyntaxKind::Identifier,
+    };
+    let mut slots = [empty; 1 << KEYWORD_SLOT_BITS];
+    let mut i = 0;
+    while i < TEXT_TO_KEYWORD.len() {
+        let (text, kind) = TEXT_TO_KEYWORD[i];
+        let bytes = text.as_bytes();
+        // `window_identifier_token` looks up names of 2 to 12 bytes that
+        // start with a lowercase letter.
+        assert!(bytes.len() >= 2 && bytes.len() <= 12 && bytes[0].is_ascii_lowercase());
+        let (lo, hi) = keyword_words(bytes);
+        let slot = keyword_slot(lo);
+        assert!(
+            slots[slot].lo == 0,
+            "two keywords share a KEYWORD_SLOTS slot"
+        );
+        slots[slot] = KeywordSlot { lo, hi, kind };
+        i += 1;
+    }
+    slots
+};
+
+/// The masks that keep the first `len` bytes of the two window words, by
+/// `len` (0 to 16).
+static KEYWORD_WORD_MASKS: [(u64, u64); IDENT_WINDOW + 1] = {
+    let mut masks = [(0u64, 0u64); IDENT_WINDOW + 1];
+    let mut len = 1;
+    while len <= IDENT_WINDOW {
+        masks[len] = if len < 8 {
+            ((1u64 << (8 * len)) - 1, 0)
+        } else if len == 8 {
+            (u64::MAX, 0)
+        } else if len < 16 {
+            (u64::MAX, (1u64 << (8 * (len - 8))) - 1)
+        } else {
+            (u64::MAX, u64::MAX)
+        };
+        len += 1;
+    }
+    masks
+};
 
 /// A numeric fragment from `scan_number_fragment`: `prefix` followed by
 /// `text[start..end]`. `prefix` holds the digits before the last separator
@@ -465,10 +578,10 @@ impl<'a> Scanner<'a> {
         if !ASCII_IDENT_START[usize::from(window[0])] {
             return None;
         }
-        let mut len = window
+        let mut len = window[1..]
             .iter()
             .position(|&b| !ASCII_IDENT_PART[usize::from(b)])
-            .unwrap_or(IDENT_WINDOW);
+            .map_or(IDENT_WINDOW, |i| i + 1);
         // Go `s.char()` after the run: the byte there, or -1 at `end`.
         let next = if len < IDENT_WINDOW {
             Some(window[len])
@@ -488,7 +601,7 @@ impl<'a> Scanner<'a> {
         let value = self.text_token_value(start, start + len);
         self.scanner_state.pos += len as i32;
         self.scanner_state.token_value = value;
-        Some(get_identifier_token(value))
+        Some(window_identifier_token(window, len))
     }
 
     // Go: scanner/scanner.go:1484 scanIdentifier
@@ -1576,6 +1689,17 @@ mod tests {
                 continue;
             }
             names.push(name);
+        }
+        // Every keyword and its near misses (longer, shorter, other case,
+        // other last byte, 12 bytes): `window_identifier_token`.
+        for &(keyword, _) in crate::frontend::scanner::scanner_p1::TEXT_TO_KEYWORD {
+            let last = keyword.len() - 1;
+            names.push(keyword.to_string());
+            names.push(format!("{keyword}s"));
+            names.push(keyword[..last].to_string());
+            names.push(keyword.to_uppercase());
+            names.push(format!("{}z", &keyword[..last]));
+            names.push(format!("{keyword:a<12}"));
         }
         names.push("instanceof1".to_string());
         names.push("\u{e9}t\u{e9}".to_string());
