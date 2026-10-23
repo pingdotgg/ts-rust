@@ -1232,6 +1232,9 @@ impl Checker {
             if object_type != t_object_type || index_type != t_index_type {
                 // constvar1: this call can read lazy state that
                 // `ConstTypeVariableMemo` does not guard.
+                crate::checker::checker_p15::cv_probe::event(
+                    crate::checker::checker_p15::cv_probe::G4,
+                );
                 self.const_type_variable_memo.mark += 1;
                 return self.get_indexed_access_type(object_type, index_type);
             }

@@ -211,11 +211,13 @@ impl Checker {
         target: TypeSystemEntity,
         property_name: TypeSystemPropertyName,
     ) -> bool {
+        crate::checker::checker_p15::cv_probe::PUSHES.with(|p| p.set(p.get() + 1));
         let resolution_cycle_start_index =
             self.find_resolution_cycle_start_index(target, property_name);
         if resolution_cycle_start_index >= 0 {
             // A cycle was found
             // constvar1: `ConstTypeVariableMemo`.
+            crate::checker::checker_p15::cv_probe::event(crate::checker::checker_p15::cv_probe::G1);
             self.const_type_variable_memo.mark += 1;
             for i in resolution_cycle_start_index as usize..self.type_resolutions.len() {
                 self.type_resolutions[i].result = false;

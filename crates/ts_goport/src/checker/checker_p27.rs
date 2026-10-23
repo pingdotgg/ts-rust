@@ -269,6 +269,9 @@ impl Checker {
         loop {
             if tail_count == 1000 {
                 // constvar1: `ConstTypeVariableMemo` (a guard that Go's model does not need).
+                crate::checker::checker_p15::cv_probe::event(
+                    crate::checker::checker_p15::cv_probe::G5,
+                );
                 self.const_type_variable_memo.mark += 1;
                 let current_node = self.current_node;
                 self.error(

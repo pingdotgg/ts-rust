@@ -2069,6 +2069,7 @@ impl Checker {
         // or expression. There is a very high likelihood we're dealing with a combination of infinite generic types
         // that perpetually generate new type identities, so we stop the recursion here by yielding the error type.
         // constvar1: `ConstTypeVariableMemo` (a guard that Go's model does not need).
+        crate::checker::checker_p15::cv_probe::event(crate::checker::checker_p15::cv_probe::G5);
         self.const_type_variable_memo.mark += 1;
         if let Some(tr) = self.tracer {
             tr.instant(

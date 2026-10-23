@@ -1145,6 +1145,27 @@ impl Checker {
         if depth >= 5 || t.is_nil() {
             return false;
         }
+        cv_probe::OPEN.with(|o| o.set(o.get() + 1));
+        let r = self.is_const_type_variable_probe(t, depth);
+        cv_probe::OPEN.with(|o| o.set(o.get() - 1));
+        r
+    }
+
+    /// constvar1 probe: the memo, and on each hit Go's fresh walk too.
+    fn cv_made(&self) -> [u64; 7] {
+        [
+            u64::from(self.type_count),
+            u64::from(self.symbol_count),
+            crate::ast::utilities_p1::peek_next_symbol_id(),
+            u64::from(self.total_instantiation_count),
+            u64::from(self.signature_count),
+            (i64::from(self.diagnostics.count) + i64::from(self.suggestion_diagnostics.count))
+                as u64,
+            cv_probe::PUSHES.with(std::cell::Cell::get),
+        ]
+    }
+
+    fn is_const_type_variable_probe(&mut self, t: TypeId, depth: i32) -> bool {
         if !self
             .ty(t)
             .flags
@@ -1153,13 +1174,52 @@ impl Checker {
             return self.is_const_type_variable_walk(t, depth);
         }
         let key = ConstTypeVariableMemo::key(t, depth);
+        let counting = cv_probe::VERIFY.with(std::cell::Cell::get) == 0;
+        if counting {
+            cv_probe::add(cv_probe::LOOKUPS);
+        }
         if let Some(answer) = self.const_type_variable_memo.get(key) {
+            if counting {
+                cv_probe::add(cv_probe::HITS);
+            }
+            let before = self.cv_made();
+            let mark = self.const_type_variable_memo.mark;
+            cv_probe::VERIFY.with(|v| v.set(v.get() + 1));
+            let fresh = self.is_const_type_variable_walk(t, depth);
+            cv_probe::VERIFY.with(|v| v.set(v.get() - 1));
+            let after = self.cv_made();
+            let mut bad = false;
+            if fresh != answer {
+                cv_probe::add(cv_probe::HIT_DIFF_ANSWER);
+                bad = true;
+            }
+            for i in 0..7 {
+                if before[i] != after[i] {
+                    cv_probe::add(cv_probe::HIT_TYPES + i);
+                    bad = true;
+                }
+            }
+            if self.const_type_variable_memo.mark != mark {
+                cv_probe::add(cv_probe::HIT_MARK);
+                bad = true;
+            }
+            if bad {
+                eprintln!(
+                    "constvar1 probe: DIFF type {} depth {} memo {} fresh {} made {:?} -> {:?}",
+                    t.0, depth, answer, fresh, before, after
+                );
+            }
             return answer;
         }
         let mark = self.const_type_variable_memo.mark;
         let answer = self.is_const_type_variable_walk(t, depth);
         if self.const_type_variable_memo.mark == mark {
+            if counting {
+                cv_probe::add(cv_probe::STORES);
+            }
             self.const_type_variable_memo.put(key, answer);
+        } else if counting {
+            cv_probe::add(cv_probe::NOT_STORED);
         }
         answer
     }
@@ -1929,6 +1989,7 @@ impl ConstTypeVariableMemo {
     #[inline]
     pub(crate) fn overwrite(&mut self, changed: bool) {
         if changed {
+            cv_probe::event(cv_probe::G2);
             self.clear();
         }
     }
@@ -1938,6 +1999,73 @@ impl ConstTypeVariableMemo {
         self.slots.fill(0);
         self.added = 0;
         self.mark += 1;
+    }
+}
+
+/// constvar1 probe (never merge): counters, written to stderr at exit when
+/// CV_PROBE_LOG is set.
+pub mod cv_probe {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    pub const LOOKUPS: usize = 0;
+    pub const HITS: usize = 1;
+    pub const STORES: usize = 2;
+    pub const NOT_STORED: usize = 3;
+    pub const HIT_DIFF_ANSWER: usize = 4;
+    /// Then types, symbols, symbol ids, instantiations, signatures, diagnostics, pushes.
+    pub const HIT_TYPES: usize = 5;
+    pub const HIT_MARK: usize = 12;
+    /// Events: total at i, inside an open walk at i + 1.
+    pub const G1: usize = 13;
+    pub const G2: usize = 15;
+    pub const G4: usize = 17;
+    pub const G5: usize = 19;
+    const NAMES: [&str; 21] = [
+        "lookups",
+        "hits",
+        "stores",
+        "not_stored",
+        "hit_diff_answer",
+        "hit_types",
+        "hit_syms",
+        "hit_symids",
+        "hit_inst",
+        "hit_sigs",
+        "hit_diags",
+        "hit_pushes",
+        "hit_mark",
+        "g1_push_fail",
+        "g1_in_walk",
+        "g2_overwrite",
+        "g2_in_walk",
+        "g4_rebuild",
+        "g4_in_walk",
+        "g5_limit",
+        "g5_in_walk",
+    ];
+    static C: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 21];
+    thread_local! {
+        pub static OPEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        pub static VERIFY: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        pub static PUSHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    pub fn add(i: usize) {
+        C[i].fetch_add(1, Relaxed);
+    }
+    pub fn event(i: usize) {
+        add(i);
+        if OPEN.with(std::cell::Cell::get) > 0 {
+            add(i + 1);
+        }
+    }
+    pub fn dump() {
+        if std::env::var_os("CV_PROBE_LOG").is_none() {
+            return;
+        }
+        let mut s = String::from("CV_PROBE");
+        for (i, n) in NAMES.iter().enumerate() {
+            s.push_str(&format!(" {}={}", n, C[i].load(Relaxed)));
+        }
+        eprintln!("{s}");
     }
 }
 
