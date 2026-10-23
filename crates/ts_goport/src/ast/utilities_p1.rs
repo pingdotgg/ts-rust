@@ -670,6 +670,13 @@ fn merge_symbol_ids(ids: &mut LineageIds, workers: &mut [WorkerSymbolIds]) {
         .filter(|group| group.len() > 1)
     {
         for place in 0..LINEAGE_ID_CHUNK {
+            let given = group
+                .iter()
+                .filter(|&&(_, worker, at)| workers[worker].chunks[at].1[place] != 0)
+                .count();
+            if given < 2 {
+                continue;
+            }
             let index = (group[0].0 << LINEAGE_ID_SHIFT) | place;
             let mut first: Option<(u64, usize, usize)> = None;
             for &(_, worker, at) in group {
@@ -767,68 +774,68 @@ fn merge_symbol_ids(ids: &mut LineageIds, workers: &mut [WorkerSymbolIds]) {
                     .collect()
             });
         let moves_from = moves_from as IdCell;
-        for (chunk, cells) in std::mem::take(&mut given.chunks) {
+        for (chunk, mut cells) in std::mem::take(&mut given.chunks) {
             if ids.is_freed(chunk) {
                 continue;
+            }
+            let first = chunk << LINEAGE_ID_SHIFT;
+            if !keeps || !given.big.is_empty() {
+                for (place, cell) in cells.iter_mut().enumerate() {
+                    if *cell == 0 {
+                        continue;
+                    }
+                    if !keeps
+                        && let Some(moves) = &block_moves
+                        && *cell != BIG_ID
+                        && *cell & BLOCK_CELL != 0
+                        && let Some(&by) = moves.get(
+                            ((*cell & !BLOCK_CELL).wrapping_sub(moves_from)
+                                / BLOCK_ID_SIZE as IdCell) as usize,
+                        )
+                    {
+                        *cell = cell.wrapping_add(by);
+                        continue;
+                    }
+                    let index = first | place;
+                    let id = given.id(index, *cell);
+                    let new = if keeps {
+                        Some(id)
+                    } else {
+                        match id.checked_sub(BLOCK_ID_OFFSET) {
+                            Some(n) => log.block_of(n).map(|block| {
+                                BLOCK_ID_OFFSET
+                                    + new_starts[worker][block]
+                                    + (n - log.blocks[block].0)
+                            }),
+                            None => log
+                                .global_of(id)
+                                .map(|global| new_globals[worker][global])
+                                .filter(|&new| new != 0),
+                        }
+                    };
+                    let Some(new) = new else {
+                        debug_assert!(false, "worker {worker} did not log id {id}");
+                        *cell = 0;
+                        continue;
+                    };
+                    *cell = id_cell(new);
+                    if *cell == BIG_ID {
+                        ids.big.insert(index, new);
+                    }
+                }
             }
             if chunk >= ids.chunks.len() {
                 ids.chunks.resize_with(chunk + 1, || None);
             }
-            let first = chunk << LINEAGE_ID_SHIFT;
-            if keeps {
-                if !given.big.is_empty() {
-                    for (place, &cell) in cells.iter().enumerate() {
-                        if cell == BIG_ID {
-                            ids.big.insert(first | place, given.big[&(first | place)]);
-                        }
+            match &mut ids.chunks[chunk] {
+                // A cell of `cells` is 0 where `old` has an id: the worker
+                // dropped this thread's ids, and no two workers keep a cell.
+                Some(old) => {
+                    for (old, cell) in old.iter_mut().zip(cells.iter()) {
+                        *old |= cell;
                     }
                 }
-                match &mut ids.chunks[chunk] {
-                    Some(old) => {
-                        // A cell of `cells` is 0 where `old` has an id.
-                        for (old, cell) in old.iter_mut().zip(cells.iter()) {
-                            *old |= cell;
-                        }
-                    }
-                    slot => *slot = Some(cells),
-                }
-                continue;
-            }
-            let old = ids.chunks[chunk].get_or_insert_with(|| Box::new([0; LINEAGE_ID_CHUNK]));
-            for (place, &cell) in cells.iter().enumerate() {
-                if cell == 0 {
-                    continue;
-                }
-                if let Some(moves) = &block_moves
-                    && cell != BIG_ID
-                    && cell & BLOCK_CELL != 0
-                    && let Some(&by) = moves.get(
-                        ((cell & !BLOCK_CELL).wrapping_sub(moves_from) / BLOCK_ID_SIZE as IdCell)
-                            as usize,
-                    )
-                {
-                    old[place] = cell.wrapping_add(by);
-                    continue;
-                }
-                let index = first | place;
-                let id = given.id(index, cell);
-                let new = match id.checked_sub(BLOCK_ID_OFFSET) {
-                    Some(n) => log.block_of(n).map(|block| {
-                        BLOCK_ID_OFFSET + new_starts[worker][block] + (n - log.blocks[block].0)
-                    }),
-                    None => log
-                        .global_of(id)
-                        .map(|global| new_globals[worker][global])
-                        .filter(|&new| new != 0),
-                };
-                let Some(new) = new else {
-                    debug_assert!(false, "worker {worker} did not log id {id}");
-                    continue;
-                };
-                old[place] = id_cell(new);
-                if old[place] == BIG_ID {
-                    ids.big.insert(index, new);
-                }
+                slot => *slot = Some(cells),
             }
         }
     }
