@@ -1795,6 +1795,7 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 pub fn bind_all() {
     let program = prog();
     held_tables(program).bound_symbols.get_or_init(|| {
+        crate::loadstamp::mark(crate::loadstamp::M_BIND_B);
         let unbound: Vec<Node> = program
             .source_files()
             .filter(|file| file.file_bind.get().is_none())
@@ -1806,6 +1807,7 @@ pub fn bind_all() {
             } else {
                 bind_files_parallel(lineage);
             }
+            crate::loadstamp::mark(crate::loadstamp::M_BIND_PAR_E);
             for file in program.source_files() {
                 // Go: program.go:606 `Tracing.Push` traces the files that are not bound yet.
                 let _trace = if file.file_bind.get().is_none() {
@@ -1822,6 +1824,7 @@ pub fn bind_all() {
             Arc::clone(&lineage.symbols)
         });
         give_private_name_class_ids(&symbols, &unbound, program.single_threaded());
+        crate::loadstamp::print_marks();
         symbols
     });
 }
@@ -5818,6 +5821,7 @@ pub fn get_diagnostics_of_any_program(
         }
     }
 
+    crate::loadstamp::mark(crate::loadstamp::M_GDAP_B);
     let options = &prog().options;
     let mut all_diagnostics = get_config_file_parsing_diagnostics();
     let config_file_parsing_diagnostics_length = all_diagnostics.len();
@@ -5835,11 +5839,13 @@ pub fn get_diagnostics_of_any_program(
         all_diagnostics.extend(content_mapper_diagnostics());
     }
     all_diagnostics.extend(syntactic_diagnostics);
+    crate::loadstamp::mark(crate::loadstamp::M_SYN_E);
 
     // If we didn't have any syntactic errors, then also try getting the program (options),
     // global and semantic errors.
     if all_diagnostics.len() == config_file_parsing_diagnostics_length {
         all_diagnostics.extend(get_program_diagnostics());
+        crate::loadstamp::mark(crate::loadstamp::M_PROGD_E);
 
         // Do binding early so we can track the time.
         append_diagnostics_for_all_files(files, &mut Vec::new(), get_bind_diagnostics);

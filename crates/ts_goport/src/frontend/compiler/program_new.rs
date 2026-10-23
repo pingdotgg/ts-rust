@@ -536,7 +536,9 @@ fn new_program_of_parts(
         has_ts_file: OnceCell::new(),
     };
     p.init_checker_pool();
+    crate::loadstamp::mark(crate::loadstamp::M_POOL_INIT_E);
     p.verify_compiler_options();
+    crate::loadstamp::mark(crate::loadstamp::M_VERIFY_E);
     p
 }
 
