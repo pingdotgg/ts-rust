@@ -2834,6 +2834,11 @@ impl Table {
 /// and a checker can add the lineage chunks bound after its copy
 /// (`catch_up`). A file arena (`new_file`) is not interleaved: its ids move
 /// to lineage ids when it joins (`ArenaOffsets`).
+///
+/// symdata1: an instantiated symbol (Go `newSharedDataSymbol`) is a 12-byte
+/// record in `insts` (`push_instance`), not a `Symbol`. Its id is
+/// `INST_BIT | record`, with an id slot and link records of its own, and
+/// `sym` reads its head from the record and its data from its target.
 #[derive(Clone, Debug)]
 pub struct SymbolArena {
     symbols: CowChunks<Symbol>,
@@ -3360,7 +3365,7 @@ impl SymbolArena {
     pub fn push_symbol(&mut self, symbol: Symbol) -> SymbolId {
         self.symbols.push(symbol);
         let index = u32::try_from(self.symbols.len() - 1).expect("symbol overflow");
-        assert!(index & INST_BIT == 0, "symbol overflow");
+        debug_assert!(index & INST_BIT == 0, "symbol overflow");
         SymbolId(index)
     }
 
@@ -3574,20 +3579,31 @@ impl SymbolArena {
         match symbols.chunks.get(i >> COW_CHUNK_SHIFT) {
             Some(Chunk::Fixed(values)) => SymRef::of(&values.values()[i & COW_CHUNK_MASK]),
             Some(_) => SymRef::of(symbols.get_other(i)),
-            None if is_instance(symbol) => self.sym_instance(symbol),
+            None if is_instance(symbol) => {
+                let (head, data) = self.sym_instance(symbol);
+                SymRef {
+                    flags: SymbolFlags(head as u32),
+                    check_flags: CheckFlags((head >> 32) as u32),
+                    data,
+                }
+            }
             None => SymRef::of(&symbols.tail[i - symbols.tail_start()]),
         }
     }
 
-    /// `sym` of an instantiated symbol: its head, and its target's data.
+    /// `sym` of an instantiated symbol: its head (flags in the low half,
+    /// check flags in the high half), and its target's data.
+    // PERF: a pair of scalars comes back in two registers; `SymRef` (three
+    // fields) came back through memory. Cold, so a call site keeps the
+    // chunk read on its straight path.
+    #[cold]
     #[inline(never)]
-    fn sym_instance(&self, symbol: SymbolId) -> SymRef<'_> {
+    fn sym_instance(&self, symbol: SymbolId) -> (u64, &SymbolData) {
         let inst = self.insts.get((symbol.0 ^ INST_BIT) as usize);
-        SymRef {
-            flags: inst.flags,
-            check_flags: inst.check_flags,
-            data: &self.symbols.get(inst.target.index()).data,
-        }
+        (
+            u64::from(inst.flags.0) | u64::from(inst.check_flags.0) << 32,
+            &self.symbols.get(inst.target.index()).data,
+        )
     }
 
     /// The flags of `symbol` (`sym(symbol).flags`). An instance reads only
@@ -3620,6 +3636,7 @@ impl SymbolArena {
         (s.flags, s.check_flags)
     }
 
+    #[cold]
     #[inline(never)]
     fn inst_head(&self, symbol: SymbolId) -> (SymbolFlags, CheckFlags) {
         let inst = self.insts.get((symbol.0 ^ INST_BIT) as usize);
