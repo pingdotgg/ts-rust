@@ -77,6 +77,22 @@ static ASCII_IDENT_PART: [bool; 256] = {
     table
 };
 
+/// The bytes that start an ASCII identifier on Go's fast path: letters, `_`,
+/// `$`.
+static ASCII_IDENT_START: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < 128 {
+        let b = i as u8;
+        table[i] = b.is_ascii_alphabetic() || b == b'_' || b == b'$';
+        i += 1;
+    }
+    table
+};
+
+/// The bytes that `Scanner::scan_ascii_identifier` reads in one window.
+const IDENT_WINDOW: usize = 16;
+
 /// A numeric fragment from `scan_number_fragment`: `prefix` followed by
 /// `text[start..end]`. `prefix` holds the digits before the last separator
 /// and stays empty (no allocation) when there is no separator.
@@ -427,6 +443,52 @@ impl<'a> Scanner<'a> {
         self.scanner_state.pos = self.scanner_state.token_start + size;
         self.scanner_state.token = SyntaxKind::Unknown;
         self.scanner_state.token
+    }
+
+    /// Go `scanIdentifier(0, identifierVariantStandard)` when it takes its
+    /// ASCII fast path, then Go `GetIdentifierToken` of the token value: the
+    /// token kind, with `pos` and the token value set as Go sets them.
+    /// `None`, with nothing changed, when the fast path does not apply (the
+    /// first byte is no ASCII letter, `_` or `$`, the name ends at a
+    /// non-ASCII byte or `\`) or when fewer than 16 bytes are left before
+    /// `end`. The caller then calls `scan_identifier`.
+    // PERF: scanintern1 C1. `scan` inlines this. The first 16 bytes come from
+    // one window with no end test per byte, and the work needs no saved
+    // registers. Out of line, `scan_identifier` paid 92 instructions per call
+    // besides its loop (VS Code load: 9.6 M calls).
+    #[inline(always)]
+    pub(crate) fn scan_ascii_identifier(&mut self) -> Option<SyntaxKind> {
+        let start = usize::try_from(self.scanner_state.pos).ok()?;
+        let end = usize::try_from(self.end).ok()?;
+        let bytes = self.text.as_bytes().get(..end)?;
+        let window: &[u8; IDENT_WINDOW] = bytes.get(start..)?.first_chunk()?;
+        if !ASCII_IDENT_START[usize::from(window[0])] {
+            return None;
+        }
+        let mut len = window
+            .iter()
+            .position(|&b| !ASCII_IDENT_PART[usize::from(b)])
+            .unwrap_or(IDENT_WINDOW);
+        // Go `s.char()` after the run: the byte there, or -1 at `end`.
+        let next = if len < IDENT_WINDOW {
+            Some(window[len])
+        } else {
+            let rest = &bytes[start + IDENT_WINDOW..];
+            let more = rest
+                .iter()
+                .position(|&b| !ASCII_IDENT_PART[usize::from(b)])
+                .unwrap_or(rest.len());
+            len += more;
+            rest.get(more).copied()
+        };
+        // Go: `ch < utf8.RuneSelf && ch != '\\'`.
+        if next.is_some_and(|b| b >= 0x80 || b == b'\\') {
+            return None;
+        }
+        let value = self.text_token_value(start, start + len);
+        self.scanner_state.pos += len as i32;
+        self.scanner_state.token_value = value;
+        Some(get_identifier_token(value))
     }
 
     // Go: scanner/scanner.go:1484 scanIdentifier
@@ -1492,6 +1554,73 @@ impl<'a> Scanner<'a> {
 #[cfg(test)]
 mod tests {
     use super::{is_canonical_js_integer, js_number_string};
+    use crate::frontend::scanner::scanner_p1::{IdentifierVariant, new_scanner};
+    use crate::scanner_util::get_identifier_token;
+
+    /// scanintern1: where `scan_ascii_identifier` takes a name, it gives what
+    /// `scan_identifier` and `get_identifier_token` give from the same state
+    /// (kind, end and token value). Names of 1 to 40 bytes (keywords too),
+    /// each byte kind before each kind of stop, at offsets that put the name
+    /// across the 16-byte window, with the scan end at, after and before the
+    /// name's end.
+    #[test]
+    fn ascii_identifier_fast_path_matches_scan_identifier() {
+        let mut names: Vec<String> = ["as", "if", "of", "type", "async", "constructor", "x"]
+            .map(String::from)
+            .to_vec();
+        for len in 1..=40 {
+            let name: String = (0..len)
+                .map(|i| char::from(b"aZ_$9qB0zA"[(i * 7 + len) % 10]))
+                .collect();
+            if name.as_bytes()[0].is_ascii_digit() {
+                continue;
+            }
+            names.push(name);
+        }
+        names.push("instanceof1".to_string());
+        names.push("\u{e9}t\u{e9}".to_string());
+        names.push("9lives".to_string());
+        let stops = ["", " ", "(", "\\u0061", "\u{e9}", "\u{2028}", "-x", "#"];
+        let mut taken = 0;
+        for name in &names {
+            for stop in stops {
+                for pad in 0..18 {
+                    let text = format!("{}{name}{stop} tail of the text", " ".repeat(pad));
+                    let name_end = (pad + name.len()) as i32;
+                    for end in [text.len() as i32, name_end + 1, name_end, name_end - 1] {
+                        if end < pad as i32 {
+                            continue;
+                        }
+                        let mut fast = new_scanner();
+                        fast.set_text(&text);
+                        fast.end = end;
+                        fast.scanner_state.pos = pad as i32;
+                        let Some(kind) = fast.scan_ascii_identifier() else {
+                            assert_eq!(fast.scanner_state.pos, pad as i32, "{text:?} {end}");
+                            continue;
+                        };
+                        taken += 1;
+                        let mut slow = new_scanner();
+                        slow.set_text(&text);
+                        slow.end = end;
+                        slow.scanner_state.pos = pad as i32;
+                        assert!(slow.scan_identifier(0, IdentifierVariant::STANDARD));
+                        let want = get_identifier_token(slow.scanner_state.token_value);
+                        assert_eq!(kind, want, "{text:?} {end}");
+                        assert_eq!(
+                            fast.scanner_state.pos, slow.scanner_state.pos,
+                            "{text:?} {end}"
+                        );
+                        assert_eq!(
+                            fast.scanner_state.token_value, slow.scanner_state.token_value,
+                            "{text:?} {end}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(taken > 1000, "{taken}");
+    }
 
     #[test]
     fn canonical_integers_round_trip() {
