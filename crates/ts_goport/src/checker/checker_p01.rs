@@ -877,6 +877,8 @@ pub struct Checker {
     pub instantiation_count: u32,
     pub instantiation_stack: Vec<TypeId>,
     pub conditional_constraint_depth: u32,
+    /// PERF (constvar1, not in Go): see `ConstTypeVariableMemo`.
+    pub(crate) const_type_variable_memo: crate::checker::checker_p15::ConstTypeVariableMemo,
     pub inline_level: i32,
     pub serialization_level: i32,
     pub current_node: Node,
@@ -1421,6 +1423,7 @@ impl Checker {
             instantiation_count: 0,
             instantiation_stack: Vec::new(),
             conditional_constraint_depth: 0,
+            const_type_variable_memo: Default::default(),
             inline_level: 0,
             serialization_level: 0,
             current_node: Node::NIL,
