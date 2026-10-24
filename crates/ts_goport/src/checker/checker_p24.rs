@@ -28,6 +28,12 @@ pub fn fast_never_order_from_env() -> bool {
     *ON.get_or_init(|| crate::fast_mode::part("GOPORT_FAST_NEVER_ORDER"))
 }
 
+/// Go `temporaryPropertyCounts` (utilities.go:936): the declaration count of
+/// each property name of an intersection in first-seen order, keyed by the
+/// name id (`some_property_reduces_to_never`). The free maps are in the
+/// `Checker` field `free_property_counts`.
+pub(crate) type TemporaryPropertyCounts = FxIndexMap<u32, i32>;
+
 /// Reusable buffers of `get_named_members` (the `Checker` field
 /// `named_members_scratch`), so a call allocates only its result.
 #[derive(Default)]
@@ -996,12 +1002,33 @@ impl Checker {
     // PERF: the counts are keyed by the name id with FxHash, and each lookup
     // passes the `Name`, so no name text is hashed, compared or copied (Go
     // hashes the text).
+    // ts#64804: the count map comes from the free list
+    // (`get_temporary_property_counts`) and goes back to it at the end, as
+    // in Go.
     pub fn some_property_reduces_to_never(&mut self, t: TypeId) -> bool {
         if self.fast_never_order {
             return self.some_property_reduces_to_never_fast(t);
         }
+        // PORT: Go `defer c.releaseTemporaryPropertyCounts(counts)`. The two
+        // loops are in `some_counted_property_reduces_to_never`, so the map
+        // is released in one place after its early return.
+        let mut counts = self.get_temporary_property_counts();
+        let reduces = self.some_counted_property_reduces_to_never(t, &mut counts);
+        self.release_temporary_property_counts(counts);
+        reduces
+    }
+
+    /// The two loops of Go `somePropertyReducesToNever` (checker.go:22320),
+    /// with the count map `counts` that the caller took from the free list.
+    /// Both loops can reduce a nested intersection again (through
+    /// `get_properties_of_type` and the property lookup), and that call takes
+    /// its own map.
+    fn some_counted_property_reduces_to_never(
+        &mut self,
+        t: TypeId,
+        counts: &mut TemporaryPropertyCounts,
+    ) -> bool {
         // Collect declaration counts for each property across all constituent types of the intersection.
-        let mut counts: FxIndexMap<u32, i32> = FxIndexMap::default();
         for i in 0..self.ty(t).types().len() {
             let u = self.type_at(t, i);
             let props = self.get_properties_of_type(u);
@@ -1011,7 +1038,7 @@ impl Checker {
         }
         // Check if any property appears in more than one constituent type and reduces to 'never'.
         // Go in the order the properties were found so the combined properties are created in the same order every time.
-        for (&id, &count) in &counts {
+        for (&id, &count) in counts.iter() {
             if count > 1 {
                 let prop_name = Name::from_id(id);
                 let prop = self.get_property_of_union_or_intersection_type_key(
@@ -1025,6 +1052,34 @@ impl Checker {
             }
         }
         false
+    }
+
+    /// An empty count map for `some_property_reduces_to_never`: the last map
+    /// released to the free list, or a new one. Give it back with
+    /// `release_temporary_property_counts`.
+    // PORT: Go keeps the free maps in a linked list (`next`). The port keeps
+    // them in a `Vec` used as a stack, so the last map released is the first
+    // one taken, as in Go.
+    // Go: checker/utilities.go:941 getTemporaryPropertyCounts
+    pub(crate) fn get_temporary_property_counts(&mut self) -> TemporaryPropertyCounts {
+        self.free_property_counts.pop().unwrap_or_default()
+    }
+
+    /// Clears `counts` and puts it on the free list, unless it held more than
+    /// 4,096 names: then it is dropped.
+    // Go: checker/utilities.go:951 releaseTemporaryPropertyCounts
+    pub(crate) fn release_temporary_property_counts(
+        &mut self,
+        mut counts: TemporaryPropertyCounts,
+    ) {
+        let size = counts.len();
+        counts.clear();
+        // Recursive reductions borrow separate maps. Do not retain unusually
+        // large property tables or references to their names in the free list.
+        if size > 4096 {
+            return;
+        }
+        self.free_property_counts.push(counts);
     }
 
     /// `some_property_reduces_to_never` in a faster order, used when
@@ -2750,6 +2805,135 @@ type I<T extends A<string> | A<number>> = A<string> & T & { kind: "b" };
             got,
             (true, true, 3, true, vec![true, false], true, [true, false])
         );
+    }
+
+    /// The free list of the property count maps, as Go
+    /// TestTemporaryPropertyCounts (types_test.go:307). A map keeps the
+    /// first-seen order of its keys. A map taken while another is out is a
+    /// separate map. A released map is empty and is the next map taken (a new
+    /// map has no capacity). A map that held more than 4,096 names is
+    /// dropped; a map that held 4,096 is kept.
+    #[test]
+    fn temporary_property_counts() {
+        let got = with_alias_types("type T = {};", |c, _| {
+            c.free_property_counts.clear();
+            let (first, second) = (10, 20);
+            let mut outer = c.get_temporary_property_counts();
+            *outer.entry(second).or_insert(0) += 1;
+            *outer.entry(first).or_insert(0) += 1;
+            *outer.entry(second).or_insert(0) += 1;
+            let outer_keys: Vec<u32> = outer.keys().copied().collect();
+            let mut inner = c.get_temporary_property_counts();
+            let inner_was_new = inner.capacity() == 0;
+            inner.insert(first, 4);
+            let outer_counts = (outer[&first], outer[&second]);
+            c.release_temporary_property_counts(inner);
+            let free = &c.free_property_counts;
+            let released = free.len() == 1 && free[0].is_empty() && !free[0].contains_key(&first);
+            let mut reused = c.get_temporary_property_counts();
+            let reused_inner = reused.capacity() > 0 && c.free_property_counts.is_empty();
+            reused.insert(second, 3);
+            reused.insert(first, 5);
+            let reused_keys: Vec<u32> = reused.keys().copied().collect();
+            let outer_first = outer[&first];
+            c.release_temporary_property_counts(reused);
+            c.release_temporary_property_counts(outer);
+            let mut reused = c.get_temporary_property_counts();
+            let reused_outer = reused.capacity() > 0 && reused.is_empty();
+            reused.extend((0..4097).map(|i| (i, i as i32)));
+            c.release_temporary_property_counts(reused);
+            let free = &c.free_property_counts;
+            let large_dropped = free.len() == 1 && free.iter().all(|m| m.capacity() < 4097);
+            let mut kept = c.get_temporary_property_counts();
+            kept.extend((0..4096).map(|i| (i, i as i32)));
+            c.release_temporary_property_counts(kept);
+            let free = &c.free_property_counts;
+            let limit_kept = free.len() == 1 && free[0].is_empty() && free[0].capacity() >= 4096;
+            (
+                outer_keys,
+                inner_was_new,
+                outer_counts,
+                released,
+                reused_inner,
+                reused_keys,
+                outer_first,
+                reused_outer,
+                large_dropped,
+                limit_kept,
+            )
+        });
+        assert_eq!(
+            got,
+            (
+                vec![20, 10],
+                true,
+                (1, 2),
+                true,
+                true,
+                vec![20, 10],
+                1,
+                true,
+                true,
+                true
+            )
+        );
+    }
+
+    /// A nested intersection reduction takes its own count map, as Go
+    /// TestIntersectionReductionReentrancy (types_test.go:348). In
+    /// `(object & object) & object` the reduction of the outer intersection
+    /// reduces the inner one in its first loop (`get_properties_of_type`),
+    /// while the outer map is out, so two maps end on the free list. Then a
+    /// conflicting private `value` in the outer property cache makes the
+    /// reduction return early. It takes the last map and gives it back
+    /// empty: the free list is the same.
+    #[test]
+    fn intersection_reduction_reentrancy() {
+        let got = with_alias_types("type T = {};", |c, _| {
+            c.fast_never_order = false;
+            c.free_property_counts.clear();
+            let property = c.new_symbol(SymbolFlags::PROPERTY, "value");
+            let members = c.create_symbol_table(&[property]);
+            let object = c.new_anonymous_type(SymbolId::NIL, members, &[], &[], &[]);
+            let inner = c.new_intersection_type(ObjectFlags::NONE, &[object, object]);
+            let outer = c.new_intersection_type(ObjectFlags::NONE, &[inner, object]);
+            let reduced = (
+                c.get_reduced_type(outer) == outer,
+                c.get_reduced_type(inner) == inner,
+            );
+            let found =
+                c.get_property_of_union_or_intersection_type(outer, "value", true) == property;
+            let capacities = |c: &Checker| -> Vec<usize> {
+                c.free_property_counts
+                    .iter()
+                    .map(|m| m.capacity())
+                    .collect()
+            };
+            let workspace = capacities(c);
+            let conflicting =
+                c.new_symbol_ex(SymbolFlags::PROPERTY, "value", CheckFlags::CONTAINS_PRIVATE);
+            let cache = c
+                .ty(outer)
+                .as_union_or_intersection_type()
+                .property_cache_without_function_property_augment;
+            c.symbols.set(cache, "value", conflicting);
+            let reduces = c.some_property_reduces_to_never(outer);
+            let value = c.sym(property).name.id();
+            let all_empty = c
+                .free_property_counts
+                .iter()
+                .all(|m| m.is_empty() && !m.contains_key(&value));
+            (
+                reduced,
+                found,
+                workspace.len(),
+                workspace.iter().all(|&n| n > 0),
+                reduces,
+                capacities(c) == workspace,
+                all_empty,
+            )
+        });
+        assert_eq!(got, ((true, true), true, 2, true, true, true, true));
     }
 
     /// `get_reduced_apparent_type` returns early for object types (plain,
