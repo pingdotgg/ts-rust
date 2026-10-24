@@ -2,6 +2,7 @@
 """test-hunks.py: the test code that a branch changes, for an expectation review.
 
 usage: test-hunks.py [--base REV] [--head REV] [--all] [CHECKOUT]
+       test-hunks.py selftest
        test-hunks.py help
 
 Compares the .rs files under crates/ of CHECKOUT (default: the current directory) between the merge base of
@@ -13,18 +14,26 @@ BASE (default origin/main) and HEAD (default HEAD), and HEAD. For each file with
   changed helpers  other test code (a mock, a helper fn) that HEAD changes, by enclosing item
   removed lines    each removed or changed line of base test code, with its enclosing fn (as int95's tool did)
 
-Test code is a file under a tests/ dir, a file that a `#[cfg(test)] mod NAME;` declares, and the item after a
-#[cfg(test)], #[cfg(all(test, ...))] or #[test] attribute (a mod, a fn, an impl, a use), to its closing brace
-or semicolon. A test fn is a #[test] fn or the fn of a test macro call (`child_test! { fn name() {...} }`). Comments, strings and char literals do not count toward the braces. Production lines of a hunk
-are counted per file and not listed; with --all, files with only production changes are listed too.
-A test fn is keyed by its name and its place among fns of that name in the file.
-Exit 0; 2 on bad arguments.
+Test code is a file under a tests/ dir, a file that a test-only `mod NAME;` declares, and the item after a
+test-only attribute: #[test], #[tokio::test], or a #[cfg(P)] whose P holds only in a test build (test,
+all(..., test, ...), any(test, ...) with test-only arguments; not(test) is production). An item with an item
+keyword (fn, mod, impl, use, let, ...) ends at the `;` or `}` that closes it. A field, a variant, a match arm
+or a parameter (no item keyword) also ends at a `,`. Any item ends before a close bracket that takes the depth
+below 0 (the struct, literal or match that holds it closes there). Only (), [] and {} are brackets, so a
+field type split over lines inside <...> ends early. A test fn is a #[test] fn or the fn of a test macro
+call (`child_test! { fn name() {...} }`). Comments, strings and char literals do not count toward the
+brackets. Production lines of a hunk are counted per file and not listed; with --all, files with only
+production changes are listed too. A test fn is keyed by its name and its place among fns of that name in
+the file.
+
+selftest checks these rules on small Rust cases (the regions, the test fns, the test-only mod declarations)
+and prints one line per case.
+Exit 0; 1 when a selftest case fails; 2 on bad arguments.
 """
 import re
 import subprocess
 import sys
 
-ATTR = re.compile(r"#\[\s*(?:cfg\s*\(\s*(?:test\s*\)|all\s*\((?:[^]]*?[(,]\s*)?test\s*[,)])|(?:[\w:]+::)?test\s*\])")
 TEST_FN_ATTR = re.compile(r"#\[\s*(?:[\w:]+::)?test\s*\]")
 FN = re.compile(r"\bfn\s+(\w+)")
 ITEM_NAME = re.compile(
@@ -37,9 +46,14 @@ STRUCTURE = re.compile(r"^\s*(?:#\[.*\]|(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{|
 TEST_MACRO = re.compile(r"(?m)^\s*\w*test!\s*\{")
 # A #[cfg(test)] mod with a body: its items are the top test items.
 MOD_ITEM = re.compile(r"(?:#\[[^\]]*\]\s*)+(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
-MOD_DECL = re.compile(
-    r"#\[\s*cfg\s*\(\s*(?:test\s*\)|all\s*\([^]]*\btest\b[^]]*)\]\s*"
-    r"(?:#\[\s*path\s*=\s*\"([^\"]+)\"\s*\]\s*)?(?:#\[[^]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;"
+# Attributes, then a `mod NAME;` declaration.
+MOD_DECL = re.compile(r"((?:#\[[^]]*\]\s*)+)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;")
+PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
+CFG_ATTR = re.compile(r"#\[\s*cfg\s*\(")
+# The first word of an item that is not a field, a variant, a match arm or a parameter.
+ITEM_KEYWORD = re.compile(
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?"
+    r"(?:fn|mod|impl|struct|enum|trait|const|static|type|use|let|macro_rules|extern|async|unsafe)\b"
 )
 
 
@@ -106,32 +120,95 @@ def mask(text):
     return "".join(out)
 
 
+def split_args(text):
+    """The comma-separated arguments of a cfg predicate list, split at bracket depth 0."""
+    args, depth, cur = [], 0, []
+    for c in text:
+        depth += c in "([{"
+        depth -= c in ")]}"
+        if c == "," and depth == 0:
+            args.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+    args.append("".join(cur))
+    return [a.strip() for a in args if a.strip()]
+
+
+def test_only(pred):
+    """True when the cfg predicate `pred` holds only in a test build."""
+    m = re.fullmatch(r"(all|any)\s*\((.*)\)", pred.strip(), re.S)
+    if not m:
+        return pred.strip() == "test"
+    args = [test_only(a) for a in split_args(m.group(2))]
+    return any(args) if m.group(1) == "all" else bool(args) and all(args)
+
+
+def close_of(code, i):
+    """Offset after the bracket that closes the open bracket at `i`."""
+    depth, n = 0, len(code)
+    while i < n:
+        depth += code[i] in "([{"
+        depth -= code[i] in ")]}"
+        i += 1
+        if depth == 0:
+            break
+    return i
+
+
+def is_test_attr(code, i):
+    """True when the attribute at `i` (its `#`) makes the next item test code."""
+    if TEST_FN_ATTR.match(code, i):
+        return True
+    m = CFG_ATTR.match(code, i)
+    return bool(m) and test_only(code[m.end() : close_of(code, m.end() - 1) - 1])
+
+
+def skip_attributes(code, i):
+    """Offset of the first word after the whitespace and attributes at `i`."""
+    n = len(code)
+    while True:
+        while i < n and code[i].isspace():
+            i += 1
+        if not code.startswith("#[", i):
+            return i
+        i = close_of(code, i + 1)
+
+
 def item_end(code, start):
-    """Offset after the item that starts at `start` (its attributes first): at the `;` or `}` that closes it."""
-    i, n, depth = start, len(code), 0
+    """Offset after the item that starts at `start` (its attributes first). See the help for the rules."""
+    i, n, depth = skip_attributes(code, start), len(code), 0
+    field = not ITEM_KEYWORD.match(code, i)
     while i < n:
         c = code[i]
-        if c == "#" and depth == 0 and code.startswith("[", i + 1):
-            # An attribute: skip its brackets.
-            d, j = 0, i + 1
-            while j < n:
-                d += code[j] == "["
-                d -= code[j] == "]"
-                j += 1
-                if d == 0:
-                    break
-            i = j
-            continue
         if c in "([{":
             depth += 1
         elif c in ")]}":
             depth -= 1
+            if depth < 0:
+                # The bracket closes the item's holder: the item ends at its last code character.
+                while code[i - 1].isspace():
+                    i -= 1
+                return i
             if depth == 0 and c == "}":
                 return i + 1
-        elif c == ";" and depth == 0:
+        elif depth == 0 and (c == ";" or c == "," and field):
             return i + 1
         i += 1
     return n
+
+
+def declared_test_mods(text):
+    """(path attribute or None, name) of each test-only `mod NAME;` declaration in `text`."""
+    code, out = mask(text), []
+    for m in MOD_DECL.finditer(code):
+        attrs = m.group(1)
+        if not any(is_test_attr(attrs, a.start()) for a in re.finditer(r"#\[", attrs)):
+            continue
+        # mask() blanks the path string: read it from the text at the same offsets.
+        path = PATH_ATTR.search(text, m.start(1), m.end(1))
+        out.append((path.group(1) if path else None, m.group(2)))
+    return out
 
 
 class Rust:
@@ -158,8 +235,7 @@ class Rust:
         self.fns = {}  # key -> (first line, last line), 0-based
         seen = {}
         for m in re.finditer(r"#\[", code):
-            attr = ATTR.match(code, m.start())
-            if not attr:
+            if not is_test_attr(code, m.start()):
                 continue
             end = item_end(code, m.start())
             a, b = line_of(m.start()), line_of(end - 1)
@@ -243,24 +319,112 @@ def test_module_files(cwd, rev):
         stem = path.rsplit("/", 1)[1][:-3]
         # A mod.rs, lib.rs, main.rs or *_root.rs declares children in its own dir; other files in dir/stem.
         own = stem in ("mod", "lib", "main") or stem.endswith("_root")
-        for m in MOD_DECL.finditer(mask(text)):
-            # mask() blanks the path string: read it from the text at the same offsets.
-            raw = MOD_DECL.match(text, m.start())
-            if raw and raw.group(1):
-                out.add(f"{directory}/{raw.group(1)}")
+        for path_attr, name in declared_test_mods(text):
+            if path_attr:
+                out.add(f"{directory}/{path_attr}")
                 continue
             base = directory if own else f"{directory}/{stem}"
-            out.add(f"{base}/{m.group(2)}.rs")
-            out.add(f"{base}/{m.group(2)}/mod.rs")
+            out.add(f"{base}/{name}.rs")
+            out.add(f"{base}/{name}/mod.rs")
             # A flat layout (scanner_util.rs declares scanner_test next to it).
-            out.add(f"{directory}/{m.group(2)}.rs")
+            out.add(f"{directory}/{name}.rs")
     return out
+
+
+# selftest cases: (name, Rust text, the 1-based lines that are test code, the test fn keys).
+SELFTEST = [
+    (
+        "a cfg(test) field ends at its comma; the next impl is production",
+        "struct Q {\n    a: u32,\n    #[cfg(test)]\n    stop_early: bool,\n}\n\nimpl Q {\n    fn stop(&self) {\n        go();\n    }\n}\n",
+        {3, 4},
+        [],
+    ),
+    (
+        "a cfg(test) last field without a comma ends before the struct's brace",
+        "struct Q {\n    a: u32,\n    #[cfg(test)]\n    stop_early: bool\n}\nfn after() {\n    go();\n}\n",
+        {3, 4},
+        [],
+    ),
+    (
+        "a cfg(test) field of a struct literal",
+        "fn make() -> Q {\n    Q {\n        a: 1,\n        #[cfg(test)]\n        stop_early: false,\n    }\n}\nfn wait_done() {\n    go();\n}\n",
+        {4, 5},
+        [],
+    ),
+    (
+        "a cfg(test) match arm ends at its comma",
+        "fn f(x: u32) -> u32 {\n    match x {\n        #[cfg(test)]\n        7 => g(1, 2),\n        _ => 0,\n    }\n}\n",
+        {3, 4},
+        [],
+    ),
+    (
+        "a cfg(test) let with a comma in its type ends at its semicolon",
+        "fn f() {\n    #[cfg(test)]\n    let m: Map<A,\n        B> = Map::new();\n    go();\n}\n",
+        {2, 3, 4},
+        [],
+    ),
+    (
+        "a cfg(test) impl with two generic parameters runs to its closing brace",
+        "#[cfg(test)]\nimpl<A, B> T for X<A, B> {\n    fn t(&self) {}\n}\nfn prod() {}\n",
+        {1, 2, 3, 4},
+        [],
+    ),
+    (
+        "all(..., not(test)) and any(test, ...) are production; all(test, ...) is test",
+        "#[cfg(all(target_family = \"wasm\", not(test)))]\nfn wasm_only() {}\n"
+        "#[cfg(any(test, feature = \"x\"))]\nfn maybe() {}\n"
+        "#[cfg(all(unix, test))]\nfn helper() {}\n#[cfg(not(test))]\nfn real() {}\n",
+        {5, 6},
+        [],
+    ),
+    (
+        "a cfg(test) mod with #[test] fns; a comment above a test belongs to it",
+        "fn prod() {}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    // checks a\n    #[test]\n    fn a() {\n        assert!(true, \"{}\", 1);\n    }\n\n    #[test]\n    fn a2() {}\n}\n",
+        set(range(3, 16)),
+        ["a", "a2"],
+    ),
+    (
+        "a test macro declares one test fn",
+        "child_test! {\n    fn from_macro() {\n        run(1, 2);\n    }\n}\nfn prod() {}\n",
+        {1, 2, 3, 4, 5},
+        ["from_macro"],
+    ),
+]
+
+# selftest cases for test-only `mod NAME;` declarations: (Rust text, the (path, name) pairs).
+SELFTEST_MODS = [
+    ("#[cfg(test)]\n#[path = \"x_test.rs\"]\nmod x_test;\n", [("x_test.rs", "x_test")]),
+    ("#[cfg(all(unix, test))]\npub(crate) mod y_test;\n", [(None, "y_test")]),
+    ("#[cfg(all(target_family = \"wasm\", not(test)))]\nmod host;\n#[cfg(feature = \"x\")]\nmod z;\n", []),
+]
+
+
+def selftest():
+    """Runs the SELFTEST cases; 0 when all pass."""
+    failed = 0
+    for name, text, lines, fns in SELFTEST:
+        r = Rust(text, False)
+        got = {k + 1 for k, t in enumerate(r.test) if t}
+        ok = got == lines and list(r.fns) == fns
+        failed += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {name}")
+        if not ok:
+            print(f"     test lines {sorted(got)} (want {sorted(lines)}), fns {list(r.fns)} (want {fns})")
+    for text, want in SELFTEST_MODS:
+        got = declared_test_mods(text)
+        ok = got == want
+        failed += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} test mods of {text.splitlines()[0]}: {got}")
+    print(f"selftest: {len(SELFTEST) + len(SELFTEST_MODS) - failed} ok, {failed} failed")
+    return 1 if failed else 0
 
 
 def main(argv):
     if argv[:1] in (["help"], ["-h"], ["--help"]):
         print(__doc__.strip())
         return 0
+    if argv[:1] == ["selftest"]:
+        return selftest()
     base, head, show_all, cwd = "origin/main", "HEAD", False, "."
     args = list(argv)
     while args:
