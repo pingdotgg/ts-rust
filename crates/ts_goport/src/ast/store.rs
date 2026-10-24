@@ -2709,18 +2709,17 @@ fn identifier_name(names: &mut IdentNames, text: &str) -> (Name, bool) {
     {
         return found;
     }
-    identifier_name_slow(names, text)
+    identifier_name_slow(names, text, key)
 }
 
-/// `identifier_name` of a text that `IdentNames::find_whole` did not find:
-/// a text over `IdentKey::WHOLE` bytes (found with a text compare) or a text
-/// that is not in the cache (interned, then put in).
+/// `identifier_name` of a text (key `key`) that `IdentNames::find_whole` did
+/// not find: a text over `IdentKey::WHOLE` bytes (found with a text compare)
+/// or a text that is not in the cache (interned, then put in).
 #[cold]
 #[inline(never)]
-fn identifier_name_slow(names: &mut IdentNames, text: &str) -> (Name, bool) {
-    let key = IdentKey::new(text.as_bytes());
+fn identifier_name_slow(names: &mut IdentNames, text: &str, key: IdentKey) -> (Name, bool) {
     if key.len > IdentKey::WHOLE
-        && let Some(found) = names.find(key, text)
+        && let Some(found) = names.find_long(key, text)
     {
         return found;
     }
@@ -2815,11 +2814,12 @@ struct IdentEntry {
 const IDENT_KEYWORD: u32 = 1 << 31;
 
 impl IdentEntry {
-    /// True when this entry holds the text `text`, whose key is `key`.
+    /// True when this entry holds the text `text`, whose key is `key`. The
+    /// text is compared too, so this is right for a text of any length
+    /// (`holds_key` is enough for at most `IdentKey::WHOLE` bytes).
     #[inline]
     fn holds(&self, key: IdentKey, text: &str) -> bool {
-        self.holds_key(key)
-            && (key.len <= IdentKey::WHOLE || Name::from_id(self.id).as_str() == text)
+        self.holds_key(key) && Name::from_id(self.id).as_str() == text
     }
 
     /// True when this entry has the key `key`: it holds the text of `key`
@@ -2882,8 +2882,10 @@ const IDENT_MAX_SETS: usize = 1 << 15;
 
 impl IdentNames {
     /// The name and keyword bit of `text` (key `key`) when the table has it.
+    /// For a text over `IdentKey::WHOLE` bytes: a shorter one uses
+    /// `find_whole`, which compares no text.
     #[inline]
-    fn find(&mut self, key: IdentKey, text: &str) -> Option<(Name, bool)> {
+    fn find_long(&mut self, key: IdentKey, text: &str) -> Option<(Name, bool)> {
         let set = self.sets.get_mut((key.set_hash() >> self.shift) as usize)?;
         let [first, second] = &mut set.0;
         if first.holds(key, text) {
@@ -2896,8 +2898,8 @@ impl IdentNames {
         None
     }
 
-    /// `find` of a text of at most `IdentKey::WHOLE` bytes, whose key is the
-    /// whole text: no text compare.
+    /// `find_long` of a text of at most `IdentKey::WHOLE` bytes, whose key is
+    /// the whole text: no text compare.
     #[inline]
     fn find_whole(&mut self, key: IdentKey) -> Option<(Name, bool)> {
         debug_assert!(key.len <= IdentKey::WHOLE);
