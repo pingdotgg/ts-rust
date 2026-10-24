@@ -417,6 +417,8 @@ impl BuildHost {
     /// the same file, so the output does not change. A bundled lib never
     /// changes. A `.d.ts` or `.json` file comes here through `source_files`
     /// (`get_source_file`), so in one cycle only its first parse comes here.
+    /// Each kept parse given here is one that Go parses again, so its
+    /// symbols get the ids of a new parse (`program::note_replayed_parse`).
     fn watch_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
         let key = SourceFileCacheKey(opts.clone());
         let fixed = crate::frontend::bundled::is_bundled(&opts.file_name);

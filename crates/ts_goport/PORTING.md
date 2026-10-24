@@ -601,6 +601,20 @@ The batch that adds it is not accepted until Theo approves.
   workers parse ahead in the first build and in the cycles with a config
   change or an overflow (`BuildHost::prefetch`); they skip the kept
   parses, as in `tsc --watch`.
+  Go's new parse makes new symbols with no ids, and its bind gives each
+  class with private names a new global id, so the symbol id counters
+  count on (watchreset1r, option R). Where the host gives a kept parse
+  and Go parses again (a `.ts` or `.js` file in each program that loads
+  it, a `.d.ts` or `.json` file in the first program of a cycle that
+  loads it), it notes the file (`program::note_replayed_parse`). The
+  program that takes the note forgets the lineage ids of the file's
+  symbols before its bind (`ast::forget_lineage_symbol_ids`), and gives
+  its private name classes ids with those of the unbound files, in Go's
+  bind order (`program::bind_all`). The checkers then give those symbols
+  ids again, as Go's do. The carry of a checker pool made before a forget
+  keeps none of its ids of the forgotten ranges, but counts them
+  (`ast::carry_symbol_ids`). Option A (parse again, as Go) gave the same
+  ids but cost 26 to 39% of the watch cycle wall (after231/watchreset1).
   A task keeps the versions that its errors point at until its next build
   or a reset of its status (`BuildTask::held_file_versions`). A file
   version's parse holds it (`ParsedSourceFile::version`), and so do the
