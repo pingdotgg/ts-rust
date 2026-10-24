@@ -2073,12 +2073,23 @@ impl Checker {
     ) -> bool {
         debug_assert_eq!(stack.len(), ids.len());
         debug_assert!(probe_id.is_none() || probe_id == self.stack_recursion_id(t));
+        // PROBE bunrcount1
+        let bunr = bunrcount::on();
+        if bunr {
+            bunrcount::add(bunrcount::K::dn_inner_calls, 1);
+        }
         if stack.len() as i32 >= max_depth {
             let identity = match probe_id {
                 Some(id) => id,
                 None => {
+                    if bunr {
+                        bunrcount::add(bunrcount::K::dn_probe_noid, 1);
+                    }
                     let target = self.get_recursion_identity_target(t);
                     if self.ty(target).flags.intersects(TypeFlags::INTERSECTION) {
+                        if bunr {
+                            bunrcount::add(bunrcount::K::dn_probe_inter, 1);
+                        }
                         for i in 0..self.ty(target).types().len() {
                             if self.is_deeply_nested_type_with_ids(
                                 self.type_at(target, i),
@@ -2098,11 +2109,24 @@ impl Checker {
             let mut count: i32 = 0;
             let mut last_type_id = TypeId(0);
             for (&t, &id) in stack.iter().zip(ids) {
+                if bunr {
+                    bunrcount::add(bunrcount::K::dn_walk, 1);
+                    match id {
+                        Some(_) => bunrcount::add(bunrcount::K::dn_walk_id, 1),
+                        None => {
+                            bunrcount::add(bunrcount::K::dn_walk_noid, 1);
+                            bunrcount::add(bunrcount::K::dn_hmri, 1);
+                        }
+                    }
+                }
                 let matching = match id {
                     Some(id) => id == identity,
                     None => self.has_matching_recursion_identity(t, identity),
                 };
                 if matching {
+                    if bunr {
+                        bunrcount::add(bunrcount::K::dn_match, 1);
+                    }
                     // We only count occurrences with a higher type id than the previous occurrence, since higher
                     // type ids are an indicator of newer instantiations caused by recursion.
                     let id = t;
@@ -2132,6 +2156,16 @@ impl Checker {
         ids: &mut Vec<Option<RecursionId>>,
         max_depth: i32,
     ) -> bool {
+        // PROBE bunrcount1
+        let bunr_site = if bunrcount::on() {
+            bunrcount::deep_call(
+                stack.len(),
+                max_depth,
+                stack.len() - ids.len().min(stack.len()),
+            )
+        } else {
+            0
+        };
         if (stack.len() as i32) < max_depth {
             return false;
         }
@@ -2144,7 +2178,11 @@ impl Checker {
             (Some(&top), Some(&id)) if top == t => id,
             _ => self.stack_recursion_id(t),
         };
-        self.is_deeply_nested_type_with_ids(t, probe_id, stack, ids, max_depth)
+        let result = self.is_deeply_nested_type_with_ids(t, probe_id, stack, ids, max_depth);
+        if result && bunrcount::on() {
+            bunrcount::deep_true(bunr_site);
+        }
+        result
     }
 
     // Go: checker/relater.go:797 hasMatchingRecursionIdentity
@@ -2370,6 +2408,269 @@ mod tests {
             }
             let got = relation.get(key);
             assert_eq!(got, want.get(&key).copied().unwrap_or_default());
+        }
+    }
+}
+
+/// PROBE bunrcount1 (never merged): event counters for the deepnest1,
+/// thisarg1 and crossdead1 studies
+/// (target/continuation-r97-goport/bunrefresh1/plan.md section 3). The Go
+/// copy in target/continuation-r97-goport/bunsteal8/bunrcount1/go counts the
+/// same events. `GOPORT_BUNRCOUNT=<path>` turns them on, and `dump` (called
+/// by bin/tsgo.rs `exit`) writes `<path>.rs.<pid>`. The counters read only
+/// data that the checker has already computed, so the output does not change.
+pub mod bunrcount {
+    use std::io::Write;
+    use std::sync::LazyLock;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    static PATH: LazyLock<Option<std::ffi::OsString>> =
+        LazyLock::new(|| std::env::var_os("GOPORT_BUNRCOUNT"));
+
+    #[inline]
+    pub fn on() -> bool {
+        PATH.is_some()
+    }
+
+    macro_rules! counters {
+        ($($name:ident),* $(,)?) => {
+            #[allow(non_camel_case_types)]
+            #[derive(Clone, Copy)]
+            #[repr(usize)]
+            pub enum K { $($name),*, COUNT }
+            const NAMES: &[&str] = &[$(stringify!($name)),*];
+        };
+    }
+
+    counters!(
+        // Deep nesting, relater path. Site 1 and 2: recursiveTypeRelatedTo
+        // (source, target; max depth 3). Site 3: conditional target, site 4:
+        // conditional source (max depth 10).
+        dn_calls_1,
+        dn_calls_2,
+        dn_calls_3,
+        dn_calls_4,
+        dn_scan_1,
+        dn_scan_2,
+        dn_scan_3,
+        dn_scan_4,
+        dn_true_1,
+        dn_true_2,
+        dn_true_3,
+        dn_true_4,
+        dn_calls_other,
+        // The id fills (port only), the calls of isDeeplyNestedType from the
+        // scans (with the intersection probe recursion), probes whose target
+        // is an intersection, probes with no id, the entries walked and the
+        // walked entries with and without a recursion id (the port's
+        // `stack_recursion_id` rule).
+        dn_fill,
+        dn_inner_calls,
+        dn_probe_inter,
+        dn_probe_noid,
+        dn_walk,
+        dn_walk_id,
+        dn_walk_noid,
+        dn_hmri,
+        dn_match,
+        // getTypeWithThisArgument: all calls, the reference branch, the
+        // reference calls that make a reference, the intersection branch,
+        // a nil this-argument in a made reference, made references whose
+        // type arguments were resolved, repeats of the same (type, this) in
+        // the last 4 and 16 made references, the hits of a 256-slot
+        // direct-mapped memo (stored only when resolved), and a checksum of
+        // the (type, this) ids.
+        ta_calls,
+        ta_ref,
+        ta_make,
+        ta_inter,
+        ta_nil_this,
+        ta_storable,
+        ta_rep4,
+        ta_rep16,
+        ta_memo256_hit,
+        ta_sum,
+        // getCrossProductIntersections: calls, rows, row members, rows with no
+        // object and no intersection member, never rows, never rows with no
+        // object or intersection member and their members, and the never
+        // exit of getIntersectionTypeEx for both (1 includes never, 2 the
+        // disjoint domain test, 3 template literals, 4 no strictNullChecks,
+        // 5 the type variable constraint, 0 later or other).
+        cx_calls,
+        cx_rows,
+        cx_members,
+        cx_rows_noobj,
+        cx_rows_never,
+        cx_rows_never_noobj,
+        cx_members_never_noobj,
+        cx_never_exit0,
+        cx_never_exit1,
+        cx_never_exit2,
+        cx_never_exit3,
+        cx_never_exit4,
+        cx_never_exit5,
+        cx_nn_exit0,
+        cx_nn_exit1,
+        cx_nn_exit2,
+        cx_nn_exit3,
+        cx_nn_exit4,
+        cx_nn_exit5,
+        ix_calls,
+    );
+
+    static C: [AtomicU64; K::COUNT as usize] = [const { AtomicU64::new(0) }; K::COUNT as usize];
+    // Stack length at a scan (101: longer).
+    static HIST: [AtomicU64; 102] = [const { AtomicU64::new(0) }; 102];
+    static SITE: AtomicU64 = AtomicU64::new(0);
+    static IX_LAST: Mutex<(u64, u64)> = Mutex::new((0, 0));
+
+    #[inline]
+    pub fn add(k: K, n: u64) {
+        C[k as usize].fetch_add(n, Relaxed);
+    }
+
+    fn at(base: K, offset: usize) -> usize {
+        base as usize + offset
+    }
+
+    /// Sets the call site (1 to 4) of the next `is_deeply_nested_relater_type`.
+    #[inline]
+    pub fn site(n: u64) {
+        if on() {
+            SITE.store(n, Relaxed);
+        }
+    }
+
+    /// Counts a call of `is_deeply_nested_relater_type`; returns its site.
+    pub fn deep_call(stack_len: usize, max_depth: i32, fill: usize) -> usize {
+        let s = SITE.swap(0, Relaxed) as usize;
+        if s == 0 {
+            add(K::dn_calls_other, 1);
+            return 0;
+        }
+        C[at(K::dn_calls_1, s - 1)].fetch_add(1, Relaxed);
+        if stack_len as i32 >= max_depth {
+            C[at(K::dn_scan_1, s - 1)].fetch_add(1, Relaxed);
+            HIST[stack_len.min(101)].fetch_add(1, Relaxed);
+            add(K::dn_fill, fill as u64);
+        }
+        s
+    }
+
+    pub fn deep_true(s: usize) {
+        if s != 0 {
+            C[at(K::dn_true_1, s - 1)].fetch_add(1, Relaxed);
+        }
+    }
+
+    struct Ta {
+        ring: [(u32, u32); 16],
+        n: usize,
+        memo: [(u32, u32); 256],
+    }
+
+    static TA: Mutex<Ta> = Mutex::new(Ta {
+        ring: [(0, 0); 16],
+        n: 0,
+        memo: [(0, 0); 256],
+    });
+
+    /// A made reference of `get_type_with_this_argument` for `(t, this)`
+    /// (`this` as passed: 0 for nil).
+    pub fn this_arg(t: u32, this: u32, storable: bool) {
+        add(K::ta_make, 1);
+        if this == 0 {
+            add(K::ta_nil_this, 1);
+        }
+        if storable {
+            add(K::ta_storable, 1);
+        }
+        add(
+            K::ta_sum,
+            (t as u64).wrapping_mul(31).wrapping_add(this as u64),
+        );
+        let key = (t, this);
+        let mut ta = TA.lock().unwrap();
+        let filled = ta.n.min(16);
+        for i in 0..filled {
+            if ta.ring[(ta.n - 1 - i) % 16] == key {
+                if i < 4 {
+                    add(K::ta_rep4, 1);
+                }
+                add(K::ta_rep16, 1);
+                break;
+            }
+        }
+        let n = ta.n;
+        ta.ring[n % 16] = key;
+        ta.n += 1;
+        let slot =
+            ((t.wrapping_mul(0x9E37_79B1) ^ this.wrapping_mul(0x85EB_CA77)) >> 24) as usize & 255;
+        if ta.memo[slot] == key {
+            add(K::ta_memo256_hit, 1);
+        } else if storable {
+            ta.memo[slot] = key;
+        }
+    }
+
+    /// Entry of `get_intersection_type_ex`: its serial number.
+    pub fn ix_enter() -> u64 {
+        C[K::ix_calls as usize].fetch_add(1, Relaxed) + 1
+    }
+
+    /// The serial number of the next `get_intersection_type_ex` call.
+    pub fn ix_next() -> u64 {
+        C[K::ix_calls as usize].load(Relaxed) + 1
+    }
+
+    /// A never exit `k` of the `get_intersection_type_ex` call `serial`.
+    pub fn ix_never(serial: u64, k: u64) {
+        if serial != 0 {
+            *IX_LAST.lock().unwrap() = (serial, k);
+        }
+    }
+
+    /// A cross-product row: `serial` from `ix_next`.
+    pub fn cross_row(serial: u64, members: usize, noobj: bool, never: bool) {
+        add(K::cx_members, members as u64);
+        if noobj {
+            add(K::cx_rows_noobj, 1);
+        }
+        if !never {
+            return;
+        }
+        let (s, k) = *IX_LAST.lock().unwrap();
+        let exit = if s == serial { k as usize } else { 0 };
+        add(K::cx_rows_never, 1);
+        C[at(K::cx_never_exit0, exit)].fetch_add(1, Relaxed);
+        if noobj {
+            add(K::cx_rows_never_noobj, 1);
+            add(K::cx_members_never_noobj, members as u64);
+            C[at(K::cx_nn_exit0, exit)].fetch_add(1, Relaxed);
+        }
+    }
+
+    /// Writes the counters to `<GOPORT_BUNRCOUNT>.rs.<pid>`, one `name value`
+    /// line each, then the stack length histogram (`dn_len_<n>`).
+    pub fn dump() {
+        let Some(path) = PATH.as_ref() else {
+            return;
+        };
+        let mut p = path.clone();
+        p.push(format!(".rs.{}", std::process::id()));
+        let mut out = String::new();
+        for (i, name) in NAMES.iter().enumerate() {
+            out.push_str(&format!("{name} {}\n", C[i].load(Relaxed)));
+        }
+        for (i, h) in HIST.iter().enumerate() {
+            let v = h.load(Relaxed);
+            if v != 0 {
+                out.push_str(&format!("dn_len_{i} {v}\n"));
+            }
+        }
+        if let Ok(mut f) = std::fs::File::create(&p) {
+            let _ = f.write_all(out.as_bytes());
         }
     }
 }

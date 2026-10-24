@@ -109,7 +109,21 @@ impl Checker {
         need_apparent_type: bool,
     ) -> TypeId {
         let mut this_argument = this_argument;
+        // PROBE bunrcount1
+        let bunr = crate::checker::relater_p1::bunrcount::on();
+        if bunr {
+            crate::checker::relater_p1::bunrcount::add(
+                crate::checker::relater_p1::bunrcount::K::ta_calls,
+                1,
+            );
+        }
         if self.ty(t).object_flags.intersects(ObjectFlags::REFERENCE) {
+            if bunr {
+                crate::checker::relater_p1::bunrcount::add(
+                    crate::checker::relater_p1::bunrcount::K::ta_ref,
+                    1,
+                );
+            }
             let target = self.ty(t).target();
             let type_parameter_count = self.ty(target).as_interface_type().type_parameters().len();
             let args = {
@@ -126,6 +140,14 @@ impl Checker {
                 })
             };
             if let Some(mut args) = args {
+                if bunr {
+                    let storable = !self
+                        .ty(t)
+                        .as_type_reference()
+                        .resolved_type_arguments
+                        .is_nil();
+                    crate::checker::relater_p1::bunrcount::this_arg(t.0, this_argument.0, storable);
+                }
                 if this_argument.is_nil() {
                     this_argument = self.ty(target).as_interface_type().this_type;
                 }
@@ -134,6 +156,12 @@ impl Checker {
             }
             return t;
         } else if self.ty(t).flags.intersects(TypeFlags::INTERSECTION) {
+            if bunr {
+                crate::checker::relater_p1::bunrcount::add(
+                    crate::checker::relater_p1::bunrcount::K::ta_inter,
+                    1,
+                );
+            }
             // PORT: Go `core.SameMap` + `core.Same` is "no element changed"
             // (`None`) here.
             let count = self.ty(t).types().len();

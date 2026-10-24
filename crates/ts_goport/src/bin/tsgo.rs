@@ -864,6 +864,8 @@ fn end_by_signal(signal: i32) {
 /// worker (see `launch`) flushes stdout and sends the code (`send_code`).
 /// On Windows it hands the code to the main thread (`windows_exit`).
 fn exit(code: i32) -> ! {
+    // PROBE bunrcount1
+    ts_goport::checker::relater_p1::bunrcount::dump();
     #[cfg(target_os = "linux")]
     if let Some(worker) = worker() {
         let _ = std::io::stdout().flush();

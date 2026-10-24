@@ -39,6 +39,12 @@ impl Checker {
         flags: IntersectionFlags,
         alias: Option<Rc<TypeAlias>>,
     ) -> TypeId {
+        // PROBE bunrcount1
+        let bunr_serial = if crate::checker::relater_p1::bunrcount::on() {
+            crate::checker::relater_p1::bunrcount::ix_enter()
+        } else {
+            0
+        };
         let mut type_set = TypeSet::with_capacity(types.len());
         let includes = self.add_types_to_intersection(&mut type_set, TypeFlags::NONE, types);
         let mut object_flags = ObjectFlags::NONE;
@@ -52,6 +58,7 @@ impl Checker {
         // a void-like type and a type known to be non-void-like, or
         // a non-primitive type and a type known to be primitive.
         if includes.intersects(TypeFlags::NEVER) {
+            crate::checker::relater_p1::bunrcount::ix_never(bunr_serial, 1);
             if type_set.contains(&self.silent_never_type) {
                 return self.silent_never_type;
             }
@@ -76,6 +83,7 @@ impl Checker {
             || includes.intersects(TypeFlags::VOID_LIKE)
                 && includes.intersects(dd.without(TypeFlags::VOID_LIKE))
         {
+            crate::checker::relater_p1::bunrcount::ix_never(bunr_serial, 2);
             return self.never_type;
         }
         if includes.intersects(TypeFlags::TEMPLATE_LITERAL | TypeFlags::STRING_MAPPING)
@@ -83,6 +91,7 @@ impl Checker {
         {
             let is_empty_set = self.extract_redundant_template_literals(&mut type_set);
             if is_empty_set {
+                crate::checker::relater_p1::bunrcount::ix_never(bunr_serial, 3);
                 return self.never_type;
             }
         }
@@ -97,6 +106,7 @@ impl Checker {
         }
         if !self.strict_null_checks && includes.intersects(TypeFlags::NULLABLE) {
             if includes.intersects(TypeFlags::INCLUDES_EMPTY_OBJECT) {
+                crate::checker::relater_p1::bunrcount::ix_never(bunr_serial, 4);
                 return self.never_type;
             }
             if includes.intersects(TypeFlags::UNDEFINED) {
@@ -181,6 +191,7 @@ impl Checker {
                         // then the constraint and P are unrelated, and the intersection reduces to never. For example, given
                         // `T extends "a" | "b"`, the intersection `T & number` reduces to never.
                         if !self.is_type_strict_subtype_of(primitive_type, constraint) {
+                            crate::checker::relater_p1::bunrcount::ix_never(bunr_serial, 5);
                             return self.never_type;
                         }
                     }
@@ -602,6 +613,16 @@ impl Checker {
         flags: IntersectionFlags,
     ) -> Vec<TypeId> {
         let count = self.get_cross_product_union_size(types);
+        if crate::checker::relater_p1::bunrcount::on() {
+            crate::checker::relater_p1::bunrcount::add(
+                crate::checker::relater_p1::bunrcount::K::cx_calls,
+                1,
+            );
+            crate::checker::relater_p1::bunrcount::add(
+                crate::checker::relater_p1::bunrcount::K::cx_rows,
+                count as u64,
+            );
+        }
         let mut intersections: Vec<TypeId> = Vec::new();
         for i in 0..count {
             let mut constituents = types.to_vec();
@@ -617,7 +638,27 @@ impl Checker {
                 }
                 j -= 1;
             }
+            // PROBE bunrcount1
+            let bunr_serial = if crate::checker::relater_p1::bunrcount::on() {
+                crate::checker::relater_p1::bunrcount::ix_next()
+            } else {
+                0
+            };
             let t = self.get_intersection_type_ex(&constituents, flags, None /*alias*/);
+            if bunr_serial != 0 {
+                let noobj = !constituents.iter().any(|&m| {
+                    self.ty(m)
+                        .flags
+                        .intersects(TypeFlags::OBJECT | TypeFlags::INTERSECTION)
+                });
+                let never = self.ty(t).flags.intersects(TypeFlags::NEVER);
+                crate::checker::relater_p1::bunrcount::cross_row(
+                    bunr_serial,
+                    constituents.len(),
+                    noobj,
+                    never,
+                );
+            }
             if !self.ty(t).flags.intersects(TypeFlags::NEVER) {
                 intersections.push(t);
             }

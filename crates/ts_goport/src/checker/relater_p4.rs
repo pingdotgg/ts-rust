@@ -746,6 +746,7 @@ impl Checker {
             let save_expanding_flags = rb.expanding_flags;
             if recursion_flags.intersects(RecursionFlags::SOURCE) {
                 rb.source_stack.push(source);
+                crate::checker::relater_p1::bunrcount::site(1); // PROBE bunrcount1
                 if !rb.expanding_flags.intersects(ExpandingFlags::SOURCE)
                     && self.is_deeply_nested_relater_type(
                         source,
@@ -759,6 +760,7 @@ impl Checker {
             }
             if recursion_flags.intersects(RecursionFlags::TARGET) {
                 rb.target_stack.push(target);
+                crate::checker::relater_p1::bunrcount::site(2); // PROBE bunrcount1
                 if !rb.expanding_flags.intersects(ExpandingFlags::TARGET)
                     && self.is_deeply_nested_relater_type(
                         target,
@@ -1598,6 +1600,7 @@ impl Checker {
             let nested = {
                 let mut guard = r.borrow_mut();
                 let rb = &mut *guard;
+                crate::checker::relater_p1::bunrcount::site(3); // PROBE bunrcount1
                 self.is_deeply_nested_relater_type(target, &rb.target_stack, &mut rb.target_ids, 10)
             };
             if nested {
@@ -1963,6 +1966,7 @@ impl Checker {
             let nested = {
                 let mut guard = r.borrow_mut();
                 let rb = &mut *guard;
+                crate::checker::relater_p1::bunrcount::site(4); // PROBE bunrcount1
                 self.is_deeply_nested_relater_type(source, &rb.source_stack, &mut rb.source_ids, 10)
             };
             if nested {
