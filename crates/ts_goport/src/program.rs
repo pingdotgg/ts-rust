@@ -1791,8 +1791,7 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // last-queued-first (`bind_files_last_queued_first`). A file that an
 // earlier program version bound is not bound again. The binds give no
 // symbol ids; the ids that Go's binds give come after them
-// (`give_private_name_class_ids`). Then the program is marked bound for its
-// include processor (`GoSharedState::mark_program_bound`).
+// (`give_private_name_class_ids`).
 pub fn bind_all() {
     let program = prog();
     let tables = held_tables(program);
@@ -1825,8 +1824,9 @@ pub fn bind_all() {
         });
         give_private_name_class_ids(&symbols, &unbound, program.single_threaded());
         // Every program file is bound now, by this program or an earlier
-        // one (a kept parse): the include processor may read the bound
-        // CommonJS indicator from here on.
+        // one (a kept parse): mark the program bound, so its include
+        // processor reads the bound CommonJS indicator from here on
+        // (`GoSharedState::mark_program_bound`).
         if let Some(go) = &tables.go {
             go.mark_program_bound();
         }
