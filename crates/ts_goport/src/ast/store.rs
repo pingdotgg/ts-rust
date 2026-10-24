@@ -6186,7 +6186,8 @@ impl NodeRef {
     }
 
     /// The column child `which` (`frozen_store_child`), else `None`.
-    #[inline]
+    // PERF: inlinefix1, as `frozen_store_child`.
+    #[inline(always)]
     fn column_child(self, which: StoreChild) -> Option<Node> {
         column_store_child(self.block?, self.node, which)
     }
@@ -6557,7 +6558,14 @@ pub fn frozen_store_modifier_flags(n: Node) -> Option<ModifierFlags> {
 /// `n.AsTypeReference().TypeName`. `None` when the entry is unknown and for
 /// any other node (nil, synthetic, unpublished): the caller reads
 /// the node data.
-#[inline]
+// PERF: inlinefix1. Always inline, here and in `column_store_child`: every
+// caller passes a constant `which`, and the match of `column_store_child`
+// folds to one arm. With `#[inline]` alone, LLVM kept an out-of-line copy
+// (with the whole match) in some 16-codegen-unit release builds after
+// unrelated changes moved code between units, and every `Node::expression`,
+// `type_` and `initializer` read paid for it (+0.3 to +0.9% instructions
+// in extchain1, linkgrow1 and pathsdiag1).
+#[inline(always)]
 #[must_use]
 pub fn frozen_store_child(n: Node, which: StoreChild) -> Option<Node> {
     if n.is_nil() {
@@ -6567,7 +6575,7 @@ pub fn frozen_store_child(n: Node, which: StoreChild) -> Option<Node> {
 }
 
 /// `frozen_store_child` in `b`, the block of `n`.
-#[inline]
+#[inline(always)]
 fn column_store_child(b: &FileBlock, n: Node, which: StoreChild) -> Option<Node> {
     let file = n.file_index();
     let kids = b.kids.get(slot_index(n))?;
