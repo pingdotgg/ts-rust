@@ -73,6 +73,22 @@ when the condition no longer holds.
 
 - `crates/ts_goport/src/flags.rs` holds Go's integer flag and enum consts, kept in step by hand.
   Compare it with `internal/{ast,binder,checker,core}` at the new pin.
+- Identity matching in inference (identmatch1) keeps each member's normalized type between the
+  pairs of one `inferFromMatchingTypes` call, so it holds second copies of Go code (Go lines at
+  `3e9236361fa9`): `infer_from_identical_types` (`checker/inference_p1.rs`) copies the loop of
+  `inferFromMatchingTypes` (inference.go:381, port `infer_from_matching_types`);
+  `is_type_identical_in_matching` (`checker/inference_p2.rs`) copies `isTypeRelatedTo`
+  (relater.go:169, port `is_type_related_to_kind` in `checker/relater_p1.rs`);
+  `is_normalized_type_identical_in_matching` copies the start of `isRelatedToEx`
+  (relater.go:2634-2665, port `is_related_to_ex` in `checker/relater_p3.rs`); and
+  `check_normalized_type_identical_to` copies `checkTypeRelatedToEx` (relater.go:358, port
+  `check_type_related_to_ex`) and the end of isRelatedToEx's identity branch (relater.go:2666).
+  Check: a Go change in any of these functions goes into both copies. The kept type is exact only
+  while a repeat of `getNormalizedType` (checker.go:28470) that makes something moves one of the
+  counts that `normalize_for_matching` compares (instantiations, types, symbols, signatures,
+  diagnostics), or emits only a tracer event (no type is kept with `--generateTrace`). If a new
+  step of `getNormalizedType` can make or change state that no count sees, add its count or drop
+  the slots.
 - `Checker::is_distribution_dependent` (`checker/relater_p5.rs`) keeps the answer of its first walk
   on the conditional root (chkperf3). That is exact only while the walk
   (`isTypeParameterPossiblyReferenced`, checker.go:22891 at `fed0bf24149f`) reads only state that

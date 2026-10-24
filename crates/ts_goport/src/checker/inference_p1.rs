@@ -664,14 +664,11 @@ impl Checker {
             // First, infer between identically matching source and target constituents and remove the
             // matching types.
             // PORT: perf. The shared list copies no elements.
+            // PORT: perf (identmatch1). Go calls inferFromMatchingTypes with isTypeOrBaseIdenticalTo and sort
+            // false. `infer_from_identical_types` is that call.
             let target_types = self.ty(target).types_list();
-            let (temp_sources, temp_targets) = self.infer_from_matching_types(
-                n,
-                source_types,
-                &target_types,
-                &mut |c: &mut Checker, s: TypeId, t: TypeId| c.is_type_or_base_identical_to(s, t),
-                false, /*sort*/
-            );
+            let (temp_sources, temp_targets) =
+                self.infer_from_identical_types(n, source_types, &target_types, true /*base*/);
             // Next, infer between closely matching source and target constituents and remove
             // the matching types. Types closely match when they are instantiations of the same
             // object type or instantiations of the same type alias.
@@ -715,13 +712,14 @@ impl Checker {
                         &single
                     };
                 // Infer between identically matching source and target constituents and remove the matching types.
+                // PORT: perf (identmatch1). Go calls inferFromMatchingTypes with isTypeIdenticalTo and sort
+                // false. `infer_from_identical_types` is that call.
                 let target_types = self.ty(target).types_list();
-                let (sources, targets) = self.infer_from_matching_types(
+                let (sources, targets) = self.infer_from_identical_types(
                     n,
                     source_types,
                     &target_types,
-                    &mut |c: &mut Checker, s: TypeId, t: TypeId| c.is_type_identical_to(s, t),
-                    false, /*sort*/
+                    false, /*base*/
                 );
                 if sources.is_empty() || targets.is_empty() {
                     return;
@@ -1459,20 +1457,68 @@ impl Checker {
                 }
             }
         }
-        // Copies the list once, without the matched types.
-        let unmatched = |list: &[TypeId], matched: &[TypeId]| -> SmallVec<[TypeId; 8]> {
-            if matched.is_empty() {
-                return SmallVec::from_slice(list);
-            }
-            list.iter()
-                .copied()
-                .filter(|t| !matched.contains(t))
-                .collect()
-        };
         (
-            unmatched(sources, &matched_sources),
-            unmatched(targets, &matched_targets),
+            Self::unmatched_types(sources, &matched_sources),
+            Self::unmatched_types(targets, &matched_targets),
         )
+    }
+
+    // Go: checker/inference.go:381 inferFromMatchingTypes with sort false and the matcher isTypeOrBaseIdenticalTo
+    // (`base`) or isTypeIdenticalTo. These are the two identity sites of inferFromTypes.
+    // PORT: perf (identmatch1). Go normalizes both members of a pair again at every pair that reaches
+    // isRelatedToEx, and keeps nothing between pairs. This loop gives each source index and the current target a
+    // slot for its normalized type (`normalize_for_matching`), used only inside this call. The pairs, their order,
+    // the first normalization of each member and the inferences stay Go's.
+    // Second copy: this repeats the loop of Go's inferFromMatchingTypes, whose port is `infer_from_matching_types`
+    // (above). A pin bump that changes inferFromMatchingTypes changes both (UPSTREAM.md, "Pin bump checks").
+    pub fn infer_from_identical_types(
+        &mut self,
+        n: &mut InferenceState,
+        sources: &[TypeId],
+        targets: &[TypeId],
+        base: bool,
+    ) -> (SmallVec<[TypeId; 8]>, SmallVec<[TypeId; 8]>) {
+        let mut matched_sources: SmallVec<[TypeId; 8]> = SmallVec::new();
+        let mut matched_targets: SmallVec<[TypeId; 8]> = SmallVec::new();
+        // The normalized source members (writing false), by index. A slot is NIL until it is kept.
+        let mut source_slots: SmallVec<[TypeId; 8]> =
+            SmallVec::from_elem(TypeId::NIL, sources.len());
+        for &t in targets {
+            // The normalized target (writing true) of this outer turn.
+            let mut target_slot = TypeId::NIL;
+            for (i, &s) in sources.iter().enumerate() {
+                let slots = (&mut source_slots[i], &mut target_slot);
+                let matched = if base {
+                    self.is_type_or_base_identical_to(s, t, slots)
+                } else {
+                    self.is_type_identical_in_matching(s, t, slots)
+                };
+                if matched {
+                    self.infer_from_types(n, s, t);
+                    if !matched_sources.contains(&s) {
+                        matched_sources.push(s);
+                    }
+                    if !matched_targets.contains(&t) {
+                        matched_targets.push(t);
+                    }
+                }
+            }
+        }
+        (
+            Self::unmatched_types(sources, &matched_sources),
+            Self::unmatched_types(targets, &matched_targets),
+        )
+    }
+
+    // The tail of inferFromMatchingTypes (inference.go:410): copies the list once, without the matched types.
+    fn unmatched_types(list: &[TypeId], matched: &[TypeId]) -> SmallVec<[TypeId; 8]> {
+        if matched.is_empty() {
+            return SmallVec::from_slice(list);
+        }
+        list.iter()
+            .copied()
+            .filter(|t| !matched.contains(t))
+            .collect()
     }
 
     // Compare two types first by depth and then by the regular type ordering.
