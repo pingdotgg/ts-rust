@@ -649,6 +649,15 @@ impl Checker {
     // shouldNormalizeIntersection) reads MembersResolved and does not resolve. So its answer for an anonymous type
     // goes from false to true when the type's members are first resolved and are empty, in a normalization or
     // between two pairs (identity relation, inferFromTypes). `empty_anonymous_resolves` counts these resolves.
+    // A resolve can also give a different answer for a short time, in a window that opens and closes in its own
+    // frame. In resolveAnonymousTypeMembers: the placeholder members (checker.go:21089,21099 setStructuredTypeMembers),
+    // and the module and class path from :21120 setStructuredTypeMembers until it sets the signatures. In
+    // getResolvedMembersOrExportsOfSymbol: the early table (:16349 getResolvedMembersOrExportsOfSymbol: read by the
+    // TypeLiteral test) before the late-bound members are added. A matching call cannot see a window open at one
+    // read and closed at a later read. When the call is nested in the resolve, the window is outer to the call and
+    // is open for the whole call. When the resolve starts in the call, the window is nested in one normalization or
+    // in the work between two pairs, and is closed before the next read. After it, the answer is the answer before
+    // the resolve, or true when the members are empty, and then the count moves.
     // Audit: target/continuation-r97-goport/int97/r230repair/identmatch1r3/audit.md. So:
     // - a result is kept only when its normalization changed no instantiation, type, symbol, signature,
     //   diagnostic or `empty_anonymous_resolves` count, and started under the instantiation limits
