@@ -2388,3 +2388,47 @@ fn test_try_get_real_file_name_for_non_js_declaration_file_name() {
     }
     t.finish();
 }
+
+// Pattern exports entrypoints (Go resolver.go:2505
+// loadEntrypointsFromTargetExports). The answers are those of a followups79
+// probe of Go `GetEntrypointsFromPackageJsonInfo` at 3e9236361fa9: a file
+// outside the package directory is skipped (RelativeFilePathFromDirectory
+// fails).
+#[test]
+fn test_pattern_export_entrypoints() {
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        (r#"{"name":"pkg","exports":{"./*":"./../other/*.js"}}"#, &[]),
+        (
+            r#"{"name":"pkg","exports":{"./*":"./lib/*.js"}}"#,
+            &[("pkg/b", "/repo/node_modules/pkg/lib/b.d.ts")],
+        ),
+    ];
+    for &(package_json_text, expected) in cases {
+        let resolver = new_test_resolver(
+            &[
+                ("/repo/node_modules/pkg/package.json", package_json_text),
+                ("/repo/node_modules/pkg/lib/b.js", ""),
+                (
+                    "/repo/node_modules/pkg/lib/b.d.ts",
+                    "export const b: number;",
+                ),
+                ("/repo/node_modules/other/a.js", ""),
+                ("/repo/node_modules/other/a.d.ts", "export const a: number;"),
+                ("/repo/src/main.ts", ""),
+            ],
+            true,
+            "/repo",
+            (*bundler_options()).clone(),
+        );
+        resolver.resolve_module_name("pkg/b", "/repo/src/main.ts", ModuleKind::ES_NEXT, None);
+        let package_json = package_json_entry(&resolver, "/repo/node_modules/pkg");
+        assert!(package_json.is_some(), "expected package JSON cache entry");
+        let entrypoints =
+            resolver.get_entrypoints_from_package_json_info(&package_json, "pkg", false);
+        let actual: Vec<(&str, &str)> = entrypoints
+            .iter()
+            .map(|e| (e.module_specifier.as_str(), e.resolved_file_name.as_str()))
+            .collect();
+        assert_eq!(actual, expected, "{package_json_text}");
+    }
+}
