@@ -154,15 +154,24 @@ fn jsdoc_text_cut(text: &str, end: usize) -> (usize, Vec<u8>) {
 /// bytes) and a char of U+10F780..U+10F7FF (4 bytes).
 const INVALID_BYTE_UNIT_LEN: i32 = 7;
 
+/// Not in Go (jsdocmem1): the call site of a speculative JSDoc tag parse
+/// (`Parser::speculate_js_doc_tag`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JsDocSpeculation {
+    /// The tag after a JSDoc signature (Go `parseJSDocSignature`).
+    SignatureTag,
+    /// A child tag of this target (Go `parseChildParameterOrPropertyTag`).
+    ChildTag(PropertyLikeParse),
+}
+
 /// Not in Go (jsdocmem1): the parser state where a speculative JSDoc tag
-/// parse starts (`Parser::speculate_js_doc_tag`). Two parses in one comment
-/// that start with the same key read the same text in the same state, so
-/// they make the same nodes and counts.
+/// parse starts (`Parser::speculate_js_doc_tag`). A parser parses one file,
+/// and a position of it is in one comment, so two parses with the same key
+/// read the same text in the same state: they make the same nodes and
+/// counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct JsDocDiscardKey {
-    /// The call site: `-1` for the tag after a JSDoc signature, else the
-    /// `PropertyLikeParse` target of a child tag.
-    site: i32,
+    site: JsDocSpeculation,
     indent: i32,
     pos: i32,
     full_start_pos: i32,
@@ -187,6 +196,25 @@ pub struct JsDocDiscard {
     text_count: usize,
     identifier_count: i32,
     sets_deprecated_tag: bool,
+}
+
+/// True when the caller of the speculative parse `site` discards its result
+/// `tag` and rewinds (`name`: the name argument of a child tag parse).
+fn js_doc_tag_is_discarded(site: JsDocSpeculation, tag: Node, name: Node) -> bool {
+    match site {
+        JsDocSpeculation::SignatureTag => tag.kind() != SyntaxKind::JsDocReturnTag,
+        JsDocSpeculation::ChildTag(_) => tag.is_nil() || is_other_child_tag(tag, name),
+    }
+}
+
+/// Go `parseChildParameterOrPropertyTag`: true when `child` is a parameter
+/// or property tag that is not a child of `name`.
+fn is_other_child_tag(child: Node, name: Node) -> bool {
+    !child.is_nil()
+        && !name.is_nil()
+        && (child.kind() == SyntaxKind::JsDocParameterTag
+            || child.kind() == SyntaxKind::JsDocPropertyTag)
+        && (is_identifier(child.name()) || !texts_equal(name, child.name().left()))
 }
 
 impl<'a> Parser<'a> {
@@ -416,10 +444,6 @@ impl<'a> Parser<'a> {
         self.token = save_token;
         self.set_has_parse_error(save_has_parse_error);
         self.statement_has_await_identifier = save_has_await_identifier;
-        // Not in Go (jsdocmem1): the kept parses are of this comment only.
-        if !self.jsdoc_discards.is_empty() {
-            self.jsdoc_discards.clear();
-        }
 
         comment
     }
@@ -1690,11 +1714,10 @@ impl<'a> Parser<'a> {
         self.new_node_list(TextRange::new(pos, end), &parameters)
     }
 
-    /// `parse` (a speculative tag parse that starts at the current token)
-    /// or its replay. `site` and `indent` are the arguments that `parse`
-    /// passes on. `discarded` is the caller's test: true when the caller
-    /// discards the result and rewinds to its mark taken before the
-    /// speculative parse.
+    /// The speculative tag parse `site` at the current token (`indent`
+    /// and `name` are the arguments of the call site), or its replay. The
+    /// caller discards the result and rewinds to its mark when
+    /// `js_doc_tag_is_discarded`.
     // PERF: jsdocmem1. Go parses the tag after a JSDoc signature
     // (`parseJSDocSignature`) and a child tag of an object type
     // (`parseChildParameterOrPropertyTag`) speculatively, and that parse
@@ -1703,26 +1726,18 @@ impl<'a> Parser<'a> {
     // stay in the file's store and the AST arena (2.8 GB for 4,000
     // `@overload` tags, Go 14 MB). The first parse at a state is real. When
     // its result is discarded, its counts are kept here, and a later parse
-    // at the same state in the same comment adds the counts and gives the
-    // same discarded result, without new nodes. The nodes, lists,
-    // positions and diagnostics of the live tree are Go's: the caller
-    // discards the result and rewinds. Go keeps only these effects after
-    // the rewind: the node and text counts of the factory,
-    // `identifierCount` and `hasDeprecatedTag`; the replay adds them. A
-    // parse that changes a parser cache (`notParenthesizedArrow`,
-    // `possibleAwaitSpans`) is not kept: a later Go parse at that state
-    // reads the cache and can make fewer nodes.
-    fn speculate_js_doc_tag(
-        &mut self,
-        site: i32,
-        indent: i32,
-        discarded: impl Fn(Node) -> bool,
-        parse: impl FnOnce(&mut Self) -> Node,
-    ) -> Node {
-        #[cfg(test)]
-        if tests::NO_REPLAY.get() {
-            return parse(self);
-        }
+    // at the same state adds the counts and gives the same discarded
+    // result, without new nodes. The nodes, lists, positions and
+    // diagnostics of the live tree are Go's: the caller discards the result
+    // and rewinds. Go keeps only these effects after the rewind: the node
+    // and text counts of the factory, `identifierCount` and
+    // `hasDeprecatedTag`; the replay adds them. A parse that changes a
+    // parser cache (`notParenthesizedArrow`, `possibleAwaitSpans`) is not
+    // kept: a later Go parse at that state reads the cache and can make
+    // fewer nodes. Out of line, so the rest of the JSDoc parser compiles as
+    // before.
+    #[inline(never)]
+    fn speculate_js_doc_tag(&mut self, site: JsDocSpeculation, indent: i32, name: Node) -> Node {
         let scanner = self.scanner.mark();
         let key = JsDocDiscardKey {
             site,
@@ -1736,8 +1751,13 @@ impl<'a> Parser<'a> {
             context_flags: self.context_flags,
             parsing_contexts: self.parsing_contexts,
         };
-        if let Some(d) = self.jsdoc_discards.get(&key).copied()
-            && discarded(d.result)
+        #[cfg(test)]
+        let replay = !tests::NO_REPLAY.get();
+        #[cfg(not(test))]
+        let replay = true;
+        if replay
+            && let Some(d) = self.jsdoc_discards.get(&key).copied()
+            && js_doc_tag_is_discarded(site, d.result, name)
         {
             self.factory.add_counts(d.node_count, d.text_count);
             self.identifier_count += d.identifier_count;
@@ -1752,10 +1772,14 @@ impl<'a> Parser<'a> {
         // Only a `@deprecated` tag sets it, and only `with_js_doc` reads
         // it: cleared here, it tells whether this parse sets it.
         let had_deprecated_tag = std::mem::replace(&mut self.has_deprecated_tag, false);
-        let result = parse(self);
+        let result = match site {
+            JsDocSpeculation::SignatureTag => self.parse_tag(&[], indent),
+            JsDocSpeculation::ChildTag(target) => self.try_parse_child_tag(target, indent),
+        };
         let sets_deprecated_tag = self.has_deprecated_tag;
         self.has_deprecated_tag |= had_deprecated_tag;
-        if discarded(result)
+        if replay
+            && js_doc_tag_is_discarded(site, result, name)
             && self.not_parenthesized_arrow.len() == arrows
             && self.possible_await_spans.len() == await_spans
         {
@@ -1779,12 +1803,7 @@ impl<'a> Parser<'a> {
         let mut return_tag = Node::NIL;
         let state = self.mark();
         if self.parse_optional_jsdoc(SyntaxKind::AtToken) {
-            let tag = self.speculate_js_doc_tag(
-                -1,
-                indent,
-                |tag| tag.kind() != SyntaxKind::JsDocReturnTag,
-                |p| p.parse_tag(&[], indent),
-            );
+            let tag = self.speculate_js_doc_tag(JsDocSpeculation::SignatureTag, indent, Node::NIL);
             if tag.kind() == SyntaxKind::JsDocReturnTag {
                 return_tag = tag;
             }
@@ -1873,22 +1892,13 @@ impl<'a> Parser<'a> {
             match self.next_token_js_doc() {
                 SyntaxKind::AtToken => {
                     if can_parse_tag && self.scanner.can_follow_js_doc_at() {
-                        let is_other_tag = |child: Node| {
-                            !child.is_nil()
-                                && !name.is_nil()
-                                && (child.kind() == SyntaxKind::JsDocParameterTag
-                                    || child.kind() == SyntaxKind::JsDocPropertyTag)
-                                && (is_identifier(child.name())
-                                    || !texts_equal(name, child.name().left()))
-                        };
                         // Every caller rewinds to its mark when this returns nil.
                         let child = self.speculate_js_doc_tag(
-                            target,
+                            JsDocSpeculation::ChildTag(target),
                             indent,
-                            |child| child.is_nil() || is_other_tag(child),
-                            |p| p.try_parse_child_tag(target, indent),
+                            name,
                         );
-                        if is_other_tag(child) {
+                        if is_other_child_tag(child, name) {
                             return Node::NIL;
                         }
                         return child;
