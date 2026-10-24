@@ -1830,14 +1830,15 @@ mod module_instance_state_tests {
     /// The state of namespace `O` in `body`, which goes in
     /// `declare const y: number; declare namespace O { ... }`.
     fn state_of_o(body: &str) -> ModuleInstanceState {
-        let text =
-            format!("export {{}};\ndeclare const y: number;\ndeclare namespace O {{\n{body}\n}}\n");
+        let text: &'static str =
+            format!("export {{}};\ndeclare const y: number;\ndeclare namespace O {{\n{body}\n}}\n")
+                .leak();
         let options = SourceFileParseOptions {
             file_name: "/index.ts".to_string(),
             path: Path("/index.ts".to_string()),
             ..Default::default()
         };
-        let file = parse_source_file(&options, text.leak(), ScriptKind::TS).root;
+        let file = parse_source_file(&options, text, ScriptKind::TS).root;
         let o = file
             .statements()
             .to_vec()
