@@ -734,17 +734,10 @@ impl FilesParser {
             // and the port does not (root, lib, automatic type directive
             // and redirect tasks) get it here.
             set_task_path(loader, &mut task.borrow_mut());
-            // loadstamp1: with the stamps on, the hash of the path alone
-            // first (its first read of the path), then the lookup.
+            // loadfree1 probe: the base of the C6 A/B. No extra hash: the
+            // c6_hash span is empty, c6_get holds the hash and the lookup
+            // (the same span count as with C6).
             let ls = crate::loadstamp::span(crate::loadstamp::C6_HASH);
-            if ls.is_some() {
-                use std::hash::BuildHasher;
-                std::hint::black_box(
-                    self.task_data_by_path
-                        .hasher()
-                        .hash_one(&task.borrow().path),
-                );
-            }
             drop(ls);
             let ls = crate::loadstamp::span(crate::loadstamp::C6_GET);
             let existing = self.task_data_by_path.get(&task.borrow().path).cloned();
