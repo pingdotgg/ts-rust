@@ -868,18 +868,20 @@ pub fn is_break_or_continue_statement(node: Node) -> bool {
 // prior to invoking `GetModuleInstanceState` is not sufficient. It is, however, necessary that the `Parent` pointers
 // for all ancestors of the `Node` provided to `GetModuleInstanceState` have been set.
 
-// A Go `[]*Node` value of the `ancestors` stack: the first `len` entries of backing array `array` in the
-// call's `ModuleInstanceWalk`. `NIL` is Go's nil slice.
+// A Go `[]*Node` value of the `ancestors` stack, as a slice header: `len` entries from slot `start` of the
+// call's `ModuleInstanceWalk`, in a backing array of capacity `cap`. `NIL` is Go's nil slice.
 #[derive(Clone, Copy)]
 struct Ancestors {
-    array: u32,
+    start: u32,
     len: u32,
+    cap: u32,
 }
 
 impl Ancestors {
     const NIL: Self = Self {
-        array: u32::MAX,
+        start: 0,
         len: 0,
+        cap: 0,
     };
 }
 
@@ -894,10 +896,8 @@ impl Ancestors {
 #[derive(Default)]
 struct ModuleInstanceWalk {
     visited: FxHashMap<Node, ModuleInstanceState>,
-    // The entries of all live backing arrays, one array after the other.
+    // The slots of all live backing arrays, one array after the other.
     slots: Vec<Node>,
-    // Each live backing array: its first slot and its Go capacity.
-    arrays: Vec<(usize, usize)>,
 }
 
 impl ModuleInstanceWalk {
@@ -907,58 +907,62 @@ impl ModuleInstanceWalk {
     // empty slice in a frame that store (cap 4) instead of calling growslice (cmd/compile ssagen
     // `(*state).append`).
     // Go: ast/utilities.go:2428 pushAncestor
+    #[inline]
     fn push_ancestor(
         &mut self,
         ancestors: Ancestors,
         parent: Node,
         stack_store: &mut bool,
     ) -> Ancestors {
-        let len = ancestors.len as usize;
-        let mut old_cap = 0;
-        if ancestors.array != Ancestors::NIL.array {
-            let (start, cap) = self.arrays[ancestors.array as usize];
-            if len < cap {
-                self.slots[start + len] = parent;
-                return Ancestors {
-                    array: ancestors.array,
-                    len: ancestors.len + 1,
-                };
-            }
-            old_cap = cap;
+        let Ancestors { start, len, cap } = ancestors;
+        if len < cap {
+            self.slots[(start + len) as usize] = parent;
+            return Ancestors {
+                start,
+                len: len + 1,
+                cap,
+            };
         }
-        let cap = if len == 0 && std::mem::take(stack_store) {
+        self.grow_ancestors(ancestors, parent, stack_store)
+    }
+
+    // The `append` of push_ancestor to a full slice: a new backing array at the end of `slots`.
+    #[inline(never)]
+    fn grow_ancestors(
+        &mut self,
+        ancestors: Ancestors,
+        parent: Node,
+        stack_store: &mut bool,
+    ) -> Ancestors {
+        let Ancestors { start, len, cap } = ancestors;
+        let new_cap = if len == 0 && std::mem::take(stack_store) {
             4
         } else {
-            go_ptr_slice_grow(old_cap, len + 1)
+            go_ptr_slice_grow(cap as usize, len as usize + 1)
         };
-        let start = self.slots.len();
-        if len > 0 {
-            let old_start = self.arrays[ancestors.array as usize].0;
-            self.slots.extend_from_within(old_start..old_start + len);
-        }
+        let new_start = self.slots.len();
+        let old = start as usize..(start + len) as usize;
+        self.slots.extend_from_within(old);
         self.slots.push(parent);
-        self.slots.resize(start + cap, Node::NIL);
-        self.arrays.push((start, cap));
+        self.slots.resize(new_start + new_cap, Node::NIL);
         Ancestors {
-            array: (self.arrays.len() - 1) as u32,
-            len: ancestors.len + 1,
+            start: new_start as u32,
+            len: len + 1,
+            cap: new_cap as u32,
         }
     }
 
     // If a virtual `Parent` exists on the stack, returns the previous stack entry and the virtual `Parent`.
     // Otherwise, we return `nil` and the value of `node.Parent`.
     // Go: ast/utilities.go:2434 popAncestor
+    #[inline]
     fn pop_ancestor(&self, ancestors: Ancestors, node: Node) -> (Ancestors, Node) {
         if ancestors.len == 0 {
             return (Ancestors::NIL, node.parent());
         }
-        let n = ancestors.len - 1;
-        let start = self.arrays[ancestors.array as usize].0;
-        let rest = Ancestors {
-            array: ancestors.array,
-            len: n,
-        };
-        (rest, self.slots[start + n as usize])
+        let len = ancestors.len - 1;
+        let parent = self.slots[(ancestors.start + len) as usize];
+        (Ancestors { len, ..ancestors }, parent)
     }
 }
 
@@ -1006,10 +1010,9 @@ fn get_module_instance_state_cached(
     // PORT: the arrays that the worker makes are dead when it returns, because no caller holds a slice of them
     // (Go's GC frees them). Its writes into older arrays stay. So the walk keeps only the arrays of the frames on
     // the call stack.
-    let (slots, arrays) = (walk.slots.len(), walk.arrays.len());
+    let live = walk.slots.len();
     let result = get_module_instance_state_worker(node, ancestors, walk);
-    walk.slots.truncate(slots);
-    walk.arrays.truncate(arrays);
+    walk.slots.truncate(live);
     walk.visited.insert(node, result);
     result
 }
