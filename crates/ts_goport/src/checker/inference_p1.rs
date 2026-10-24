@@ -1,3 +1,4 @@
+use crate::checker::inference_p2::NormalizedSlot;
 use crate::prelude::*;
 use smallvec::SmallVec;
 
@@ -1480,12 +1481,12 @@ impl Checker {
     ) -> (SmallVec<[TypeId; 8]>, SmallVec<[TypeId; 8]>) {
         let mut matched_sources: SmallVec<[TypeId; 8]> = SmallVec::new();
         let mut matched_targets: SmallVec<[TypeId; 8]> = SmallVec::new();
-        // The normalized source members (writing false), by index. A slot is NIL until it is kept.
-        let mut source_slots: SmallVec<[TypeId; 8]> =
-            SmallVec::from_elem(TypeId::NIL, sources.len());
+        // The normalized source members (writing false), by index. A slot is empty until a type is kept.
+        let mut source_slots: SmallVec<[NormalizedSlot; 8]> =
+            SmallVec::from_elem(NormalizedSlot::EMPTY, sources.len());
         for &t in targets {
             // The normalized target (writing true) of this outer turn.
-            let mut target_slot = TypeId::NIL;
+            let mut target_slot = NormalizedSlot::EMPTY;
             for (i, &s) in sources.iter().enumerate() {
                 let slots = (&mut source_slots[i], &mut target_slot);
                 let matched = if base {

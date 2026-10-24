@@ -1122,6 +1122,17 @@ impl Checker {
         } else {
             panic!("Unhandled case in resolveStructuredTypeMembers");
         }
+        // PERF (identmatch1, not in Go): `empty_anonymous_resolves`. Go's
+        // IsEmptyAnonymousObjectType gives false for `t` before this resolve
+        // (unless the TypeLiteral test gives true) and `is_empty_resolved_type`
+        // after it. Inside the resolve it can read the partial members, but
+        // those reads are nested in this call.
+        if flags.intersects(TypeFlags::OBJECT)
+            && object_flags.intersects(ObjectFlags::ANONYMOUS)
+            && self.is_empty_resolved_type(t)
+        {
+            self.empty_anonymous_resolves += 1;
+        }
         self.ty(t).as_structured_type()
     }
 

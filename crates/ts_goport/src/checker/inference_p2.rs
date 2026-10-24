@@ -9,6 +9,24 @@
 use crate::prelude::*;
 use smallvec::SmallVec;
 
+/// PERF (identmatch1, not in Go): the slot of one member in
+/// `infer_from_identical_types` (`normalize_for_matching`). `normalized` is
+/// the kept normalized type, NIL until one is kept. `resolves` is the
+/// `Checker::empty_anonymous_resolves` count when it was kept: the type is
+/// used only while that count is the same.
+#[derive(Clone, Copy)]
+pub(crate) struct NormalizedSlot {
+    normalized: TypeId,
+    resolves: u32,
+}
+
+impl NormalizedSlot {
+    pub(crate) const EMPTY: NormalizedSlot = NormalizedSlot {
+        normalized: TypeId::NIL,
+        resolves: 0,
+    };
+}
+
 impl Checker {
     // Infer a suitable input type for a homomorphic mapped type { [P in keyof T]: X }. We construct
     // an object type with the same set of properties as the source type, where the type of each
@@ -486,11 +504,11 @@ impl Checker {
     // Go: checker/inference.go:1225 isTypeOrBaseIdenticalTo
     // PORT: perf (identmatch1). Called only by `infer_from_identical_types`, with the slots of the pair (see
     // `is_type_identical_in_matching`).
-    pub fn is_type_or_base_identical_to(
+    pub(crate) fn is_type_or_base_identical_to(
         &mut self,
         s: TypeId,
         t: TypeId,
-        slots: (&mut TypeId, &mut TypeId),
+        slots: (&mut NormalizedSlot, &mut NormalizedSlot),
     ) -> bool {
         if t == self.missing_type {
             return s == t;
@@ -510,11 +528,11 @@ impl Checker {
     // normalization.
     // Second copy: this repeats Go's isTypeRelatedTo (relater.go:169), whose port is `is_type_related_to_kind`
     // (relater_p1.rs). A pin bump that changes isTypeRelatedTo changes both (UPSTREAM.md, "Pin bump checks").
-    pub fn is_type_identical_in_matching(
+    pub(crate) fn is_type_identical_in_matching(
         &mut self,
         source: TypeId,
         target: TypeId,
-        slots: (&mut TypeId, &mut TypeId),
+        slots: (&mut NormalizedSlot, &mut NormalizedSlot),
     ) -> bool {
         let mut source = source;
         let mut target = target;
@@ -589,7 +607,7 @@ impl Checker {
         &mut self,
         source: TypeId,
         target: TypeId,
-        (source_slot, target_slot): (&mut TypeId, &mut TypeId),
+        (source_slot, target_slot): (&mut NormalizedSlot, &mut NormalizedSlot),
     ) -> bool {
         // Go: relater.go:369. checkTypeRelatedToEx reads the relation size before isRelatedToEx normalizes.
         let relation_size = self.identity_relation.borrow().size();
@@ -621,19 +639,39 @@ impl Checker {
 
     // Go: checker/relater.go:2654 getNormalizedType (checker.go:28470) of one member of an identity pair of
     // inferFromMatchingTypes, at Go's place in Go's order. `slot` is the member's slot in the current call.
-    // PORT: perf (identmatch1). Not in Go. Go normalizes a member again at each pair; a repeat gives the same
-    // type when it makes nothing: the steps of getNormalizedType read caches that only grow, or interned
-    // types. A repeat can still instantiate (the Index branch: isGenericMappedType and getIndexTypeForMappedType
-    // on a mapped type with an `as` clause), so a result is kept in `slot` only when its normalization changed no
-    // instantiation, type, symbol, signature or diagnostic count and started under the instantiation limits
-    // (checker.go:22608). The kept type is used only under the count limit; the stack depth is the same at each
-    // pair of one call. With `--generateTrace` on, nothing is kept: a repeat can emit a tracer event and change
-    // no count (checkCrossProductUnion_DepthLimit, checker.go:27256, after the intern miss in
-    // getIntersectionTypeEx, which does not store the error type), and Go emits it at each repeat.
-    fn normalize_for_matching(&mut self, t: TypeId, writing: bool, slot: &mut TypeId) -> TypeId {
+    // PORT: perf (identmatch1). Not in Go. Go normalizes a member again at each pair. A repeat gives the type of
+    // the first normalization when each read in it gives the value that it gave the first time. A read of a
+    // cached or computed-once value (the reduced type caches, the IsGenericType, CouldContainTypeVariables and
+    // IsNeverIntersection flags, cachedTypes, the relation caches, the interned types) does: the first
+    // normalization computed that value or read it, and a value is computed again only by a computation that
+    // was in progress before this call started, which ends after the call. One read does not:
+    // IsEmptyAnonymousObjectType (checker.go:27077; for example in getIntersectionType and
+    // shouldNormalizeIntersection) reads MembersResolved and does not resolve. So its answer for an anonymous type
+    // goes from false to true when the type's members are first resolved and are empty, in a normalization or
+    // between two pairs (identity relation, inferFromTypes). `empty_anonymous_resolves` counts these resolves.
+    // Audit: target/continuation-r97-goport/int97/r230repair/identmatch1r3/audit.md. So:
+    // - a result is kept only when its normalization changed no instantiation, type, symbol, signature,
+    //   diagnostic or `empty_anonymous_resolves` count, and started under the instantiation limits
+    //   (checker.go:22608). A repeat can still instantiate (the Index branch: isGenericMappedType and
+    //   getIndexTypeForMappedType on a mapped type with an `as` clause). An empty resolve in the first
+    //   normalization changes the next ones (`X & T` before the resolve of an empty `X`, `T` after it).
+    // - a kept type is used only while `empty_anonymous_resolves` has the count it was kept with, and under the
+    //   count limit. The stack depth is the same at each pair of one call.
+    // With `--generateTrace` on, nothing is kept: a repeat can emit a tracer event and change no count
+    // (checkCrossProductUnion_DepthLimit, checker.go:27256, after the intern miss in getIntersectionTypeEx, which
+    // does not store the error type), and Go emits it at each repeat.
+    fn normalize_for_matching(
+        &mut self,
+        t: TypeId,
+        writing: bool,
+        slot: &mut NormalizedSlot,
+    ) -> TypeId {
         let under_count_limit = self.instantiation_count < 5_000_000;
-        if slot.is_some() && under_count_limit {
-            return *slot;
+        if slot.normalized.is_some()
+            && slot.resolves == self.empty_anonymous_resolves
+            && under_count_limit
+        {
+            return slot.normalized;
         }
         let counts = |c: &Checker| {
             (
@@ -642,6 +680,7 @@ impl Checker {
                 c.symbol_count,
                 c.signature_count,
                 c.diagnostics.count,
+                c.empty_anonymous_resolves,
             )
         };
         let can_keep =
@@ -649,7 +688,10 @@ impl Checker {
         let before = counts(self);
         let normalized = self.get_normalized_type(t, writing);
         if can_keep && counts(self) == before {
-            *slot = normalized;
+            *slot = NormalizedSlot {
+                normalized,
+                resolves: self.empty_anonymous_resolves,
+            };
         }
         normalized
     }
