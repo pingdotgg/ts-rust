@@ -2209,7 +2209,7 @@ mod tests {
                 path: Path("/a.js".to_string()),
                 ..Default::default()
             },
-            text,
+            &*Box::leak(text.into()),
             ScriptKind::JS,
         );
         NO_REPLAY.set(false);
