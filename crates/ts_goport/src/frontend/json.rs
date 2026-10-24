@@ -1950,38 +1950,6 @@ fn json_append_multiline(compact: &str, prefix: &str, indent: &str) -> Result<St
     json_append_multiline_pieces(compact, prefix, indent, None)
 }
 
-/// The size classes of the Go allocator (internal/runtime/gc/sizeclasses.go
-/// `SizeClassToSize`, go1.27.1).
-const GO_SIZE_CLASSES: [usize; 67] = [
-    8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352,
-    384, 416, 448, 480, 512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048,
-    2304, 2688, 3072, 3200, 3456, 4096, 4864, 5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728,
-    10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480, 21760, 24576, 27264, 28672,
-    32768,
-];
-
-// Go: runtime/slice.go growslice (`nextslicecap`) and runtime/msize.go
-// roundupsize, for a `[]byte` (noscan)
-/// The capacity of a Go `[]byte` with capacity `old_cap` after an `append`
-/// that needs `new_len` bytes.
-fn go_byte_slice_grow(old_cap: usize, new_len: usize) -> usize {
-    let mut new_cap = old_cap;
-    if new_len > 2 * old_cap {
-        new_cap = new_len;
-    } else if old_cap < 256 {
-        new_cap = 2 * old_cap;
-    } else {
-        while new_cap < new_len {
-            new_cap += (new_cap + 3 * 256) >> 2;
-        }
-    }
-    match GO_SIZE_CLASSES.iter().find(|&&size| size >= new_cap) {
-        Some(&size) => size,
-        // A large object takes whole pages of 8 KiB.
-        None => new_cap.next_multiple_of(8192),
-    }
-}
-
 /// Where Go's streaming `jsontext.Encoder` (v2 `MarshalWrite` to an
 /// `io.Writer` that is not a `bytes.Buffer`) writes its buffer out, for
 /// `json_marshal_indent_write`. Its buffer starts empty and grows by Go
@@ -2013,7 +1981,7 @@ impl JsonStreamPieces {
     /// Go `slices.Grow(e.Buf, n)`.
     fn reserve(&mut self, n: usize) {
         if n > 0 && self.len + n > self.cap {
-            self.cap = go_byte_slice_grow(self.cap, self.len + n);
+            self.cap = crate::gostd::slices::go_byte_slice_grow(self.cap, self.len + n);
         }
     }
 
