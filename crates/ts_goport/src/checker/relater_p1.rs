@@ -2160,8 +2160,9 @@ impl Checker {
         max_depth: i32,
     ) -> bool {
         debug_assert!(ids.len() <= stack.len());
-        let filled = ids.len();
-        ids.extend(stack[filled..].iter().map(|&s| self.stack_recursion_key(s)));
+        for &s in &stack[ids.len()..] {
+            ids.push(self.stack_recursion_key(s));
+        }
         // The probe is usually the entry just pushed, whose key is known.
         let probe_key = match (stack.last(), ids.last()) {
             (Some(&top), Some(&key)) if top == t => key,
