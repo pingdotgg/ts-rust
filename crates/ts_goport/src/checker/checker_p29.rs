@@ -286,7 +286,7 @@ impl Checker {
     // intersection make it empty (an object or non-primitive type with null or undefined under
     // strictNullChecks, or two disjoint domains). get_intersection_type_ex and the dead-row skip
     // of get_cross_product_intersections both use it, so they cannot drift apart.
-    // Go: checker/checker.go:26678 (inline in getIntersectionTypeEx)
+    // Go: checker/checker.go:26678 getIntersectionTypeEx: the inline disjoint-domain test
     #[inline]
     fn includes_disjoint_domains(&self, includes: TypeFlags) -> bool {
         let dd = TypeFlags::DISJOINT_DOMAINS;
