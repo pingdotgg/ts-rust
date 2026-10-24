@@ -5,7 +5,9 @@ use super::file_loader::{ImportNames, SyntheticImports};
 use crate::frontend::prelude::*;
 use crate::gostd::slices::stable_sort_by;
 use crate::program::ThreadBudget;
+use rustc_hash::FxBuildHasher;
 use std::cell::Cell;
+use std::hash::BuildHasher;
 use std::rc::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -54,6 +56,11 @@ pub struct ParseTask {
     // `collectFiles`; the link saves the string hash per visit. A `Weak`
     // link makes no `Rc` cycle (task, data, task).
     pub data: Weak<RefCell<ParseTaskData>>,
+    /// The hash of `path` in `task_data_by_path` (`FxBuildHasher`), when a
+    /// parse worker made it (`PrepAdd::path_hash`).
+    // PERF (loadfree1 C6): `start` then does not read the path for the
+    // hash on the loader. Not in Go.
+    pub path_hash: Option<u64>,
 }
 
 /// Go `*parseTask`.
@@ -280,15 +287,17 @@ impl ParseTask {
         if !is_normalized_path(&ref_.file_name) {
             ref_.file_name = normalize_path(&ref_.file_name);
         }
-        self.add_normalized_sub_task(ref_, lib_file);
+        self.add_normalized_sub_task(ref_, lib_file, None);
     }
 
     /// `add_sub_task` of a ref whose name is normalized already (a parse
-    /// worker normalized it, `PrepAdd`).
+    /// worker normalized it, `PrepAdd`). `path_hash`: the hash of its path
+    /// that the worker made (`ParseTask::path_hash`).
     pub(crate) fn add_normalized_sub_task(
         &mut self,
         ref_: ResolvedRef,
         lib_file: Option<Rc<LibFile>>,
+        path_hash: Option<u64>,
     ) {
         let sub_task = Rc::new(RefCell::new(ParseTask {
             normalized_file_path: ref_.file_name,
@@ -298,6 +307,7 @@ impl ParseTask {
             elide_on_depth: ref_.elide_on_depth,
             include_reason: ref_.include_reason,
             package_id: ref_.package_id,
+            path_hash,
             ..Default::default()
         }));
         self.sub_tasks.push(sub_task);
@@ -344,6 +354,12 @@ fn set_task_path(loader: &FileLoader, task: &mut ParseTask) {
     }
 }
 
+/// Go `filesParser.taskDataByPath`.
+// PERF (loadfree1 C6): hashbrown's map (the map of std) with
+// `FxBuildHasher`, as `FxHashMap`: `start` looks a path up with the hash
+// that a parse worker made (`ParseTask::path_hash`).
+pub type TaskDataByPath = hashbrown::HashMap<Path, Rc<RefCell<ParseTaskData>>, FxBuildHasher>;
+
 /// One queued run of the closure that Go `filesParser.start` passes to
 /// `wg.Queue`, with the values it captures.
 pub(crate) struct QueuedParseTask {
@@ -366,7 +382,7 @@ pub(crate) struct QueuedParseTask {
 // order do not change.
 pub struct FilesParser {
     pub(crate) queue: Vec<QueuedParseTask>,
-    pub task_data_by_path: FxHashMap<Path, Rc<RefCell<ParseTaskData>>>,
+    pub task_data_by_path: TaskDataByPath,
     pub max_depth: i32,
     /// Go `singleThreaded`: no parse workers.
     pub single_threaded: bool,
@@ -396,7 +412,7 @@ impl Drop for FilesParser {
 
 /// The parse tasks of a dropped `FilesParser`. The drop takes their links
 /// out, which frees the task graph (see the `FilesParser` drop).
-struct ParseTaskLinks(FxHashMap<Path, Rc<RefCell<ParseTaskData>>>);
+struct ParseTaskLinks(TaskDataByPath);
 
 impl Drop for ParseTaskLinks {
     fn drop(&mut self) {
@@ -687,7 +703,21 @@ impl FilesParser {
             // and the port does not (root, lib, automatic type directive
             // and redirect tasks) get it here.
             set_task_path(loader, &mut task.borrow_mut());
-            let existing = self.task_data_by_path.get(&task.borrow().path).cloned();
+            // Go `taskDataByPath.LoadOrStore(task.path, ..)`
+            // (filesparser.go:279), the load part, with the hash that the
+            // worker made when the task has one.
+            let existing = {
+                let task = task.borrow();
+                let hasher = self.task_data_by_path.hasher();
+                let hash = task
+                    .path_hash
+                    .unwrap_or_else(|| hasher.hash_one(&task.path));
+                debug_assert_eq!(hash, hasher.hash_one(&task.path), "{}", task.path.0);
+                self.task_data_by_path
+                    .raw_entry()
+                    .from_key_hashed_nocheck(hash, &task.path)
+                    .map(|(_, data)| data.clone())
+            };
             let (data, loaded) = match existing {
                 Some(data) => {
                     // No queued task of this path ran yet, so the loader
@@ -1928,6 +1958,8 @@ pub(crate) struct PrepAdd {
     /// The resolved file name, normalized.
     pub(crate) file_name: String,
     pub(crate) path: Path,
+    /// The hash of `path` in `task_data_by_path` (`ParseTask::path_hash`).
+    pub(crate) path_hash: u64,
     pub(crate) package_id: PackageId,
     pub(crate) increase_depth: bool,
 }
@@ -1991,6 +2023,7 @@ impl PrepCommit {
                     normalize_path(file_name)
                 },
                 path: resolved.resolved_path.clone(),
+                path_hash: FxBuildHasher.hash_one(&resolved.resolved_path),
                 package_id: resolved.package_id.clone(),
                 increase_depth: resolved.is_external_library_import,
             });
