@@ -1934,7 +1934,7 @@ impl FileLoader {
                                 package_id: add.package_id,
                             },
                             None,
-                            Some(add.path_hash),
+                            add.path_hash,
                         );
                     }
                     let resolutions = std::mem::take(&mut commit.resolutions);
