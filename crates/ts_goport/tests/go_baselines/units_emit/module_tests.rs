@@ -2393,7 +2393,7 @@ fn test_try_get_real_file_name_for_non_js_declaration_file_name() {
 // loadEntrypointsFromTargetExports). The answers are those of a followups79
 // probe of Go `GetEntrypointsFromPackageJsonInfo` at 3e9236361fa9: a file
 // outside the package directory is skipped (RelativeFilePathFromDirectory
-// fails).
+// fails), and the module specifier is not resolved.
 #[test]
 fn test_pattern_export_entrypoints() {
     let cases: &[(&str, &[(&str, &str)])] = &[
@@ -2401,6 +2401,11 @@ fn test_pattern_export_entrypoints() {
         (
             r#"{"name":"pkg","exports":{"./*":"./lib/*.js"}}"#,
             &[("pkg/b", "/repo/node_modules/pkg/lib/b.d.ts")],
+        ),
+        // Go joins the package name and the subpath with "/" (resolver.go:2550).
+        (
+            r#"{"name":"pkg","exports":{"./*":"./lib*"}}"#,
+            &[("pkg//b.d.ts", "/repo/node_modules/pkg/lib/b.d.ts")],
         ),
     ];
     for &(package_json_text, expected) in cases {

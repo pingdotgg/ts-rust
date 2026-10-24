@@ -370,8 +370,9 @@ impl ResolutionState<'_> {
                     if resolved_subpath.is_empty() {
                         continue;
                     }
-                    let module_specifier =
-                        crate::frontend::tspath::resolve_path(package_name, &[resolved_subpath]);
+                    // Go resolver.go:2550: the package name and the subpath
+                    // joined with "/", not resolved.
+                    let module_specifier = format!("{package_name}/{resolved_subpath}");
                     entrypoints.push(self.resolver.create_resolved_entrypoint_handling_symlink(
                         file,
                         &module_specifier,
