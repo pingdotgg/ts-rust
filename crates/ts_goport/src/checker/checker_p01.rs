@@ -874,6 +874,15 @@ pub struct Checker {
     pub type_parameters_origin_count: u32,
     pub class_type_parameters_origins: FxHashMap<TypeId, u32>,
     pub total_instantiation_count: u32,
+    /// PERF (identmatch1, not in Go): the count of member resolves of
+    /// anonymous object types (ObjectFlags `ANONYMOUS`, so also reverse
+    /// mapped types) that ended with an empty resolved type. Go's
+    /// IsEmptyAnonymousObjectType (checker.go:27077) reads
+    /// `MEMBERS_RESOLVED` and does not resolve, so its answer for such a
+    /// type goes from false to true at that resolve and at no other time
+    /// outside it. `normalize_for_matching` keeps a normalized type only
+    /// while this count does not move.
+    pub empty_anonymous_resolves: u32,
     pub instantiation_count: u32,
     pub instantiation_stack: Vec<TypeId>,
     pub conditional_constraint_depth: u32,
@@ -1432,6 +1441,7 @@ impl Checker {
             type_parameters_origin_count: 0,
             class_type_parameters_origins: FxHashMap::default(),
             total_instantiation_count: 0,
+            empty_anonymous_resolves: 0,
             instantiation_count: 0,
             instantiation_stack: Vec::new(),
             conditional_constraint_depth: 0,
