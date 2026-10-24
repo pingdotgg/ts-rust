@@ -2035,72 +2035,81 @@ impl Checker {
 
     // PORT: perf. The recursion id kept for each entry of the relater stacks
     // (`is_deeply_nested_relater_type`; the inference stacks keep
-    // `inference_stack_ids`). `None` marks an entry that still needs
-    // `has_matching_recursion_identity`: an instantiated mapped type (its
-    // mapped target can make types), an indexed access (its object type can
-    // be a mapped type) or an intersection (its parts can be mapped types).
-    // Any other type is its own `get_recursion_identity_target`, so that
-    // function is `get_recursion_identity_from_target(t) == identity`, which
-    // reads only type data that is fixed at type creation.
-    pub fn stack_recursion_id(&self, t: TypeId) -> Option<RecursionId> {
+    // `inference_stack_ids`), as one word. `RecursionKey::NONE` marks an
+    // entry that still needs `has_matching_recursion_identity`: an
+    // instantiated mapped type (its mapped target can make types), an indexed
+    // access (its object type can be a mapped type) or an intersection (its
+    // parts can be mapped types). Any other type is its own
+    // `get_recursion_identity_target`, so that function is
+    // `get_recursion_identity_from_target(t) == identity`, which reads only
+    // type data that is fixed at type creation. An id that has no key
+    // (`RecursionKey::new`) also gives `NONE`, and its entry runs the Go call.
+    #[inline]
+    pub fn stack_recursion_key(&self, t: TypeId) -> RecursionKey {
         let ty = self.ty(t);
         if ty.object_flags.contains(ObjectFlags::INSTANTIATED_MAPPED)
             || ty
                 .flags
                 .intersects(TypeFlags::INTERSECTION | TypeFlags::INDEXED_ACCESS)
         {
-            return None;
+            return RecursionKey::NONE;
         }
-        Some(self.get_recursion_identity_from_target(t))
+        RecursionKey::new(Some(self.get_recursion_identity_from_target(t)))
     }
 
     // PORT: perf. `is_deeply_nested_type` for the relater stacks, which keep
-    // recursion ids (`is_deeply_nested_relater_type`). `ids[i]` is
-    // `stack_recursion_id(stack[i])`. An entry with an id is compared
-    // directly. `probe_id` is `stack_recursion_id(t)` when the caller has it,
-    // else `None`. A probe with an id is its own recursion identity target
-    // and not an intersection, so the Go code would only compute that same
-    // id. The other probes and the `None` entries run the Go code, so
-    // `get_recursion_identity_target` runs for the same types in Go order.
+    // recursion keys (`is_deeply_nested_relater_type`). `ids[i]` is
+    // `stack_recursion_key(stack[i])`. An entry with a key is compared
+    // directly: keys are equal only when their ids are equal. `probe_key` is
+    // `stack_recursion_key(t)` when the caller has it, else
+    // `RecursionKey::NONE`. A probe with a key is its own recursion identity
+    // target and not an intersection, so the Go code would only compute the
+    // id that the key holds. The other probes and the `NONE` entries run the
+    // Go code, so `get_recursion_identity_target` runs for the same types in
+    // Go order.
     // Go: checker/relater.go:766 isDeeplyNestedType
     pub fn is_deeply_nested_type_with_ids(
         &mut self,
         t: TypeId,
-        probe_id: Option<RecursionId>,
+        probe_key: RecursionKey,
         stack: &[TypeId],
-        ids: &[Option<RecursionId>],
+        ids: &[RecursionKey],
         max_depth: i32,
     ) -> bool {
         debug_assert_eq!(stack.len(), ids.len());
-        debug_assert!(probe_id.is_none() || probe_id == self.stack_recursion_id(t));
+        debug_assert!(probe_key == RecursionKey::NONE || probe_key == self.stack_recursion_key(t));
         if stack.len() as i32 >= max_depth {
-            let identity = match probe_id {
-                Some(id) => id,
-                None => {
-                    let target = self.get_recursion_identity_target(t);
-                    if self.ty(target).flags.intersects(TypeFlags::INTERSECTION) {
-                        for i in 0..self.ty(target).types().len() {
-                            if self.is_deeply_nested_type_with_ids(
-                                self.type_at(target, i),
-                                None,
-                                stack,
-                                ids,
-                                max_depth,
-                            ) {
-                                return true;
-                            }
+            let (identity, key) = if probe_key != RecursionKey::NONE {
+                let identity: Option<RecursionId> = probe_key.into();
+                (identity.unwrap_or_default(), probe_key)
+            } else {
+                let target = self.get_recursion_identity_target(t);
+                if self.ty(target).flags.intersects(TypeFlags::INTERSECTION) {
+                    for i in 0..self.ty(target).types().len() {
+                        if self.is_deeply_nested_type_with_ids(
+                            self.type_at(target, i),
+                            RecursionKey::NONE,
+                            stack,
+                            ids,
+                            max_depth,
+                        ) {
+                            return true;
                         }
-                        return false;
                     }
-                    self.get_recursion_identity_from_target(target)
+                    return false;
                 }
+                let identity = self.get_recursion_identity_from_target(target);
+                // `NONE` when the identity has no key. Then no entry key
+                // matches it, and only the `NONE` entries can.
+                (identity, RecursionKey::new(Some(identity)))
             };
             let mut count: i32 = 0;
             let mut last_type_id = TypeId(0);
-            for (&t, &id) in stack.iter().zip(ids) {
-                let matching = match id {
-                    Some(id) => id == identity,
-                    None => self.has_matching_recursion_identity(t, identity),
+            for (&t, &entry_key) in stack.iter().zip(ids) {
+                let matching = if entry_key != RecursionKey::NONE {
+                    entry_key == key
+                } else {
+                    self.has_matching_recursion_identity(t, identity)
                 };
                 if matching {
                     // We only count occurrences with a higher type id than the previous occurrence, since higher
@@ -2120,31 +2129,45 @@ impl Checker {
     }
 
     // PORT: perf. `is_deeply_nested_type` for the relater stacks. `ids`
-    // holds `stack_recursion_id` for a prefix of `stack`. It is filled up to
+    // holds `stack_recursion_key` for a prefix of `stack`. It is filled up to
     // the full stack only when the check reaches the scan, and the caller
-    // truncates it when the stack pops. The ids read only type data fixed
-    // at type creation, so a late fill gives the same ids.
+    // truncates it when the stack pops. The keys read only type data fixed
+    // at type creation, so a late fill gives the same keys. The length test
+    // is inline at the call sites (relater_p4.rs), where it ends most calls;
+    // the fill and the scan are out of line
+    // (`is_deeply_nested_relater_scan`).
     // Go: checker/relater.go:766 isDeeplyNestedType
+    #[inline(always)]
     pub fn is_deeply_nested_relater_type(
         &mut self,
         t: TypeId,
         stack: &[TypeId],
-        ids: &mut Vec<Option<RecursionId>>,
+        ids: &mut Vec<RecursionKey>,
         max_depth: i32,
     ) -> bool {
-        if (stack.len() as i32) < max_depth {
-            return false;
-        }
+        (stack.len() as i32) >= max_depth
+            && self.is_deeply_nested_relater_scan(t, stack, ids, max_depth)
+    }
+
+    // PORT: perf. The part of `is_deeply_nested_relater_type` after the
+    // length test: fill `ids` to the full stack, then scan.
+    #[inline(never)]
+    fn is_deeply_nested_relater_scan(
+        &mut self,
+        t: TypeId,
+        stack: &[TypeId],
+        ids: &mut Vec<RecursionKey>,
+        max_depth: i32,
+    ) -> bool {
         debug_assert!(ids.len() <= stack.len());
-        for &s in &stack[ids.len()..] {
-            ids.push(self.stack_recursion_id(s));
-        }
-        // The probe is usually the entry just pushed, whose id is known.
-        let probe_id = match (stack.last(), ids.last()) {
-            (Some(&top), Some(&id)) if top == t => id,
-            _ => self.stack_recursion_id(t),
+        let filled = ids.len();
+        ids.extend(stack[filled..].iter().map(|&s| self.stack_recursion_key(s)));
+        // The probe is usually the entry just pushed, whose key is known.
+        let probe_key = match (stack.last(), ids.last()) {
+            (Some(&top), Some(&key)) if top == t => key,
+            _ => self.stack_recursion_key(t),
         };
-        self.is_deeply_nested_type_with_ids(t, probe_id, stack, ids, max_depth)
+        self.is_deeply_nested_type_with_ids(t, probe_key, stack, ids, max_depth)
     }
 
     // Go: checker/relater.go:797 hasMatchingRecursionIdentity
