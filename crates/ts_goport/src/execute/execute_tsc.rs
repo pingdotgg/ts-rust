@@ -279,6 +279,10 @@ pub fn tsc_build_compilation(
         return result(ExitStatus::Success);
     }
 
+    // PORT: Go's symbol id counters are per process, so each project counts
+    // on from the ids of the last (`program::CheckerPool::carry_symbol_ids`).
+    // A watch build sets it again for each cycle (`Orchestrator::do_cycle`).
+    let _carry_ids = crate::program::carry_symbol_ids_of_every_pool();
     let orchestrator = Box::new(new_orchestrator(OrchestratorOptions {
         sys,
         command: Rc::new(build_command),
@@ -502,6 +506,11 @@ pub fn tsc_compilation(
         return wasm_unsupported("--watch");
         #[cfg(not(target_family = "wasm"))]
         {
+            // PORT: Go's symbol id counters are per process, so each build
+            // counts on from the ids of the last
+            // (`program::CheckerPool::carry_symbol_ids`). A test drives the
+            // later cycles, which set it again (`Watcher::do_cycle`).
+            let _carry_ids = crate::program::carry_symbol_ids_of_every_pool();
             let mut watcher = create_watcher(
                 sys,
                 Rc::new(config_for_compilation),
