@@ -76,7 +76,8 @@ pub struct Statistics {
     pub timestamp_updates: i32,
     files: i32,
     lines: i32,
-    identifiers: i32,
+    // PORT: Go `int`, so `i64` (see `program::identifier_count`).
+    identifiers: i64,
     symbols: i32,
     types: i32,
     instantiations: i32,
@@ -416,6 +417,66 @@ mod tests {
         let writes = Rc::new(RefCell::new(Writes::default()));
         statistics.report(&(writes.clone() as Writer));
         assert_eq!(writes.take().0, go_writes);
+    }
+
+    // Go counts identifiers in `int`, 64 bits. The JSDoc reparse of one
+    // file can make more than 2^31 of them: the pin 3e9236361fa9 oracle
+    // prints this table for `--extendedDiagnostics` on the jsdocmem1
+    // skeptic input `sk-bun0327-34000` (an i32 count printed
+    // `-1982887150`). The sum of `aggregate` and the rows of `report` keep
+    // the count.
+    #[test]
+    fn identifiers_past_i32_max_match_go() {
+        let times = |parse: u64, bind: u64, check: u64, total: u64| CompileTimes {
+            config_time: Duration::from_micros(100),
+            parse_time: Duration::from_millis(parse),
+            bind_time: Duration::from_millis(bind),
+            check_time: Duration::from_millis(check),
+            emit_time: Duration::from_micros(100),
+            total_time: Duration::from_millis(total),
+            ..CompileTimes::default()
+        };
+        let mut sum = Statistics::default();
+        for identifiers in [1_200_000_000, 1_112_080_146] {
+            sum.aggregate(&Statistics {
+                identifiers,
+                compile_times: Some(times(0, 0, 0, 0)),
+                ..Statistics::default()
+            });
+        }
+        assert_eq!(sum.identifiers, 2_312_080_146);
+
+        let statistics = Statistics {
+            files: 96,
+            lines: 14353,
+            identifiers: sum.identifiers,
+            symbols: 8580,
+            types: 343,
+            instantiations: 0,
+            memory_used: 1_221_248 * 1024,
+            memory_allocs: 1_470_897_153,
+            compile_times: Some(times(231_143, 1, 17, 231_162)),
+            ..Statistics::default()
+        };
+        let out = Rc::new(RefCell::new(Vec::<u8>::new()));
+        statistics.report(&(out.clone() as Writer));
+        assert_eq!(
+            String::from_utf8(out.take()).unwrap(),
+            "Files:                  96\n\
+             Lines:               14353\n\
+             Identifiers:    2312080146\n\
+             Symbols:              8580\n\
+             Types:                 343\n\
+             Instantiations:          0\n\
+             Memory used:      1221248K\n\
+             Memory allocs:  1470897153\n\
+             Config time:        0.000s\n\
+             Parse time:       231.143s\n\
+             Bind time:          0.001s\n\
+             Check time:         0.017s\n\
+             Emit time:          0.000s\n\
+             Total time:       231.162s\n"
+        );
     }
 
     // The content mapper rows (tsgo#4712): identities in sorted order, and

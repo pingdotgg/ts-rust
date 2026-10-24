@@ -167,7 +167,9 @@ pub struct Parser<'a> {
     pub statement_has_await_identifier: bool,
     pub has_deprecated_tag: bool,
 
-    pub identifier_count: i32,
+    // PORT: Go `int` is 64 bits. The JSDoc reparse of one file can make more
+    // than 2^31 identifiers, so this is `i64`, not the `i32` of PORTING.md.
+    pub identifier_count: i64,
     pub not_parenthesized_arrow: FxHashSet<i32>,
     pub jsdoc_infos: Vec<JsDocInfo>,
     pub possible_await_spans: Vec<i32>,
