@@ -14,11 +14,15 @@
 # The tsc is a PGO build of the shipped profile (fat LTO), trained on each platform:
 # crates/ts_goport/scripts/build-pgo.sh with the training set of scripts/goport/pgo-train.sh (7
 # projects at fixed commits). The job also builds the plain tsc, and fails unless the PGO tsc gives
-# the same stdout, stderr, exit code and emitted files as the plain tsc on that set. No BOLT
-# (build-release.sh has it): BOLT refuses the static Linux bin (build-bolt.sh), its Mach-O support
-# is experimental, macOS has no perf branch sampling for its profile, and BOLT has no PE support.
+# the same stdout, stderr, exit code and emitted files as the plain tsc on that set. linux-x64 also
+# gets BOLT: crates/ts_goport/scripts/bolt-musl.sh, with a profile from a counting copy that runs
+# the same set, and no -split-eh (it can break the unwinding of a caught panic with musl). The PGO
+# check then compares the BOLT tsc with the plain tsc. The others have no BOLT: linux-arm64 is not
+# tried yet, BOLT's Mach-O support is experimental, and BOLT has no PE support.
 # Linux is static musl and non-PIE, so it starts on any x86-64 or arm64 Linux, Alpine too
 # (npm/README.md, "Linux libc"). Each Linux tsc builds natively on a Blacksmith runner of its arch.
+# The linux-x64 PGO tsc links lust's memfast.c in place of musl's memcpy, memmove, memcmp, bcmp and
+# memchr (crates/ts_goport/scripts/memfast.sh): musl's memcmp and bcmp are byte loops.
 # Windows (x86_64-pc-windows-msvc, aarch64-pc-windows-msvc) builds in Git Bash, with the C runtime
 # linked in (+crt-static), so tsc.exe needs no Visual C++ redistributable. jemalloc does not build
 # there: it uses the system allocator. Each PGO tsc builds natively, so its training runs on its
@@ -42,6 +46,9 @@ on:
       - "scripts/goport/pgo-train.sh"
       - "crates/ts_goport/scripts/copy-libs.sh"
       - "crates/ts_goport/scripts/build-pgo.sh"
+      - "crates/ts_goport/scripts/memfast.*"
+      - "crates/ts_goport/scripts/bolt-musl.sh"
+      - "crates/ts_goport/scripts/check-unwind.py"
       - "LICENSE"
       - "NOTICE.md"
       - "licenses/**"
@@ -134,6 +141,15 @@ jobs:
       - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }} --component llvm-tools
       - if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -yq musl-tools
+      # linux-x64: llvm-bolt, merge-fdata, llvm-objcopy and llvm-dwarfdump of LLVM 23 for bolt-musl.sh.
+      - name: BOLT tools
+        if: matrix.platform == 'linux-x64'
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb https://apt.llvm.org/$codename/ llvm-toolchain-$codename-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list
+          sudo apt-get update -q && sudo apt-get install -yq bolt-23 llvm-23
+          /usr/lib/llvm-23/bin/llvm-bolt --version | grep -m1 'LLVM version'
       # darwin-x64 on an arm64 Mac: the check runs the x86-64 tsc, so Rosetta 2 must be there.
       - name: Rosetta
         if: matrix.rosetta
@@ -176,6 +192,13 @@ jobs:
           # jemalloc stops at start when the kernel page is bigger than its build page. arm64 kernels
           # use 4, 16 or 64 KiB pages; 2^16 covers all three.
           [[ $target != aarch64-* ]] || echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
+          # linux-x64: lust's memfast.c in place of musl's memcpy, memmove, memcmp, bcmp and memchr
+          # (memfast.sh), in the PGO build only. The plain tsc keeps musl's, so the PGO check below
+          # also checks memfast against them.
+          if [[ $target == x86_64-unknown-linux-musl ]]; then
+            flags=$(crates/ts_goport/scripts/memfast.sh "$RUNNER_TEMP/memfast-wrap.o")
+            echo "PGO_RUSTFLAGS=$flags" | tee -a "$GITHUB_ENV"
+          fi
       # The plain tsc: the reference of the PGO check below, or the shipped tsc with no-pgo. PGO_LINK is
       # the link mode of both builds (build-pgo.sh): static on Linux, crt-static on Windows.
       - name: Build
@@ -201,10 +224,19 @@ jobs:
           PGO_BINS: tsgo
           PGO_CARGO: cargo
           CARGO_FEATURES: --features noembed
+          # The BOLT input needs the static relocations.
+          PGO_EMIT_RELOCS: ${{ matrix.platform == 'linux-x64' && '1' || '' }}
         run: |
           PGO_TRAIN="scripts/goport/pgo-train.sh run $RUNNER_TEMP/train" crates/ts_goport/scripts/build-pgo.sh "$RUNNER_TEMP/pgo"
           mkdir -p "$RUNNER_TEMP/out"
           cp "$RUNNER_TEMP/pgo/target-use/goport/tsgo${{ matrix.exe }}" "$RUNNER_TEMP/out/tsc${{ matrix.exe }}"
+      # linux-x64: BOLT of the PGO tsc. bolt-musl.sh also checks that the BOLT tsc still unwinds a
+      # caught panic (check-unwind.py).
+      - name: BOLT
+        if: matrix.platform == 'linux-x64'
+        run: |
+          crates/ts_goport/scripts/bolt-musl.sh "$RUNNER_TEMP/out/tsc" "$RUNNER_TEMP/train" "$RUNNER_TEMP/bolt"
+          cp "$RUNNER_TEMP/bolt/bin/tsc" "$RUNNER_TEMP/out/tsc"
       - name: Check the PGO tsc against the plain tsc
         if: ${{ !matrix.no-pgo }}
         run: scripts/goport/pgo-train.sh compare "$RUNNER_TEMP/train" "$RUNNER_TEMP/plain/tsc${{ matrix.exe }}" "$RUNNER_TEMP/out/tsc${{ matrix.exe }}"
@@ -233,6 +265,12 @@ jobs:
           [[ $rc == 2 ]] && grep -q "error TS2322" check.txt
           if [[ $RUNNER_OS == Linux ]]; then
             file "$dir/tsc" | tee /dev/stderr | grep -q "statically linked"
+            # memfast (linux-x64): the five __wrap_ functions, and none of musl's.
+            if [[ ${PGO_RUSTFLAGS:-} == *--wrap=* ]]; then
+              syms=$(nm "$dir/tsc" | grep -E ' [Tt] (__wrap_)?(memcpy|memmove|memcmp|bcmp|memchr)$' | awk '{print $3}' | sort | xargs)
+              echo "mem functions: $syms"
+              [[ $syms == "__wrap_bcmp __wrap_memchr __wrap_memcmp __wrap_memcpy __wrap_memmove" ]]
+            fi
             # Static: it starts on musl (Alpine) too.
             docker run --rm -v "$dir:/t:ro" alpine:3 /t/tsc --version
           fi
