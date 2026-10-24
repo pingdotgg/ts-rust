@@ -40,9 +40,8 @@ pub struct IncludeProcessor {
     pub(crate) computed_diagnostics: OnceCell<RefCell<DiagnosticsCollection>>,
     /// PORT: Go builds `computed_diagnostics` lazily, from
     /// `GetProgramDiagnostics` or `GetIncludeProcessorDiagnostics`. The port
-    /// builds it there too, and also after the bind that comes before a
-    /// checker read (`go_frontend::fill_include_diagnostics`), which can be
-    /// before `ExplainFiles` runs. The `redirectAndFileFormat` lines that the
+    /// builds it when it makes the program (`GoSharedState::new`), before
+    /// `ExplainFiles` can run. The `redirectAndFileFormat` lines that the
     /// collection makes (with absolute names) wait here until the port
     /// reaches a point where Go builds the collection
     /// (`mark_diagnostics_read`). Until then `ExplainFiles` makes its own
@@ -340,11 +339,12 @@ impl IncludeProcessor {
             ));
         }
 
-        // Go `ast.IsExternalOrCommonJSModule` reads the CommonJS indicator
-        // that the binder sets, so a file with only CommonJS syntax gets its
-        // line only when it is bound before this first (cached) call.
+        // PORT: Go `ast.IsExternalOrCommonJSModule` reads the indicators on
+        // the source file. `prog()` is not set during program construction,
+        // so this reads the `ParsedSourceFile` fields.
         if let Some(source_file) = &source_file
-            && super::program_new::is_external_or_common_js_module_of(source_file)
+            && (source_file.external_module_indicator.is_some()
+                || source_file.common_js_module_indicator.is_some())
         {
             let meta_data = program.get_source_file_meta_data(&file.path());
             // ts#64159 (includeprocessor.go:168): the package.json name is

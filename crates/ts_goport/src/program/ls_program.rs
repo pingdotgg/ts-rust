@@ -1459,14 +1459,9 @@ impl CompilerCheckerPool {
 // PORT: the Rust binder binds every file of the program version into one
 // arena (`program::bind_all`). A file version that an earlier version
 // bound is not bound again.
-// Go builds the include processor diagnostics at the first read, which in
-// the project system comes after this bind (project.go:598), so their file
-// format lines read the bound CommonJS indicator. They are built here, for
-// the checker threads (`go_frontend::fill_include_diagnostics`).
 pub fn bind_source_files(p: &NewProgram) {
     let _program = enter(p);
     bind_all();
-    super::go_frontend::fill_include_diagnostics(p);
 }
 
 // PORT: each `get_type_checker*` function makes the program of `p` current
