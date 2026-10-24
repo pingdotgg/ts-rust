@@ -1348,7 +1348,7 @@ pub(crate) struct StartedEmit {
     /// `None` with `buffer_early_emit_writes`: `tsc -b` makes other
     /// programs on this thread meanwhile, and their state is not the
     /// state of this program.
-    fingerprint: Option<(usize, (u64, u64), usize)>,
+    fingerprint: Option<(usize, (u64, u64), u64, usize)>,
 }
 
 /// PORT: not in Go (perf). The first half of `emit_files(program, options,

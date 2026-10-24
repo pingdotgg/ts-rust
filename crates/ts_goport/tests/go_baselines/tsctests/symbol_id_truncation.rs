@@ -23,7 +23,8 @@
 //! followups38 added the ids that `NewChecker` gives to binder symbols
 //! (merge errors) and the programs of one process with `--singleThreaded`
 //! (`tsc -b`, watch), whose counters run on from one program to the next
-//! (`program::CheckerPool::carry_symbol_ids`).
+//! (`program::CheckerPool::carry_symbol_ids`). idcarry1 added the same for
+//! the default checkers and `--checkers N`.
 
 use ts_goport::execute::tsc::ExitStatus;
 use ts_goport::fswatch::{Event, EventKind};
@@ -33,7 +34,7 @@ use crate::support::child::{
     command_line_in_process, new_in_process_test_sys, run_command_in_child, run_test_in_child,
 };
 use crate::support::runner::TscInput;
-use crate::support::test_sys::new_test_sys;
+use crate::support::test_sys::{TSC_LIB_PATH, new_test_sys};
 
 const PROJECT: &str = "/home/src/workspaces/project";
 
@@ -354,6 +355,173 @@ fn ids_count_on_across_watch_cycles_single_threaded() {
                 "second build: {}",
                 sys.output_text()
             );
+        },
+    );
+}
+
+/// `class <name> { static readonly #<member> = Symbol(); ... }` with an
+/// error that prints the private name, one line (idcarry1 cases).
+fn symbol_class(name: &str, member: &str) -> String {
+    format!(
+        "class {name} {{ static readonly #{member} = Symbol(); static t() {{ const n: number = {name}.#{member}; }} }}\n"
+    )
+}
+
+/// The TS2322 error of `symbol_class(class, member)` on `line` of `file`,
+/// with the class's symbol id `id`. The output writes the internal prefix as
+/// U+FFFD, as Go's does.
+fn symbol_class_error(file: &str, line: usize, class: &str, id: usize, member: &str) -> String {
+    format!(
+        "{file}({line},61): error TS2322: Type 'typeof {class}.\u{FFFD}#{id}@#{member}' is not assignable to type 'number'.\n"
+    )
+}
+
+/// `files` (name in the project and text), with the bundled libs at the
+/// default lib path. The test system's own libs are small stubs, and Go's
+/// ids here come from the checks of the real libs.
+fn with_real_libs(files: Vec<(&str, String)>) -> TscInput {
+    let libs = ts_goport::frontend::tsoptions::LIB_FILES_SET
+        .iter()
+        .map(String::as_str)
+        .chain(["lib.d.ts"])
+        .filter_map(|name| {
+            let text =
+                ts_goport::frontend::bundled::bundled_text(&format!("bundled:///libs/{name}"))?;
+            Some((format!("{TSC_LIB_PATH}/{name}"), text.to_string()))
+        });
+    TscInput {
+        files: files
+            .into_iter()
+            .map(|(name, text)| (format!("{PROJECT}/{name}"), text))
+            .chain(libs)
+            .map(|(name, text)| (name, text.into()))
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// The diagnostics of `tsc -b --pretty false` plus `extra` on idcarry1's
+/// `build-def`: p2 references p1, each has one file with two classes with a
+/// private name, and the projects check the es2022 lib.
+fn build_def(extra: &[&str]) -> String {
+    let config = |files: &str, references: &str| {
+        format!(
+            r#"{{"compilerOptions":{{"strict":true,"composite":true,"emitDeclarationOnly":true,"outDir":"out","types":[],"lib":["es2022"],"target":"es2022"}},"files":[{files}]{references}}}"#
+        )
+    };
+    let input = with_real_libs(vec![
+        (
+            "tsconfig.json",
+            r#"{"files":[],"references":[{"path":"p1"},{"path":"p2"}]}"#.into(),
+        ),
+        ("p1/a.ts", symbol_class("A", "a") + &symbol_class("B", "b")),
+        ("p1/tsconfig.json", config(r#""a.ts""#, "")),
+        ("p2/b.ts", symbol_class("C", "c") + &symbol_class("D", "d")),
+        (
+            "p2/tsconfig.json",
+            config(r#""b.ts""#, r#","references":[{"path":"../p1"}]"#),
+        ),
+    ]);
+    let sys = new_test_sys(&input, false);
+    let mut args: Vec<String> = ["-b", "--pretty", "false"].map(String::from).to_vec();
+    args.extend(extra.iter().map(|arg| arg.to_string()));
+    let result = run_command_in_child(&sys, &args).unwrap_or_else(|err| panic!("tsgo: {err}"));
+    assert!(result.unported.is_none(), "unported {:?}", result.unported);
+    // The test system adds the list of files of each project.
+    sys.output_text()
+        .lines()
+        .filter(|line| !line.starts_with("!!! List files"))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+/// The errors of `build_def` when p1's checkers gave `p1_ids` global ids:
+/// p1's binds give A and B ids 1 and 2, so p2's give C and D the next two.
+fn build_def_expected(p1_ids: usize) -> String {
+    symbol_class_error("p1/a.ts", 1, "A", 1, "a")
+        + &symbol_class_error("p1/a.ts", 2, "B", 2, "b")
+        + &symbol_class_error("p2/b.ts", 1, "C", p1_ids + 3, "c")
+        + &symbol_class_error("p2/b.ts", 2, "D", p1_ids + 4, "d")
+}
+
+// idcarry1 (R228 reviewer item 1). Go's symbol id counters are per process,
+// so p2 counts on from the global ids that p1's checkers gave, in check and
+// d.ts emit. Each checker of the port counts on its own; the pool hands its
+// ids back to the loading thread when p1 is built
+// (`program::CheckerPool::carry_symbol_ids`). With 4 checkers Go gives
+// `SharedArrayBuffer` a block id on one checker before another names it
+// (`getNameOfSymbolAsWritten`), so p1 gives 34 global ids; with 1 or 2
+// checkers the name comes first and p1 gives 35. The expected texts are
+// the output of `tsgo-oracle-3e9236361fa9 -b --pretty false` (with the same
+// options) on the same files (idcarry1 `build-def`; the default printed
+// `#37 #38` in 51 of 52 runs and `#38 #39` once, `--checkers 1` and `2`
+// printed `#38 #39` in every run).
+#[test]
+fn ids_count_on_across_the_projects_of_tsc_b() {
+    assert_eq!(build_def(&[]), build_def_expected(34));
+}
+
+#[test]
+fn ids_count_on_across_the_projects_of_tsc_b_with_one_or_two_checkers() {
+    assert_eq!(build_def(&["--checkers", "1"]), build_def_expected(35));
+    assert_eq!(build_def(&["--checkers", "2"]), build_def_expected(35));
+}
+
+#[test]
+fn ids_count_on_across_watch_cycles() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::ids_count_on_across_watch_cycles",
+        || {
+            // idcarry1 `w1`: the first build gives 36 global ids after the 2
+            // ids of A and C, and the later builds check only b.ts and give
+            // none. So D gets 39 and E 40. The texts are the output of
+            // `tsgo-oracle-3e9236361fa9 -w --pretty false` on the same files
+            // (6 of 6 runs).
+            let b_ts = |class: &str, member: &str| symbol_class(class, member) + "export {};\n";
+            let a_ts = symbol_class("A", "a")
+                + "type R = Record<'x' | 'y', number>;
+declare const k1: unique symbol;
+export const obj = { [k1]: 1, m(a: Partial<R>) { return a; } };
+const bad: string = obj;
+";
+            let input = with_real_libs(vec![
+                ("a.ts", a_ts),
+                ("b.ts", b_ts("C", "c")),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"strict":true,"noEmit":true,"types":[],"lib":["es2022"],"target":"es2022"},"files":["a.ts","b.ts"]}"#.into(),
+                ),
+            ]);
+            let sys = new_in_process_test_sys(&input);
+            let args = ["-w", "--pretty", "false"].map(String::from);
+            let result = command_line_in_process(&context::background(), &sys, &args);
+            let mut w = result
+                .watcher
+                .expect("expected Watcher to be non-nil in watch mode");
+            let first = sys.output_text();
+            for error in [
+                symbol_class_error("a.ts", 1, "A", 2, "a"),
+                symbol_class_error("b.ts", 1, "C", 1, "c"),
+            ] {
+                assert!(first.contains(&error), "first build: {first}");
+            }
+            for (class, member, id) in [("D", "d", 39), ("E", "e", 40)] {
+                sys.set_output_bytes(Vec::new());
+                let b = format!("{PROJECT}/b.ts");
+                let _ = sys.fs_from_file_map().write_file(&b, &b_ts(class, member));
+                sys.mock_watch_backend().send_events(vec![Event {
+                    kind: EventKind::Update,
+                    path: b,
+                }]);
+                w.do_cycle();
+                let output = sys.output_text();
+                for error in [
+                    symbol_class_error("a.ts", 1, "A", 2, "a"),
+                    symbol_class_error("b.ts", 1, class, id, member),
+                ] {
+                    assert!(output.contains(&error), "build of {class}: {output}");
+                }
+            }
         },
     );
 }

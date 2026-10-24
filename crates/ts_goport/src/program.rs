@@ -342,11 +342,40 @@ struct CheckerPool {
     /// (`send_emit_pool_jobs`). It stops with the checkers. wasm has none.
     #[cfg(not(target_family = "wasm"))]
     emit: Option<EmitPool>,
-    /// `--singleThreaded`: the next symbol id and block of the loading
-    /// thread when the pool was made. The pool's checker hands its symbol
-    /// ids to the next pool (`symbol_id_carry_start`) or back to the loading
-    /// thread when it stops (`carry_symbol_ids`). None for other pools.
-    carry_from: Option<(u64, u64)>,
+    /// How the checkers hand their symbol ids back to the loading thread
+    /// (`carry_symbol_ids`). None for a pool that does not, or did.
+    carry: Option<IdCarry>,
+    /// The jobs sent to the checkers that have not given their result yet
+    /// (`send_thread_job`, `idle`).
+    #[cfg(not(target_family = "wasm"))]
+    pending: Arc<AtomicUsize>,
+}
+
+/// How a checker pool hands the symbol ids of its checkers back to the
+/// loading thread (`CheckerPool::carry_symbol_ids`), so the next program
+/// counts on from them as in Go (`symbol_id_carry_start`).
+#[derive(Clone, Copy)]
+struct IdCarry {
+    /// A one-checker `--singleThreaded` pool: the carry waits for the
+    /// checker's jobs when the next such pool is made, the next such
+    /// program binds, or the pool stops. Other pools carry only when they
+    /// have no job.
+    single: bool,
+    /// Outside `tsc -b` and watch mode (`carry_symbol_ids_of_every_pool`):
+    /// the next symbol id and block of the loading thread when the pool was
+    /// made. The loading thread takes the ids only when it gave none since.
+    only_from: Option<(u64, u64)>,
+}
+
+impl IdCarry {
+    /// What each worker of a pool of `count` checkers records for the carry
+    /// (`ast::record_symbol_ids`): None for no log, else whether it counts
+    /// its block ids. An `only_from` pool has one worker, whose ids keep
+    /// their numbers, so it needs no log. Only a merge of two workers or
+    /// more reads the block ids before each id (`ast::IdLog::clock`).
+    fn log(self, count: usize) -> Option<bool> {
+        self.only_from.is_none().then_some(count > 1)
+    }
 }
 
 impl CheckerPool {
@@ -391,12 +420,13 @@ impl CheckerPool {
     /// threads, with the threads of the emit pool.
     #[cfg(not(target_family = "wasm"))]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
-        self.carry_symbol_ids();
+        self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
         let CheckerPool {
             workers,
             mut threads,
             emit,
-            carry_from: _,
+            carry: _,
+            pending: _,
         } = self;
         // A pool that only ends with the process forgets its checkers and
         // synthetic nodes (see `create_checkers`); a released program frees
@@ -421,11 +451,8 @@ impl CheckerPool {
     /// until the process (the wasm instance) ends.
     #[cfg(target_family = "wasm")]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
-        self.carry_symbol_ids();
-        let CheckerPool {
-            checkers,
-            carry_from: _,
-        } = self;
+        self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
+        let CheckerPool { checkers, carry: _ } = self;
         for slot in checkers {
             if let InlineChecker::Made(checker, mut ids) = slot {
                 ids.run(|| drop(checker));
@@ -434,60 +461,96 @@ impl CheckerPool {
         Vec::new()
     }
 
-    /// A `--singleThreaded` pool (`carry_from`): makes the symbol ids of its
-    /// checker the symbol ids of this thread (the loading thread), so the
-    /// next program's checker starts from them (`WorkerSeed`). When this
-    /// thread gave ids after the pool was made, or took the ids of a later
-    /// pool, it keeps its own.
+    /// Hands the symbol ids of the checkers to this thread (the loading
+    /// thread), so the next program's checkers start from them
+    /// (`WorkerSeed`, `ast::carry_symbol_ids`). With `wait`, after the jobs
+    /// sent so far; else only when the pool has no job, so this thread does
+    /// not wait for a check. A pool hands its ids on once: the ids that its
+    /// checkers give later stay on their threads.
     // PORT: Go's symbol id counters (global and block) are per process, so
     // the ids of the next program (`tsc -b`, a watch cycle) count on from the
-    // last one, and a bound file keeps the ids of its symbols
-    // (`ast::SymbolIdCarry`). With more checkers Go's ids race, and each
-    // checker here counts on its own, so only a one-checker
-    // `--singleThreaded` pool hands its ids on.
-    fn carry_symbol_ids(&mut self) {
-        let Some(from) = self.carry_from else {
+    // last one, and a bound file keeps the ids of its symbols. Here each
+    // checker counts on its own (`ast::id_seed`).
+    fn carry_symbol_ids(&mut self, wait: bool) {
+        let Some(carry) = self.carry else {
             return;
         };
-        if (next_ids().1, next_symbol_block_id()) != from {
+        if !wait && !self.idle() {
             return;
         }
-        if let Some(carry) = self.symbol_ids() {
-            install_symbol_ids(carry);
+        self.carry = None;
+        if carry
+            .only_from
+            .is_some_and(|from| (next_ids().1, next_symbol_block_id()) != from)
+        {
+            return;
         }
+        crate::ast::carry_symbol_ids(|base| self.worker_symbol_ids(base));
     }
 
-    /// A copy of the symbol ids of the pool's first checker, after the jobs
-    /// sent to it so far.
+    /// True when every job sent to the checkers has given its result.
     #[cfg(not(target_family = "wasm"))]
-    fn symbol_ids(&self) -> Option<SymbolIdCarry> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.workers
-            .first()?
-            .send(Box::new(move || {
-                let _ = sender.send(copy_symbol_ids());
-            }))
-            .ok()?;
-        receiver.recv().ok()
+    fn idle(&self) -> bool {
+        self.pending.load(Ordering::Acquire) == 0
     }
 
-    /// wasm: a copy of the symbol ids of the pool's first checker, made
-    /// first if no job has made it yet.
+    /// wasm: each job runs when it is sent.
     #[cfg(target_family = "wasm")]
-    fn symbol_ids(&mut self) -> Option<SymbolIdCarry> {
+    fn idle(&self) -> bool {
+        true
+    }
+
+    /// The symbol ids of each checker that `base` (the loading thread's)
+    /// does not have, after the jobs sent to it so far
+    /// (`ast::worker_symbol_ids`), in pool order.
+    #[cfg(not(target_family = "wasm"))]
+    fn worker_symbol_ids(&self, base: &SymbolIdBase) -> Vec<WorkerSymbolIds> {
+        let receivers: Vec<_> = self
+            .workers
+            .iter()
+            .filter_map(|worker| {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let base = base.clone();
+                worker
+                    .send(Box::new(move || {
+                        let ids = worker_symbol_ids(&base);
+                        // Before the send: the loading thread takes its
+                        // lineage ids back (`ast::carry_symbol_ids`).
+                        drop(base);
+                        let _ = sender.send(ids);
+                    }))
+                    .ok()?;
+                Some(receiver)
+            })
+            .collect();
+        receivers
+            .into_iter()
+            .filter_map(|receiver| receiver.recv().ok())
+            .collect()
+    }
+
+    /// wasm: the symbol ids of each checker that `base` does not have. A
+    /// checker that no job has made is made first, as Go makes every
+    /// checker of the pool.
+    #[cfg(target_family = "wasm")]
+    fn worker_symbol_ids(&mut self, base: &SymbolIdBase) -> Vec<WorkerSymbolIds> {
         let count = self.checkers.len();
-        let slot = self.checkers.first_mut()?;
-        if matches!(slot, InlineChecker::Unmade(_)) {
-            let (checker, ids) =
-                std::mem::replace(slot, InlineChecker::Busy).into_checker(0, count);
-            *slot = InlineChecker::Made(checker, ids);
-        }
-        match slot {
-            InlineChecker::Made(_, ids) | InlineChecker::Released(ids) => {
-                Some(ids.run(copy_symbol_ids))
-            }
-            InlineChecker::Unmade(_) | InlineChecker::Busy => None,
-        }
+        (0..count)
+            .filter_map(|index| {
+                let slot = &mut self.checkers[index];
+                if matches!(slot, InlineChecker::Unmade(_)) {
+                    let (checker, ids) =
+                        std::mem::replace(slot, InlineChecker::Busy).into_checker(index, count);
+                    *slot = InlineChecker::Made(checker, ids);
+                }
+                match slot {
+                    InlineChecker::Made(_, ids) | InlineChecker::Released(ids) => {
+                        Some(ids.run(|| worker_symbol_ids(base)))
+                    }
+                    InlineChecker::Unmade(_) | InlineChecker::Busy => None,
+                }
+            })
+            .collect()
     }
 }
 
@@ -1921,10 +1984,11 @@ fn trace_bind_source_file(file: Node) -> Option<crate::tracing::Pop> {
 /// thread's state, so anything it adds would be lost. The early emit
 /// (`execute::incremental::Program::start_emit`) also reads it:
 /// an emit pool starts from a copy of the same state.
-pub(crate) fn bind_thread_fingerprint() -> (usize, (u64, u64), usize) {
+pub(crate) fn bind_thread_fingerprint() -> (usize, (u64, u64), u64, usize) {
     (
         synthetic_slot_count(),
         next_ids(),
+        next_symbol_block_id(),
         go_frontend::lazy_jsdoc_count(),
     )
 }
@@ -4254,36 +4318,89 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
     checker
 }
 
-/// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id and block of this thread for a one-checker `--singleThreaded`
-/// pool (`singleThreaded` on the command line or in the project tsconfig).
-/// Watch mode makes the next program before it releases the last one, so
-/// the pool of the last program can still be here: its symbol ids become
-/// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
-/// builders the last pool can still be checking: the copy then waits for
-/// its jobs, so such projects check one after the other (PORTING.md,
+thread_local! {
+    /// Set on the loading thread of `tsc -b` and watch mode while they
+    /// build (`carry_symbol_ids_of_every_pool`).
+    static CARRY_EVERY_POOL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `tsc -b` and watch mode call it on their loading thread for each build:
+/// while the result lives, every checker pool that this thread makes hands
+/// its symbol ids back to it, so the programs made after count on from
+/// them, as Go's process counters do (`CheckerPool::carry_symbol_ids`). A
+/// pool does so when its `tsc -b` task is built, before watch mode makes
+/// the next program (`carry_symbol_ids_of`), or else when its program is
+/// released. Elsewhere only a one-checker `--singleThreaded` pool does (the
+/// API `emitProgram`); the language server's checkers are not in pools.
+pub fn carry_symbol_ids_of_every_pool() -> CarryEveryPool {
+    CarryEveryPool(CARRY_EVERY_POOL.with(|every| every.replace(true)))
+}
+
+/// `carry_symbol_ids_of_every_pool` until it drops: then the flag is as it
+/// was before. A pool keeps the carry that it was made with.
+#[must_use = "the pools of this thread carry their ids only while it lives"]
+pub struct CarryEveryPool(bool);
+
+impl Drop for CarryEveryPool {
+    fn drop(&mut self) {
+        CARRY_EVERY_POOL.with(|every| every.set(self.0));
+    }
+}
+
+/// The checker pool of `program`, whose check and emit are done, hands its
+/// symbol ids back to this thread (`CheckerPool::carry_symbol_ids`): when
+/// its `tsc -b` task is built, or before watch mode makes the next program.
+/// The programs made after count on from them. Go's builders share the
+/// counters, so a task that starts after another is built counts on from
+/// that one's ids. The ids of tasks that build at the same time race in Go;
+/// here a task that is not built yet hands its ids on later.
+pub fn carry_symbol_ids_of(program: &'static GoProgram) {
+    POOLS.with(|pools| {
+        if let Some(pool) = pools.borrow_mut().get_mut(&program.id) {
+            pool.carry_symbol_ids(pool.carry.is_some_and(|carry| carry.single));
+        }
+    });
+}
+
+/// `CheckerPool::carry` of a new pool of `count` checkers: every pool in
+/// `tsc -b` and watch mode (`carry_symbol_ids_of_every_pool`), and
+/// elsewhere a one-checker `--singleThreaded` pool (`singleThreaded` on the
+/// command line or in the project tsconfig). A `--singleThreaded` pool
+/// first takes the ids of the last such pool of this thread
+/// (`carry_last_pool_symbol_ids`): watch mode makes the next program
+/// before it releases the last one, so that pool can still be here. With
+/// more `tsc -b` builders it can still be checking: the carry then waits
+/// for its jobs, so such projects check one after the other (PORTING.md,
 /// Threads).
-fn symbol_id_carry_start(count: usize) -> Option<(u64, u64)> {
-    if count != 1 || !single_threaded() {
+fn symbol_id_carry_start(count: usize) -> Option<IdCarry> {
+    let single = count == 1 && single_threaded();
+    let every = CARRY_EVERY_POOL.with(std::cell::Cell::get);
+    if !single && !every {
         return None;
     }
-    carry_last_pool_symbol_ids();
-    Some((next_ids().1, next_symbol_block_id()))
+    if single {
+        carry_last_pool_symbol_ids();
+    }
+    Some(IdCarry {
+        single,
+        only_from: (!every).then(|| (next_ids().1, next_symbol_block_id())),
+    })
 }
 
 /// The carry of `symbol_id_carry_start`: the last one-checker
 /// `--singleThreaded` pool of this thread hands its symbol ids to this
-/// thread (`CheckerPool::carry_symbol_ids`). The bind of the next program
-/// takes them before it gives ids (`give_private_name_class_ids`).
+/// thread after its jobs (`CheckerPool::carry_symbol_ids`). The bind of the
+/// next such program takes them before it gives ids
+/// (`give_private_name_class_ids`).
 fn carry_last_pool_symbol_ids() {
     POOLS.with(|pools| {
         let mut pools = pools.borrow_mut();
         let last = pools
             .iter_mut()
-            .filter(|(_, pool)| pool.carry_from.is_some())
+            .filter(|(_, pool)| pool.carry.is_some_and(|carry| carry.single))
             .max_by_key(|&(&id, _)| id);
         if let Some((_, pool)) = last {
-            pool.carry_symbol_ids();
+            pool.carry_symbol_ids(true);
         }
     });
 }
@@ -4309,7 +4426,7 @@ fn start_checkers(count: usize) -> CheckerPool {
     let claims = arena
         .is_none()
         .then(Arc::<crate::jemalloc_layout::ArenaClaims>::default);
-    let carry_from = symbol_id_carry_start(count);
+    let carry = symbol_id_carry_start(count);
     let (workers, threads): (Vec<_>, Vec<_>) = (0..count)
         .map(|index| {
             let (sender, receiver) = std::sync::mpsc::channel::<Job>();
@@ -4328,6 +4445,9 @@ fn start_checkers(count: usize) -> CheckerPool {
                     #[cfg(all(feature = "jemalloc", target_os = "linux"))]
                     let _manual_arena = claims.and_then(|claims| claims.claim());
                     seed.install();
+                    if let Some(count_block_ids) = carry.and_then(|carry| carry.log(count)) {
+                        record_symbol_ids(count_block_ids);
+                    }
                     let checker = new_pool_checker(index, count);
                     WORKER_CHECKER.with(|slot| *slot.borrow_mut() = Some(checker));
                     WORKER_INDEX.with(|slot| slot.set(Some(index)));
@@ -4355,7 +4475,8 @@ fn start_checkers(count: usize) -> CheckerPool {
         workers,
         threads,
         emit: None,
-        carry_from,
+        carry,
+        pending: Arc::default(),
     }
 }
 
@@ -4366,14 +4487,17 @@ fn start_checkers(count: usize) -> CheckerPool {
 fn start_checkers(count: usize) -> CheckerPool {
     // First, as on native: the carry of the last pool becomes this thread's
     // ids, and each checker starts from them (`id_seed`).
-    let carry_from = symbol_id_carry_start(count);
+    let carry = symbol_id_carry_start(count);
     let checkers = (0..count)
-        .map(|_| InlineChecker::Unmade(WorkerIds(id_seed().into())))
+        .map(|_| {
+            let mut ids = WorkerIds(id_seed().into());
+            if let Some(count_block_ids) = carry.and_then(|carry| carry.log(count)) {
+                ids.run(|| record_symbol_ids(count_block_ids));
+            }
+            InlineChecker::Unmade(ids)
+        })
         .collect();
-    CheckerPool {
-        checkers,
-        carry_from,
-    }
+    CheckerPool { checkers, carry }
 }
 
 /// wasm: a checker of the inline pool. Making it on its first job, and
@@ -4559,11 +4683,16 @@ fn send_thread_job<R: Send + 'static>(
     f: impl FnOnce() -> R + Send + 'static,
 ) -> JobReceiver<R> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let job: Job = Box::new(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        let _ = sender.send(result);
-    });
     with_pool(|pool| {
+        let pending = Arc::clone(&pool.pending);
+        pending.fetch_add(1, Ordering::Relaxed);
+        let job: Job = Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            // Before the result: a thread that has every result sees the
+            // pool idle (`CheckerPool::idle`). A job gives no id after it.
+            pending.fetch_sub(1, Ordering::Release);
+            let _ = sender.send(result);
+        });
         pool.workers[index]
             .send(job)
             .expect("checker thread stopped");
