@@ -393,7 +393,7 @@ impl ConfigFileRegistryBuilder {
         if include_tsconfig_dir {
             globs.push(get_recursive_glob_pattern(&tsconfig_dir));
         }
-        let extended_source_files: &[String] = match &command_line {
+        let extended_source_files: &[&str] = match &command_line {
             Some(command_line) => command_line.extended_source_files(),
             None => &[],
         };
@@ -403,7 +403,7 @@ impl ConfigFileRegistryBuilder {
             {
                 continue;
             }
-            globs.push(file_name.clone());
+            globs.push(file_name.to_string());
         }
         if !external_directories.is_empty() {
             let (common_parents, ignored_external_dirs) = tspath::get_common_parents(
@@ -1183,7 +1183,7 @@ impl ConfigFileRegistryBuilder {
         &self,
         file_name: &str,
         path: &tspath::Path,
-        resolution_stack: &[tspath::Path],
+        resolution_stack: &tsoptions::ResolutionStack,
         _host: &dyn tsoptions::ParseConfigHost,
     ) -> Rc<tsoptions::ExtendedConfigCacheEntry> {
         let mut content = String::new();
@@ -1204,7 +1204,7 @@ impl ConfigFileRegistryBuilder {
                     file_name: file_name.to_string(),
                     content,
                     fs: source,
-                    resolution_stack: resolution_stack.to_vec(),
+                    resolution_stack: resolution_stack.clone(),
                     host,
                     cache: Some(cache),
                 },
@@ -1294,7 +1294,7 @@ impl tsoptions::ExtendedConfigCache for ConfigFileRegistryBuilder {
         &self,
         file_name: &str,
         path: &tspath::Path,
-        resolution_stack: &[tspath::Path],
+        resolution_stack: &tsoptions::ResolutionStack,
         host: &dyn tsoptions::ParseConfigHost,
     ) -> Rc<tsoptions::ExtendedConfigCacheEntry> {
         ConfigFileRegistryBuilder::get_extended_config(

@@ -420,7 +420,12 @@ impl Watcher {
 
         if !self.config_file_name.is_empty() {
             let mut config_file_paths = vec![self.config_file_name.clone()];
-            config_file_paths.extend(self.config.extended_source_files().iter().cloned());
+            config_file_paths.extend(
+                self.config
+                    .extended_source_files()
+                    .iter()
+                    .map(|f| f.to_string()),
+            );
             self.config_file_paths = config_file_paths;
         }
 
@@ -1309,7 +1314,12 @@ impl Watcher {
         }
         self.config_has_errors = false;
         let mut config_file_paths = vec![self.config_file_name.clone()];
-        config_file_paths.extend(config_parse_result.extended_source_files().iter().cloned());
+        config_file_paths.extend(
+            config_parse_result
+                .extended_source_files()
+                .iter()
+                .map(|f| f.to_string()),
+        );
         self.config_file_paths = config_file_paths;
         // PORT: ts#64457 makes Go call `ParsedOptions.Equals`
         // (tsoptions/parsedoptions.go:21) in place of `reflect.DeepEqual`.
