@@ -707,7 +707,9 @@ impl CompilerHost for BuildCompilerHost {
         self.host.get_source_file(opts)
     }
 
-    // PORT: not in Go (see `BuildHost::prefetch`).
+    // PORT: not in Go (see `CompilerHost::prefetch_parses`). The build
+    // host keeps the default: each program parses ahead on workers, also
+    // in `tsc -b --watch`, as Go parses on goroutines.
     fn prefetch_parses(&self) -> bool {
         self.host.prefetch_parses()
     }

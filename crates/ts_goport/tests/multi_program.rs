@@ -729,17 +729,21 @@ fn watch_copied_errors_read_their_file_versions() {
     fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
 }
 
-/// watchfree1: Go `tsc -b --watch` parses every file of a project that it
-/// builds again in each cycle (`resetCaches`). Here a file keeps its parse
-/// while it does not change (`BuildHost::watch_source_file`), and from the
-/// second cycle on a new parse is a freeable file version. Four edits of
-/// `core/src/a.ts` build `core` again each time, and parse only `a.ts`
-/// again. The output (times removed) equals `expected.txt`, the output of
+/// watchfree1, watchreset1: Go `tsc -b --watch` parses every file of a
+/// project that it builds again in each cycle (`resetCaches`), and so does
+/// the port; from the second parse of a file on, a parse is a freeable file
+/// version. Four edits of `core/src/a.ts` build `core` again each time, and
+/// each build parses its 5 files again: `lib.es5.d.ts`,
+/// `lib.decorators.d.ts`, `lib.decorators.legacy.d.ts`, `a.ts` and `c.ts`
+/// (Go at 3e9236361fa9 with a parse trace: 5 parses in each cycle after the
+/// first build, target/continuation-r97-goport/after231/watchreset1/out,
+/// watch-build.go.*trace.*). The output (times removed) equals
+/// `expected.txt`, the output of
 /// `tsgo-oracle-673a5f17d713 -b -w tsconfig.json --pretty false` for the
 /// same edits, and the outputs of `core` equal its outputs
-/// (`expected-out`). Each version of `a.ts` dies but the last: its parse is
-/// kept, and the `c.ts` error of the last build points at it
-/// (`BuildTask::held_file_versions`).
+/// (`expected-out`). Each version dies but the last `a.ts` and `c.ts`: the
+/// `c.ts` error of the last build and its related information point at
+/// them (`BuildTask::held_file_versions`).
 // PORT: no Go counterpart for the file versions; the output is Go's.
 #[test]
 fn watch_build_frees_file_versions() {
@@ -784,8 +788,8 @@ fn watch_build_frees_file_versions() {
     let (made, dead) = file_version_counts(&stdout);
     assert_eq!(
         (made, dead),
-        (4, 3),
-        "each build after the first parses a.ts again; the last a.ts version lives"
+        (20, 18),
+        "each build after the first parses the 3 libs, a.ts and c.ts again; the last a.ts and c.ts live"
     );
     fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
 }

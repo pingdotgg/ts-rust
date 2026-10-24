@@ -1453,9 +1453,9 @@ mod tests {
 
     // followups32 item 6: `take_data_of_dying_versions` (`tsc -b -w` freed
     // the kept parses that a config change dropped with it until
-    // watchreset1): a version whose last holder that is dies there, before its data goes
-    // to the build's free thread, so its id is dead, it is not in the
-    // registry and a read of it panics while the free thread is busy. The
+    // watchreset1): a version whose last holder that is dies there, before
+    // its data goes to the build's free thread, so its id is dead, it is not
+    // in the registry and a read of it panics while the free thread is busy. The
     // free thread frees its data later. A version with another holder lives
     // until that holder lets go. Its thread holds the store build lock
     // (`publish_pinned`).

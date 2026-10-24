@@ -1,9 +1,17 @@
-//! Port-only tests of the file versions that `tsc -b --watch` keeps
-//! (watchfix1 part 2): a config change drops the kept parses of a project
-//! whose module indicator options it changes, and keeps the parses whose
-//! options stay and those of the other projects (item 3), and a task
-//! whose status is reset lets go of the versions that its errors held
-//! (item 4).
+//! Port-only tests of the file versions of `tsc -b --watch` (watchfix1
+//! part 2, then watchreset1). Until watchreset1 the port kept parses from
+//! one cycle to the next, and these tests checked which kept parses a
+//! config change dropped (item 3) and that a task whose status is reset
+//! lets go of the versions that its errors held (item 4). Since
+//! watchreset1 the port keeps no parse across cycles, as Go
+//! (build/orchestrator.go:506-513 `resetCaches`, build/host.go:50-56): each
+//! cycle parses again every file of each project that it builds, the
+//! bundled libs too. The tests keep their names. Each one now checks that
+//! the count of new versions per cycle is Go's count of parses (an
+//! instrumented Go at 3e9236361fa9 that runs the same sessions on Go's
+//! test system: target/continuation-r97-goport/after231/watchreset1,
+//! goinst/watchreset_parse_test.go and logs/go-wr1-test.log), and that each
+//! version dies after its cycle unless an error of its task holds it.
 //!
 //! Go has no file versions: its GC frees a file when no program, cache or
 //! diagnostic holds it. The output of each cycle is Go's: the lines that
@@ -66,9 +74,8 @@ fn session(
 }
 
 /// `(made, dead)` file versions once the dead count reaches `dead` or 10 s
-/// pass: a dropped version that no other holder keeps dies on the build
-/// thread, and the free thread frees its data
-/// (`BuildHost::drop_kept_parses_whose_module_indicator_options_change`).
+/// pass: a version of a released program that no other holder keeps dies
+/// at the release, and a free thread frees its data.
 fn file_versions(dead: usize) -> (usize, usize) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -117,19 +124,12 @@ fn build_watch_drops_kept_parses_whose_module_indicator_options_changed() {
                         out.contains("Found 0 errors. Watching for file changes."),
                         "edit {i}: {out}"
                     );
-                    let expected = match i {
-                        // s2.ts v2.
-                        0 => (1, 0),
-                        // The module indicator inputs stay: both kept
-                        // parses are used again, nothing is parsed.
-                        1 => (1, 0),
-                        // `force` changes them: s1.ts is parsed again, and
-                        // the kept s2.ts v2, which no build of the cycle
-                        // takes, goes. Before, it went back to the kept
-                        // parses for the rest of the session.
-                        _ => (2, 1),
-                    };
-                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_drops_kept_parses_whose_module_indicator_options_changed edit {i}: {:?}", c).unwrap(); } }
+                    // Each cycle parses lib.es5.d.ts, s1.ts and s2.ts again
+                    // (Go: 3 parses), and the last one, with `force` and
+                    // only s1.ts, lib.es5.d.ts and s1.ts (Go: 2). No error
+                    // holds them, so each dies after its cycle.
+                    let expected = [(3, 3), (6, 6), (8, 8)][i];
+                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
                 },
             );
         },
@@ -166,21 +166,12 @@ fn build_watch_keeps_kept_parses_whose_module_indicator_inputs_stay() {
                         out.contains("Found 0 errors. Watching for file changes."),
                         "edit {i}: {out}"
                     );
-                    let expected = match i {
-                        // s1.ts v2.
-                        0 => (1, 0),
-                        // The `module` and `jsx` edits give no file other
-                        // module indicator options (Go
-                        // `GetExternalModuleIndicatorOptions`): both kept
-                        // parses are used again, nothing is parsed. Before,
-                        // each of these edits dropped the kept s1.ts.
-                        1 | 2 => (1, 0),
-                        // react-jsx gives every file the `jsx` option:
-                        // s1.ts is parsed again and its kept v2 goes. The
-                        // kept m1.ts did not read it, so it stays.
-                        _ => (2, 1),
-                    };
-                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_kept_parses_whose_module_indicator_inputs_stay edit {i}: {:?}", c).unwrap(); } }
+                    // Each cycle parses lib.es5.d.ts, s1.ts and m1.ts again
+                    // (Go: 3 parses), also when the `module` and `jsx`
+                    // edits give no file other module indicator options.
+                    // No error holds them, so each dies after its cycle.
+                    let expected = [(3, 3), (6, 6), (9, 9), (12, 12)][i];
+                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
                 },
             );
         },
@@ -225,20 +216,12 @@ fn build_watch_keeps_script_parses_from_legacy_to_auto_and_back() {
                         out.contains("Found 0 errors. Watching for file changes."),
                         "edit {i}: {out}"
                     );
-                    let expected = match i {
-                        // s1.ts v2, then q1.mts v2.
-                        0 => (1, 0),
-                        1 => (2, 0),
-                        // `auto` (the default) and `legacy` give s1.ts the
-                        // same options, so its kept v2 stays. They give
-                        // q1.mts other ones (`force` by its extension with
-                        // `auto`): it is parsed again and its kept version
-                        // goes. Before, s1.ts v2 went too, and s1.ts was
-                        // parsed again.
-                        2 => (3, 1),
-                        _ => (4, 2),
-                    };
-                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_script_parses_from_legacy_to_auto_and_back edit {i}: {:?}", c).unwrap(); } }
+                    // Each cycle parses lib.es5.d.ts, s1.ts, q1.mts and m1.ts
+                    // again (Go: 4 parses), whether the module indicator
+                    // options of a file change or not. No error holds
+                    // them, so each dies after its cycle.
+                    let expected = [(4, 4), (8, 8), (12, 12), (16, 16)][i];
+                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
                 },
             );
         },
@@ -272,19 +255,13 @@ fn build_watch_keeps_mts_and_cts_script_parses_on_a_force_edit() {
                         out.contains("Found 0 errors. Watching for file changes."),
                         "edit {i}: {out}"
                     );
-                    let expected = match i {
-                        // q1.mts v2, then c1.cts v2.
-                        0 => (1, 0),
-                        1 => (2, 0),
-                        // `auto` already forces q1.mts and c1.cts by their
-                        // extension, so their kept v2 stay with `force`
-                        // and back. Only s1.ts is parsed again, and its
-                        // `force` parse goes at the edit back. Before, q1
-                        // and c1 were parsed again at both edits.
-                        2 => (3, 0),
-                        _ => (4, 1),
-                    };
-                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_mts_and_cts_script_parses_on_a_force_edit edit {i}: {:?}", c).unwrap(); } }
+                    // Each cycle parses lib.es5.d.ts, s1.ts, q1.mts and c1.cts
+                    // again (Go: 4 parses), also when `force` gives q1.mts
+                    // and c1.cts the options that their extension gives
+                    // with `auto`. No error holds them, so each dies after
+                    // its cycle.
+                    let expected = [(4, 4), (8, 8), (12, 12), (16, 16)][i];
+                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
                 },
             );
         },
@@ -328,18 +305,12 @@ fn build_watch_keeps_the_parses_of_a_project_whose_config_stays() {
                         out.contains("Found 0 errors. Watching for file changes."),
                         "edit {i}: {out}"
                     );
-                    let expected = match i {
-                        // b/src/s.ts v2.
-                        0 => (1, 0),
-                        // `force` in `a` parses a/src/s.ts again. The kept
-                        // b/src/s.ts v2 is not a file of `a`, so it stays.
-                        // Before, it went.
-                        1 => (2, 0),
-                        // b/src/m.ts v2. The build of `b` takes the kept
-                        // b/src/s.ts v2. Before, it parsed it again.
-                        _ => (3, 0),
-                    };
-                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_the_parses_of_a_project_whose_config_stays edit {i}: {:?}", c).unwrap(); } }
+                    // Only the project of the edit builds, and it parses
+                    // each of its files and lib.es5.d.ts again: `b` (Go: 3
+                    // parses), then `a` (Go: 2), then `b` (Go: 3). No error
+                    // holds them, so each dies after its cycle.
+                    let expected = [(3, 3), (5, 5), (8, 8)][i];
+                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
                 },
             );
         },
@@ -396,11 +367,16 @@ fn build_watch_reset_status_lets_go_of_held_versions() {
                     assert_eq!(out.contains(a_error), a, "edit {i}: {out}");
                     assert_eq!(out.contains(b_error), b, "edit {i}: {out}");
                     assert!(out.contains(found), "edit {i}: {out}");
-                    // b.ts v2, then a.ts v2. The edit of b.ts drops its
-                    // kept parse, and `reset_status` the errors of `app`
-                    // that held it, so it dies.
-                    let expected = [(1, 0), (2, 0), (2, 1)][i];
-                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_reset_status_lets_go_of_held_versions edit {i}: {:?}", c).unwrap(); } }
+                    // The build of `app` parses lib.es5.d.ts and b.ts v2
+                    // (Go: 2 parses), then the build of `core`
+                    // lib.es5.d.ts and a.ts v2 (Go: 2), and the last cycle
+                    // builds nothing (Go: 0). Each lib version dies after
+                    // its cycle. The errors of `app` hold b.ts v2 and
+                    // those of `core` a.ts v2. The last edit of b.ts
+                    // resets the status of `app` (`reset_status`), which
+                    // lets go of b.ts v2, so it dies.
+                    let expected = [(2, 1), (4, 2), (4, 3)][i];
+                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
                 },
             );
         },
