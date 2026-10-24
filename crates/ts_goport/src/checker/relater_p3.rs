@@ -1315,12 +1315,12 @@ pub struct Relater {
     pub maybe_keys_set: RelationKeySet,
     pub source_stack: Vec<TypeId>,
     pub target_stack: Vec<TypeId>,
-    // PORT: perf. Not in Go. `stack_recursion_id` of a prefix of
-    // `source_stack` and `target_stack`. `is_deeply_nested_relater_type`
-    // fills them to the full stack when it reaches its scan; a pop truncates
-    // them to the stack length.
-    pub source_ids: Vec<Option<RecursionId>>,
-    pub target_ids: Vec<Option<RecursionId>>,
+    // PORT: perf. Not in Go. `stack_recursion_key` of a prefix of
+    // `source_stack` and `target_stack`, one word per entry.
+    // `is_deeply_nested_relater_type` fills them to the full stack when it
+    // reaches its scan; a pop truncates them to the stack length.
+    pub source_ids: Vec<RecursionKey>,
+    pub target_ids: Vec<RecursionKey>,
     pub maybe_count: i32,
     pub source_depth: i32,
     pub target_depth: i32,
