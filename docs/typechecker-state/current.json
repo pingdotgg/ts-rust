@@ -1123,7 +1123,26 @@
     "runtimeAuthorized": true,
     "expectedCompilerRecoveries": [],
     "expectationUpdates": [],
-    "verdictHistory": [],
+    "verdictHistory": [
+      {
+        "role": "audit_accepted_roster",
+        "agent": "ad2e1520d69febd20",
+        "verdict": "PASS",
+        "batchId": "recovery-continuation-go-checker-port-111",
+        "revision": 230,
+        "sourceFingerprint": "4eefd8890c1756ec5e30207529924b588491970932f6a07cd099e4eeb9bc1cf2",
+        "file": "target/continuation-r230-auditor-verdict.txt"
+      },
+      {
+        "role": "independent_reviewer",
+        "agent": "ab07b21c4d4cd5bc0",
+        "verdict": "STOP",
+        "batchId": "recovery-continuation-go-checker-port-111",
+        "revision": 230,
+        "sourceFingerprint": "4eefd8890c1756ec5e30207529924b588491970932f6a07cd099e4eeb9bc1cf2",
+        "file": "target/continuation-r230-reviewer-verdict.txt"
+      }
+    ],
     "focusedResults": [],
     "runtimeToolHandles": [],
     "commands": [],
@@ -1163,7 +1182,7 @@
     "reviewer": {
       "role": "independent_reviewer",
       "agent": "ab07b21c4d4cd5bc0",
-      "verdict": "PENDING"
+      "verdict": "STOP"
     },
     "nextPermittedAction": "Run the R230 pipeline (candidate.sh side)."
   },
