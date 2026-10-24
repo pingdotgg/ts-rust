@@ -627,30 +627,37 @@ pub fn get_text_of_property_name(name: Node) -> String {
 }
 
 // Go: ast/utilities.go:2262 TryGetTextOfPropertyName
+// PORT: this returns an owned copy. `try_get_property_name_text` is the
+// same with no copy.
 pub fn try_get_text_of_property_name(name: Node) -> (String, bool) {
+    match try_get_property_name_text(name) {
+        Some(text) => (text.into_owned(), true),
+        None => (String::new(), false),
+    }
+}
+
+// Go: ast/utilities.go:2262 TryGetTextOfPropertyName
+// PORT: Go returns the node's string with no copy. This borrows the
+// `'static` node text in the same way. Only a JsxNamespacedName makes a
+// new string. `None` is Go's `"", false`.
+// PERF: pathsdiag1. `for_each_property_assignment` reads the name of each
+// property it passes. An owned copy for each one was one malloc and free
+// per step of the O(N^2) `paths` diagnostics (Bun 0137).
+pub fn try_get_property_name_text(name: Node) -> Option<std::borrow::Cow<'static, str>> {
     match name.kind() {
         SyntaxKind::Identifier
         | SyntaxKind::PrivateIdentifier
         | SyntaxKind::StringLiteral
         | SyntaxKind::NumericLiteral
         | SyntaxKind::BigIntLiteral
-        | SyntaxKind::NoSubstitutionTemplateLiteral => {
-            return (name.text().to_string(), true);
-        }
-        SyntaxKind::ComputedPropertyName => {
-            if is_string_or_numeric_literal_like(name.expression()) {
-                return (name.expression().text().to_string(), true);
-            }
-        }
+        | SyntaxKind::NoSubstitutionTemplateLiteral => Some(name.text().into()),
+        SyntaxKind::ComputedPropertyName => is_string_or_numeric_literal_like(name.expression())
+            .then(|| name.expression().text().into()),
         SyntaxKind::JsxNamespacedName => {
-            return (
-                format!("{}:{}", name.namespace().text(), name.name().text()),
-                true,
-            );
+            Some(format!("{}:{}", name.namespace().text(), name.name().text()).into())
         }
-        _ => {}
+        _ => None,
     }
-    (String::new(), false)
 }
 
 // Go: ast/utilities.go:2277 IsJSDocNode

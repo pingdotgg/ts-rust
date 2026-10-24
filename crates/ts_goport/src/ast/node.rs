@@ -1490,6 +1490,16 @@ impl NodeSlice {
         self.len() == 0
     }
 
+    /// The file and the astdata ids of a slice over the ids of one store
+    /// (`from_ids`), for `BuildStoreReads::node`. `None` for other slices.
+    #[must_use]
+    pub fn store_ids(self) -> Option<(usize, &'static [crate::astdata::NodeId])> {
+        match self.0 {
+            SliceRepr::Ids { file, ids } => Some((file as usize, ids)),
+            _ => None,
+        }
+    }
+
     /// Go `nodes[i]`. Panics when `i` is out of range, like Go.
     #[inline]
     #[must_use]
