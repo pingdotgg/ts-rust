@@ -463,9 +463,12 @@ mod tests {
                 }
             }
         }
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // This file builds in the goport_core crate
+        // (crates/ts_goport/parts/goport_core), whose files stay in
+        // crates/ts_goport/src.
+        let src = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"));
         let mut found = Vec::new();
-        visit(&src, &src, &mut found);
+        visit(src, src, &mut found);
         found.sort();
         assert_eq!(
             found,
