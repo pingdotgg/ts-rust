@@ -2357,6 +2357,113 @@ impl<'a> FileNodeReader<'a> {
     }
 }
 
+/// Node reads of an unpublished store of this thread under one borrow of
+/// the store (`with_build_store_reads`): each read is a column load. A
+/// read of a node that is not a node of this store with `'static` data
+/// gives `None`; the caller then reads it with the `Node` accessors.
+// PERF: pathsdiag1. A `Node` read of a store that is not published and not
+// the active store finds the store in `BUILD` on each read, and a kind
+// read there makes the whole header (`try_store_header_slow`). The config
+// file checks of a program read the config file before the publish: a
+// `paths` diagnostic reads every `paths` key before its own, as Go
+// (`for_each_property_assignment`).
+pub struct BuildStoreReads<'a> {
+    file: usize,
+    store: &'a FileStore,
+    /// The store has no alias slot, so an id needs no record read
+    /// (`FrozenIds::Direct`).
+    alias_free: bool,
+}
+
+impl BuildStoreReads<'_> {
+    /// `Node::new(file, id)` for child id `id` of a node of this store.
+    #[inline]
+    #[must_use]
+    pub fn node(&self, id: crate::astdata::NodeId) -> Node {
+        let index = id.index();
+        if !self.alias_free {
+            self.store.slot_resolve(self.file, index)
+        } else if index == NIL_SLOT as usize {
+            Node::NIL
+        } else {
+            handle(self.file, index as u32)
+        }
+    }
+
+    /// The slot of `n` when it is a node of this store with `'static`
+    /// data.
+    #[inline]
+    fn static_slot(&self, n: Node) -> Option<(usize, NodeData<'static>)> {
+        if n.is_nil() || n.file_index() != self.file {
+            return None;
+        }
+        let index = slot_index(n);
+        match (self.store.cell_of(index), *self.store.nodes.get(index)?) {
+            (NO_CELL, Some(data)) => Some((index, data)),
+            _ => None,
+        }
+    }
+
+    /// Go `n.Kind` and the node data of `n` (`Node::kind`,
+    /// `static_ast_node`).
+    #[inline]
+    #[must_use]
+    pub fn kind_and_data(&self, n: Node) -> Option<(SyntaxKind, NodeData<'static>)> {
+        let (index, data) = self.static_slot(n)?;
+        Some((self.store.kinds[index], data))
+    }
+
+    /// Go `n.Text()` (`Node::text`) of `n` when its kind is Identifier,
+    /// PrivateIdentifier, StringLiteral, NumericLiteral, BigIntLiteral or
+    /// NoSubstitutionTemplateLiteral (the first case of Go
+    /// `TryGetTextOfPropertyName`). `None` for other nodes.
+    #[inline]
+    #[must_use]
+    pub fn literal_text(&self, n: Node) -> Option<&'static str> {
+        let (index, data) = self.static_slot(n)?;
+        // An Identifier data text that is empty is in the name of its slot
+        // (`name_node_text`).
+        let name_text = |text: &'static str| {
+            if text.is_empty() {
+                self.store.slot_text_name_of(index).as_str()
+            } else {
+                text
+            }
+        };
+        Some(match (self.store.kinds[index], data) {
+            (SyntaxKind::Identifier, NodeData::Identifier(d)) => name_text(&d.text),
+            (SyntaxKind::PrivateIdentifier, NodeData::PrivateIdentifier(d)) => name_text(&d.text),
+            (SyntaxKind::StringLiteral, NodeData::StringLiteral(d)) => &d.text,
+            (SyntaxKind::NumericLiteral, NodeData::NumericLiteral(d)) => &d.text,
+            (SyntaxKind::BigIntLiteral, NodeData::BigIntLiteral(d)) => &d.text,
+            (
+                SyntaxKind::NoSubstitutionTemplateLiteral,
+                NodeData::NoSubstitutionTemplateLiteral(d),
+            ) => &d.text,
+            _ => return None,
+        })
+    }
+}
+
+/// `read` on the reads of unpublished store `file` of this thread (built
+/// or detached). `None` when `file` is not such a store (published, of
+/// another thread or synthetic) and when the store is borrowed for a
+/// write. `read` must not make or change nodes of the store.
+pub fn with_build_store_reads<R>(
+    file: usize,
+    read: impl FnOnce(&BuildStoreReads<'_>) -> R,
+) -> Option<R> {
+    if is_storeless_id(file) || file_block(file).is_some() {
+        return None;
+    }
+    let store = build_store(file)?.try_borrow().ok()?;
+    Some(read(&BuildStoreReads {
+        file,
+        store: &store,
+        alias_free: store.aliases.is_empty(),
+    }))
+}
+
 /// The handle of slot `index` in store `file`. Does not resolve aliases.
 const fn handle(file: usize, index: u32) -> Node {
     Node(((file as u64) << 32) | (index as u64 + 1))
