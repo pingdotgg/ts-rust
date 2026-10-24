@@ -15,6 +15,11 @@ path = "../../src/goport_core_root.rs"
 goport_util = { path = "../goport_util" }
 rustc-hash = "=2.1.2"
 indexmap = "=2.14.0"
+# The map of std, with lookups by a hash made before (raw-entry): the loader
+# finds the task data of a path with the hash that a parse worker made
+# (frontend/compiler/files_parser.rs `task_data_by_path`). indexmap uses the
+# same version.
+hashbrown = { version = "=0.17.1", default-features = false, features = ["raw-entry"] }
 memchr = "=2.8.2"
 smallvec = "=1.15.1"
 bumpalo = "=3.20.3"
