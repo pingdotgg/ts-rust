@@ -87,6 +87,17 @@ pub struct WatchSource {
     reads_options: bool,
 }
 
+/// PORT: not in Go (`BuildHost::watch_source_file`). True when the bind of
+/// `file` can set its CommonJS indicator and so change what
+/// `is_external_or_common_js_module_of` reads: a JS file that its parse
+/// does not make an ES module. The Go binder sets the indicator only in a
+/// JS file (binder.go `setCommonJSModuleIndicator`), and a file that its
+/// parse gives an external module indicator reads true before and after
+/// its bind. The parse is enough to tell, so no bind state is read here.
+fn bind_can_set_common_js_indicator(file: &ParsedSourceFile) -> bool {
+    file.is_js() && file.external_module_indicator.is_nil()
+}
+
 /// PORT: not in Go. What the module indicator options of a parse take from
 /// the compiler options (Go `GetExternalModuleIndicatorOptions`,
 /// parseoptions.go:19; the rest is the file name and its package.json):
@@ -414,9 +425,16 @@ impl BuildHost {
     /// with parse workers off after the first build (`prefetch`) the parses
     /// of a cycle ran on one thread (query-persist-client-core rebuilds took
     /// 2.7 times as long). A parse of the same text with the same options is
-    /// the same file, so the output does not change. A bundled lib never
-    /// changes. A `.d.ts` or `.json` file comes here through `source_files`
-    /// (`get_source_file`), so in one cycle only its first parse comes here.
+    /// the same file. But a kept parse keeps the bind of the program that
+    /// bound it, and Go gives each program a new, unbound `.ts` or `.js`
+    /// file. The one bind result that a program reads before its own bind is
+    /// the CommonJS indicator (`is_external_or_common_js_module_of`, the file
+    /// format line of the TS6059 chains and `--explainFiles`), so a parse
+    /// whose bind can set it is not kept (`bind_can_set_common_js_indicator`)
+    /// and each program parses it again, as Go does. With that the output
+    /// does not change. A bundled lib never changes. A `.d.ts` or `.json`
+    /// file comes here through `source_files` (`get_source_file`), so in one
+    /// cycle only its first parse comes here.
     fn watch_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
         let key = SourceFileCacheKey(opts.clone());
         let fixed = crate::frontend::bundled::is_bundled(&opts.file_name);
@@ -463,7 +481,9 @@ impl BuildHost {
         }
         if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
             match &file {
-                Some(file) if fixed || mod_time.is_some() => {
+                Some(file)
+                    if (fixed || mod_time.is_some()) && !bind_can_set_common_js_indicator(file) =>
+                {
                     sources.insert(
                         key,
                         WatchSource {

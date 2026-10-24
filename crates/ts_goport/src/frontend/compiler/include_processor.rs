@@ -40,8 +40,9 @@ pub struct IncludeProcessor {
     pub(crate) computed_diagnostics: OnceCell<RefCell<DiagnosticsCollection>>,
     /// PORT: Go builds `computed_diagnostics` lazily, from
     /// `GetProgramDiagnostics` or `GetIncludeProcessorDiagnostics`. The port
-    /// builds it when it makes the program (`GoSharedState::new`), before
-    /// `ExplainFiles` can run. The `redirectAndFileFormat` lines that the
+    /// builds it there too, and also after the bind that comes before a
+    /// checker read (`go_frontend::fill_include_diagnostics`), which can be
+    /// before `ExplainFiles` runs. The `redirectAndFileFormat` lines that the
     /// collection makes (with absolute names) wait here until the port
     /// reaches a point where Go builds the collection
     /// (`mark_diagnostics_read`). Until then `ExplainFiles` makes its own
