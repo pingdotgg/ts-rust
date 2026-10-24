@@ -2734,9 +2734,9 @@ fn take_early_bind() -> Option<EarlyBind> {
 // thread builds the program tables and the syntactic diagnostics
 // (loadstamp1: 5.8 ms on Sentry, 2.7 ms on VS Code, dbook-lan).
 pub(crate) fn start_early_bind(roots: impl Iterator<Item = Node>) {
-    if std::env::var_os("GOPORT_EARLY_BIND").is_some_and(|value| value == "0")
-        || single_threaded()
+    if single_threaded()
         || crate::tracing::get().is_some()
+        || std::env::var_os("GOPORT_EARLY_BIND").is_some_and(|value| value == "0")
     {
         return;
     }
@@ -6842,6 +6842,67 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("the bind chain does not end");
         assert_eq!(result, (true, 0, 1));
+    }
+
+    // bindgap1: the queue of an early bind (`BindQueue::held`,
+    // `start_early_bind`) holds every bound file until `release` gives the
+    // offsets of the first file; then each file reaches the join with its
+    // offsets. A stop before the release drops the held files: none reaches
+    // the join, and the chain ends.
+    #[test]
+    fn a_held_bind_queue_holds_its_files_until_the_release() {
+        let program = small_program("goport-bind-held");
+        for release in [true, false] {
+            let (done, ended) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _program = crate::core::enter_program(Some(program));
+                let order = [0, 1, 2, 3];
+                let queue = BindQueue::held(vec![false; 4], 2);
+                let (joined, arrived) = std::sync::mpsc::channel();
+                let joined = Mutex::new(joined);
+                let run = |_, link: &mut LinkBinders<'_>| {
+                    let joined = joined.lock().unwrap().clone();
+                    run_bind_link(
+                        &queue,
+                        &order,
+                        link,
+                        |_| Some(((), SymbolArena::new_file().mark())),
+                        |i, ready| {
+                            let _ = joined.send((i, ready.is_some()));
+                        },
+                    );
+                };
+                let (sender, _receiver) = std::sync::mpsc::channel();
+                let mut early = Vec::new();
+                std::thread::scope(|scope| {
+                    spawn_bind_chain(scope, 2, &run, &queue, sender);
+                    // Every file is bound, and none reaches the join.
+                    while queue.files_left() || queue.lock().binding > 0 {
+                        std::thread::yield_now();
+                    }
+                    early.extend(arrived.try_iter());
+                    if release {
+                        queue.release(SymbolArena::new().next_file_offsets());
+                    } else {
+                        queue.stop();
+                    }
+                });
+                drop(joined);
+                let mut late: Vec<(usize, bool)> = arrived.iter().collect();
+                late.sort_unstable();
+                let _ = done.send((early, late));
+            });
+            let (early, late) = ended
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .expect("the held bind chain does not end");
+            assert_eq!(early, Vec::new(), "a file joined before the release");
+            let expected: Vec<(usize, bool)> = if release {
+                (0..4).map(|i| (i, true)).collect()
+            } else {
+                Vec::new()
+            };
+            assert_eq!(late, expected, "release {release}");
+        }
     }
 
     // followups63 (R214 reviewer item 2): a real bind that fails on a bind
