@@ -4279,8 +4279,9 @@ fn new_link_record<V: Default>(cell: &mut Option<V>) -> &mut V {
 /// - `DenseLinkPage` (the default) holds the values in place, so a read is
 ///   one more load. Each page costs 64 values, used or not, so it suits
 ///   stores where most keys of a page have a record, of 32 bytes or less.
-///   Put a larger value in a `Box` (`LinkStore<Node, Box<V>>`, like Go
-///   `symbolArenaLinkStore`): a page then costs 8 bytes per key, and a read
+///   Put a larger value in a `Box` (`LinkStore<Node, Box<V>>`, like the
+///   pages of Go `core.PagedLinkStore`, which hold pointers into an arena,
+///   core/linkstore.go:46): a page then costs 8 bytes per key, and a read
 ///   one more load.
 /// - `SparseLinkPage` (`SparseLinkStore`) holds only the records that its
 ///   keys have, of any size: a read is two more loads.

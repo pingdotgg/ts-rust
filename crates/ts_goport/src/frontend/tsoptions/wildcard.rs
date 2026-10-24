@@ -95,9 +95,9 @@ pub fn get_wildcard_directories(
             for recursive_key in &recursive_keys {
                 let key =
                     to_canonical_key(path, compare_paths_options.use_case_sensitive_file_names);
-                if &key != recursive_key
-                    && contains_path(recursive_key, &key, compare_paths_options)
-                {
+                // Go: recursiveKey.ContainsPath(key), a path key test
+                // (pathkey.go:155).
+                if &key != recursive_key && contains_path_key(recursive_key, &key) {
                     return false;
                 }
             }

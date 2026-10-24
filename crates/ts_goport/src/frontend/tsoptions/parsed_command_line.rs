@@ -668,9 +668,10 @@ impl ParsedCommandLine {
     }
 
     // Go: tsoptions/parsedcommandline.go:207 (*ParsedCommandLine).checkSourceFilesBelongToPath
-    // Go tests rooted paths (`CaseSensitivity.ContainsFilePath`, :210): the
-    // root directory and the config's file names are rooted and normalized.
-    // Go makes the path key of a file only for its diagnostic.
+    // Go tests rooted paths (:210 `ContainsFilePath`): the root directory
+    // and the config's file names are rooted and normalized.
+    // Go makes the path key of a file only for its diagnostic (:211
+    // `PathKey`): a dynamic name keeps its case (`to_path`).
     pub fn check_source_files_belong_to_path(
         &self,
         source_files: &[String],
@@ -680,10 +681,12 @@ impl ParsedCommandLine {
         let use_case_sensitive_file_names = self.use_case_sensitive_file_names();
         for file in source_files {
             if !contains_rooted_path(root_directory, file, use_case_sensitive_file_names) {
-                let absolute_source_file_path = get_canonical_file_name(
-                    &get_normalized_absolute_path(file, self.get_current_directory()),
+                let absolute_source_file_path = to_path(
+                    file,
+                    self.get_current_directory(),
                     use_case_sensitive_file_names,
-                );
+                )
+                .into_string();
                 self.common_source_directory_errors.borrow_mut().push(new_compiler_diagnostic(
                     diag::File_0_is_not_under_rootDir_1_rootDir_is_expected_to_contain_all_source_files,
                     args![absolute_source_file_path, root_directory],
@@ -1351,6 +1354,52 @@ mod common_source_directory_tests {
             );
         }
         assert_eq!(codes(&command_line), [6059, 6059]);
+    }
+
+    // followups76 (R228 reviewer item 9): Go prints the path key of the file
+    // in TS6059 (`CaseSensitivity.PathKey`, parsedcommandline.go:211). On a
+    // case-insensitive file system the key of an encoded dynamic name keeps
+    // its case; the key of a disk path is lower case. Go answers from a probe
+    // at 3e9236361fa9 (`TestF76TsoptionsProbe`).
+    #[test]
+    fn source_file_outside_root_dir_prints_go_path_key() {
+        let command_line = new_parsed_command_line(
+            Rc::new(CompilerOptions::default()),
+            Vec::new(),
+            None,
+            ComparePathsOptions {
+                use_case_sensitive_file_names: false,
+                current_directory: "/p".to_string(),
+            },
+        );
+        for (root, file) in [
+            (
+                "^/~ts-uri~/custom/authority/Src",
+                "^/~ts-uri~/custom/authority/Dir/A.ts",
+            ),
+            ("/p/src", "/P/Dir/A.ts"),
+        ] {
+            assert!(!command_line.check_source_files_belong_to_path(&[file.to_string()], root));
+        }
+        // Go prints "File '^/~ts-uri~/custom/authority/Dir/A.ts' is not under
+        // 'rootDir' '^/~ts-uri~/custom/authority/Src'. ..." and "File
+        // '/p/dir/a.ts' is not under 'rootDir' '/p/src'. ...".
+        let args: Vec<Vec<String>> = command_line
+            .common_source_directory_errors
+            .borrow()
+            .iter()
+            .map(|diagnostic| diagnostic.message_args().to_vec())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                [
+                    "^/~ts-uri~/custom/authority/Dir/A.ts",
+                    "^/~ts-uri~/custom/authority/Src"
+                ],
+                ["/p/dir/a.ts", "/p/src"],
+            ]
+        );
     }
 
     // Go: tsoptions/parsedcommandline.go:207 checkSourceFilesBelongToPath

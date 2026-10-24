@@ -80,6 +80,57 @@ fn resolves(resolver: &DefaultResolver, name: &str, containing_file: &str) -> bo
     r.is_resolved()
 }
 
+// followups76 (R228 reviewer item 9): Go loadNodeModuleFromDirectoryWorker
+// applies typesVersions only when the package directory holds the package
+// file, by a rooted test without case (`tspath.CaseInsensitive.ContainsPath`,
+// resolver.go:1879). Go folds case with ToLower, which keeps 'ς' (EqualFold
+// would match it to 'σ'): the package "ς" with "types": "../σ/index.d.ts"
+// does not hold its types file, so Go loads that file and not the
+// typesVersions match "ts1/index.d.ts"; the package "x" with
+// "../X/index.d.ts" holds it. Go answers from a probe at 3e9236361fa9
+// (`TestF76ModuleProbe`, the same map and options).
+#[test]
+fn test_types_versions_need_the_package_file_in_the_package_like_go() {
+    for (name, other, want) in [
+        ("\u{3c2}", "\u{3c3}", "/p/node_modules/\u{3c3}/index.d.ts"),
+        ("x", "X", "/p/node_modules/x/ts1/index.d.ts"),
+    ] {
+        let package_json = format!(
+            r#"{{"types": "../{other}/index.d.ts", "typesVersions": {{"*": {{"*": ["ts1/*"]}}}}}}"#
+        );
+        let fs = vfstest::from_map(
+            [
+                ("/p/main.ts".to_string(), String::new()),
+                (format!("/p/node_modules/{name}/package.json"), package_json),
+                (
+                    format!("/p/node_modules/{name}/ts1/index.d.ts"),
+                    "export {};".to_string(),
+                ),
+                (
+                    format!("/p/node_modules/{other}/index.d.ts"),
+                    "export {};".to_string(),
+                ),
+            ],
+            true,
+        );
+        let host: Rc<dyn ResolutionHost> = Rc::new(ResolutionHostStub {
+            fs,
+            cwd: "/p".to_string(),
+        });
+        let resolver = new_resolver(ResolverOptions {
+            host: Some(host),
+            compiler_options: Some(Rc::new(CompilerOptions {
+                module_resolution: ModuleResolutionKind::NODE10,
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let (r, _, _) =
+            resolver.resolve_module_name(name, "/p/main.ts", ModuleKind::COMMON_JS, None);
+        assert_eq!(r.resolved_file_name, want, "{name}");
+    }
+}
+
 // Go: module/resolver_test.go:54 TestResolveModuleNameTrailingSlash
 /// Regression test for https://github.com/microsoft/typescript-go/issues/3526.
 ///
@@ -1772,6 +1823,11 @@ struct MockModuleSpecifierGenerationHost {
     // file exists.
     existing_files: Option<Vec<String>>,
     file_exists_calls: RefCell<Vec<String>>,
+    // Not in Go's mock (empty there): the global typings cache location and
+    // the redirect targets of the followups76 probe host (`f76Host`, which
+    // embeds Go's mock and answers these two).
+    global_typings_cache_location: String,
+    redirect_targets: Vec<String>,
 }
 
 impl OutputPathsHost for MockModuleSpecifierGenerationHost {
@@ -1810,7 +1866,7 @@ impl ModuleSpecifierGenerationHost for MockModuleSpecifierGenerationHost {
         Vec::new()
     }
     fn get_global_typings_cache_location(&self) -> String {
-        String::new()
+        self.global_typings_cache_location.clone()
     }
     fn use_case_sensitive_file_names(&self) -> bool {
         self.use_case_sensitive_file_names
@@ -1825,7 +1881,7 @@ impl ModuleSpecifierGenerationHost for MockModuleSpecifierGenerationHost {
         None
     }
     fn get_redirect_targets(&self, _path: &Path) -> Vec<String> {
-        Vec::new()
+        self.redirect_targets.clone()
     }
     fn get_source_of_project_reference_if_output_included(&self, file: Node) -> String {
         ts_goport::ast::source_file_file_name(file).to_string()
@@ -1870,6 +1926,8 @@ fn mock_host(symlink_cache: KnownSymlinks) -> MockModuleSpecifierGenerationHost 
         symlink_cache: Some(Rc::new(symlink_cache)),
         existing_files: None,
         file_exists_calls: RefCell::new(Vec::new()),
+        global_typings_cache_location: String::new(),
+        redirect_targets: Vec::new(),
     }
 }
 
@@ -2009,6 +2067,60 @@ fn test_get_each_file_name_of_module_own_package_dynamic_name() {
         let result = get_each_file_name_of_module(importing, &imported, &host, true);
         let names: Vec<&str> = result.iter().map(|path| path.file_name.as_str()).collect();
         assert_eq!(names, want, "{importing}");
+    }
+}
+
+// followups76 (R228 reviewer item 9): Go getEachFileNameOfModule maps a
+// target through a symlink only when it is below the real directory
+// (`CaseSensitivity.RelativeFilePathFromDirectory`, specifiers.go:316),
+// which compares an encoded dynamic name with case. On a case-insensitive
+// host the redirect target ".../real/file.ts" is not below ".../Real", so
+// it gets no symlink path; ".../Real/other.ts" does. Go answers from a probe
+// with Go's mock host at 3e9236361fa9 (`TestF76SpecifiersProbe`, a host that
+// adds redirect targets).
+#[test]
+fn test_get_each_file_name_of_module_symlink_targets_dynamic_name() {
+    let real = "^/~ts-uri~/custom/authority/Real";
+    let imported = format!("{real}/file.ts");
+    for (redirect, want) in [
+        (
+            "^/~ts-uri~/custom/authority/real/file.ts",
+            &[
+                "/project/symlink/file.ts",
+                "^/~ts-uri~/custom/authority/Real/file.ts",
+                "^/~ts-uri~/custom/authority/real/file.ts",
+            ][..],
+        ),
+        (
+            "^/~ts-uri~/custom/authority/Real/other.ts",
+            &[
+                "/project/symlink/file.ts",
+                "/project/symlink/other.ts",
+                "^/~ts-uri~/custom/authority/Real/file.ts",
+                "^/~ts-uri~/custom/authority/Real/other.ts",
+            ][..],
+        ),
+    ] {
+        let mut symlink_cache = KnownSymlinks::new("/project", false);
+        symlink_cache.set_directory(
+            "/project/symlink",
+            tspath::to_path("/project/symlink", "/project", false)
+                .ensure_trailing_directory_separator(),
+            Some(KnownDirectoryLink {
+                real: format!("{real}/"),
+                real_path: tspath::to_path(real, "/project", false)
+                    .ensure_trailing_directory_separator(),
+                ..Default::default()
+            }),
+        );
+        let host = MockModuleSpecifierGenerationHost {
+            use_case_sensitive_file_names: false,
+            redirect_targets: vec![redirect.to_string()],
+            ..mock_host(symlink_cache)
+        };
+        let result = get_each_file_name_of_module("/project/main.ts", &imported, &host, true);
+        let names: Vec<&str> = result.iter().map(|path| path.file_name.as_str()).collect();
+        assert_eq!(names, want, "{redirect}");
     }
 }
 
@@ -2167,6 +2279,81 @@ fn node_modules_search_root_contains_the_importing_directory() {
                 importing,
                 "",
                 "/a/node_modules/pkg/index.d.ts",
+                ModuleSpecifierOptions::default(),
+            );
+            if got != expected {
+                return Err(format!("got {got:?}, expected {expected:?}"));
+            }
+            Ok(())
+        });
+    }
+    t.finish();
+}
+
+// followups76 (R228 reviewer item 9): Go tryGetModuleNameAsNodeModule tests
+// rooted paths (`CaseSensitivity.ContainsPath`, specifiers.go:766-767). On a
+// case-insensitive host Go folds case with ToLower, which keeps 'ſ' (EqualFold
+// would match it to 's'): the search root "/ſ" does not contain "/s/src", so
+// the specifier is a local one, and "/s" does not contain the typings
+// location "/ſ/cache", so the package name stays. Go answers from a probe
+// with Go's mock host at 3e9236361fa9 (`TestF76SpecifiersProbe`, a host that
+// adds a typings location). It runs in a child process, because the
+// importing file must be published.
+#[test]
+fn test_node_modules_search_root_tests_rooted_paths_like_go() {
+    super::childprog::in_child(
+        module_path!(),
+        "test_node_modules_search_root_tests_rooted_paths_like_go",
+        node_modules_search_root_tests_rooted_paths_like_go,
+    );
+}
+
+fn node_modules_search_root_tests_rooted_paths_like_go() {
+    use ts_goport::modulespecifiers::{ModuleSpecifierOptions, get_module_specifier};
+
+    let file = super::parsetestutil::parse_type_script_published("", false /*jsx*/);
+    // (importing file, module file, global typings cache location, Go's specifier)
+    let tests: &[(&str, &str, &str, &str)] = &[
+        (
+            "/s/src/main.ts",
+            "/\u{17f}/node_modules/pkg/index.d.ts",
+            "",
+            "../node_modules/pkg",
+        ),
+        (
+            "/S/src/main.ts",
+            "/s/node_modules/pkg/index.d.ts",
+            "",
+            "pkg",
+        ),
+        (
+            "/s/src/main.ts",
+            "/s/node_modules/pkg/index.d.ts",
+            "/\u{17f}/cache",
+            "pkg",
+        ),
+        (
+            "/s/src/main.ts",
+            "/s/node_modules/pkg/index.d.ts",
+            "/S/cache",
+            "../node_modules/pkg",
+        ),
+    ];
+    let mut t = Subtests::new("NodeModulesSearchRootRooted");
+    for &(importing, to, typings, expected) in tests {
+        t.run(&format!("{importing} {to} {typings}"), || {
+            let mut host = mock_host(KnownSymlinks::new("/", false));
+            host.current_dir = "/".to_string();
+            host.use_case_sensitive_file_names = false;
+            host.existing_files = Some(Vec::new());
+            host.global_typings_cache_location = typings.to_string();
+            let got = get_module_specifier(
+                &CompilerOptions::default(),
+                &host,
+                file,
+                importing,
+                "",
+                to,
                 ModuleSpecifierOptions::default(),
             );
             if got != expected {
