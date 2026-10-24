@@ -391,10 +391,10 @@ impl Checker {
         if self.is_empty_anonymous_object_type(t) {
             if !includes.intersects(TypeFlags::INCLUDES_EMPTY_OBJECT) {
                 includes |= TypeFlags::INCLUDES_EMPTY_OBJECT;
-                // Go `orderedSet.Add` adds only values it has not seen.
-                if !type_set.contains(&t) {
-                    type_set.push(t);
-                }
+                // Go `typeSet.add(t)`: the checker's `orderedSet.add`
+                // appends with no duplicate test. The flag test above keeps
+                // a second empty object out.
+                type_set.push(t);
             }
         } else {
             if flags.intersects(TypeFlags::ANY_OR_UNKNOWN) {
