@@ -1082,9 +1082,10 @@ fn build_program(
         Entry::Only { early_bind } => {
             set_prog(program);
             // PERF (bindgap1): the files bind while this thread builds the
-            // tables, only when this program published every file.
+            // tables, only when this program published every file and no
+            // file has a syntactic diagnostic (`start_early_bind`).
             if early_bind && parsed.len() == files.len() {
-                super::start_early_bind(files.iter().map(|file| file.root));
+                super::start_early_bind(files);
             }
             true
         }
@@ -2819,5 +2820,107 @@ pub(super) mod tests {
             "a worker asked the disk again: the program cache keeps the first answer"
         );
         assert!(index);
+    }
+
+    /// Set in the child process of
+    /// `a_program_with_a_syntactic_diagnostic_starts_no_early_bind`: its case.
+    const EARLY_BIND_CHILD: &str = "GOPORT_TEST_EARLY_BIND_CASE";
+    const EARLY_BIND_TEST: &str =
+        "program::go_frontend::tests::a_program_with_a_syntactic_diagnostic_starts_no_early_bind";
+
+    // bindgap1 round 2 (R235 reviewer B2): Go binds a program with a
+    // syntactic diagnostic only to emit it or for `--diagnostics`
+    // (program.go:2066-2080), so the `tsc` install starts no early bind for
+    // it (`start_early_bind`). The cases: a parse error, a JS-only syntax
+    // error, and a parameter decorator in an unchecked JS file, which only
+    // the decorator check of the program finds (Go TS1206). A program with
+    // none starts one. A process installs one program, so each case runs in
+    // a child process.
+    #[test]
+    fn a_program_with_a_syntactic_diagnostic_starts_no_early_bind() {
+        // (case, second file, its text, early bind)
+        const CASES: [(&str, &str, &str, bool); 4] = [
+            ("none", "b.ts", "export const b = 1;\n", true),
+            ("parse error", "b.ts", "export const b = (1 + ;\n", false),
+            (
+                "JS syntax",
+                "b.js",
+                "export const b = (x: number) => x;\n",
+                false,
+            ),
+            (
+                "JS decorator",
+                "b.js",
+                "export class B { m(@d x) {} }\n",
+                false,
+            ),
+        ];
+        if let Ok(case) = std::env::var(EARLY_BIND_CHILD) {
+            let &(_, file, text, early) = CASES.iter().find(|c| c.0 == case).unwrap();
+            let config = format!(
+                r#"{{"compilerOptions":{{"noLib":true,"types":[],"allowJs":true,"noEmit":true}},"files":["a.ts","{file}"]}}"#
+            );
+            let dir = write_project(
+                "goport-early-bind-syntax",
+                &[
+                    ("tsconfig.json", &config),
+                    ("a.ts", "export const a = 1;\n"),
+                    (file, text),
+                ],
+            );
+            let opts = load_config(
+                &format!("{dir}/tsconfig.json"),
+                |_| {},
+                &mut CompileTimes::default(),
+            )
+            .unwrap();
+            crate::program::TEST_BIND_THREADS.set(Some(2));
+            install_new_program(opts, true).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            if case == "JS decorator" {
+                assert!(
+                    prog().source_files().all(|file| {
+                        let info = source_file_info(file.root);
+                        info.diagnostics.is_empty() && info.js_diagnostics.is_empty()
+                    }),
+                    "the parse found the decorator"
+                );
+            }
+            let started = crate::program::EARLY_BIND
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some();
+            assert_eq!(started, early, "{case}: early bind");
+            return;
+        }
+        // `/proc/self/exe` still names this binary when a build replaces it.
+        let proc_exe = std::path::Path::new("/proc/self/exe");
+        let exe = if proc_exe.exists() {
+            proc_exe.to_path_buf()
+        } else {
+            std::env::current_exe().expect("test binary")
+        };
+        for (case, ..) in CASES {
+            let output = std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    EARLY_BIND_TEST,
+                    "--nocapture",
+                    "--test-threads",
+                    "1",
+                ])
+                .env(EARLY_BIND_CHILD, case)
+                .env_remove("GOPORT_EARLY_BIND")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("run the child test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{case} ({}):\n{stdout}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
