@@ -9,8 +9,10 @@ use crate::prelude::*;
 use crate::printer::{EmitContext, EmitFlags};
 
 // PORT: private accessors for NodeBuilderImpl fields. They keep the field
-// shapes (owned by U11) in one place. Clone the handle out, then drop the
-// borrow before any Checker call.
+// shapes (owned by U11) in one place. `nb_ctx` clones the context handle out,
+// for a caller that keeps it across a Checker call. The field readers borrow
+// `b`, then `b.ctx`, in one expression (Go `b.ctx.<field>`; nbctx1: no `Rc`
+// clone).
 fn nb_ctx(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<RefCell<NodeBuilderContext>> {
     b.borrow().ctx.clone()
 }
@@ -20,19 +22,15 @@ fn nb_e(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<EmitContext> {
 }
 
 fn nb_tracker(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<dyn SymbolTracker> {
-    let ctx = nb_ctx(b);
-    let tracker = ctx.borrow().tracker.clone();
-    tracker
+    b.borrow().ctx.borrow().tracker.clone()
 }
 
 fn nb_flags(b: &Rc<RefCell<NodeBuilderImpl>>) -> NodeBuilderFlags {
-    let ctx = nb_ctx(b);
-    let flags = ctx.borrow().flags;
-    flags
+    b.borrow().ctx.borrow().flags
 }
 
 fn nb_add_length(b: &Rc<RefCell<NodeBuilderImpl>>, n: i32) {
-    nb_ctx(b).borrow_mut().approximate_length += n;
+    b.borrow().ctx.borrow_mut().approximate_length += n;
 }
 
 /// Go `transform func(b *NodeBuilderImpl, t *Type) *ast.TypeNode`.
@@ -258,19 +256,20 @@ impl Checker {
 
     // Go: checker/nodebuilderimpl.go:3371 typeToTypeNode
     pub fn type_to_type_node(&mut self, b: &Rc<RefCell<NodeBuilderImpl>>, t: TypeId) -> Node {
-        let ctx = nb_ctx(b);
         // PORT: Go uses two defers (typeStack pop after the push in the body,
         // and depth-- in the alias branch). The body reports whether it pushed
         // and whether it took the depth++ path, and the deferred work runs
-        // here in Go's LIFO order.
+        // here in Go's LIFO order. The defers read `b.ctx` when they run, as
+        // Go does (the context is the same one: enter and exit of a context
+        // are balanced around this call).
         let mut pushed = false;
         let mut depth_incremented = false;
         let result = self.type_to_type_node_body(b, t, &mut pushed, &mut depth_incremented);
         if depth_incremented {
-            ctx.borrow_mut().depth -= 1;
+            b.borrow().ctx.borrow_mut().depth -= 1;
         }
         if pushed {
-            ctx.borrow_mut().type_stack.pop();
+            b.borrow().ctx.borrow_mut().type_stack.pop();
         }
         result
     }
@@ -949,12 +948,14 @@ impl Checker {
             // `ast.GetSymbolId(symbol)`. The two are one to one. The Go call
             // gives the symbol its global id, so it is made too (`get_symbol_id`).
             get_symbol_id(&self.symbols, symbol);
-            let ctx = nb_ctx(b);
-            if ctx.borrow().type_parameter_symbol_list.has(&symbol) {
-                return NodeList::NIL;
+            {
+                let b = b.borrow();
+                let mut ctx = b.ctx.borrow_mut();
+                if ctx.type_parameter_symbol_list.has(&symbol) {
+                    return NodeList::NIL;
+                }
+                ctx.type_parameter_symbol_list.add(symbol);
             }
-
-            ctx.borrow_mut().type_parameter_symbol_list.add(symbol);
             let type_argument_nodes = self.lookup_instantiated_type_argument_nodes(b, chain, index);
             if type_argument_nodes.is_some() {
                 return type_argument_nodes;
