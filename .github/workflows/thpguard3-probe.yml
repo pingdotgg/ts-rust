@@ -1,0 +1,34 @@
+# thpguard3 probe (probe branch only, never merged): what CI runners report about THP, free page reporting and
+# the virtio balloon, and the first-touch cost of huge pages after an idle gap (scripts/goport/thpguard3).
+name: thpguard3 probe
+
+on:
+  push:
+    branches: [goport-thpguard3-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-22.04
+          - ubuntu-24.04-arm
+          - blacksmith-2vcpu-ubuntu-2404
+          - blacksmith-4vcpu-ubuntu-2404
+          - blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/goport/thpguard3
+      - name: sysinfo
+        run: bash scripts/goport/thpguard3/sysinfo.sh
+      - name: thpprobe
+        run: python3 -I scripts/goport/thpguard3/thpprobe.py 512 10 3
