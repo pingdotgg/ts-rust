@@ -1104,10 +1104,6 @@ fn build_program(
             (tables, common_source_directory)
         }
     };
-    // watchreset1r: the kept parses of `tsc -b --watch` that Go parses again
-    // here (`bind_all`).
-    tables.replayed_files =
-        crate::program::take_replayed_parses(files.iter().map(|file| file.store));
     // Go: compiler/program.go:360 ReuseProgram keeps `processedFiles`, so
     // the new program keeps the resolver and the package.json lookups of
     // module specifier generation in its cache (program.go:168-185).

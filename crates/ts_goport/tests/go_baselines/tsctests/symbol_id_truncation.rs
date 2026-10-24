@@ -548,11 +548,10 @@ fn private_name_ids(output: &str) -> String {
     ids.join(" ")
 }
 
-/// The private name ids (`private_name_ids`) of each build of a
-/// `tsc -b -w --pretty false` session plus `extra` on `files` (with the
-/// bundled libs): the first build, then one cycle for each edit, which
-/// writes one file and sends its event.
-fn build_watch_ids(
+/// The output of each build of a `tsc -b -w --pretty false` session plus
+/// `extra` on `files` (with the bundled libs): the first build, then one
+/// cycle for each edit, which writes one file and sends its event.
+fn build_watch_outputs(
     files: Vec<(&str, String)>,
     edits: &[(&str, String)],
     extra: &[&str],
@@ -564,7 +563,7 @@ fn build_watch_ids(
     let mut w = result
         .watcher
         .expect("expected Watcher to be non-nil in watch mode");
-    let mut ids = vec![private_name_ids(&sys.output_text())];
+    let mut outputs = vec![sys.output_text()];
     for (name, text) in edits {
         sys.set_output_bytes(Vec::new());
         let path = format!("{PROJECT}/{name}");
@@ -574,9 +573,22 @@ fn build_watch_ids(
             path,
         }]);
         w.do_cycle();
-        ids.push(private_name_ids(&sys.output_text()));
+        outputs.push(sys.output_text());
     }
-    ids
+    outputs
+}
+
+/// The private name ids (`private_name_ids`) of each build of
+/// `build_watch_outputs`.
+fn build_watch_ids(
+    files: Vec<(&str, String)>,
+    edits: &[(&str, String)],
+    extra: &[&str],
+) -> Vec<String> {
+    build_watch_outputs(files, edits, extra)
+        .iter()
+        .map(|output| private_name_ids(output))
+        .collect()
 }
 
 /// The project config of the watchreset1 cases, with `rest` after the
@@ -733,6 +745,170 @@ fn private_name_ids_follow_go_parses_of_a_shared_file_with_one_builder() {
                     "#41@#a #42@#s #77@#b #78@#s",
                     "#41@#a #42@#s #81@#b #82@#s",
                 ]
+            );
+        },
+    );
+}
+
+// watchreset1r round 2 (skeptic B1). p1 has no incremental state (not
+// composite), `noEmitOnError` or `noEmit`, and a syntax error, so Go's
+// build of p1 stops before any bind (compiler/program.go:2067-2081
+// `GetDiagnosticsOfAnyProgram`, :2012-2033 `HandleNoEmitOptions`,
+// programtosnapshot.go:31-33). p1 is the first program of each cycle that
+// loads the libs, so Go's new lib parses stay unbound until p2 binds them,
+// and p2's checkers give their symbols new ids. The port takes the notes
+// at the bind, not when it makes the program (`program::bind_all`). The
+// expected ids are the output of `tsgo-oracle-3e9236361fa9 -b -w --pretty
+// false` on the watchreset1r skeptic cases `nobind` (`noEmitOnError`) and
+// `nobind2` (`noEmit`), 2 of 2 runs in each mode
+// (after231/watchreset1r2/logs/nobind-go.log).
+fn nobind_ids(p1_options: &str, extra: &[&str]) -> Vec<String> {
+    let config = |options: &str, file: &str| {
+        format!(
+            r#"{{"compilerOptions":{{"strict":true,{options}"types":[],"lib":["es2022"],"target":"es2022"}},"files":["../s.ts","{file}"]}}"#
+        )
+    };
+    let s_ts = |edit: usize| symbol_class("S", "s") + &format!("const e{edit}: string = {edit};\n");
+    build_watch_ids(
+        vec![
+            (
+                "tsconfig.json",
+                r#"{"files":[],"references":[{"path":"p1"},{"path":"p2"}]}"#.into(),
+            ),
+            ("s.ts", symbol_class("S", "s")),
+            ("p1/a.ts", symbol_class("A", "a") + "const broken = ;\n"),
+            ("p1/tsconfig.json", config(p1_options, "a.ts")),
+            ("p2/b.ts", symbol_class("B", "b")),
+            (
+                "p2/tsconfig.json",
+                config(
+                    r#""composite":true,"emitDeclarationOnly":true,"rootDir":"..","outDir":"out","#,
+                    "b.ts",
+                ),
+            ),
+        ],
+        &[
+            ("s.ts", s_ts(1)),
+            ("s.ts", s_ts(2)),
+            (
+                "p2/b.ts",
+                symbol_class("B", "b") + "const e3: string = 3;\n",
+            ),
+            ("s.ts", s_ts(4)),
+        ],
+        extra,
+    )
+}
+
+/// `nobind_ids` with p1 `noEmitOnError` (case `nobind`).
+const NO_EMIT_ON_ERROR: &str = r#""noEmitOnError":true,"rootDir":"..","outDir":"out","#;
+
+#[test]
+fn private_name_ids_follow_go_parses_after_a_build_program_with_no_bind() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_after_a_build_program_with_no_bind",
+        || {
+            assert_eq!(
+                nobind_ids(NO_EMIT_ON_ERROR, &[]),
+                [
+                    "#1@#b #2@#s",
+                    "#37@#b #38@#s",
+                    "#73@#b #74@#s",
+                    "#109@#b #110@#s",
+                    "#145@#b #146@#s",
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn private_name_ids_follow_go_parses_after_a_build_program_with_no_bind_single_threaded() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_after_a_build_program_with_no_bind_single_threaded",
+        || {
+            assert_eq!(
+                nobind_ids(NO_EMIT_ON_ERROR, &["--singleThreaded"]),
+                [
+                    "#1@#b #2@#s",
+                    "#38@#b #39@#s",
+                    "#75@#b #76@#s",
+                    "#112@#b #113@#s",
+                    "#149@#b #150@#s",
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn private_name_ids_follow_go_parses_after_a_no_emit_build_program_with_no_bind() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_after_a_no_emit_build_program_with_no_bind",
+        || {
+            assert_eq!(
+                nobind_ids(r#""noEmit":true,"#, &["--singleThreaded"]),
+                [
+                    "#1@#b #2@#s",
+                    "#38@#b #39@#s",
+                    "#75@#b #76@#s",
+                    "#112@#b #113@#s",
+                    "#149@#b #150@#s",
+                ]
+            );
+        },
+    );
+}
+
+// watchreset1r round 2: `--diagnostics` "Symbols" of a `tsc -b -w` cycle
+// whose program stops at a syntax error (noEmit, no incremental state, so
+// nothing binds before the statistics). Go parses each file again, and its
+// `SymbolCount` sums the file counts of these unbound parses before
+// `ForEachCheckerParallel` makes the checkers, which bind
+// (compiler/program.go:1743). So only the checkers' own symbols count. The
+// port keeps the parses: R234 summed their old binds (32,612 and 33,284).
+// The expected counts are the output of `tsgo-oracle-3e9236361fa9 -b -w
+// --diagnostics` (loadparity1r3 skeptic tool `diagwatch.sh`;
+// after231/watchreset1r2/logs/diagwatch-dev1.log).
+fn syntax_error_cycle_symbols(extra: &[&str]) -> Vec<u64> {
+    let mut args = vec!["--diagnostics"];
+    args.extend_from_slice(extra);
+    build_watch_outputs(
+        vec![
+            ("src/a.ts", "export const a = 1;\n".into()),
+            ("src/e.js", "export const e = 1;\n".into()),
+            ("package.json", "{}\n".into()),
+            (
+                "tsconfig.json",
+                r#"{"compilerOptions":{"allowJs":true,"module":"node16","noEmit":true,"types":[]},"include":["src"]}"#.into(),
+            ),
+        ],
+        &[
+            ("src/a.ts", "let q = ;\n".into()),
+            ("src/a.ts", "export const a = 3;\n".into()),
+        ],
+        &args,
+    )
+    .iter()
+    .map(|output| {
+        output
+            .lines()
+            .find_map(|line| line.strip_prefix("Symbols:"))
+            .and_then(|count| count.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no Symbols line in {output}"))
+    })
+    .collect()
+}
+
+#[test]
+fn diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind",
+        || {
+            assert_eq!(syntax_error_cycle_symbols(&[]), [59_787, 896, 59_787]);
+            assert_eq!(
+                syntax_error_cycle_symbols(&["--singleThreaded"]),
+                [56_936, 224, 56_936]
             );
         },
     );

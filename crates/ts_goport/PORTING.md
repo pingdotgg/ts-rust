@@ -607,11 +607,17 @@ The batch that adds it is not accepted until Theo approves.
   and Go parses again (a `.ts` or `.js` file in each program that loads
   it, a `.d.ts` or `.json` file in the first program of a cycle that
   loads it), it notes the file (`program::note_replayed_parse`). The
-  program that takes the note forgets the lineage ids of the file's
-  symbols before its bind (`ast::forget_lineage_symbol_ids`), and gives
-  its private name classes ids with those of the unbound files, in Go's
-  bind order (`program::bind_all`). The checkers then give those symbols
-  ids again, as Go's do. The carry of a checker pool made before a forget
+  next bind of a program that has the file takes the note, not the making
+  of the program: a build program that stops before its bind (a syntax
+  error with `noEmit` or `noEmitOnError` and no incremental state) leaves
+  Go's new parse of a shared `.d.ts` unbound for the next program of the
+  cycle. The bind forgets the lineage ids of the file's symbols
+  (`ast::forget_lineage_symbol_ids`), and gives its private name classes
+  ids with those of the unbound files, in Go's bind order
+  (`program::bind_all`). The checkers then give those symbols ids again,
+  as Go's do. Until a bind takes it, a noted file counts no symbols in
+  `--diagnostics` (`program::symbol_count`), as Go's unbound parse. The
+  carry of a checker pool made before a forget
   keeps none of its ids of the forgotten ranges, but counts them
   (`ast::carry_symbol_ids`). Option A (parse again, as Go) gave the same
   ids but cost 26 to 39% of the watch cycle wall (after231/watchreset1).
