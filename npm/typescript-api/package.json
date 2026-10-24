@@ -1,0 +1,32 @@
+{
+    "name": "typescript",
+    "version": "6.0.3",
+    "private": true,
+    "description": "The TypeScript 6.0 JavaScript API (require(\"typescript\")) with tsc-rs as the compiler",
+    "license": "MIT AND Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/pingdotgg/ts-rust.git",
+        "directory": "npm/typescript-api"
+    },
+    "main": "./lib/typescript.js",
+    "typings": "./lib/typescript.d.ts",
+    "bin": {
+        "tsc": "./bin/tsc",
+        "tsserver": "./bin/tsserver"
+    },
+    "files": [
+        "bin",
+        "lib",
+        "native",
+        "src"
+    ],
+    "engines": {
+        "node": ">=20.19"
+    },
+    "scripts": {
+        "build": "node scripts/build.mjs",
+        "install:consumers": "npm ci --ignore-scripts --no-audit --no-fund --prefix test/consumers",
+        "test": "node --test test/*.test.mjs"
+    }
+}

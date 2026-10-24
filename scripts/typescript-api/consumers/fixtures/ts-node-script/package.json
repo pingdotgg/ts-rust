@@ -1,0 +1,15 @@
+{
+  "name": "ts-node-script",
+  "version": "0.0.1",
+  "description": "A script that imports TypeScript modules, run with node -r ts-node/register (tsc-rs typescript API harness fixture)",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "node -r ts-node/register src/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "ts-node": "10.9.2",
+    "typescript": "6.0.3"
+  }
+}

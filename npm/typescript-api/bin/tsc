@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+"use strict";
+
+require("../src/tsc.js").main(process.argv.slice(2));

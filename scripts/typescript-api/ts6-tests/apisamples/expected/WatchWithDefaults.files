@@ -1,0 +1,14 @@
+== ./out/a.js
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.a = void 0;
+exports.a = 1;
+== ./out/b.js
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.b = void 0;
+const a_1 = require("./a");
+exports.b = a_1.a;
+== ./src/b.ts
+import { a } from "./a";
+export const b: number = a;

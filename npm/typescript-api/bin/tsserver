@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+"use strict";
+
+// TypeScript 6.0's tsserver, on this package's lib/typescript.js.
+require("../lib/tsserver.js");
