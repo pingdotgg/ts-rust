@@ -64,25 +64,7 @@ impl Checker {
             }
             return self.never_type;
         }
-        let dd = TypeFlags::DISJOINT_DOMAINS;
-        if self.strict_null_checks
-            && includes.intersects(TypeFlags::NULLABLE)
-            && includes.intersects(
-                TypeFlags::OBJECT | TypeFlags::NON_PRIMITIVE | TypeFlags::INCLUDES_EMPTY_OBJECT,
-            )
-            || includes.intersects(TypeFlags::NON_PRIMITIVE)
-                && includes.intersects(dd.without(TypeFlags::NON_PRIMITIVE))
-            || includes.intersects(TypeFlags::STRING_LIKE)
-                && includes.intersects(dd.without(TypeFlags::STRING_LIKE))
-            || includes.intersects(TypeFlags::NUMBER_LIKE)
-                && includes.intersects(dd.without(TypeFlags::NUMBER_LIKE))
-            || includes.intersects(TypeFlags::BIG_INT_LIKE)
-                && includes.intersects(dd.without(TypeFlags::BIG_INT_LIKE))
-            || includes.intersects(TypeFlags::ES_SYMBOL_LIKE)
-                && includes.intersects(dd.without(TypeFlags::ES_SYMBOL_LIKE))
-            || includes.intersects(TypeFlags::VOID_LIKE)
-                && includes.intersects(dd.without(TypeFlags::VOID_LIKE))
-        {
+        if self.includes_disjoint_domains(includes) {
             crate::checker::relater_p1::bunrcount::ix_never(bunr_serial, 2);
             return self.never_type;
         }
@@ -309,6 +291,33 @@ impl Checker {
             self.intersection_types.insert(key, result);
         }
         result
+    }
+
+    // The disjoint-domain exit of get_intersection_type_ex: true when the `includes` of an
+    // intersection make it empty (an object or non-primitive type with null or undefined under
+    // strictNullChecks, or two disjoint domains). get_intersection_type_ex and the dead-row skip
+    // of get_cross_product_intersections both use it, so they cannot drift apart.
+    // Go: checker/checker.go:26678 (inline in getIntersectionTypeEx)
+    #[inline]
+    fn includes_disjoint_domains(&self, includes: TypeFlags) -> bool {
+        let dd = TypeFlags::DISJOINT_DOMAINS;
+        self.strict_null_checks
+            && includes.intersects(TypeFlags::NULLABLE)
+            && includes.intersects(
+                TypeFlags::OBJECT | TypeFlags::NON_PRIMITIVE | TypeFlags::INCLUDES_EMPTY_OBJECT,
+            )
+            || includes.intersects(TypeFlags::NON_PRIMITIVE)
+                && includes.intersects(dd.without(TypeFlags::NON_PRIMITIVE))
+            || includes.intersects(TypeFlags::STRING_LIKE)
+                && includes.intersects(dd.without(TypeFlags::STRING_LIKE))
+            || includes.intersects(TypeFlags::NUMBER_LIKE)
+                && includes.intersects(dd.without(TypeFlags::NUMBER_LIKE))
+            || includes.intersects(TypeFlags::BIG_INT_LIKE)
+                && includes.intersects(dd.without(TypeFlags::BIG_INT_LIKE))
+            || includes.intersects(TypeFlags::ES_SYMBOL_LIKE)
+                && includes.intersects(dd.without(TypeFlags::ES_SYMBOL_LIKE))
+            || includes.intersects(TypeFlags::VOID_LIKE)
+                && includes.intersects(dd.without(TypeFlags::VOID_LIKE))
     }
 
     // Go: checker/checker.go:26826 isUnionWithUndefined
@@ -607,6 +616,14 @@ impl Checker {
     }
 
     // Go: checker/checker.go:27031 getCrossProductIntersections
+    // PORT: Go clones `types` for each row. Here one row buffer, a local of this call, holds
+    // the row: each row writes every union column and the other columns keep `types[j]`, so
+    // the buffer holds the same row as Go's clone. It must stay a local: a live row can enter
+    // this function again (constraints, late-bound members, relations).
+    // PORT: with strictNullChecks, a row that is_dead_cross_product_row accepts skips the
+    // get_intersection_type_ex call. For such a row Go returns `neverType` at the disjoint-domain
+    // exit before it makes a type, takes an id or fills a cache, and drops the row, so the
+    // result and every effect are the same.
     pub fn get_cross_product_intersections(
         &mut self,
         types: &[TypeId],
@@ -624,8 +641,8 @@ impl Checker {
             );
         }
         let mut intersections: Vec<TypeId> = Vec::new();
+        let mut constituents = types.to_vec();
         for i in 0..count {
-            let mut constituents = types.to_vec();
             let mut n = i;
             let mut j = types.len() as i32 - 1;
             while j >= 0 {
@@ -638,6 +655,26 @@ impl Checker {
                 }
                 j -= 1;
             }
+            // PROBE crossdead1: GOPORT_CROSSDEAD_VERIFY keeps the call for the rows that the
+            // fold calls dead and checks the result (never_type at exit 2, no type made, no
+            // intersection cache entry). Without it the row is skipped and counted.
+            let dead = self.strict_null_checks && self.is_dead_cross_product_row(&constituents);
+            let verify = crate::checker::relater_p1::bunrcount::verify();
+            if dead && !verify {
+                if crate::checker::relater_p1::bunrcount::on() {
+                    crate::checker::relater_p1::bunrcount::add(
+                        crate::checker::relater_p1::bunrcount::K::cd_skip,
+                        1,
+                    );
+                    crate::checker::relater_p1::bunrcount::add(
+                        crate::checker::relater_p1::bunrcount::K::cd_skip_members,
+                        constituents.len() as u64,
+                    );
+                }
+                continue;
+            }
+            let cd_types0 = self.type_count;
+            let cd_cache0 = self.intersection_types.len();
             // PROBE bunrcount1
             let bunr_serial = if crate::checker::relater_p1::bunrcount::on() {
                 crate::checker::relater_p1::bunrcount::ix_next()
@@ -658,12 +695,78 @@ impl Checker {
                     noobj,
                     never,
                 );
+                if verify {
+                    let ok = t == self.never_type
+                        && crate::checker::relater_p1::bunrcount::last_exit(bunr_serial) == 2
+                        && self.type_count == cd_types0
+                        && self.intersection_types.len() == cd_cache0;
+                    let odd = constituents.iter().any(|&m| {
+                        self.ty(m).flags.intersects(
+                            TypeFlags::ANY_OR_UNKNOWN | TypeFlags::NEVER | TypeFlags::UNION,
+                        )
+                    });
+                    crate::checker::relater_p1::bunrcount::cross_verify(
+                        dead,
+                        ok,
+                        never && noobj,
+                        crate::checker::relater_p1::bunrcount::last_exit(bunr_serial),
+                        self.strict_null_checks,
+                        odd,
+                    );
+                }
             }
             if !self.ty(t).flags.intersects(TypeFlags::NEVER) {
                 intersections.push(t);
             }
         }
         intersections
+    }
+
+    // Whether get_intersection_type_ex(row) returns `never_type` at its disjoint-domain exit
+    // (checker.go:26678) with no other effect. Call it only with strictNullChecks on. It
+    // computes, from flags and identities only, the `includes` that add_types_to_intersection
+    // would compute, and is false at the first member with an Object, Union, Intersection,
+    // Any, Unknown or Never flag (those members take other branches of addTypeToIntersection,
+    // and an object member can resolve late-bound members).
+    // With strictNullChecks every other member goes into the type set, so Go adds NonPrimitive
+    // ("two distinct unit types") exactly when the members with a Unit flag have 2 or more
+    // identities, after regularization and with `missing_type` mapped to `undefined_type`.
+    // The inputs (TypeFlags of a type that is not a union, the regular type of a literal, the
+    // intrinsic types and strictNullChecks) never change after creation, and nothing is kept
+    // between rows or calls.
+    fn is_dead_cross_product_row(&self, row: &[TypeId]) -> bool {
+        let mut includes = TypeFlags::NONE;
+        let mut unit = TypeId::NIL;
+        for &m in row {
+            let mut flags = self.ty(m).flags;
+            if flags.intersects(
+                TypeFlags::OBJECT
+                    | TypeFlags::UNION
+                    | TypeFlags::INTERSECTION
+                    | TypeFlags::ANY_OR_UNKNOWN
+                    | TypeFlags::NEVER,
+            ) {
+                return false;
+            }
+            // Go `getRegularTypeOfLiteralType` (a row holds no union, so this is a field read).
+            let mut t = m;
+            if flags.intersects(TypeFlags::FRESHABLE) {
+                t = self.ty(m).as_literal_type().regular_type;
+                flags = self.ty(t).flags;
+            }
+            if t == self.missing_type {
+                t = self.undefined_type;
+            }
+            if flags.intersects(TypeFlags::UNIT) {
+                if unit.is_nil() {
+                    unit = t;
+                } else if unit != t {
+                    includes |= TypeFlags::NON_PRIMITIVE;
+                }
+            }
+            includes |= flags & TypeFlags::INCLUDES_MASK;
+        }
+        self.includes_disjoint_domains(includes)
     }
 
     // Go: checker/checker.go:27053 getConstituentCount

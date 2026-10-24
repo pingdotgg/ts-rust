@@ -2517,6 +2517,21 @@ pub mod bunrcount {
         cx_nn_exit4,
         cx_nn_exit5,
         ix_calls,
+        // crossdead1: rows skipped by the dead-row fold and their members. With
+        // GOPORT_CROSSDEAD_VERIFY (no skip): rows the fold calls dead, of which
+        // the call gave never_type at exit 2 with no type made and no cache entry
+        // (ok) or not (bad), and the rows the fold kept that ended at exit 2 with
+        // no object or intersection member (miss), split into loose mode, rows
+        // with an Any, Unknown, Never or Union member (odd), and others.
+        cd_skip,
+        cd_skip_members,
+        cd_fold,
+        cd_fold_ok,
+        cd_fold_bad,
+        cd_miss_e2,
+        cd_miss_e2_loose,
+        cd_miss_e2_odd,
+        cd_miss_e2_other,
     );
 
     static C: [AtomicU64; K::COUNT as usize] = [const { AtomicU64::new(0) }; K::COUNT as usize];
@@ -2628,6 +2643,48 @@ pub mod bunrcount {
     pub fn ix_never(serial: u64, k: u64) {
         if serial != 0 {
             *IX_LAST.lock().unwrap() = (serial, k);
+        }
+    }
+
+    static VERIFY: LazyLock<bool> =
+        LazyLock::new(|| std::env::var_os("GOPORT_CROSSDEAD_VERIFY").is_some());
+
+    /// crossdead1: verify mode (keep the call for dead rows and check them).
+    #[inline]
+    pub fn verify() -> bool {
+        on() && *VERIFY
+    }
+
+    /// The never exit of the `get_intersection_type_ex` call `serial` (0: none recorded).
+    pub fn last_exit(serial: u64) -> u64 {
+        let (s, k) = *IX_LAST.lock().unwrap();
+        if s == serial { k } else { 0 }
+    }
+
+    /// crossdead1 verify mode: one row that was not skipped.
+    pub fn cross_verify(
+        dead: bool,
+        ok: bool,
+        never_noobj: bool,
+        exit: u64,
+        strict: bool,
+        odd: bool,
+    ) {
+        if dead {
+            add(K::cd_fold, 1);
+            add(if ok { K::cd_fold_ok } else { K::cd_fold_bad }, 1);
+        } else if never_noobj && exit == 2 {
+            add(K::cd_miss_e2, 1);
+            add(
+                if !strict {
+                    K::cd_miss_e2_loose
+                } else if odd {
+                    K::cd_miss_e2_odd
+                } else {
+                    K::cd_miss_e2_other
+                },
+                1,
+            );
         }
     }
 
