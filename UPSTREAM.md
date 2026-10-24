@@ -73,6 +73,35 @@ when the condition no longer holds.
 
 - `crates/ts_goport/src/flags.rs` holds Go's integer flag and enum consts, kept in step by hand.
   Compare it with `internal/{ast,binder,checker,core}` at the new pin.
+- Identity matching in inference (identmatch1) keeps each member's normalized type between the
+  pairs of one `inferFromMatchingTypes` call, so it holds second copies of Go code (Go lines at
+  `3e9236361fa9`): `infer_from_identical_types` (`checker/inference_p1.rs`) copies the loop of
+  `inferFromMatchingTypes` (inference.go:381, port `infer_from_matching_types`);
+  `is_type_identical_in_matching` (`checker/inference_p2.rs`) copies `isTypeRelatedTo`
+  (relater.go:169, port `is_type_related_to_kind` in `checker/relater_p1.rs`);
+  `is_normalized_type_identical_in_matching` copies the start of `isRelatedToEx`
+  (relater.go:2634-2665, port `is_related_to_ex` in `checker/relater_p3.rs`); and
+  `check_normalized_type_identical_to` copies `checkTypeRelatedToEx` (relater.go:358, port
+  `check_type_related_to_ex`) and the end of isRelatedToEx's identity branch (relater.go:2666).
+  Check: a Go change in any of these functions goes into both copies. A kept type is exact only
+  while a repeat of `getNormalizedType` (checker.go:28470) gives the first result. The guard
+  covers two things. First, a repeat that makes something moves one of the counts that
+  `normalize_for_matching` compares (instantiations, types, symbols, signatures, diagnostics), or
+  emits only a tracer event (no type is kept with `--generateTrace`). Second, the path reads
+  lazily set state that it does not compute in one place: `IsEmptyAnonymousObjectType`
+  (checker.go:27077; for example in getIntersectionType and shouldNormalizeIntersection) reads
+  `MembersResolved` and does not resolve. So its answer for an anonymous type goes
+  from false to true when the type's members are first resolved and are empty, also between two
+  pairs. `Checker::empty_anonymous_resolves` counts these resolves
+  (`resolve_structured_type_members_slow`, `checker/checker_p21.rs`): a normalization during which
+  it moves is not kept, and a kept type is used only while the count is the one it was kept with.
+  The other reads on the path read cached or computed-once values, and a repeat reads what the
+  first normalization read (audit of identmatch1 round 3,
+  `target/continuation-r97-goport/int97/r230repair/identmatch1r3/audit.md`). At a bump, check
+  `getNormalizedType` and the functions it calls (getReducedType, getIntersectionType,
+  getUnionType, the simplifications) for a new step that makes or changes state that no count sees,
+  and for a new read of lazily set state that does not compute it (another `MembersResolved` read,
+  or a field that is set later). Add a count for it or drop the slots.
 - `Checker::is_distribution_dependent` (`checker/relater_p5.rs`) keeps the answer of its first walk
   on the conditional root (chkperf3). That is exact only while the walk
   (`isTypeParameterPossiblyReferenced`, checker.go:22891 at `fed0bf24149f`) reads only state that
