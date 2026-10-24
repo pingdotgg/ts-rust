@@ -194,7 +194,7 @@ pub struct JsDocDiscard {
     result: Node,
     node_count: usize,
     text_count: usize,
-    identifier_count: i32,
+    identifier_count: i64,
     sets_deprecated_tag: bool,
 }
 
