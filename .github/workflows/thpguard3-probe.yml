@@ -1,5 +1,7 @@
-# thpguard3 probe (probe branch only, never merged): what CI runners report about THP, free page reporting and
-# the virtio balloon, and the first-touch cost of huge pages after an idle gap (scripts/goport/thpguard3).
+# thpguard3 probe (probe branch only, never merged): tsc-rs 0.8.0 (the THP guard of R231) on small Blacksmith
+# runners, THP guard as it is against GOPORT_THP_GUARD=force, back to back and after idle gaps
+# (scripts/goport/thpguard3/measure.sh). The project inputs come from the testbox inputs sticky disk, mounted
+# with commit: false (nothing is written back).
 name: thpguard3 probe
 
 on:
@@ -10,25 +12,65 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  measure:
     strategy:
       fail-fast: false
       matrix:
         runner:
-          - ubuntu-latest
-          - ubuntu-22.04
-          - ubuntu-24.04-arm
           - blacksmith-2vcpu-ubuntu-2404
           - blacksmith-4vcpu-ubuntu-2404
-          - blacksmith-4vcpu-ubuntu-2404-arm
+          - blacksmith-8vcpu-ubuntu-2404
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           sparse-checkout: scripts/goport/thpguard3
-      - name: sysinfo
-        run: bash scripts/goport/thpguard3/sysinfo.sh
-      - name: thpprobe
-        run: python3 -I scripts/goport/thpguard3/thpprobe.py 512 10 3
+      - uses: useblacksmith/stickydisk@v1
+        with:
+          key: ts-rust-testbox-inputs
+          path: ~/goport-data/inputs
+          commit: "false"
+      - name: inputs and binary
+        run: |
+          set -eux
+          R=/home/theo/Code/sandbox/ts-rust/target
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /home/theo /home/theo/Code /home/theo/Code/sandbox /home/theo/Code/sandbox/ts-rust "$R"
+          for d in project-inputs project-inputs-extra; do
+            mkdir -p "$R/$d"
+            sudo mount --bind "$HOME/goport-data/inputs$R/$d" "$R/$d"
+          done
+          ls "$R/project-inputs" "$R/project-inputs-extra" | head -20
+          mkdir -p ~/rel
+          curl -fsSL https://github.com/pingdotgg/ts-rust/releases/download/v0.8.0/tsc-rs-0.8.0-linux-x64.tar.gz | tar -xz -C ~/rel
+          GOPORT_THP_GUARD_DEBUG=1 ~/rel/tsc-rs-0.8.0-linux-x64/tsc --version
+      - name: measure
+        env:
+          THPG_OURS: /home/runner/rel/tsc-rs-0.8.0-linux-x64/tsc
+          PHASES: warm b2b gap idle
+          IDLE_PROJECTS: valibot zod effect
+          IDLE_CFGS: unset forcel
+          IDLE_ROUNDS: "2"
+        run: bash scripts/goport/thpguard3/measure.sh "$HOME/out" 10 5 60 "unset force forcel"
+      - name: tables
+        if: always()
+        run: |
+          python3 -I scripts/goport/thpguard3/table.py "$HOME/out/runs.tsv" --summary || true
+          python3 -I scripts/goport/thpguard3/table.py "$HOME/out/runs.tsv" --paired || true
+          python3 -I scripts/goport/thpguard3/table.py "$HOME/out/runs.tsv" || true
+          python3 -I scripts/goport/thpguard3/thpprobe.py 512 10 2 > "$HOME/out/thpprobe.txt" 2>&1 || true
+          cat "$HOME/out/thpprobe.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: thpguard3-${{ matrix.runner }}
+          path: |
+            ~/out/runs.tsv
+            ~/out/sysinfo.txt
+            ~/out/sysinfo-end.txt
+            ~/out/thpprobe.txt
+      - name: unmount
+        if: always()
+        run: |
+          for d in project-inputs project-inputs-extra; do sudo umount "/home/theo/Code/sandbox/ts-rust/target/$d" || true; done
