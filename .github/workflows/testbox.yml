@@ -132,6 +132,9 @@ jobs:
           export COMPILER_RUNNER_TMP="$RUNNER_TEMP/compiler-runner"
           export TS_CARGO_CGROUP_ACTIVE=1
           export TS_CARGO_JOBS=32
+          # jemalloc's configure takes LG_VADDR from the build CPU (cpuid 0x80000008): 57 on some testbox
+          # hosts, 48 on the others and on zbook and dbook-lan. 48 makes a build's bytes host-independent.
+          export JEMALLOC_SYS_WITH_LG_VADDR=48
           export TS_CARGO_SLOTS=1
           export GOPORT_TESTS_JOBS=5
           export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup" HOME=/home/theo

@@ -10,9 +10,9 @@ use smallvec::SmallVec;
 // nested inference takes another state from the pool, never this one.
 
 // Go: checker/inference.go:11 InferenceKey
-// ts#64553 (Go N' inference.go:11): the key also holds the priority and the
-// variance of the inference state, so a cached inference from type arguments
-// is reused only in the same state.
+// ts#64553 (Go N' inference.go:11 InferenceKey): the key also holds the
+// priority and the variance of the inference state, so a cached inference
+// from type arguments is reused only in the same state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InferenceKey {
     pub source: TypeId,
@@ -1511,7 +1511,8 @@ impl Checker {
         )
     }
 
-    // The tail of inferFromMatchingTypes (inference.go:410): copies the list once, without the matched types.
+    // Go: checker/inference.go:411-416 inferFromMatchingTypes: the tail. It copies the list once, without the
+    // matched types.
     fn unmatched_types(list: &[TypeId], matched: &[TypeId]) -> SmallVec<[TypeId; 8]> {
         if matched.is_empty() {
             return SmallVec::from_slice(list);

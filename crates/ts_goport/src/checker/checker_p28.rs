@@ -1092,9 +1092,14 @@ impl Checker {
         // first changed element every mapped type equals its non-nil source,
         // so the mapped list is built only from the first change, and a
         // mapping that changes nothing costs no copy (Go `changed` is
-        // `mapped_types.is_some()`).
+        // `mapped_types.is_some()`). The list is a stack `TypeSet`, as Go's
+        // `getTemporaryTypeSet` (`inline [16]`); it holds at most `count`.
+        // PERF (typeset1): the prefix is copied with an iterator, as
+        // `extend_from_slice` on a `SmallVec` costs a memmove and a memcpy
+        // call. Go keeps spilled sets on a free list; a port of that list
+        // measured slower than these stack sets, so the port has none.
         let count = self.ty(owner).types().len();
-        let mut mapped_types: Option<Vec<TypeId>> = None;
+        let mut mapped_types: Option<TypeSet> = None;
         for i in 0..count {
             let s = self.type_at(owner, i);
             let mapped = if self.ty(s).flags.intersects(TypeFlags::UNION) {
@@ -1107,8 +1112,8 @@ impl Checker {
                     list.push(mapped);
                 }
             } else if mapped != s {
-                let mut list: Vec<TypeId> = Vec::with_capacity(count.max(16));
-                list.extend_from_slice(&self.ty(owner).types()[..i]);
+                let mut list = TypeSet::with_capacity(count);
+                list.extend(self.ty(owner).types()[..i].iter().copied());
                 if mapped.is_some() {
                     list.push(mapped);
                 }

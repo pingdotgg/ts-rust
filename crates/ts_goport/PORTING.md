@@ -1277,6 +1277,14 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
     both print `#1 #2 #5 #6`). Which tasks are built when another starts
     depends on timing outside tests, as in Go; a test builds each task to
     the end before the next one starts.
+  - wasm makes each checker of a pool at its first job. Before a pool
+    hands its ids on, it makes each checker that had no job
+    (`program::make_unmade_checkers`), with the pool's program current and
+    outside the `POOLS` borrow. Go makes every checker of a pool at once
+    (checkerpool.go:367), and a native worker makes its checker when it
+    starts, so the ids of each `NewChecker` count. A checker has no job
+    when a syntax error stops the check (program.go:2066) and it owns no
+    emitted file.
   - A one-checker pool of a `--singleThreaded` program (on the command
     line or in the project tsconfig, `program::single_threaded`) also
     hands its ids on when the next such pool is made or the next such
