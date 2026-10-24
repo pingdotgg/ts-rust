@@ -597,12 +597,11 @@ impl Orchestrator {
         });
         let result = 'start: {
             if self.opts.command.compiler_options.watch.is_true() {
-                // PORT: not in Go. From the second build of a file on, its
-                // new parse is a freeable file version (watchfree1, see
-                // `Watcher::start`), and a source file keeps its parse while
-                // it does not change (`BuildHost::watch_source_file`).
+                // PORT: not in Go. From the second parse of a file on, its
+                // parse is a freeable file version (watchfree1, see
+                // `Watcher::start` and `BuildHost::watch`).
                 crate::ast::set_watch_process();
-                self.host.watch_sources.replace(Some(FxHashMap::default()));
+                self.host.watch.set(true);
                 (self
                     .watch_status_reporter
                     .as_ref()
@@ -1097,9 +1096,6 @@ impl Orchestrator {
         for path in &paths {
             self.get_task(path).borrow_mut().drop_status_prefetch();
         }
-        // No kept watch parse of a written file outlives this build (see
-        // `BuildHost::drop_written_watch_sources`).
-        self.host.drop_written_watch_sources();
         self.host.written.clear();
     }
 

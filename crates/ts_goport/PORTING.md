@@ -574,33 +574,21 @@ The batch that adds it is not accepted until Theo approves.
   last build (Go `repopulateDiagnosticsOfFile`) points at the file
   versions of the build that made it, and Go prints it from them: the new
   snapshot holds them (`Snapshot::held_file_versions`). `tsc -b --watch`
-  (`Orchestrator::start`) does the same for the program of each task. Go
-  parses every file of each project that it builds again in each cycle
-  (`resetCaches`); here a file keeps its parse while its modification time
-  does not change, no watch event names it and no build wrote it since the
-  parse (`BuildHost::watch_source_file`, as Go `tsc --watch` keeps its
-  files; the end of each build drops the kept parses of the files that it
-  wrote, `BuildHost::drop_written_watch_sources`), so a cycle parses only
-  the changed files, on the loading thread.
-  A `.d.ts` or `.json` file still comes through `source_files` (Go
-  `sourceFiles`) first, which keeps the first parse of a cycle until the
-  cycle ends, as in Go: a project that builds beside an upstream project
-  (no reference) can read the upstream `.d.ts` before that build writes
-  it, and a downstream project of the same cycle then gets the old parse
-  (bwsig1, `build_watch_keeps_the_first_dts_parse_of_a_cycle`).
-  A config change keeps the parses too: their key holds the parse options,
-  and a parse with other module indicator options that it did not read is
-  kept as a copy, as in `tsc --watch`
-  (`BuildHost::keep_watch_sources_for_config_change`). A config change
-  that gives a project other module indicator inputs
-  (`ModuleIndicatorInputs`) drops the kept parses of that project's files
-  that read their options when the file's options under the new inputs
-  are not those of the parse
-  (`BuildHost::drop_kept_parses_whose_module_indicator_options_change`);
-  the parses of the other projects stay. An overflow drops all. Parse
-  workers parse ahead in the first build and in the cycles with a config
-  change or an overflow (`BuildHost::prefetch`); they skip the kept
-  parses, as in `tsc --watch`.
+  (`Orchestrator::start`) does the same for the program of each task. As
+  in Go, `tsc -b --watch` keeps no parse from one cycle to the next
+  (`resetCaches`): each program parses again every file that is not a
+  `.d.ts` or `.json` file (build/host.go `GetSourceFile`), and a `.d.ts`
+  or `.json` file comes through `source_files` (Go `sourceFiles`), which
+  keeps the first parse of a cycle until the cycle ends: a project that
+  builds beside an upstream project (no reference) can read the upstream
+  `.d.ts` before that build writes it, and a downstream project of the
+  same cycle then gets the old parse (bwsig1,
+  `build_watch_keeps_the_first_dts_parse_of_a_cycle`). Each parse of a
+  path that an earlier program published is a freeable file version
+  (`BuildHost::watch`), also a parse that the program leaves out
+  (`watcher::note_kept_parse`), and parse workers parse ahead in every
+  cycle, as Go parses on goroutines. Fresh parses take new symbol ids,
+  so the ids of each cycle are Go's (watchreset1).
   A task keeps the versions that its errors point at until its next build
   or a reset of its status (`BuildTask::held_file_versions`). A file
   version's parse holds it (`ParsedSourceFile::version`), and so do the

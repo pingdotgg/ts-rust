@@ -798,8 +798,8 @@ fn watch_build_frees_file_versions() {
 /// fix of `b.ts`, and the first config again. Go parses every file again
 /// after a config edit (execute/watcher.go doBuild,
 /// build/orchestrator.go resetCaches); the port keeps the parses of the
-/// files with no errors (`WatchCompilerHost::reuse_parse`,
-/// `BuildHost::keep_watch_sources_for_config_change`). The output (times
+/// files with no errors (`WatchCompilerHost::reuse_parse`; `tsc -b
+/// --watch` parses every file again, as Go). The output (times
 /// and clear-screen codes removed) equals `expected-w.txt`, the output of
 /// `tsgo-oracle-673a5f17d713 -w -p tsconfig.json --pretty` for the same
 /// edits. The outputs equal Go's (`expected-out`): the last edit emits

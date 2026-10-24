@@ -62,8 +62,10 @@ pub struct WatchCompilerHost {
 }
 
 /// PORT: not in Go. Records a new parse that a watch host keeps for later
-/// builds (`WatchCompilerHost::get_source_file`, the build host's
-/// `watch_source_file`). A kept parse can be left out of the program that
+/// builds (`WatchCompilerHost::get_source_file`), or that the `tsc -b
+/// --watch` host gives (`BuildHost::get_source_file`: its `.d.ts` and
+/// `.json` parses last one cycle, and a parse that a program leaves out
+/// gets its version here). A kept parse can be left out of the program that
 /// loaded it and be a program file of a later one: Go keeps one copy of a
 /// package that two `node_modules` directories hold with the same name and
 /// version (filesparser.go:448, the other path maps to the kept file at

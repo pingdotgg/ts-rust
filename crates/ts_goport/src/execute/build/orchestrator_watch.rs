@@ -20,7 +20,6 @@
 //! mode (buildtask.go:251).
 
 use crate::execute::build::build_task::BuildTask;
-use crate::execute::build::host::ModuleIndicatorInputs;
 use crate::execute::build::orchestrator::Orchestrator;
 use crate::execute::tsc::compile::{Watcher, write_str};
 use crate::execute::watchmanager::{DirWatchSet, can_watch_directory, new_dir_watch_set};
@@ -51,9 +50,6 @@ impl Orchestrator {
             self.wm.borrow().force_overflow();
         }
         self.reset_caches();
-        // PORT: not in Go (see `BuildHost::prefetch`). The first build
-        // parsed ahead; its parses are static.
-        self.host.prefetch.set(false);
 
         self.wm.borrow().unlock();
 
@@ -86,12 +82,7 @@ impl Orchestrator {
         // `cached_fs` (host.rs).
         self.host.cached_fs.clear_cache();
         self.host.extended_config_cache.reset();
-        // PORT: watch mode keeps its parses in `watch_sources` (see
-        // `BuildHost::watch_source_file`). This one has the `.d.ts` and
-        // `.json` parses of the cycle (`BuildHost::get_source_file`).
         self.host.source_files.reset();
-        // PORT: not in Go (see `BuildHost::end_config_change_cycle`).
-        self.host.end_config_change_cycle();
         *self.host.config_times.borrow_mut() = FxHashMap::default();
     }
 
@@ -506,25 +497,6 @@ impl Orchestrator {
             );
         }
 
-        // PORT: not in Go (`BuildHost::watch_source_file`). A changed file
-        // is parsed again, and an overflow parses every file again, as Go
-        // does in each cycle. A config change keeps the other parses for
-        // the files whose parse options stay the same
-        // (`BuildHost::keep_watch_sources_for_config_change`), less the
-        // ones that read module indicator options that it changed (below).
-        if overflow {
-            self.host.evict_watch_sources(None);
-        } else {
-            let paths: FxHashSet<Path> = changed_paths
-                .keys()
-                .map(|path| self.to_path(path))
-                .collect();
-            self.host.evict_watch_sources(Some(&paths));
-            if needs_config_update {
-                self.host.keep_watch_sources_for_config_change();
-            }
-        }
-
         if !needs_update {
             self.reset_caches();
             self.wm.borrow().unlock();
@@ -539,24 +511,11 @@ impl Orchestrator {
             args![],
         ));
         if needs_config_update {
-            // PORT: not in Go (see
-            // `BuildHost::drop_kept_parses_whose_module_indicator_options_change`).
-            let before = self.dirty_configs();
             // Generate new tasks
             self.generate_graph_reusing_old_tasks();
-            let changed = self.configs_with_new_module_indicator_inputs(before);
-            if !changed.is_empty() {
-                self.host
-                    .drop_kept_parses_whose_module_indicator_options_change(&changed);
-            }
         }
 
-        // PORT: not in Go (see `BuildHost::prefetch`). Go parses the files
-        // of each build on goroutines. A cycle with a config change or an
-        // overflow can parse many files again, so its builds parse ahead.
-        self.host.prefetch.set(needs_config_update);
         self.build_or_clean();
-        self.host.prefetch.set(false);
         self.update_watch();
         let desired_dirs = self.compute_desired_watches();
         let reconciled = self.wm.borrow().reconcile_watches(&desired_dirs);
@@ -567,50 +526,6 @@ impl Orchestrator {
         }
         self.reset_caches();
         self.wm.borrow().unlock();
-    }
-
-    /// PORT: not in Go (see
-    /// `BuildHost::drop_kept_parses_whose_module_indicator_options_change`).
-    /// The config of each task whose config changed, from before the
-    /// change, by config path. A config that did not parse is left out.
-    fn dirty_configs(&self) -> FxHashMap<Path, Rc<ParsedCommandLine>> {
-        let mut configs = FxHashMap::default();
-        self.range_task(&mut |path: &Path, task: &Rc<RefCell<BuildTask>>| {
-            let task = task.borrow();
-            if task.dirty
-                && let Some(config) = &task.resolved
-            {
-                configs.insert(path.clone(), config.clone());
-            }
-        });
-        configs
-    }
-
-    /// PORT: not in Go (see
-    /// `BuildHost::drop_kept_parses_whose_module_indicator_options_change`).
-    /// The configs of `before` whose task now has other module indicator
-    /// inputs, each with those inputs: `None` when the task left the graph
-    /// or its config does not parse.
-    fn configs_with_new_module_indicator_inputs(
-        &self,
-        mut before: FxHashMap<Path, Rc<ParsedCommandLine>>,
-    ) -> Vec<(Option<ModuleIndicatorInputs>, Rc<ParsedCommandLine>)> {
-        let mut changed = Vec::new();
-        self.range_task(&mut |path: &Path, task: &Rc<RefCell<BuildTask>>| {
-            let Some(config) = before.remove(path) else {
-                return;
-            };
-            let inputs = task
-                .borrow()
-                .resolved
-                .as_ref()
-                .map(|now| ModuleIndicatorInputs::of(now.compiler_options()));
-            if inputs != Some(ModuleIndicatorInputs::of(config.compiler_options())) {
-                changed.push((inputs, config));
-            }
-        });
-        changed.extend(before.into_values().map(|config| (None, config)));
-        changed
     }
 
     // Go: build/orchestrator.go:917 (*Orchestrator).rangeTask

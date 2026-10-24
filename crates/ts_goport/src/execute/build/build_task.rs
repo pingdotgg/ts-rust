@@ -1031,20 +1031,13 @@ impl BuildTask {
         // a program that loads while the build host caches no parse (the
         // first one of a build cycle): later programs take the lib files
         // from that cache, and the workers would parse them for nothing.
-        // Not when the load gets no parse workers (`BuildHost::prefetch`):
-        // the workers' parses would stay unused in their AST arenas. And
-        // not in a watch cycle after the first build: a lib parse there is a
-        // freeable file version, which these early workers cannot make
-        // (`FilesParser::parse` drops them), and a cycle with a config
-        // change keeps the lib parses anyway.
-        let mut host_has_parses = host
-            .watch_sources
-            .borrow()
-            .as_ref()
-            .is_some_and(|sources| !sources.is_empty());
+        // Not in a watch cycle after the first build: a lib parse there is
+        // a freeable file version, which these early workers cannot make
+        // (`FilesParser::parse` drops them).
+        let mut host_has_parses = false;
         host.source_files
             .for_each_stored(|_, _| host_has_parses = true);
-        if host.prefetch.get() && !host_has_parses && crate::ast::published_paths().is_empty() {
+        if !host_has_parses && crate::ast::published_paths().is_empty() {
             crate::execute::execute_tsc::start_lib_prefetch(
                 &*sys,
                 &resolved,

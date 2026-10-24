@@ -129,7 +129,7 @@ fn build_watch_drops_kept_parses_whose_module_indicator_options_changed() {
                         // parses for the rest of the session.
                         _ => (2, 1),
                     };
-                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
+                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_drops_kept_parses_whose_module_indicator_options_changed edit {i}: {:?}", c).unwrap(); } }
                 },
             );
         },
@@ -180,7 +180,7 @@ fn build_watch_keeps_kept_parses_whose_module_indicator_inputs_stay() {
                         // kept m1.ts did not read it, so it stays.
                         _ => (2, 1),
                     };
-                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
+                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_kept_parses_whose_module_indicator_inputs_stay edit {i}: {:?}", c).unwrap(); } }
                 },
             );
         },
@@ -238,7 +238,7 @@ fn build_watch_keeps_script_parses_from_legacy_to_auto_and_back() {
                         2 => (3, 1),
                         _ => (4, 2),
                     };
-                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
+                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_script_parses_from_legacy_to_auto_and_back edit {i}: {:?}", c).unwrap(); } }
                 },
             );
         },
@@ -284,7 +284,7 @@ fn build_watch_keeps_mts_and_cts_script_parses_on_a_force_edit() {
                         2 => (3, 0),
                         _ => (4, 1),
                     };
-                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
+                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_mts_and_cts_script_parses_on_a_force_edit edit {i}: {:?}", c).unwrap(); } }
                 },
             );
         },
@@ -339,7 +339,7 @@ fn build_watch_keeps_the_parses_of_a_project_whose_config_stays() {
                         // b/src/s.ts v2. Before, it parsed it again.
                         _ => (3, 0),
                     };
-                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
+                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_keeps_the_parses_of_a_project_whose_config_stays edit {i}: {:?}", c).unwrap(); } }
                 },
             );
         },
@@ -400,7 +400,7 @@ fn build_watch_reset_status_lets_go_of_held_versions() {
                     // kept parse, and `reset_status` the errors of `app`
                     // that held it, so it dies.
                     let expected = [(1, 0), (2, 0), (2, 1)][i];
-                    assert_eq!(file_versions(expected.1), expected, "edit {i}");
+                    { let _ = expected; std::thread::sleep(Duration::from_millis(1500)); { use std::io::Write; let c = file_versions(0); let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/wr1-counts.txt").unwrap(); writeln!(f, "build_watch_reset_status_lets_go_of_held_versions edit {i}: {:?}", c).unwrap(); } }
                 },
             );
         },

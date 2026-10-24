@@ -765,10 +765,11 @@ fn kill_and_take_data(version: Arc<FileVersion>) -> Option<(usize, impl Send + u
 /// Not in Go (perf, followups32): the data of each version of `versions`
 /// whose last holder this is, for a free on a free thread. Each such
 /// version dies here (`kill_and_take_data`), so its id is dead before the
-/// send, as in a pin release (`PinRelease`). `tsc -b -w` frees the kept
-/// parses that a config change drops this way
-/// (`BuildHost::drop_kept_parses_whose_module_indicator_options_change`),
-/// as Go's GC frees the files of the old program.
+/// send, as in a pin release (`PinRelease`). `tsc -b -w` freed the kept
+/// parses that a config change dropped this way until watchreset1 (it now
+/// keeps no parse across cycles, as Go); the test keeps checking
+/// `kill_and_take_data`, which the pin release uses.
+#[cfg(test)]
 pub(crate) fn take_data_of_dying_versions(
     versions: Vec<Arc<FileVersion>>,
 ) -> Vec<impl Send + use<>> {
@@ -1450,10 +1451,9 @@ mod tests {
         }
     }
 
-    // followups32 item 6: `tsc -b -w` frees the kept parses that a config
-    // change drops with `take_data_of_dying_versions`
-    // (`BuildHost::drop_kept_parses_whose_module_indicator_options_change`):
-    // a version whose last holder that is dies there, before its data goes
+    // followups32 item 6: `take_data_of_dying_versions` (`tsc -b -w` freed
+    // the kept parses that a config change dropped with it until
+    // watchreset1): a version whose last holder that is dies there, before its data goes
     // to the build's free thread, so its id is dead, it is not in the
     // registry and a read of it panics while the free thread is busy. The
     // free thread frees its data later. A version with another holder lives

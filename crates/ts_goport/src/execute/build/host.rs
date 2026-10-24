@@ -75,93 +75,6 @@ impl TscExtendedConfigCache {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SourceFileCacheKey(pub SourceFileParseOptions);
 
-/// PORT: not in Go. A parse that `BuildHost::watch_source_file` keeps, and
-/// the modification time of its file at the parse.
-pub struct WatchSource {
-    file: Rc<ParsedSourceFile>,
-    mod_time: Option<std::time::SystemTime>,
-    /// `reads_module_indicator_options(file)`, found at the parse: a later
-    /// node read of a freeable version pins it on this thread until the
-    /// next program release (`ast::with_file_version`), so a test of a
-    /// kept parse before a build would keep it through the build.
-    reads_options: bool,
-}
-
-/// PORT: not in Go. What the module indicator options of a parse take from
-/// the compiler options (Go `GetExternalModuleIndicatorOptions`,
-/// parseoptions.go:19; the rest is the file name and its package.json):
-/// the detection kind, and with `auto` only, whether `jsx` is react-jsx or
-/// react-jsxdev and whether the module resolution is in Node16..NodeNext,
-/// which reads the package.json `type` (`loadSourceFileMetaData`,
-/// fileloader.go:382). `module` has an effect only through the two
-/// default kinds here: with no `moduleDetection`, a module kind in
-/// Node16..NodeNext gives `force` (`GetEmitModuleDetectionKind`,
-/// compileroptions.go:243), and with no `moduleResolution` (or classic or
-/// node10) the module kind picks the resolution kind
-/// (`GetModuleResolutionKind`, compileroptions.go:227). The module kind
-/// that `isFileForcedToBeModuleByFormat` passes on is not an input: once
-/// the `type` is known, `GetImpliedNodeFormatForEmitWorker`
-/// (utilities.go:2622) gives ESNext to the same files with any module
-/// kind. Two configs with the same inputs
-/// give each file the same module indicator options. See
-/// `BuildHost::drop_kept_parses_whose_module_indicator_options_change`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ModuleIndicatorInputs {
-    detection: ModuleDetectionKind,
-    jsx: bool,
-    node_resolution: bool,
-}
-
-impl ModuleIndicatorInputs {
-    #[must_use]
-    pub fn of(options: &CompilerOptions) -> Self {
-        let detection = options.get_emit_module_detection_kind();
-        let auto = detection == ModuleDetectionKind::AUTO;
-        let resolution = options.get_module_resolution_kind();
-        ModuleIndicatorInputs {
-            detection,
-            jsx: auto
-                && (options.jsx == JsxEmit::REACT_JSX || options.jsx == JsxEmit::REACT_JSX_DEV),
-            node_resolution: auto
-                && ModuleResolutionKind::NODE16 <= resolution
-                && resolution <= ModuleResolutionKind::NODE_NEXT,
-        }
-    }
-
-    /// The module indicator options of `file_name` under these inputs
-    /// (Go `GetExternalModuleIndicatorOptions`), or `None` when they take
-    /// the package.json `type`, which is not read here: with `auto`, for a
-    /// file that is not .mts, .cts, .mjs or .cjs, under a Node16..NodeNext
-    /// resolution or in node_modules (fileloader.go:382).
-    #[must_use]
-    pub fn options_of(self, file_name: &str) -> Option<ExternalModuleIndicatorOptions> {
-        if is_declaration_file_name(file_name) {
-            return Some(ExternalModuleIndicatorOptions::default());
-        }
-        match self.detection {
-            ModuleDetectionKind::FORCE => Some(ExternalModuleIndicatorOptions {
-                jsx: false,
-                force: true,
-            }),
-            ModuleDetectionKind::AUTO => {
-                // `isFileForcedToBeModuleByFormat` (parseoptions.go:46).
-                let force = file_extension_is_one_of(
-                    file_name,
-                    &[EXTENSION_CJS, EXTENSION_CTS, EXTENSION_MJS, EXTENSION_MTS],
-                );
-                if !force && (self.node_resolution || file_name.contains("/node_modules/")) {
-                    return None;
-                }
-                Some(ExternalModuleIndicatorOptions {
-                    jsx: self.jsx,
-                    force,
-                })
-            }
-            _ => Some(ExternalModuleIndicatorOptions::default()),
-        }
-    }
-}
-
 impl Hash for SourceFileCacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.file_name.hash(state);
@@ -293,25 +206,14 @@ pub struct BuildHost {
     // graph ahead of `get_resolved_project_reference` (config_prefetch.rs),
     // until the graph is made.
     pub config_prefetch: RefCell<Option<PrefetchPool>>,
-    // PORT: not in Go (`CompilerHost::prefetch_parses`). In watch mode,
-    // true only in the first build and in the cycles with a config change
-    // or an overflow (set by `Orchestrator::watch` and `do_cycle`). Another
-    // cycle takes almost every file from `watch_sources`: a parse of a
-    // changed file on a worker saves less than the pool costs. The workers
-    // skip the parses that `watch_source_file` keeps
-    // (`cached_source_file_refs`), and a worker parse of a published path
-    // is a freeable file version (`freeable_worker_parses`).
-    pub prefetch: std::cell::Cell<bool>,
-    // PORT: not in Go (`watch_source_file`). The parses of the files in
-    // `tsc -b --watch`, with the modification time of each file at its
-    // parse. `None` outside watch mode. A `.d.ts` or `.json` file comes
-    // through `source_files` first, which keeps the first parse of a cycle
-    // for the rest of the cycle (`get_source_file`).
-    pub watch_sources: RefCell<Option<FxHashMap<SourceFileCacheKey, WatchSource>>>,
-    // PORT: not in Go (`keep_watch_sources_for_config_change`). In a cycle
-    // after a config change, the parses that `watch_sources` had before it
-    // and that no build of the cycle took yet.
-    watch_sources_before_config_change: RefCell<FxHashMap<SourceFileCacheKey, WatchSource>>,
+    // PORT: not in Go. True in `tsc -b --watch` (set by
+    // `Orchestrator::start`). Each parse is then a freeable file version once
+    // its path was published (`ast::set_watch_process`), also a parse that
+    // no program takes (`watcher::note_kept_parse`). Go frees an old parse
+    // with its GC. As in Go, no parse is kept from one cycle to the next:
+    // `source_files` keeps the `.d.ts` and `.json` parses of one cycle, and
+    // every other file is parsed again by each program that loads it.
+    pub watch: std::cell::Cell<bool>,
     // PORT: Go `*collections.SyncMap`. The task `writeFile` stores into it
     // from the checker threads.
     pub m_times: Arc<Mutex<FxHashMap<Path, Option<SystemTime>>>>,
@@ -319,9 +221,7 @@ pub struct BuildHost {
     // (the task `writeFile`) or touched (`set_m_time`). A check reads such
     // a file again, as Go does, in place of what the build info prefetch
     // read before the write (orchestrator.rs `BuildInfoPrefetch`). The
-    // orchestrator clears it at the start and the end of each build; at the
-    // end, the kept watch parses of its paths go first
-    // (`drop_written_watch_sources`).
+    // orchestrator clears it at the start and the end of each build.
     pub written: Arc<WrittenPaths>,
 }
 
@@ -395,270 +295,21 @@ impl BuildHost {
             config_times: RefCell::new(FxHashMap::default()),
             resolved_references: ParseCache::default(),
             config_prefetch: RefCell::new(None),
-            prefetch: std::cell::Cell::new(true),
-            watch_sources: RefCell::new(None),
-            watch_sources_before_config_change: RefCell::default(),
+            watch: std::cell::Cell::new(false),
             m_times: Arc::default(),
             written: Arc::default(),
         }
     }
 
-    /// PORT: not in Go (memory and time). In `tsc -b --watch` a file keeps
-    /// its parse while its modification time does not change, no watch
-    /// event names it and no build wrote it since the parse (`written`,
-    /// `drop_written_watch_sources`), as Go `tsc --watch` keeps its files
-    /// (execute/watcher.go `sourceFileCache`).
-    /// Go parses every file of each project that it builds again in each
-    /// cycle (`resetCaches`, and `sourceFiles` keeps the `.d.ts` and `.json`
-    /// files of one cycle). Here each such parse is a new file version, and
-    /// with parse workers off after the first build (`prefetch`) the parses
-    /// of a cycle ran on one thread (query-persist-client-core rebuilds took
-    /// 2.7 times as long). A parse of the same text with the same options is
-    /// the same file, so the output does not change. A bundled lib never
-    /// changes. A `.d.ts` or `.json` file comes here through `source_files`
-    /// (`get_source_file`), so in one cycle only its first parse comes here.
-    fn watch_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
-        let key = SourceFileCacheKey(opts.clone());
-        let fixed = crate::frontend::bundled::is_bundled(&opts.file_name);
-        // The OS file system, not the one this cycle caches: a build of this
-        // cycle can write the file after a lookup of it.
-        let mod_time = if fixed {
-            None
-        } else {
-            self.sys
-                .fs()
-                .stat(&opts.file_name)
-                .and_then(|info| info.mod_time())
-        };
-        let keep = fixed || (mod_time.is_some() && !self.written.contains(&opts.path));
-        let cached = self
-            .watch_sources
-            .borrow()
-            .as_ref()
-            .and_then(|sources| sources.get(&key))
-            .filter(|source| keep && source.mod_time == mod_time)
-            .map(|source| source.file.clone());
-        if cached.is_some() {
-            return cached;
-        }
-        // A kept parse from before a config change of this cycle: one with
-        // these parse options, or with other module indicator options that
-        // its parse did not read (`parse_with_options`).
-        let before = self
-            .take_watch_source_before_config_change(opts)
-            .filter(|source| keep && source.mod_time == mod_time);
-        if let Some(source) = before {
-            let file = source.file.clone();
-            if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
-                sources.insert(key, source);
-            }
-            return Some(file);
-        }
-        let file = self.host.get_source_file(opts);
-        // Each parse here can be kept and be a program file of a later
-        // build, also a `.ts` file that one program leaves out (see
-        // `note_kept_parse`, and the note in `get_source_file`).
-        if let Some(file) = &file {
+    /// PORT: not in Go. Records a parse that `get_source_file` gives
+    /// (`program::note_parsed_source_file`); in `tsc -b --watch` a parse of
+    /// a path that an earlier program published also gets its file version
+    /// here (`watcher::note_kept_parse`).
+    fn note_parse(&self, file: &Rc<ParsedSourceFile>) {
+        if self.watch.get() {
             crate::execute::watcher::note_kept_parse(file);
-        }
-        if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
-            match &file {
-                Some(file) if fixed || mod_time.is_some() => {
-                    sources.insert(
-                        key,
-                        WatchSource {
-                            file: file.clone(),
-                            mod_time,
-                            reads_options: crate::frontend::parser::reads_module_indicator_options(
-                                file,
-                            ),
-                        },
-                    );
-                }
-                _ => {
-                    sources.remove(&key);
-                }
-            }
-        }
-        file
-    }
-
-    /// PORT: not in Go (`watch_source_file`). Drops the kept parses of the
-    /// files at `paths` (the paths of a cycle's watch events), or every
-    /// kept parse when `paths` is `None` (an overflow).
-    pub fn evict_watch_sources(&self, paths: Option<&FxHashSet<Path>>) {
-        if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
-            match paths {
-                Some(paths) => sources.retain(|key, _| !paths.contains(&key.0.path)),
-                None => sources.clear(),
-            }
-        }
-    }
-
-    /// PORT: not in Go (`watch_source_file`). At the end of a build, drops
-    /// the kept parses of the files that the build wrote or touched
-    /// (`written`). Go keeps no parse from one cycle to the next
-    /// (`resetCaches`), so the next cycle parses each written file again.
-    /// A kept parse is checked only by its modification time: a parse that
-    /// a project with no reference to the writer made before the write
-    /// would stay when the write keeps that time (a coarse clock) and no
-    /// watch event names the file (an output directory that is not
-    /// watched). In the cycle that writes a file, `source_files` keeps
-    /// giving the first parse of the cycle, as Go does.
-    pub fn drop_written_watch_sources(&self) {
-        let written = self
-            .written
-            .paths
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if written.is_empty() {
-            return;
-        }
-        let unwritten =
-            |key: &SourceFileCacheKey, _: &mut WatchSource| !written.contains(&key.0.path);
-        if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
-            sources.retain(unwritten);
-        }
-        self.watch_sources_before_config_change
-            .borrow_mut()
-            .retain(unwritten);
-    }
-
-    /// PORT: not in Go (`watch_source_file`). A cycle with a config change
-    /// keeps the parses too: the key of a parse holds its parse options, so
-    /// a project whose options changed parses again only the files whose
-    /// parse options changed and whose parses read the changed options
-    /// (`take_watch_source_before_config_change`). Go parses every file
-    /// again in each cycle, and the port did in a config change cycle, on
-    /// one thread (a query-persist-client-core build after a tsconfig edit
-    /// took 2 times as long as Go). The kept parses wait in
-    /// `watch_sources_before_config_change`, and a build of the cycle takes
-    /// back each one that it uses (`watch_source_file`). Then
-    /// `end_config_change_cycle` drops the ones that it replaced.
-    pub fn keep_watch_sources_for_config_change(&self) {
-        if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
-            self.watch_sources_before_config_change
-                .borrow_mut()
-                .extend(sources.drain());
-        }
-    }
-
-    /// PORT: not in Go (`watch_source_file`). Takes the kept parse from
-    /// before a config change that a parse with `opts` would give: the one
-    /// with `opts`, else one whose parse options differ only in module
-    /// indicator options that it did not read, as a copy with `opts`
-    /// (`parse_with_options`). The key of a kept parse holds its options, so
-    /// the other three module indicator options are looked up.
-    fn take_watch_source_before_config_change(
-        &self,
-        opts: &SourceFileParseOptions,
-    ) -> Option<WatchSource> {
-        let mut before = self.watch_sources_before_config_change.borrow_mut();
-        if before.is_empty() {
-            return None;
-        }
-        let mut key = SourceFileCacheKey(opts.clone());
-        if let Some(source) = before.remove(&key) {
-            return Some(source);
-        }
-        for (jsx, force) in [(false, false), (false, true), (true, false), (true, true)] {
-            key.0.external_module_indicator_options = ExternalModuleIndicatorOptions { jsx, force };
-            if key.0.external_module_indicator_options == opts.external_module_indicator_options {
-                continue;
-            }
-            let Some(source) = before.get(&key) else {
-                continue;
-            };
-            // Such a parse fits only its own options (no node read here,
-            // see `WatchSource::reads_options`).
-            if source.reads_options {
-                return None;
-            }
-            let file = crate::frontend::parser::parse_with_options(&source.file, opts)?;
-            let mod_time = source.mod_time;
-            before.remove(&key);
-            return Some(WatchSource {
-                file,
-                mod_time,
-                reads_options: false,
-            });
-        }
-        None
-    }
-
-    /// PORT: not in Go (`keep_watch_sources_for_config_change`). Drops the
-    /// kept parses from before the config change of this cycle that its
-    /// builds will not take, so that they are freed before the builds parse
-    /// these files again. `Orchestrator::do_cycle` gives each project whose
-    /// change gave it other `ModuleIndicatorInputs`: its config from before
-    /// the change, whose files are the parses it holds, and its new inputs
-    /// (`None` when its config is gone). A kept parse that read its module
-    /// indicator options (`WatchSource::reads_options`) fits only a parse
-    /// with its own options. If it is a file of such a project, it goes
-    /// unless the options of the file under the new inputs of one of these
-    /// projects are its own (`ModuleIndicatorInputs::options_of`); when
-    /// such a project parses the file again with other options, it would
-    /// go at `end_config_change_cycle` all the same. The parses of the
-    /// other projects stay: Go shares no such parse between the programs
-    /// of a build (build/host.go:54 keeps only `.d.ts` and `.json` files,
-    /// and orchestrator.go:511 resets that cache in each cycle). Before,
-    /// the dropped parses stayed until `end_config_change_cycle`: on 600
-    /// script files with 12 `moduleDetection` edits, `tsc -b -w` held 24%
-    /// more RSS than R173, which dropped every kept parse before a config
-    /// change build. A dropped version that no other holder keeps dies
-    /// here, and its data is freed on the free thread, beside the build, as
-    /// Go's GC frees the files of the old program
-    /// (`file_version::take_data_of_dying_versions`).
-    pub fn drop_kept_parses_whose_module_indicator_options_change(
-        &self,
-        changed: &[(Option<ModuleIndicatorInputs>, Rc<ParsedCommandLine>)],
-    ) {
-        let mut versions = Vec::new();
-        self.watch_sources_before_config_change
-            .borrow_mut()
-            .retain(|key, source| {
-                if !source.reads_options {
-                    return true;
-                }
-                let mut held = false;
-                for (inputs, config) in changed {
-                    if !config.file_names_by_path().contains_key(&key.0.path) {
-                        continue;
-                    }
-                    let options = inputs.and_then(|inputs| inputs.options_of(&key.0.file_name));
-                    if options == Some(key.0.external_module_indicator_options) {
-                        return true;
-                    }
-                    held = true;
-                }
-                if held {
-                    versions.extend(source.file.version.get().cloned());
-                }
-                !held
-            });
-        let data = crate::ast::file_version::take_data_of_dying_versions(versions);
-        if !data.is_empty() {
-            crate::execute::build::build_task::drop_in_background(data);
-        }
-    }
-
-    /// PORT: not in Go (`keep_watch_sources_for_config_change`). At the end
-    /// of a cycle, a kept parse from before a config change that no build
-    /// of the cycle took goes back to `watch_sources`, for a later build of
-    /// its project, unless the cycle has a parse of the same path (with
-    /// other parse options): that one replaced it, so it goes.
-    pub fn end_config_change_cycle(&self) {
-        let before = std::mem::take(&mut *self.watch_sources_before_config_change.borrow_mut());
-        if before.is_empty() {
-            return;
-        }
-        if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
-            let parsed: FxHashSet<Path> = sources.keys().map(|key| key.0.path.clone()).collect();
-            sources.extend(
-                before
-                    .into_iter()
-                    .filter(|(key, _)| !parsed.contains(&key.0.path)),
-            );
+        } else {
+            crate::program::note_parsed_source_file(file);
         }
     }
 
@@ -832,14 +483,8 @@ impl CompilerHost for BuildHost {
         );
     }
 
-    // PORT: not in Go (see `BuildHost::prefetch`).
-    fn prefetch_parses(&self) -> bool {
-        self.prefetch.get()
-    }
-
     // Go: build/host.go:50 (*host).GetSourceFile
     fn get_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
-        let watch = self.watch_sources.borrow().is_some();
         if is_declaration_file_name(&opts.file_name)
             || file_extension_is(&opts.file_name, EXTENSION_JSON)
         {
@@ -849,34 +494,35 @@ impl CompilerHost for BuildHost {
             // package imports) and be a program file of a later one. Go
             // keeps the whole `*ast.SourceFile`. The note makes the publish
             // of the first program give the store its complete Go file, so
-            // the later program can use it.
-            // PORT: in `tsc -b --watch` the parse comes from
-            // `watch_source_file`, and this cache still gives the first
-            // parse of the cycle to each later program of the cycle, as Go
-            // does. A program that builds beside an upstream project (no
-            // reference to it) can read its `.d.ts` before the upstream
-            // build writes it; a downstream program of the same cycle then
-            // gets that parse, not the new text (bwsig1: hono
-            // `runtime-tests/*` build infos after a `removeComments` edit).
+            // the later program can use it. In `tsc -b --watch` the cache
+            // lasts one cycle (`resetCaches`): a program that builds beside
+            // an upstream project (no reference to it) can read its `.d.ts`
+            // before the upstream build writes it, and a downstream program
+            // of the same cycle then gets that parse, not the new text
+            // (bwsig1: hono `runtime-tests/*` build infos after a
+            // `removeComments` edit).
             return self.source_files.load_or_store(
                 SourceFileCacheKey(opts.clone()),
                 |key| {
-                    if watch {
-                        return self.watch_source_file(&key.0);
-                    }
                     let file = self.host.get_source_file(&key.0);
                     if let Some(file) = &file {
-                        crate::program::note_parsed_source_file(file);
+                        self.note_parse(file);
                     }
                     file
                 },
                 false, /* allowZero */
             );
         }
-        if watch {
-            return self.watch_source_file(opts);
+        let file = self.host.get_source_file(opts);
+        // PORT: in `tsc -b --watch` a parse that the program leaves out (a
+        // deduplicated package copy) is noted too, so that from its second
+        // parse on it is a freeable version, which dies after the load.
+        if self.watch.get()
+            && let Some(file) = &file
+        {
+            self.note_parse(file);
         }
-        self.host.get_source_file(opts)
+        file
     }
 
     // Go: build/host.go:58 (*host).GetContentMappedSourceFiles (tsgo#4712)
@@ -906,12 +552,9 @@ impl CompilerHost for BuildHost {
     }
 
     // PORT: not in Go (see `CompilerHost::cached_source_file_refs`). The
-    // `.d.ts` and `.json` files that `get_source_file` keeps, and in
-    // `tsc -b --watch` the parses that `watch_source_file` keeps, also from
-    // before a config change. A kept parse is given only for the module
-    // indicator options that its parse read, if any
-    // (`FileRefs::of_kept_parse`; a `.d.ts` or `.json` parse reads none).
-    // The references of each parse are made once (`cached_refs`).
+    // `.d.ts` and `.json` files that `get_source_file` keeps
+    // (`FileRefs::of_kept_parse`; such a parse reads no module indicator
+    // options). The references of each parse are made once (`cached_refs`).
     fn cached_source_file_refs(&self) -> FxHashMap<String, Arc<FileRefs>> {
         let mut refs = FxHashMap::default();
         let mut memo = self.cached_refs.borrow_mut();
@@ -926,20 +569,12 @@ impl CompilerHost for BuildHost {
             refs.insert(key.0.file_name.clone(), file_refs.clone());
         };
         self.source_files.for_each_stored(&mut add);
-        if let Some(sources) = self.watch_sources.borrow().as_ref() {
-            for (key, source) in sources {
-                add(key, &source.file);
-            }
-        }
-        for (key, source) in self.watch_sources_before_config_change.borrow().iter() {
-            add(key, &source.file);
-        }
         refs
     }
 
     // PORT: not in Go (see `CompilerHost::freeable_worker_parses`).
     fn freeable_worker_parses(&self) -> bool {
-        self.watch_sources.borrow().is_some()
+        self.watch.get()
     }
 
     // Go: build/host.go:66 (*host).GetResolvedProjectReference
@@ -1149,8 +784,8 @@ mod tests {
     /// before the write. The write keeps the modification time (a coarse
     /// clock) and no watch event names the file (an output directory that
     /// is not watched). The cycle keeps the first parse (Go `sourceFiles`),
-    /// and the next cycle parses the file again, as Go does
-    /// (`drop_written_watch_sources`).
+    /// and the next cycle parses the file again, as Go does (`resetCaches`
+    /// empties `sourceFiles`, build/orchestrator.go:511).
     #[test]
     fn a_written_file_is_parsed_again_in_the_next_cycle() {
         let dir = std::env::temp_dir().join(format!(
@@ -1180,7 +815,7 @@ mod tests {
         });
         let sys: Rc<dyn System> = Rc::new(crate::execute::tsc::new_os_system().unwrap());
         let host = BuildHost::new(sys, command, compare_paths_options);
-        host.watch_sources.replace(Some(FxHashMap::default()));
+        host.watch.set(true);
         let file_name = normalized(&dts);
         let opts = SourceFileParseOptions {
             path: host.to_path(&file_name),
@@ -1199,7 +834,6 @@ mod tests {
         drop(file);
         assert_eq!(text(), OLD, "a later program of the cycle");
         // The end of `build_all_tasks`, then `resetCaches`.
-        host.drop_written_watch_sources();
         host.written.clear();
         host.source_files.reset();
         assert_eq!(text(), NEW, "the next cycle");

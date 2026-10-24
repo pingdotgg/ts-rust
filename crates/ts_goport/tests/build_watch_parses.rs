@@ -144,16 +144,15 @@ fn build_watch_keeps_the_first_json_parse_of_a_cycle() {
 /// (:769-773, execute/watchmanager/watchbackend.go:84-92). Lines are at Go
 /// fed0bf24149f. Go 673a5f17d713 does the same for a non-composite `side`.
 ///
-/// The port keeps a `.d.ts` parse from one cycle to the next and checks it
-/// by its modification time. The end of `build_all_tasks` drops the kept
-/// parse of each written file (`BuildHost::drop_written_watch_sources`).
-/// Without that call the port keeps the parse of step 2 and finds no
-/// error: this test checks that call. A watch event drops a kept parse too
-/// (`BuildHost::evict_watch_sources`), so the check needs an `out` with no
-/// watch. Why the root is `/tmp/<dir>`: there `out` is 3 levels below `/`,
-/// and it gets no watch. Under the system temp dir it can be deeper and get
-/// a watch. Go gives the same output at any depth, so where `/tmp` is
-/// deeper the test still runs and passes, but it does not check the drop.
+/// Until watchreset1 the port kept a `.d.ts` parse from one cycle to the
+/// next, checked by its modification time, and this test checked that the
+/// end of each build dropped the kept parse of each written file. Now the
+/// port keeps no parse across cycles, as Go. A watch event for the file
+/// would make the step 5 build parse it again anyway, so the check needs an
+/// `out` with no watch. Why the root is `/tmp/<dir>`: there `out` is 3
+/// levels below `/`, and it gets no watch. Under the system temp dir it can
+/// be deeper and get a watch. Go gives the same output at any depth, so
+/// where `/tmp` is deeper the test still runs and passes.
 /// `expected.txt` and the counts are from
 /// `tsgo-oracle-fed0bf24149f` and `tsgo-oracle-673a5f17d713` in place of
 /// `tsgo` for this test (3 of 3 runs each).
