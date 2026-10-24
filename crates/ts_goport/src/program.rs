@@ -2777,12 +2777,12 @@ fn take_early_bind() -> Option<EarlyBind> {
 
 /// Starts the parallel bind (`bind_files_parallel`) of the program files of
 /// a one-program `tsc` process when they are published
-/// (`go_frontend::build_program`, after `set_prog`). `roots` are the program
-/// files in file order, all published by this program. Each bind thread
-/// holds the files that it bound; `bind_all` gives the offsets of the first
-/// file and joins them (`EarlyBind::join`). Off with `--singleThreaded`,
-/// with tracing, with fewer than 2 bind threads and with
-/// `GOPORT_EARLY_BIND=0`.
+/// (`go_frontend::build_program`, after `set_prog`). `parsed` are the
+/// program files in file order, all published by this program. Each bind
+/// thread holds the files that it bound; `bind_all` gives the offsets of the
+/// first file and joins them (`EarlyBind::join`). Off with
+/// `--singleThreaded`, with tracing, with fewer than 2 bind threads, with
+/// `GOPORT_EARLY_BIND=0` and when a file has a syntactic diagnostic.
 // PORT: not in Go (bindgap1, go-note 5.2 B1). Go binds when the program is
 // made (program.go:600 BindSourceFiles), and the bind reads only its file
 // (binder.go:120 to :130, `file.BindOnce`), so an early bind gives the same
@@ -2792,31 +2792,39 @@ fn take_early_bind() -> Option<EarlyBind> {
 // and the other `GoFile` cells stay empty, so the "Symbols" sum and the
 // file format lines read no bind. A bind writes the node records and the
 // binder bits of their flags (`BINDER_ADDED_FLAGS`) while it runs; no code
-// from the publish to `bind_all` reads them (bindgap1 report section 2). A
-// program that never binds (syntax errors and no `--diagnostics`, Go
-// program.go:2077) keeps the binds until the process ends. A hit on a bind
+// from the publish to `bind_all` reads them (bindgap1 report section 2).
+// Go binds a program with a syntactic diagnostic only to emit it or for
+// `--diagnostics` (program.go:2066-2080), so such a program starts no
+// early bind: an early bind could crash a program that Go never binds (a
+// deep file overflows the bind thread stack; R235 reviewer B2). Its late
+// bind is the bind of `bind_all`, as before bindgap1. The check reads the
+// lists of the parse in the loop that finds the unbound files, so it adds
+// no pass over the files. A program that does not reach `bind_all` (the
+// `program_created` hook of `goport_emit` can stop it) keeps the binds
+// until the process ends. A hit on a bind
 // thread fails its bind, so these threads count no unported hit
 // (`core::skip_unported_hits`): the serial bind of `bind_all` counts it,
 // and a program that does not bind has none. PERF: the binds run while this
 // thread builds the program tables and the syntactic diagnostics
 // (loadstamp1: 5.8 ms on Sentry, 2.7 ms on VS Code, dbook-lan).
-pub(crate) fn start_early_bind(roots: impl Iterator<Item = Node>) {
+pub(crate) fn start_early_bind(parsed: &[Rc<crate::frontend::parser::ParsedSourceFile>]) {
     if single_threaded()
         || crate::tracing::get().is_some()
         || std::env::var_os("GOPORT_EARLY_BIND").is_some_and(|value| value == "0")
     {
         return;
     }
-    let files: Vec<(Node, bool)> = roots
-        .filter_map(|root| {
-            let go_file = crate::ast::go_file(root.file_index());
-            go_file
-                .file_bind
-                .get()
-                .is_none()
-                .then(|| (root, go_file.version().is_some()))
-        })
-        .collect();
+    let options = &prog().options;
+    let mut files: Vec<(Node, bool)> = Vec::with_capacity(parsed.len());
+    for file in parsed {
+        if has_syntactic_diagnostics(file, options) {
+            return;
+        }
+        let go_file = crate::ast::go_file(file.root.file_index());
+        if go_file.file_bind.get().is_none() {
+            files.push((file.root, go_file.version().is_some()));
+        }
+    }
     let threads = bind_thread_count(files.len()).min(files.len());
     if threads < 2 {
         return;
@@ -5258,6 +5266,25 @@ pub fn get_syntactic_diagnostics(source_file: Node) -> Vec<Diagnostic> {
         }
         diags
     })
+}
+
+/// True when `get_syntactic_diagnostics` of `file`, a published file of the
+/// current program, is not empty. The parse gives every list but the one of
+/// `get_additional_js_syntactic_diagnostics`, which walks only the nodes of
+/// an unchecked JS file that contain a decorator. `start_early_bind` uses
+/// it.
+// PORT: Go `GetSyntacticDiagnostics` filters the list (`filterAndSortDiagnostics`
+// drops some unnecessary-code suggestions of a mapped file). This does not,
+// so it can be true where Go's list is empty; then a program only binds late.
+fn has_syntactic_diagnostics(
+    file: &crate::frontend::parser::ParsedSourceFile,
+    options: &CompilerOptions,
+) -> bool {
+    !file.diagnostics.is_empty()
+        || !file.js_diagnostics.is_empty()
+        || matches!(file.script_kind, ScriptKind::JS | ScriptKind::JSX)
+            && !is_check_js_enabled_for_file(file.root, options)
+            && !get_additional_js_syntactic_diagnostics(file.root, options).is_empty()
 }
 
 // Go: compiler/program.go:791 getAdditionalJSSyntacticDiagnostics
