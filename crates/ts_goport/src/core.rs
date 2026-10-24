@@ -4168,10 +4168,10 @@ pub struct SparseLinkPage<V> {
 
 impl<V> SparseLinkPage<V> {
     /// The capacity of `records` in a new page: 64 bytes, and at least 4
-    /// records. Then it doubles, as a `Vec` does.
-    // PERF: each growth is a `realloc`. Growing one record at a time cost
-    // 0.5% more instructions on zod; from 4 records, about 0.1% more on
-    // effect than from 64 bytes.
+    /// records. Then it doubles, as a `Vec` does (`grow`).
+    // PERF: each growth is an allocation and a copy. Growing one record at a
+    // time cost 0.5% more instructions on zod; from 4 records, about 0.1%
+    // more on effect than from 64 bytes.
     const FIRST: usize = {
         let size = if size_of::<V>() == 0 {
             1
@@ -4185,10 +4185,27 @@ impl<V> SparseLinkPage<V> {
     // PERF: out of line, so an inlined `get` stays small.
     #[inline(never)]
     fn push(&mut self, index: usize, value: V) -> &mut V {
+        if self.records.len() == self.records.capacity() {
+            self.grow();
+        }
         self.records.push(value);
         let place = self.records.len();
         self.places[index % LINK_PAGE_SIZE] = place as u8;
         &mut self.records[place - 1]
+    }
+
+    /// Doubles the capacity of `records`, as `Vec::push` does.
+    // PERF: a new allocation, a copy and a sized free, not the `realloc` of
+    // `Vec::push`. jemalloc's `realloc` (`do_rallocx`) has no thread cache
+    // fast path, and a doubled small block always moves to another size
+    // class (linkgrow1: VS Code st, the `realloc` path was most of the 0.13%
+    // of instructions that record growth took). Same records, same order.
+    #[cold]
+    #[inline(never)]
+    fn grow(&mut self) {
+        let mut grown = Vec::with_capacity((2 * self.records.capacity()).max(Self::FIRST));
+        grown.append(&mut self.records);
+        self.records = grown;
     }
 }
 

@@ -154,6 +154,69 @@ fn jsdoc_text_cut(text: &str, end: usize) -> (usize, Vec<u8>) {
 /// bytes) and a char of U+10F780..U+10F7FF (4 bytes).
 const INVALID_BYTE_UNIT_LEN: i32 = 7;
 
+/// Not in Go (jsdocmem1): the call site of a speculative JSDoc tag parse
+/// (`Parser::speculate_js_doc_tag`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JsDocSpeculation {
+    /// The tag after a JSDoc signature (Go `parseJSDocSignature`).
+    SignatureTag,
+    /// A child tag of this target (Go `parseChildParameterOrPropertyTag`).
+    ChildTag(PropertyLikeParse),
+}
+
+/// Not in Go (jsdocmem1): the parser state where a speculative JSDoc tag
+/// parse starts (`Parser::speculate_js_doc_tag`). A parser parses one file,
+/// and a position of it is in one comment, so two parses with the same key
+/// read the same text in the same state: they make the same nodes and
+/// counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct JsDocDiscardKey {
+    site: JsDocSpeculation,
+    indent: i32,
+    pos: i32,
+    full_start_pos: i32,
+    token_start: i32,
+    token: SyntaxKind,
+    token_flags: TokenFlags,
+    skip_js_doc_leading_asterisks: i32,
+    context_flags: NodeFlags,
+    parsing_contexts: ParsingContexts,
+}
+
+/// Not in Go (jsdocmem1): a speculative JSDoc tag parse whose result its
+/// caller discarded, and what the parse left after the caller's rewind (Go
+/// keeps these too: the factory counts, `identifierCount` and
+/// `hasDeprecatedTag`).
+#[derive(Clone, Copy, Debug)]
+pub struct JsDocDiscard {
+    /// The discarded result. No live node points to it. A replay gives it
+    /// to the caller's check again.
+    result: Node,
+    node_count: usize,
+    text_count: usize,
+    identifier_count: i64,
+    sets_deprecated_tag: bool,
+}
+
+/// True when the caller of the speculative parse `site` discards its result
+/// `tag` and rewinds (`name`: the name argument of a child tag parse).
+fn js_doc_tag_is_discarded(site: JsDocSpeculation, tag: Node, name: Node) -> bool {
+    match site {
+        JsDocSpeculation::SignatureTag => tag.kind() != SyntaxKind::JsDocReturnTag,
+        JsDocSpeculation::ChildTag(_) => tag.is_nil() || is_other_child_tag(tag, name),
+    }
+}
+
+/// Go `parseChildParameterOrPropertyTag`: true when `child` is a parameter
+/// or property tag that is not a child of `name`.
+fn is_other_child_tag(child: Node, name: Node) -> bool {
+    !child.is_nil()
+        && !name.is_nil()
+        && (child.kind() == SyntaxKind::JsDocParameterTag
+            || child.kind() == SyntaxKind::JsDocPropertyTag)
+        && (is_identifier(child.name()) || !texts_equal(name, child.name().left()))
+}
+
 impl<'a> Parser<'a> {
     /// The file position of the position `pos` of a JSDoc text with a cut
     /// tail (see `parse_js_doc_comment`).
@@ -1651,13 +1714,96 @@ impl<'a> Parser<'a> {
         self.new_node_list(TextRange::new(pos, end), &parameters)
     }
 
+    /// The speculative tag parse `site` at the current token (`indent`
+    /// and `name` are the arguments of the call site), or its replay. The
+    /// caller discards the result and rewinds to its mark when
+    /// `js_doc_tag_is_discarded`.
+    // PERF: jsdocmem1. Go parses the tag after a JSDoc signature
+    // (`parseJSDocSignature`) and a child tag of an object type
+    // (`parseChildParameterOrPropertyTag`) speculatively, and that parse
+    // does the same for the tag after it. So a comment with N such tags
+    // parses O(N^2) tags. Go's GC frees the discarded nodes, but here they
+    // stay in the file's store and the AST arena (2.8 GB for 4,000
+    // `@overload` tags, Go 14 MB). The first parse at a state is real. When
+    // its result is discarded, its counts are kept here, and a later parse
+    // at the same state adds the counts and gives the same discarded
+    // result, without new nodes. The nodes, lists, positions and
+    // diagnostics of the live tree are Go's: the caller discards the result
+    // and rewinds. Go keeps only these effects after the rewind: the node
+    // and text counts of the factory, `identifierCount` and
+    // `hasDeprecatedTag`; the replay adds them. A parse that changes a
+    // parser cache (`notParenthesizedArrow`, `possibleAwaitSpans`) is not
+    // kept: a later Go parse at that state reads the cache and can make
+    // fewer nodes. Out of line, so the rest of the JSDoc parser compiles as
+    // before.
+    #[inline(never)]
+    fn speculate_js_doc_tag(&mut self, site: JsDocSpeculation, indent: i32, name: Node) -> Node {
+        let scanner = self.scanner.mark();
+        let key = JsDocDiscardKey {
+            site,
+            indent,
+            pos: scanner.pos,
+            full_start_pos: scanner.full_start_pos,
+            token_start: scanner.token_start,
+            token: scanner.token,
+            token_flags: scanner.token_flags,
+            skip_js_doc_leading_asterisks: scanner.skip_js_doc_leading_asterisks,
+            context_flags: self.context_flags,
+            parsing_contexts: self.parsing_contexts,
+        };
+        #[cfg(test)]
+        let replay = !tests::NO_REPLAY.get();
+        #[cfg(not(test))]
+        let replay = true;
+        if replay
+            && let Some(d) = self.jsdoc_discards.get(&key).copied()
+            && js_doc_tag_is_discarded(site, d.result, name)
+        {
+            self.factory.add_counts(d.node_count, d.text_count);
+            self.identifier_count += d.identifier_count;
+            self.has_deprecated_tag |= d.sets_deprecated_tag;
+            return d.result;
+        }
+        let node_count = self.factory.node_count();
+        let text_count = self.factory.text_count();
+        let identifier_count = self.identifier_count;
+        let arrows = self.not_parenthesized_arrow.len();
+        let await_spans = self.possible_await_spans.len();
+        // Only a `@deprecated` tag sets it, and only `with_js_doc` reads
+        // it: cleared here, it tells whether this parse sets it.
+        let had_deprecated_tag = std::mem::replace(&mut self.has_deprecated_tag, false);
+        let result = match site {
+            JsDocSpeculation::SignatureTag => self.parse_tag(&[], indent),
+            JsDocSpeculation::ChildTag(target) => self.try_parse_child_tag(target, indent),
+        };
+        let sets_deprecated_tag = self.has_deprecated_tag;
+        self.has_deprecated_tag |= had_deprecated_tag;
+        if replay
+            && js_doc_tag_is_discarded(site, result, name)
+            && self.not_parenthesized_arrow.len() == arrows
+            && self.possible_await_spans.len() == await_spans
+        {
+            self.jsdoc_discards.insert(
+                key,
+                JsDocDiscard {
+                    result,
+                    node_count: self.factory.node_count() - node_count,
+                    text_count: self.factory.text_count() - text_count,
+                    identifier_count: self.identifier_count - identifier_count,
+                    sets_deprecated_tag,
+                },
+            );
+        }
+        result
+    }
+
     // Go: jsdoc.go:1122 parseJSDocSignature
     fn parse_js_doc_signature(&mut self, start: i32, indent: i32) -> Node {
         let parameters = self.parse_callback_tag_parameters(indent);
         let mut return_tag = Node::NIL;
         let state = self.mark();
         if self.parse_optional_jsdoc(SyntaxKind::AtToken) {
-            let tag = self.parse_tag(&[], indent);
+            let tag = self.speculate_js_doc_tag(JsDocSpeculation::SignatureTag, indent, Node::NIL);
             if tag.kind() == SyntaxKind::JsDocReturnTag {
                 return_tag = tag;
             }
@@ -1746,14 +1892,13 @@ impl<'a> Parser<'a> {
             match self.next_token_js_doc() {
                 SyntaxKind::AtToken => {
                     if can_parse_tag && self.scanner.can_follow_js_doc_at() {
-                        let child = self.try_parse_child_tag(target, indent);
-                        if !child.is_nil()
-                            && !name.is_nil()
-                            && (child.kind() == SyntaxKind::JsDocParameterTag
-                                || child.kind() == SyntaxKind::JsDocPropertyTag)
-                            && (is_identifier(child.name())
-                                || !texts_equal(name, child.name().left()))
-                        {
+                        // Every caller rewinds to its mark when this returns nil.
+                        let child = self.speculate_js_doc_tag(
+                            JsDocSpeculation::ChildTag(target),
+                            indent,
+                            name,
+                        );
+                        if is_other_child_tag(child, name) {
                             return Node::NIL;
                         }
                         return child;
@@ -2027,7 +2172,118 @@ fn texts_equal(mut a: Node, mut b: Node) -> bool {
 #[cfg(test)]
 mod tests {
     use super::jsdoc_text_cut;
+    use crate::frontend::parser::{ParsedSourceFile, SourceFileParseOptions, parse_source_file};
+    use crate::frontend::prelude::*;
+    use crate::frontend::tspath::Path;
     use crate::scanner_util::go_string_from_bytes;
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Set: `speculate_js_doc_tag` always parses, as Go.
+        pub(super) static NO_REPLAY: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The node tree of `n` (kind, range, flags, lists) with its eager
+    /// JSDoc, as the astdump tool writes it.
+    fn dump(file: &ParsedSourceFile, n: Node, depth: usize, out: &mut String) {
+        let mut lists = String::new();
+        let mut children = Vec::new();
+        n.for_each_child_and_lists(
+            &mut |c| {
+                children.push(c);
+                false
+            },
+            &mut |l, is_mod| {
+                let tc = if l.has_trailing_comma() { ",tc" } else { "" };
+                let m = if is_mod { "M" } else { "L" };
+                lists += &format!(" {m}{}-{}:{}{tc}", l.pos(), l.end(), l.nodes().len());
+            },
+        );
+        let (pos, end, flags) = (n.pos(), n.end(), n.flags().0);
+        *out += &format!("{depth} {:?} {pos} {end} {flags:x}{lists}\n", n.kind());
+        for &j in file.jsdoc_cache.get(&n).into_iter().flatten() {
+            *out += "@";
+            dump(file, j, depth + 1, out);
+        }
+        for c in children {
+            dump(file, c, depth + 1, out);
+        }
+    }
+
+    /// The tree, the diagnostics and the Go counts of a parse of `text`.
+    fn parse(text: &str, replay: bool) -> String {
+        NO_REPLAY.set(!replay);
+        let file = parse_source_file(
+            &SourceFileParseOptions {
+                file_name: "/a.js".to_string(),
+                path: Path("/a.js".to_string()),
+                ..Default::default()
+            },
+            &*Box::leak(text.into()),
+            ScriptKind::JS,
+        );
+        NO_REPLAY.set(false);
+        let mut out = format!(
+            "identifiers {} nodes {} texts {}\n",
+            file.identifier_count, file.node_count, file.text_count
+        );
+        let all = [
+            &file.diagnostics,
+            &file.js_diagnostics,
+            &file.jsdoc_diagnostics,
+        ];
+        for d in all.into_iter().flatten() {
+            out += &format!("diag {} {} {} {:?}\n", d.pos, d.end, d.code, d.message_args);
+        }
+        dump(&file, file.root, 0, &mut out);
+        out
+    }
+
+    /// jsdocmem1: a replayed speculative tag parse gives Go's tree,
+    /// diagnostics and counts (Go parses each speculative tag again).
+    #[test]
+    fn replayed_speculative_jsdoc_tags_match_a_full_parse() {
+        let tags = |tag: &str, n: usize| (0..n).map(|_| tag).collect::<Vec<_>>().join(" ");
+        let cases = [
+            format!("/** {} */\nfunction f() {{}}\n", tags("@overload", 7)),
+            format!("/** {} */\nfunction f() {{}}\n", tags("@callback C", 7)),
+            format!(
+                "/** {} */\nfunction f(a) {{}}\n",
+                tags("@param {Object} a", 7)
+            ),
+            format!(
+                "/**\n * {} */\nfunction f(a) {{}}\n",
+                tags("@param {Object} a\n *", 7)
+            ),
+            format!(
+                "/** @typedef {{Object}} T {} */\n",
+                tags("@property {Object} a", 7)
+            ),
+            format!(
+                "/** {} @returns {{number}} */\nfunction f() {{}}\n",
+                tags("@overload @param {string} x", 5)
+            ),
+            format!(
+                "/** {} @overload @deprecated */\nfunction f() {{}}\n",
+                tags("@overload", 5)
+            ),
+            "/** @param {Object} a @param {Object} a.b @param {Object} a.b.c @param {Object} b \
+             @param {Object} b.c @param {Object} b.c.d @param {Object} a @param {Object} a.b */\n\
+             function f(a, b) {}\n"
+                .to_string(),
+            format!(
+                "/** {} */\nfunction f() {{}}\n",
+                tags("@overload @param {{[(x) => 1]: number}} p", 5)
+            ),
+            format!(
+                "/** {} */\nfunction f() {{}}\n",
+                tags("@overload @param {Object} @template T @param {", 5)
+            ),
+        ];
+        for text in &cases {
+            assert_eq!(parse(text, true), parse(text, false), "{text}");
+        }
+    }
 
     /// The cut of a closed comment keeps no bytes and allocates nothing
     /// (the R159 reviewer: it ran 2 walks and 1 allocation per JSDoc

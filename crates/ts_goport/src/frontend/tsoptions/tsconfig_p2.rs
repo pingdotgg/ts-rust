@@ -188,7 +188,7 @@ fn get_extended_config(
     source_file: Option<&TsConfigSourceFile>,
     extended_config_file_name: &str,
     host: &dyn ParseConfigHost,
-    resolution_stack: &[Path],
+    resolution_stack: &ResolutionStack,
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
     result: &mut ExtendsResult,
 ) -> (Option<Rc<ParsedTsconfig>>, Vec<Diagnostic>) {
@@ -229,12 +229,10 @@ fn get_extended_config(
     {
         result
             .extended_source_files
-            .insert(source_file_file_name(extended_result.source_file).to_string());
-        for extended_source_file in &extended_result.extended_source_files {
-            result
-                .extended_source_files
-                .insert(extended_source_file.clone());
-        }
+            .insert(source_file_file_name(extended_result.source_file));
+        result
+            .extended_source_files
+            .extend(extended_result.extended_source_files.iter().copied());
     }
     (cache_entry.extended_config.clone(), errors)
 }
@@ -245,7 +243,7 @@ fn get_extended_config(
 pub fn parse_extended_config(
     file_name: &str,
     path: Path,
-    resolution_stack: &[Path],
+    resolution_stack: &ResolutionStack,
     host: &dyn ParseConfigHost,
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
 ) -> ExtendedConfigCacheEntry {
@@ -315,7 +313,7 @@ pub fn parse_config(
     host: &dyn ParseConfigHost,
     base_path: &str,
     config_file_name: &str,
-    resolution_stack: &[Path],
+    resolution_stack: &ResolutionStack,
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
 ) -> (ParsedTsconfig, Vec<Diagnostic>) {
     let base_path = normalize_slashes(base_path);
@@ -377,8 +375,7 @@ pub fn parse_config(
 
     if let Some(extended_config_paths) = own_config.extended_config_path.clone() {
         // copy the resolution stack so it is never reused between branches in potential diamond-problem scenarios.
-        let mut resolution_stack = resolution_stack.to_vec();
-        resolution_stack.push(resolved_path.clone());
+        let resolution_stack = resolution_stack.push(resolved_path.clone());
         let mut result = ExtendsResult::default();
         for extended_config_path in &extended_config_paths {
             // Go: applyExtendedConfig(result, extendedConfigPath)
@@ -502,7 +499,12 @@ pub fn parse_config(
             );
         }
         if let Some(source_file) = source_file.as_deref_mut() {
-            for extended_source_file in &result.extended_source_files {
+            // PERF: Go grows the slice in `slices.Insert`. One reserve keeps
+            // the list near its final length, with no doubling slack.
+            source_file
+                .extended_source_files
+                .reserve(result.extended_source_files.len());
+            for &extended_source_file in &result.extended_source_files {
                 // ts#64755: a config is not in its own extended source files
                 // (an `extends` cycle through it).
                 if to_path(
@@ -516,13 +518,13 @@ pub fn parse_config(
                 // Go: core.InsertSorted(..., cmp.Compare)
                 let i = match source_file
                     .extended_source_files
-                    .binary_search(extended_source_file)
+                    .binary_search(&extended_source_file)
                 {
                     Ok(i) | Err(i) => i,
                 };
                 source_file
                     .extended_source_files
-                    .insert(i, extended_source_file.clone());
+                    .insert(i, extended_source_file);
             }
         }
         let own_options = own_config.options.take();
@@ -724,7 +726,7 @@ pub fn parse_json_config_file_content_worker(
         host,
         base_path,
         config_file_name,
-        resolution_stack,
+        &ResolutionStack::from_slice(resolution_stack),
         extended_config_cache,
     );
     if let Some(options) = parsed_config.options.as_mut() {
@@ -1716,6 +1718,8 @@ fn set_content_mapper_diagnostic_location(
 
 // Go: tsoptions/tsconfigparsing.go:1743 ForEachPropertyAssignment
 // PORT: Go `*T` results are `Option<T>`. The Go variadic `key2` is a slice.
+// The Go loop is `find_property_assignment`: Go returns `callback` of the
+// first property assignment whose name is `key` or `key2[0]`.
 pub fn for_each_property_assignment<T>(
     object_literal: Node,
     key: &str,
@@ -1723,17 +1727,67 @@ pub fn for_each_property_assignment<T>(
     key2: &[&str],
 ) -> Option<T> {
     if object_literal.is_some() {
-        for property in object_literal.properties().iter() {
-            if !is_property_assignment(property) {
-                continue;
-            }
-            let (prop_name, ok) = try_get_text_of_property_name(property.name());
-            if ok && (prop_name == key || (!key2.is_empty() && key2[0] == prop_name)) {
-                return callback(property);
-            }
+        let is_key =
+            |prop_name: &str| prop_name == key || (!key2.is_empty() && key2[0] == prop_name);
+        if let Some(property) = find_property_assignment(object_literal, is_key) {
+            return callback(property);
         }
     }
     None
+}
+
+/// The first property assignment of `object_literal` whose name text
+/// (`try_get_property_name_text`) `is_key` accepts: the loop of Go
+/// `ForEachPropertyAssignment`.
+// PERF: pathsdiag1. As in Go, each diagnostic of a `paths` entry scans the
+// `paths` keys up to its own: N^2/2 steps for N entries (Bun 0137 has
+// 120,000). The config file checks of a program run before the publish, so
+// there a step reads the config file store directly (`BuildStoreReads`):
+// no store lookup per node and no copy of the name.
+fn find_property_assignment(object_literal: Node, is_key: impl Fn(&str) -> bool) -> Option<Node> {
+    let properties = object_literal.properties();
+    let mut start = 0;
+    if let Some((file, ids)) = properties.store_ids()
+        && let Some(scan) =
+            with_build_store_reads(file, |reads| scan_property_assignments(reads, ids, &is_key))
+    {
+        match scan {
+            Ok(found) => return found,
+            Err(i) => start = i,
+        }
+    }
+    properties.iter().skip(start).find(|&property| {
+        is_property_assignment(property)
+            && try_get_property_name_text(property.name()).is_some_and(|name| is_key(&name))
+    })
+}
+
+/// The steps of `find_property_assignment` over the property ids `ids` of
+/// a build store. `Err(i)` when property `i` needs the `Node` reads: it or
+/// its name is not a node of the store with `'static` data, or the kind of
+/// its name is not a literal kind (`BuildStoreReads::literal_text`).
+fn scan_property_assignments(
+    reads: &BuildStoreReads<'_>,
+    ids: &[crate::astdata::NodeId],
+    is_key: &impl Fn(&str) -> bool,
+) -> Result<Option<Node>, usize> {
+    for (i, &id) in ids.iter().enumerate() {
+        let property = reads.node(id);
+        let name = match reads.kind_and_data(property) {
+            Some((
+                SyntaxKind::PropertyAssignment,
+                crate::astdata::NodeData::PropertyAssignment(d),
+            )) => reads.node(d.name),
+            Some((kind, _)) if kind != SyntaxKind::PropertyAssignment => continue,
+            _ => return Err(i),
+        };
+        match reads.literal_text(name) {
+            Some(text) if is_key(text) => return Ok(Some(property)),
+            Some(_) => {}
+            None => return Err(i),
+        }
+    }
+    Ok(None)
 }
 
 // Go: tsoptions/tsconfigparsing.go:1759 getTsConfigObjectLiteralExpression
@@ -2415,5 +2469,49 @@ mod go_lower_tests {
             format!("{root}/app/${{confİgDir}}/out")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod property_assignment_tests {
+    use super::*;
+
+    /// The loop of Go `ForEachPropertyAssignment` with the `Node` reads.
+    fn node_reads_find(object_literal: Node, key: &str, key2: &[&str]) -> Option<Node> {
+        object_literal.properties().iter().find(|&property| {
+            if !is_property_assignment(property) {
+                return false;
+            }
+            let (name, ok) = try_get_text_of_property_name(property.name());
+            ok && (name == key || (!key2.is_empty() && key2[0] == name))
+        })
+    }
+
+    // pathsdiag1: before the publish `find_property_assignment` reads the
+    // config file store directly (`BuildStoreReads`), and from a computed
+    // name on it reads with the `Node` reads. Both find the property that
+    // the Go loop finds.
+    #[test]
+    fn build_store_scan_finds_the_go_property() {
+        let source_file = new_tsconfig_source_file_from_file_path(
+            "/p/tsconfig.json",
+            to_path("/p/tsconfig.json", "", true),
+            r#"{ "compilerOptions": { "a": 1, b: 2, 3: 3, "": 4, d, "a": 5, 'g': 6, ["c"]: 7, ...e, "f": 8, "c": 9 } }"#,
+        )
+        .source_file;
+        let root = get_tsconfig_object_literal_expression(source_file);
+        let options =
+            for_each_property_assignment(root, "compilerOptions", |p| Some(p.initializer()), &[])
+                .expect("compilerOptions");
+        assert!(with_build_store_reads(options.file_index(), |_| ()).is_some());
+        for key in ["a", "b", "3", "", "c", "d", "e", "f", "g", "x"] {
+            for key2 in [&[][..], &[""], &["f"]] {
+                assert_eq!(
+                    for_each_property_assignment(options, key, Some, key2),
+                    node_reads_find(options, key, key2),
+                    "{key} {key2:?}"
+                );
+            }
+        }
     }
 }
