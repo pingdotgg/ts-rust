@@ -264,7 +264,7 @@ impl EsDecoratorTransformer {
     // Go: transformers/estransforms/esdecorator.go:200 esDecoratorTransformer.exitClass
     pub(super) fn exit_class(&mut self) {
         // Go evaluates the message args first: a nil `tx.top` is a nil dereference.
-        // Go N' loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
+        // Go loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
         // (esdecorator.go:201).
         let top = self
             .top
@@ -286,7 +286,7 @@ impl EsDecoratorTransformer {
         let top_kind = self
             .top
             .as_ref()
-            // Go N' loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
+            // Go loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
             // (esdecorator.go:208).
             .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0))
             .kind;
@@ -311,7 +311,7 @@ impl EsDecoratorTransformer {
 
     // Go: transformers/estransforms/esdecorator.go:222 esDecoratorTransformer.exitClassElement
     pub(super) fn exit_class_element(&mut self) {
-        // Go N' loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
+        // Go loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
         // (esdecorator.go:223).
         let top = self
             .top
@@ -325,7 +325,7 @@ impl EsDecoratorTransformer {
         let next_kind = top
             .next
             .as_ref()
-            // Go N' loads `tx.top.next.kind` (offset 0) for the assert message: addr=0x0
+            // Go loads `tx.top.next.kind` (offset 0) for the assert message: addr=0x0
             // (esdecorator.go:224).
             .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0))
             .kind;
@@ -343,7 +343,7 @@ impl EsDecoratorTransformer {
         let top_kind = self
             .top
             .as_ref()
-            // Go N' loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
+            // Go loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
             // (esdecorator.go:230).
             .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0))
             .kind;
@@ -359,7 +359,7 @@ impl EsDecoratorTransformer {
 
     // Go: transformers/estransforms/esdecorator.go:238 esDecoratorTransformer.exitName
     pub(super) fn exit_name(&mut self) {
-        // Go N' loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
+        // Go loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
         // (esdecorator.go:239).
         let top = self
             .top
@@ -394,7 +394,7 @@ impl EsDecoratorTransformer {
         let top_kind = self
             .top
             .as_ref()
-            // Go N' loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
+            // Go loads `tx.top.kind` (offset 0) for the assert message: addr=0x0
             // (esdecorator.go:260).
             .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0))
             .kind;

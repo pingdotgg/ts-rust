@@ -1095,15 +1095,28 @@ impl Checker {
                 {
                     continue;
                 }
+                // PORT: a private name holds the key of its class, where Go's
+                // `propertySymbol.Name()` holds the class's symbol id, which
+                // TS4094 prints (`go_symbol_name`).
                 if self
                     .get_declaration_modifier_flags_from_symbol(property_symbol)
                     .intersects(ModifierFlags::PRIVATE | ModifierFlags::PROTECTED)
                 {
-                    let name = self.sym(property_symbol).name.clone();
+                    let name = go_symbol_name(&self.symbols, property_symbol);
                     tracker_report_private_in_base_of_class_expression(self, b, &name);
                 }
                 if self.is_private_identifier_symbol(property_symbol) {
-                    let name = symbol_name(&self.symbols, property_symbol);
+                    // `ast.SymbolName` gives `#x` for a private class element,
+                    // and `symbol.Name()` for any other private name (an
+                    // object literal `#x`).
+                    let value_declaration = self.sym(property_symbol).value_declaration;
+                    let name = if value_declaration.is_some()
+                        && is_private_identifier_class_element_declaration(value_declaration)
+                    {
+                        symbol_name(&self.symbols, property_symbol)
+                    } else {
+                        go_symbol_name(&self.symbols, property_symbol)
+                    };
                     tracker_report_private_in_base_of_class_expression(self, b, &name);
                 }
             }

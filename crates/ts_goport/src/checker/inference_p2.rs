@@ -167,7 +167,7 @@ impl Checker {
         if source.is_nil() || target.is_nil() || constraint.is_nil() {
             // Go reads `source.id`, `target.id` and `constraint.id`: a
             // reverse mapped symbol of another checker has no links here.
-            // Go N' loads `id` (offset 8) of each: addr=0x8 (inference.go:1078).
+            // Go loads `id` (offset 8) of each: addr=0x8 (inference.go:1078).
             crate::core::go_nil_dereference_at(0x8);
         }
         let key = ReverseMappedTypeKey {

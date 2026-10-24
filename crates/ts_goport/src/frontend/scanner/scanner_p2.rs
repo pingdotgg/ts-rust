@@ -14,8 +14,9 @@ use std::borrow::Cow;
 use crate::scanner_util::push_js_string_rune;
 
 use super::scanner_p1::{
-    EscapeSequenceScanningFlags, IdentifierVariant, RUNE_SELF, Scanner, intern_token_value,
-    rune_to_char, rune_to_string, utf8_decode_last_rune_in_string, utf8_decode_rune_in_string,
+    EscapeSequenceScanningFlags, IdentifierVariant, RUNE_SELF, Scanner, TEXT_TO_KEYWORD,
+    intern_token_value, rune_to_char, rune_to_string, utf8_decode_last_rune_in_string,
+    utf8_decode_rune_in_string,
 };
 
 /// Go `strconv.ParseInt(s, base, bitSize)` with the error ignored, as the
@@ -75,6 +76,134 @@ static ASCII_IDENT_PART: [bool; 256] = {
         i += 1;
     }
     table
+};
+
+/// The bytes that start an ASCII identifier on Go's fast path: letters, `_`,
+/// `$`.
+static ASCII_IDENT_START: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < 128 {
+        let b = i as u8;
+        table[i] = b.is_ascii_alphabetic() || b == b'_' || b == b'$';
+        i += 1;
+    }
+    table
+};
+
+/// The bytes that `Scanner::scan_ascii_identifier` reads in one window.
+const IDENT_WINDOW: usize = 16;
+
+/// Go `GetIdentifierToken` of the ASCII identifier of `len` bytes at the
+/// start of `window` (`len` is at least 1, and more than 16 only when the
+/// name runs past the window).
+// PERF: scanintern1 C2. One probe of `KEYWORD_SLOTS` with the name's bytes
+// as two zero-padded words, in place of the `text_to_keyword` compare chain
+// (26 instructions per call on the VS Code load).
+#[inline(always)]
+fn window_identifier_token(window: &[u8; IDENT_WINDOW], len: usize) -> SyntaxKind {
+    // Go: `len(str) >= 2 && len(str) <= 12 && str[0] >= 'a' && str[0] <= 'z'`,
+    // then `textToKeyword[str]`.
+    if !(2..=12).contains(&len) || !window[0].is_ascii_lowercase() {
+        return SyntaxKind::Identifier;
+    }
+    let (lo_mask, hi_mask) = KEYWORD_WORD_MASKS[len];
+    let lo = u64::from_le_bytes(window[..8].try_into().unwrap_or_default()) & lo_mask;
+    let hi = u64::from_le_bytes(window[8..].try_into().unwrap_or_default()) & hi_mask;
+    let slot = &KEYWORD_SLOTS[keyword_slot(lo)];
+    // A name has no zero byte, so equal padded words mean an equal text.
+    if slot.lo == lo && slot.hi == hi {
+        slot.kind
+    } else {
+        SyntaxKind::Identifier
+    }
+}
+
+/// A `KEYWORD_SLOTS` entry: the keyword's bytes as two zero-padded
+/// little-endian words (bytes 0 to 7, bytes 8 to 15) and its kind. An empty
+/// slot has `lo` 0, which no name of 2 or more bytes has.
+#[derive(Clone, Copy)]
+struct KeywordSlot {
+    lo: u64,
+    hi: u64,
+    kind: SyntaxKind,
+}
+
+/// `log2` of the `KEYWORD_SLOTS` length.
+const KEYWORD_SLOT_BITS: u32 = 8;
+
+/// The multiplier of `keyword_slot`. A search found that it gives each of
+/// the 86 keywords its own slot. The build of `KEYWORD_SLOTS` checks this,
+/// so a new keyword that shares a slot stops the compile (search again).
+const KEYWORD_SLOT_MUL: u64 = 0x686a_c588_6dd9_fa39;
+
+/// The `KEYWORD_SLOTS` index of the padded first word `lo` of a text.
+#[inline(always)]
+const fn keyword_slot(lo: u64) -> usize {
+    (lo.wrapping_mul(KEYWORD_SLOT_MUL) >> (64 - KEYWORD_SLOT_BITS)) as usize
+}
+
+/// The two padded words of `text` (`KeywordSlot`), at most 16 bytes.
+const fn keyword_words(text: &[u8]) -> (u64, u64) {
+    let (mut lo, mut hi) = (0u64, 0u64);
+    let mut i = 0;
+    while i < text.len() {
+        if i < 8 {
+            lo |= (text[i] as u64) << (8 * i);
+        } else {
+            hi |= (text[i] as u64) << (8 * (i - 8));
+        }
+        i += 1;
+    }
+    (lo, hi)
+}
+
+/// Go `textToKeyword` as a table with one slot per keyword
+/// (`keyword_slot`).
+static KEYWORD_SLOTS: [KeywordSlot; 1 << KEYWORD_SLOT_BITS] = {
+    let empty = KeywordSlot {
+        lo: 0,
+        hi: 0,
+        kind: SyntaxKind::Identifier,
+    };
+    let mut slots = [empty; 1 << KEYWORD_SLOT_BITS];
+    let mut i = 0;
+    while i < TEXT_TO_KEYWORD.len() {
+        let (text, kind) = TEXT_TO_KEYWORD[i];
+        let bytes = text.as_bytes();
+        // `window_identifier_token` looks up names of 2 to 12 bytes that
+        // start with a lowercase letter.
+        assert!(bytes.len() >= 2 && bytes.len() <= 12 && bytes[0].is_ascii_lowercase());
+        let (lo, hi) = keyword_words(bytes);
+        let slot = keyword_slot(lo);
+        assert!(
+            slots[slot].lo == 0,
+            "two keywords share a KEYWORD_SLOTS slot"
+        );
+        slots[slot] = KeywordSlot { lo, hi, kind };
+        i += 1;
+    }
+    slots
+};
+
+/// The masks that keep the first `len` bytes of the two window words, by
+/// `len` (0 to 16).
+static KEYWORD_WORD_MASKS: [(u64, u64); IDENT_WINDOW + 1] = {
+    let mut masks = [(0u64, 0u64); IDENT_WINDOW + 1];
+    let mut len = 1;
+    while len <= IDENT_WINDOW {
+        masks[len] = if len < 8 {
+            ((1u64 << (8 * len)) - 1, 0)
+        } else if len == 8 {
+            (u64::MAX, 0)
+        } else if len < 16 {
+            (u64::MAX, (1u64 << (8 * (len - 8))) - 1)
+        } else {
+            (u64::MAX, u64::MAX)
+        };
+        len += 1;
+    }
+    masks
 };
 
 /// A numeric fragment from `scan_number_fragment`: `prefix` followed by
@@ -427,6 +556,52 @@ impl<'a> Scanner<'a> {
         self.scanner_state.pos = self.scanner_state.token_start + size;
         self.scanner_state.token = SyntaxKind::Unknown;
         self.scanner_state.token
+    }
+
+    /// Go `scanIdentifier(0, identifierVariantStandard)` when it takes its
+    /// ASCII fast path, then Go `GetIdentifierToken` of the token value: the
+    /// token kind, with `pos` and the token value set as Go sets them.
+    /// `None`, with nothing changed, when the fast path does not apply (the
+    /// first byte is no ASCII letter, `_` or `$`, the name ends at a
+    /// non-ASCII byte or `\`) or when fewer than 16 bytes are left before
+    /// `end`. The caller then calls `scan_identifier`.
+    // PERF: scanintern1 C1. `scan` inlines this. The first 16 bytes come from
+    // one window with no end test per byte, and the work needs no saved
+    // registers. Out of line, `scan_identifier` paid 92 instructions per call
+    // besides its loop (VS Code load: 9.6 M calls).
+    #[inline(always)]
+    pub(crate) fn scan_ascii_identifier(&mut self) -> Option<SyntaxKind> {
+        let start = usize::try_from(self.scanner_state.pos).ok()?;
+        let end = usize::try_from(self.end).ok()?;
+        let bytes = self.text.as_bytes().get(..end)?;
+        let window: &[u8; IDENT_WINDOW] = bytes.get(start..)?.first_chunk()?;
+        if !ASCII_IDENT_START[usize::from(window[0])] {
+            return None;
+        }
+        let mut len = window[1..]
+            .iter()
+            .position(|&b| !ASCII_IDENT_PART[usize::from(b)])
+            .map_or(IDENT_WINDOW, |i| i + 1);
+        // Go `s.char()` after the run: the byte there, or -1 at `end`.
+        let next = if len < IDENT_WINDOW {
+            Some(window[len])
+        } else {
+            let rest = &bytes[start + IDENT_WINDOW..];
+            let more = rest
+                .iter()
+                .position(|&b| !ASCII_IDENT_PART[usize::from(b)])
+                .unwrap_or(rest.len());
+            len += more;
+            rest.get(more).copied()
+        };
+        // Go: `ch < utf8.RuneSelf && ch != '\\'`.
+        if next.is_some_and(|b| b >= 0x80 || b == b'\\') {
+            return None;
+        }
+        let value = self.text_token_value(start, start + len);
+        self.scanner_state.pos += len as i32;
+        self.scanner_state.token_value = value;
+        Some(window_identifier_token(window, len))
     }
 
     // Go: scanner/scanner.go:1484 scanIdentifier
@@ -1492,6 +1667,84 @@ impl<'a> Scanner<'a> {
 #[cfg(test)]
 mod tests {
     use super::{is_canonical_js_integer, js_number_string};
+    use crate::frontend::scanner::scanner_p1::{IdentifierVariant, new_scanner};
+    use crate::scanner_util::get_identifier_token;
+
+    /// scanintern1: where `scan_ascii_identifier` takes a name, it gives what
+    /// `scan_identifier` and `get_identifier_token` give from the same state
+    /// (kind, end and token value). Names of 1 to 40 bytes (keywords too),
+    /// each byte kind before each kind of stop, at offsets that put the name
+    /// across the 16-byte window, with the scan end at, after and before the
+    /// name's end.
+    #[test]
+    fn ascii_identifier_fast_path_matches_scan_identifier() {
+        let mut names: Vec<String> = ["as", "if", "of", "type", "async", "constructor", "x"]
+            .map(String::from)
+            .to_vec();
+        for len in 1..=40 {
+            let name: String = (0..len)
+                .map(|i| char::from(b"aZ_$9qB0zA"[(i * 7 + len) % 10]))
+                .collect();
+            if name.as_bytes()[0].is_ascii_digit() {
+                continue;
+            }
+            names.push(name);
+        }
+        // Every keyword and its near misses (longer, shorter, other case,
+        // other last byte, 12 bytes): `window_identifier_token`.
+        for &(keyword, _) in crate::frontend::scanner::scanner_p1::TEXT_TO_KEYWORD {
+            let last = keyword.len() - 1;
+            names.push(keyword.to_string());
+            names.push(format!("{keyword}s"));
+            names.push(keyword[..last].to_string());
+            names.push(keyword.to_uppercase());
+            names.push(format!("{}z", &keyword[..last]));
+            names.push(format!("{keyword:a<12}"));
+        }
+        names.push("instanceof1".to_string());
+        names.push("\u{e9}t\u{e9}".to_string());
+        names.push("9lives".to_string());
+        let stops = ["", " ", "(", "\\u0061", "\u{e9}", "\u{2028}", "-x", "#"];
+        let mut taken = 0;
+        for name in &names {
+            for stop in stops {
+                for pad in 0..18 {
+                    let text = format!("{}{name}{stop} tail of the text", " ".repeat(pad));
+                    let name_end = (pad + name.len()) as i32;
+                    for end in [text.len() as i32, name_end + 1, name_end, name_end - 1] {
+                        if end < pad as i32 {
+                            continue;
+                        }
+                        let mut fast = new_scanner();
+                        fast.set_text(&text);
+                        fast.end = end;
+                        fast.scanner_state.pos = pad as i32;
+                        let Some(kind) = fast.scan_ascii_identifier() else {
+                            assert_eq!(fast.scanner_state.pos, pad as i32, "{text:?} {end}");
+                            continue;
+                        };
+                        taken += 1;
+                        let mut slow = new_scanner();
+                        slow.set_text(&text);
+                        slow.end = end;
+                        slow.scanner_state.pos = pad as i32;
+                        assert!(slow.scan_identifier(0, IdentifierVariant::STANDARD));
+                        let want = get_identifier_token(slow.scanner_state.token_value);
+                        assert_eq!(kind, want, "{text:?} {end}");
+                        assert_eq!(
+                            fast.scanner_state.pos, slow.scanner_state.pos,
+                            "{text:?} {end}"
+                        );
+                        assert_eq!(
+                            fast.scanner_state.token_value, slow.scanner_state.token_value,
+                            "{text:?} {end}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(taken > 1000, "{taken}");
+    }
 
     #[test]
     fn canonical_integers_round_trip() {

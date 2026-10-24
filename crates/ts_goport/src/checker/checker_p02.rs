@@ -452,7 +452,12 @@ impl Checker {
         self.value_symbol_links
             .get_by_id(&self.symbols, undefined_symbol)
             .resolved_type = undefined_widening_type;
+        // Go reads the links of `argumentsSymbol` (which gives it its id)
+        // before it gets `IArguments` (checker.go:1382): Go makes the calls
+        // of an assignment in lexical order, so the left side comes first.
         let arguments_symbol = self.arguments_symbol;
+        self.value_symbol_links
+            .get_by_id(&self.symbols, arguments_symbol);
         let iarguments_type =
             self.get_global_type("IArguments", 0 /*arity*/, true /*reportErrors*/);
         self.value_symbol_links

@@ -15,8 +15,16 @@ type Nb = Rc<RefCell<NodeBuilderImpl>>;
 // borrow, so callers never hold it across a Checker call.
 // Go `b.ctx.<field>`. The context is its own `Rc<RefCell<..>>`. The readers
 // borrow `b`, then `b.ctx`, in one expression, with no `Rc` clone (nbctx1).
-// A block that holds a context guard binds `let b = b.borrow();` first, so
-// it cannot pass `b` to a Checker call while the guard lives.
+// Rule (nbctx1): inside a `let b = b.borrow();` block, and inside an
+// `nb_ctx` or `nb_ctx_mut` closure, touch ctx fields only. Make no Checker,
+// tracker or builder call there. The borrows of `b` and `b.ctx` live to the
+// end of the block. A Checker call can reach the cached to-string builder
+// (`symbol_to_string`), which can be this builder, and its `enter_context`
+// then panics on the held borrow. The compiler does not stop such a call
+// (`self` is free in the block; the shadowed `b` only stops calls that take
+// `b`), and tests that never reach the builder pass. No debug check backs
+// the rule: the tests, CI and the gate run release builds only, so a
+// `debug_assertions` check would never run.
 
 fn nb_flags(b: &Nb) -> NodeBuilderFlags {
     b.borrow().ctx.borrow().flags
@@ -130,7 +138,7 @@ impl Checker {
         debug_assert!(!chain.is_empty() && 0 <= index && (index as usize) < chain.len());
         let symbol = chain[index as usize];
         // Go keys the list by `ast.GetSymbolId(symbol)`, which gives the
-        // symbol its id (`ValueSymbolLinkStore`).
+        // symbol its global id (`get_symbol_id`).
         get_symbol_id(&self.symbols, symbol);
         {
             let b = b.borrow();
@@ -1857,7 +1865,7 @@ impl Checker {
         if declaration.is_some() && !node_is_synthesized(declaration) {
             let symbol = self.get_symbol_of_declaration(declaration);
             // Go keys the map by `ast.GetSymbolId(symbol)`, which gives the
-            // symbol its id (`ValueSymbolLinkStore`).
+            // symbol its global id (`get_symbol_id`).
             get_symbol_id(&self.symbols, symbol);
             let cached = b
                 .borrow()
