@@ -193,7 +193,7 @@ child_test! {
         let root_count = config
             .extended_source_files()
             .iter()
-            .filter(|f| *f == "/project/tsconfig.root.json")
+            .filter(|f| **f == "/project/tsconfig.root.json")
             .count();
         assert_eq!(root_count, 1);
 
