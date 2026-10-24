@@ -1220,15 +1220,19 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
     set while a build or a watch cycle runs): every pool made then, when its
     task is built or before watch mode makes the next program
     (`program::carry_symbol_ids_of`), or else when its program is
-    released. Each worker logs the global ids that it gave and the blocks
-    that it took. The merge keeps an id that the loading thread has. Else
+    released. Each worker logs the global ids that it gave. The merge
+    keeps an id that the loading thread has. Else
     the worker that gave the symbol an id first wins, by a clock (the ids
     that the worker gave before it, of both kinds), as the first id wins in
     Go. Only a pool of more than one worker counts its block ids for the
-    clock (`ast::record_symbol_ids`): each one then takes the slow path of
-    `SymbolIdGenerator`. One worker's log order is its clock order, so a
-    one-checker pool, a `--singleThreaded` program and a `tsc -p` without
-    watch pay nothing per block id. The global counter counts on by the winning global ids and the
+    clock (`ast::record_symbol_ids`): each one then takes the other path of
+    `SymbolIdGenerator::next_id` (`at_last`). One worker's log order is
+    its clock order, so a one-checker pool, a `--singleThreaded` program
+    and a `tsc -p` without watch pay nothing per block id. A worker has one
+    generator and only it moves its block counter, so the log does not
+    list the blocks: block k starts k blocks after the counter at
+    `record_symbol_ids`, with k * 256 block ids before it. The global
+    counter counts on by the winning global ids and the
     global ids of the workers' own symbols, in clock order; the block
     counter counts on by every block, whole blocks in clock order of the
     takes. The ids are new numbers, so two workers' ids do not collide.
