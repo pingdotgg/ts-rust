@@ -929,6 +929,8 @@ impl Checker {
                 return types[1 - i];
             }
             // Remove the target type from the slice.
+            // PORT: Go borrows a temporary type set here. A stack `TypeSet`
+            // measured slower than this `Vec` on most perf cells (typeset1).
             let mut filtered = Vec::with_capacity(types.len() - 1);
             filtered.extend_from_slice(&types[..i]);
             filtered.extend_from_slice(&types[i + 1..]);
