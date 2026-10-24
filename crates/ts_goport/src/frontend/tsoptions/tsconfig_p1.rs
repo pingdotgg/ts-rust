@@ -14,8 +14,13 @@ fn leak_option(o: CommandLineOption) -> &'static CommandLineOption {
 }
 
 // Go: tsoptions/tsconfigparsing.go:27 extendsResult
-// PORT: Go `collections.Set[string]` is `FxHashSet<String>`. Readers sort
-// the keys (`core.InsertSorted`), so order does not matter.
+// PORT: Go `collections.Set[tspath.RootedFilePath]` is
+// `FxHashSet<&'static str>`. Readers sort the keys (`core.InsertSorted`),
+// so order does not matter. The names are config source file names
+// (`source_file_file_name`), which the file store keeps for the whole run,
+// so each entry shares the name's bytes as a Go string header does. A
+// `String` per entry used about 4.8x Go's memory on a 5,000-config
+// `extends` chain (bunprobe1 R4).
 #[derive(Clone, Debug, Default)]
 pub struct ExtendsResult {
     pub options: CompilerOptions,
@@ -25,7 +30,7 @@ pub struct ExtendsResult {
     // tsgo#4712
     pub content_mappers: Option<Vec<CompilerOptionsValue>>,
     pub compile_on_save: bool,
-    pub extended_source_files: FxHashSet<String>,
+    pub extended_source_files: FxHashSet<&'static str>,
 }
 
 // Go: tsoptions/declarations_generated.go:1112 compilerOptionsDeclaration (ts#64457 generates it)
@@ -224,9 +229,56 @@ pub trait ExtendedConfigCache {
         &self,
         file_name: &str,
         path: &Path,
-        resolution_stack: &[Path],
+        resolution_stack: &ResolutionStack,
         host: &dyn ParseConfigHost,
     ) -> Rc<ExtendedConfigCacheEntry>;
+}
+
+/// Go `resolutionStack []tspath.PathKey` of `parseConfig` and the extended
+/// config cache.
+// PORT: Go `parseConfig` appends its path to the caller's slice
+// (`append(resolutionStack, resolvedPath)`), so the configs of an `extends`
+// chain share one backing array and its path strings. A `Vec<Path>` copy per
+// config made O(N^2) path strings on a 5,000-config chain (bunprobe1 R4).
+// This parent-linked list shares the same way: each config adds one node, and
+// a cache that keeps the stack (`ExtendedConfigParseArgs`) keeps an `Rc`.
+#[derive(Clone, Default)]
+pub struct ResolutionStack(Option<Rc<ResolutionStackNode>>);
+
+struct ResolutionStackNode {
+    path: Path,
+    parent: ResolutionStack,
+}
+
+impl ResolutionStack {
+    /// The stack of a caller's slice (the public parse functions; Go callers
+    /// pass an empty one).
+    pub fn from_slice(paths: &[Path]) -> Self {
+        paths
+            .iter()
+            .fold(Self::default(), |stack, path| stack.push(path.clone()))
+    }
+
+    /// Go `append(resolutionStack, path)`.
+    #[must_use]
+    pub fn push(&self, path: Path) -> Self {
+        Self(Some(Rc::new(ResolutionStackNode {
+            path,
+            parent: self.clone(),
+        })))
+    }
+
+    /// Go `slices.Contains(resolutionStack, path)`.
+    pub fn contains(&self, path: &Path) -> bool {
+        let mut node = self.0.as_deref();
+        while let Some(n) = node {
+            if n.path == *path {
+                return true;
+            }
+            node = n.parent.0.as_deref();
+        }
+        false
+    }
 }
 
 // Go: tsoptions/tsconfigparsing.go:74 ExtendedConfigCacheEntry
@@ -241,7 +293,7 @@ pub struct ExtendedConfigCacheEntry {
 
 impl ExtendedConfigCacheEntry {
     // Go: tsoptions/tsconfigparsing.go:80 (*ExtendedConfigCacheEntry).ExtendedFileNames
-    pub fn extended_file_names(&self) -> &[String] {
+    pub fn extended_file_names(&self) -> &[&'static str] {
         if let Some(extended_result) = &self.extended_result {
             return &extended_result.extended_source_files;
         }
@@ -418,12 +470,14 @@ pub fn parse_own_config_of_json_source_file(
 
 // Go: tsoptions/tsconfigparsing.go:209 TsConfigSourceFile
 // PORT: Go `*configFileSpecs` is `Option<ConfigFileSpecs>`; readers copy
-// or borrow it and never share it.
+// or borrow it and never share it. Go `[]tspath.RootedFilePath` is
+// `Vec<&'static str>`: the entries share the config source file names, as
+// in `ExtendsResult`.
 #[derive(Clone, Debug, Default)]
 // PORT: Go embeds `*ast.SourceFile`. `source_file` is its root node, and
 // `path` and `file_name` keep its `Path()` and `FileName()`.
 pub struct TsConfigSourceFile {
-    pub extended_source_files: Vec<String>,
+    pub extended_source_files: Vec<&'static str>,
     pub config_file_specs: Option<ConfigFileSpecs>,
     pub source_file: Node,
     pub path: Path,

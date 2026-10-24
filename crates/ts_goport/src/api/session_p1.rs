@@ -3993,7 +3993,7 @@ impl Session {
         let extended_files = command_line.extended_source_files();
         let mut config_files = Vec::with_capacity(extended_files.len() + 1);
         config_files.push(config_file.file_name.clone());
-        config_files.extend(extended_files.iter().cloned());
+        config_files.extend(extended_files.iter().map(|f| f.to_string()));
         Ok(config_files)
     }
 

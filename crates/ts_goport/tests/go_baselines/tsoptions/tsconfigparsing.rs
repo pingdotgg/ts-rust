@@ -1655,7 +1655,7 @@ impl ExtendedConfigCache for MemoCache {
         &self,
         file_name: &str,
         path: &Path,
-        resolution_stack: &[Path],
+        resolution_stack: &ResolutionStack,
         host: &dyn ParseConfigHost,
     ) -> Rc<ExtendedConfigCacheEntry> {
         let cached = self.m.borrow().get(path).cloned();

@@ -1008,7 +1008,7 @@ impl ParsedCommandLine {
 
     // Go: tsoptions/parsedcommandline.go:472 (*ParsedCommandLine).ExtendedSourceFiles
     /// PORT: Go returns nil without a config file; that is an empty slice.
-    pub fn extended_source_files(&self) -> &[String] {
+    pub fn extended_source_files(&self) -> &[&'static str] {
         match &self.config_file {
             None => &[],
             Some(config_file) => &config_file.extended_source_files,

@@ -188,7 +188,7 @@ fn get_extended_config(
     source_file: Option<&TsConfigSourceFile>,
     extended_config_file_name: &str,
     host: &dyn ParseConfigHost,
-    resolution_stack: &[Path],
+    resolution_stack: &ResolutionStack,
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
     result: &mut ExtendsResult,
 ) -> (Option<Rc<ParsedTsconfig>>, Vec<Diagnostic>) {
@@ -229,12 +229,10 @@ fn get_extended_config(
     {
         result
             .extended_source_files
-            .insert(source_file_file_name(extended_result.source_file).to_string());
-        for extended_source_file in &extended_result.extended_source_files {
-            result
-                .extended_source_files
-                .insert(extended_source_file.clone());
-        }
+            .insert(source_file_file_name(extended_result.source_file));
+        result
+            .extended_source_files
+            .extend(extended_result.extended_source_files.iter().copied());
     }
     (cache_entry.extended_config.clone(), errors)
 }
@@ -245,7 +243,7 @@ fn get_extended_config(
 pub fn parse_extended_config(
     file_name: &str,
     path: Path,
-    resolution_stack: &[Path],
+    resolution_stack: &ResolutionStack,
     host: &dyn ParseConfigHost,
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
 ) -> ExtendedConfigCacheEntry {
@@ -315,7 +313,7 @@ pub fn parse_config(
     host: &dyn ParseConfigHost,
     base_path: &str,
     config_file_name: &str,
-    resolution_stack: &[Path],
+    resolution_stack: &ResolutionStack,
     extended_config_cache: Option<&dyn ExtendedConfigCache>,
 ) -> (ParsedTsconfig, Vec<Diagnostic>) {
     let base_path = normalize_slashes(base_path);
@@ -377,8 +375,7 @@ pub fn parse_config(
 
     if let Some(extended_config_paths) = own_config.extended_config_path.clone() {
         // copy the resolution stack so it is never reused between branches in potential diamond-problem scenarios.
-        let mut resolution_stack = resolution_stack.to_vec();
-        resolution_stack.push(resolved_path.clone());
+        let resolution_stack = resolution_stack.push(resolved_path.clone());
         let mut result = ExtendsResult::default();
         for extended_config_path in &extended_config_paths {
             // Go: applyExtendedConfig(result, extendedConfigPath)
@@ -502,7 +499,12 @@ pub fn parse_config(
             );
         }
         if let Some(source_file) = source_file.as_deref_mut() {
-            for extended_source_file in &result.extended_source_files {
+            // PERF: Go grows the slice in `slices.Insert`. One reserve keeps
+            // the list near its final length, with no doubling slack.
+            source_file
+                .extended_source_files
+                .reserve(result.extended_source_files.len());
+            for &extended_source_file in &result.extended_source_files {
                 // ts#64755: a config is not in its own extended source files
                 // (an `extends` cycle through it).
                 if to_path(
@@ -516,13 +518,13 @@ pub fn parse_config(
                 // Go: core.InsertSorted(..., cmp.Compare)
                 let i = match source_file
                     .extended_source_files
-                    .binary_search(extended_source_file)
+                    .binary_search(&extended_source_file)
                 {
                     Ok(i) | Err(i) => i,
                 };
                 source_file
                     .extended_source_files
-                    .insert(i, extended_source_file.clone());
+                    .insert(i, extended_source_file);
             }
         }
         let own_options = own_config.options.take();
@@ -724,7 +726,7 @@ pub fn parse_json_config_file_content_worker(
         host,
         base_path,
         config_file_name,
-        resolution_stack,
+        &ResolutionStack::from_slice(resolution_stack),
         extended_config_cache,
     );
     if let Some(options) = parsed_config.options.as_mut() {
