@@ -604,7 +604,7 @@ fn composite_config(root_dir: &str, rest: &str) -> String {
 // per cycle (build/host.go:50-56, orchestrator.go:511 `resetCaches`). The
 // new symbols have no ids, and the bind gives each class with private names
 // a new id. The port keeps the parses and gives their symbols new ids where
-// Go parses again (`program::note_replayed_parse`, `program::bind_all`). The
+// Go parses again (`program::note_go_parse`, `program::bind_all`). The
 // expected ids are the output of `tsgo-oracle-3e9236361fa9 -b -w --pretty
 // false` (with the same options) on watchreset1's `bw` case (6 of 6 runs
 // each mode, after231/watchreset1/logs/drive1.log): cycle 2 parses the libs

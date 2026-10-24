@@ -417,8 +417,10 @@ impl BuildHost {
     /// the same file, so the output does not change. A bundled lib never
     /// changes. A `.d.ts` or `.json` file comes here through `source_files`
     /// (`get_source_file`), so in one cycle only its first parse comes here.
-    /// Each kept parse given here is one that Go parses again, so its
-    /// symbols get the ids of a new parse (`program::note_replayed_parse`).
+    /// Each call is one Go parse, so each parse given here is noted
+    /// (`program::note_go_parse`): the bind of a program that has a kept
+    /// parse, or one that another program bound first, gives its symbols
+    /// the ids of a new parse.
     fn watch_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
         let key = SourceFileCacheKey(opts.clone());
         let fixed = crate::frontend::bundled::is_bundled(&opts.file_name);
@@ -442,7 +444,7 @@ impl BuildHost {
             .map(|source| source.file.clone());
         if let Some(file) = &cached {
             // watchreset1r: Go parses the file again here.
-            crate::program::note_replayed_parse(file.store);
+            crate::program::note_go_parse(file.store);
             return cached;
         }
         // A kept parse from before a config change of this cycle: one with
@@ -456,10 +458,15 @@ impl BuildHost {
             if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
                 sources.insert(key, source);
             }
-            crate::program::note_replayed_parse(file.store);
+            crate::program::note_go_parse(file.store);
             return Some(file);
         }
         let file = self.host.get_source_file(opts);
+        // watchreset1r: a new parse that another program of this cycle
+        // binds first gets new ids at the bind of this program.
+        if let Some(file) = &file {
+            crate::program::note_go_parse(file.store);
+        }
         // Each parse here can be kept and be a program file of a later
         // build, also a `.ts` file that one program leaves out (see
         // `note_kept_parse`, and the note in `get_source_file`).

@@ -603,20 +603,24 @@ The batch that adds it is not accepted until Theo approves.
   parses, as in `tsc --watch`.
   Go's new parse makes new symbols with no ids, and its bind gives each
   class with private names a new global id, so the symbol id counters
-  count on (watchreset1r, option R). Where the host gives a kept parse
-  and Go parses again (a `.ts` or `.js` file in each program that loads
-  it, a `.d.ts` or `.json` file in the first program of a cycle that
-  loads it), it notes the file (`program::note_replayed_parse`). The
-  next bind of a program that has the file takes the note, not the making
-  of the program: a build program that stops before its bind (a syntax
-  error with `noEmit` or `noEmitOnError` and no incremental state) leaves
-  Go's new parse of a shared `.d.ts` unbound for the next program of the
-  cycle. The bind forgets the lineage ids of the file's symbols
+  count on (watchreset1r, option R). The host notes each Go parse (a
+  `.ts` or `.js` file in each program that loads it, a `.d.ts` or `.json`
+  file in the first program of a cycle that loads it) with a count per
+  file (`program::note_go_parse`), also a new parse that it gives to
+  more than one program. The bind of a program that has the file takes
+  one note, not the making of the program: a build program that stops
+  before its bind (a syntax error with `noEmit` or `noEmitOnError` and no
+  incremental state) leaves Go's new parse of a shared `.d.ts` unbound
+  for the next program of the cycle. When a program bound the file
+  before (a kept parse, or a program of this cycle that bound first; in
+  default mode a project with a syntax error binds late), the bind
+  forgets the lineage ids of the file's symbols
   (`ast::forget_lineage_symbol_ids`), and gives its private name classes
   ids with those of the unbound files, in Go's bind order
   (`program::bind_all`). The checkers then give those symbols ids again,
-  as Go's do. Until a bind takes it, a noted file counts no symbols in
-  `--diagnostics` (`program::symbol_count`), as Go's unbound parse. The
+  as Go's do. While a note is left, a program that is not bound counts
+  no symbols for the file in `--diagnostics` (`program::symbol_count`),
+  as Go's unbound parse. The
   carry of a checker pool made before a forget
   keeps none of its ids of the forgotten ranges, but counts them
   (`ast::carry_symbol_ids`). Option A (parse again, as Go) gave the same

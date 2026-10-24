@@ -7,6 +7,8 @@
 //! before that build writes it. Every later program of the cycle then gets
 //! that parse. The `.d.ts` case is
 //! `multi_program::build_watch_keeps_the_first_dts_parse_of_a_cycle`.
+//! The port keeps a parse that Go makes again, so the `shared-ts-bind-order`
+//! tests check that the symbols of such a parse get Go's new ids.
 //!
 //! Each test copies its fixture to a new directory and runs `tsgo` there,
 //! and `goport_watch` or `tsgo -b --watch`. The directory is under the
@@ -218,6 +220,165 @@ fn build_watch_parses_a_written_dts_again_in_the_next_cycle() {
         root.display()
     );
     assert_eq!(stderr, "", "stderr ({})", root.display());
+    fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
+}
+
+/// watchreset1r round 3 (skeptic B3). p1 and p2 both have `s.ts`; p1 also
+/// has a syntax error. Go parses `s.ts` in each program of each cycle
+/// (build/host.go:50-56 `GetSourceFile`), and each bind gives the new class
+/// `S` (with a private name) a new id. The port keeps one parse; in default
+/// mode p2 binds it before p1, which binds only at its emit or its
+/// statistics. Each program's bind must still give `S` new ids
+/// (`program::note_go_parse`, `program::bind_all`). `goport_watch` runs the
+/// default schedule (no test schedule). The edits: `s.ts`, `s.ts`,
+/// `p2/b.ts` (p1 does not build), `s.ts`.
+const SHARED_TS_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/build_watch/shared-ts-bind-order"
+);
+
+/// One build of a `tsc -b --watch` output: the private name ids
+/// (`#<id>@#<name>`, sorted) and the `--diagnostics` "Symbols" counts (in
+/// output order).
+#[derive(Debug, PartialEq)]
+struct BuildIds {
+    ids: Vec<u64>,
+    symbols: Vec<u64>,
+}
+
+/// Runs `goport_watch` with `tsc -b --watch --pretty false` plus `extra` on
+/// a copy of `shared-ts-bind-order` (p1 with `noEmitOnError` when
+/// `no_emit_on_error`), and gives each build's `BuildIds` with the scratch
+/// dir, which the caller removes.
+fn shared_ts_builds(
+    test: &str,
+    no_emit_on_error: bool,
+    extra: &[&str],
+) -> (PathBuf, Vec<BuildIds>) {
+    let root = scratch_dir(test);
+    let project = root.join("project");
+    copy_dir(Path::new(SHARED_TS_FIXTURE), &project);
+    if no_emit_on_error {
+        let config = project.join("p1/tsconfig.json");
+        let text = read(&config).replacen(
+            r#""strict": true,"#,
+            r#""strict": true, "noEmitOnError": true,"#,
+            1,
+        );
+        fs::write(&config, text).expect("write p1/tsconfig.json");
+    }
+    let out = root.join("watch.txt");
+    let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
+        .arg(&out)
+        .args(["s.ts", "edits/s1.ts", "edits/s2.ts", "p2/b.ts=edits/b3.ts"])
+        .arg("edits/s4.ts")
+        .args(["--", "-b", "--watch", "tsconfig.json", "--pretty", "false"])
+        .args(extra)
+        .current_dir(&project)
+        .output()
+        .expect("run goport_watch");
+    assert!(
+        run.status.success(),
+        "goport_watch failed ({}) in {}:\n{}\n{}",
+        run.status,
+        root.display(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let output = read(&out);
+    let mut builds: Vec<BuildIds> = Vec::new();
+    for line in output.lines() {
+        if line.contains("Starting compilation") || line.contains("File change detected") {
+            builds.push(BuildIds {
+                ids: Vec::new(),
+                symbols: Vec::new(),
+            });
+        }
+        let Some(build) = builds.last_mut() else {
+            continue;
+        };
+        if let Some(count) = line.strip_prefix("Symbols:") {
+            build
+                .symbols
+                .push(count.trim().parse().expect("Symbols count"));
+        }
+        for (at, _) in line.match_indices("@#") {
+            let digits = line[..at]
+                .bytes()
+                .rev()
+                .take_while(u8::is_ascii_digit)
+                .count();
+            if digits > 0 && line[..at - digits].ends_with('#') {
+                build
+                    .ids
+                    .push(line[at - digits..at].parse().expect("private name id"));
+            }
+        }
+    }
+    for build in &mut builds {
+        build.ids.sort_unstable();
+    }
+    (root, builds)
+}
+
+/// The `nbemit` case: p1 emits in spite of its syntax error, so it binds at
+/// its emit. Go's ids race between its builders: in 16 runs of
+/// `tsgo-oracle-3e9236361fa9 -b -w --pretty false`
+/// (after231/watchreset1r2/skep/logs/nbemit.log,
+/// after231/watchreset1r3/logs/nbemit-go.log) each build's two ids (`B` and
+/// p2's `S`) are in the ranges below, and the fourth build (p2 only) is
+/// `#115@#b #116@#s` in every run. Round 2 lost one id in each cycle
+/// (`#112@#b #113@#s` there), which no Go run can give.
+// PORT: no Go counterpart; the ids are Go's.
+#[test]
+fn build_watch_gives_new_ids_to_a_shared_ts_file_in_each_program_in_any_bind_order() {
+    let (root, builds) = shared_ts_builds("shared-ts-emit", false, &[]);
+    let ranges = [1..=4, 39..=42, 77..=80, 115..=116, 151..=154];
+    assert_eq!(builds.len(), ranges.len(), "builds ({})", root.display());
+    for (build, (ids, range)) in builds
+        .iter()
+        .map(|build| &build.ids)
+        .zip(ranges)
+        .enumerate()
+    {
+        assert!(
+            ids.len() == 2 && ids[0] != ids[1] && ids.iter().all(|id| range.contains(id)),
+            "build {}: ids {ids:?}, Go's are two in {range:?} ({})",
+            build + 1,
+            root.display()
+        );
+    }
+    fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
+}
+
+/// The `nobind` case with `--diagnostics`: p1 has `noEmitOnError`, so it
+/// binds only at its statistics, after p2 bound `s.ts`. Go's own parse of
+/// `s.ts` in p1 is not bound then, so p1's "Symbols" (the first count of a
+/// build that builds p1) has none of its symbols. The ids and counts are
+/// those of `tsgo-oracle-3e9236361fa9 -b -w --pretty false --diagnostics`
+/// in 11 of 11 runs (after231/watchreset1r2/skep/logs, `nobindD` and
+/// `nobind2D`; after231/watchreset1r3/logs/nobindD-go.log; one run gives
+/// the two ids of the second build to the other classes).
+// PORT: no Go counterpart; the ids and counts are Go's.
+#[test]
+fn build_watch_counts_no_symbols_of_a_shared_ts_file_that_another_program_bound() {
+    let (root, builds) = shared_ts_builds("shared-ts-diagnostics", true, &["--diagnostics"]);
+    let build = |ids: [u64; 2], symbols: &[u64]| BuildIds {
+        ids: ids.to_vec(),
+        symbols: symbols.to_vec(),
+    };
+    assert_eq!(
+        builds,
+        [
+            build([1, 2], &[6_385, 10_600]),
+            build([39, 40], &[6_385, 10_601]),
+            build([77, 78], &[6_385, 10_601]),
+            build([115, 116], &[10_602]),
+            build([151, 152], &[6_385, 10_602]),
+        ],
+        "builds against tsgo ({})",
+        root.display()
+    );
     fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
 }
 

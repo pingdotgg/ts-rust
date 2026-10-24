@@ -1695,53 +1695,69 @@ struct Lineage {
 static LINEAGE: Mutex<Option<Lineage>> = Mutex::new(None);
 
 /// PORT: not in Go (watchreset1r). On in `tsc -b --watch`, which keeps a
-/// parse where Go parses the file again (`note_replayed_parse`). The
-/// lineage then keeps the symbol indexes of each static file too, so
-/// `bind_all` can forget their ids (`Lineage::file_symbols`).
+/// parse where Go parses the file again (`note_go_parse`). The lineage
+/// then keeps the symbol indexes of each static file too, so `bind_all`
+/// can forget their ids (`Lineage::file_symbols`).
 static REPLAY_GO_PARSE_IDS: AtomicBool = AtomicBool::new(false);
 
 /// Turns on the id replay of the parses that `tsc -b --watch` keeps
-/// (`note_replayed_parse`). `Orchestrator::start` calls it before the
-/// first build of a watch.
+/// (`note_go_parse`). `Orchestrator::start` calls it before the first
+/// build of a watch.
 pub fn replay_go_parse_ids() {
     REPLAY_GO_PARSE_IDS.store(true, Ordering::Relaxed);
 }
 
 thread_local! {
-    /// The files (ids) of the parses that `tsc -b --watch` kept where Go
-    /// parses the file again (`note_replayed_parse`), until the bind of a
-    /// program that has them takes them (`bind_all`).
-    static REPLAYED_PARSES: RefCell<FxHashSet<usize>> = RefCell::default();
+    /// The Go parses of this cycle of `tsc -b --watch` that no bind took
+    /// yet (`note_go_parse`): the number of them by file (store id).
+    static GO_PARSES: RefCell<FxHashMap<usize, u32>> = RefCell::default();
 }
 
-/// PORT: not in Go (watchreset1r). `tsc -b --watch` gives the kept parse of
-/// file `file` (a store id) where Go parses it again: a `.ts` or `.js` file
-/// in every program that loads it, a `.d.ts` or `.json` file in the first
-/// program of a cycle that loads it (build/host.go:50-56, orchestrator.go:511
-/// `resetCaches`). Go makes new symbols, with no ids, and binds them. The
-/// next bind of a program that has the file takes the note and gives the
-/// file's symbols new ids (`bind_all`). Until then the file is unbound in
-/// Go (`symbol_count`).
-pub fn note_replayed_parse(file: usize) {
-    REPLAYED_PARSES.with(|files| files.borrow_mut().insert(file));
+/// PORT: not in Go (watchreset1r). `tsc -b --watch` gives file `file` (a
+/// store id) to a program where Go parses it (build/host.go:50-56
+/// `GetSourceFile`): a `.ts` or `.js` file in each program that loads it, a
+/// `.d.ts` or `.json` file in the first program of a cycle that loads it
+/// (the cycle's `sourceFiles`, orchestrator.go:511 `resetCaches`). Each Go
+/// parse makes new symbols, with no ids, and the first bind of a program
+/// that has it binds it. The host gives one parse to all these programs,
+/// also over cycles. So it notes each Go parse here: a program loads a file
+/// once, so the notes of a `.ts` file are one per program. The bind of a
+/// program that has the file takes one note, and when a program bound the
+/// file before (a kept parse, or a program of this cycle that bound first),
+/// gives the file's symbols new ids (`bind_all`). While a note is left and
+/// a program is not bound, the file is unbound in Go (`symbol_count`).
+pub fn note_go_parse(file: usize) {
+    GO_PARSES.with(|files| *files.borrow_mut().entry(file).or_default() += 1);
 }
 
-/// Drops the notes of `note_replayed_parse` that no program took. A build
-/// watch cycle calls it at its end (`Orchestrator::reset_caches`), when Go
-/// drops the parses of the cycle.
-pub fn clear_replayed_parses() {
-    REPLAYED_PARSES.with(|files| files.borrow_mut().clear());
+/// Drops the notes of `note_go_parse` that no program took. A build watch
+/// cycle calls it at its end (`Orchestrator::reset_caches`), when Go drops
+/// the parses of the cycle.
+pub fn clear_go_parses() {
+    GO_PARSES.with(|files| files.borrow_mut().clear());
 }
 
-/// The files of `files` (store ids) that `note_replayed_parse` noted, sorted;
-/// their notes go.
-fn take_replayed_parses(files: impl Iterator<Item = usize>) -> Vec<usize> {
-    REPLAYED_PARSES.with(|noted| {
+/// The files of `files` (store ids) that have a note of `note_go_parse`,
+/// sorted; one note of each goes (the program's own Go parse, or the
+/// cycle's parse of a `.d.ts` or `.json` file).
+fn take_go_parses(files: impl Iterator<Item = usize>) -> Vec<usize> {
+    GO_PARSES.with(|noted| {
         let mut noted = noted.borrow_mut();
         if noted.is_empty() {
             return Vec::new();
         }
-        let mut taken: Vec<usize> = files.filter(|file| noted.remove(file)).collect();
+        let mut taken: Vec<usize> = files
+            .filter(|file| {
+                let Some(count) = noted.get_mut(file) else {
+                    return false;
+                };
+                *count -= 1;
+                if *count == 0 {
+                    noted.remove(file);
+                }
+                true
+            })
+            .collect();
         taken.sort_unstable();
         taken
     })
@@ -1940,17 +1956,20 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 pub fn bind_all() {
     let program = prog();
     held_tables(program).bound_symbols.get_or_init(|| {
-        // watchreset1r: a bound file that `tsc -b --watch` kept where Go
-        // parses it again (`note_replayed_parse`) gets the ids of a new
-        // parse: this thread forgets the ids of its symbols first
-        // (`forget_replayed_symbol_ids`), and its private name classes get
-        // ids with those of the unbound files, as Go binds both. The bind
-        // takes the notes, not the making of the program: a build program
-        // that stops before its bind (no incremental state, a syntax error,
-        // and `noEmit` or `noEmitOnError`) leaves Go's new parse of a
-        // shared `.d.ts` unbound for the next program of the cycle.
-        let replayed =
-            take_replayed_parses(program.source_files().map(|file| file.root.file_index()));
+        // watchreset1r: in `tsc -b --watch` a file with a Go parse that no
+        // bind took (`note_go_parse`) and that a program bound before (a
+        // kept parse, or another program of this cycle that bound first)
+        // gets the ids of a new parse: this thread forgets the ids of its
+        // symbols first (`forget_replayed_symbol_ids`), and its private
+        // name classes get ids with those of the unbound files, as Go
+        // binds both. The bind takes the notes, not the making of the
+        // program: a build program that stops before its bind (no
+        // incremental state, a syntax error, and `noEmit` or
+        // `noEmitOnError`) leaves Go's new parse of a shared `.d.ts`
+        // unbound for the next program of the cycle. A program takes one
+        // note of a `.ts` file, its own parse, so a later program that has
+        // the file gives it new ids in any bind order.
+        let replayed = take_go_parses(program.source_files().map(|file| file.root.file_index()));
         let replayed = replayed.as_slice();
         let is_replayed = |file: &crate::ast::FileRef<GoFile>| {
             !replayed.is_empty() && replayed.binary_search(&file.root.file_index()).is_ok()
@@ -6335,17 +6354,19 @@ pub fn identifier_count() -> i32 {
 
 // Go: compiler/program.go:1743 SymbolCount
 // PORT: an unbound file (the program had syntactic errors) has the Go zero
-// value. So does a kept parse of `tsc -b --watch` that no bind took yet
-// (`note_replayed_parse`): Go's new parse of it is not bound. Go sums the
-// files before `ForEachCheckerParallel` makes the checkers, which bind.
+// value. So does a file of `tsc -b --watch` with a Go parse that no bind
+// took yet (`note_go_parse`), in a program that is not bound: Go's parse of
+// it is not bound, also when another program bound the port's one parse. Go
+// sums the files before `ForEachCheckerParallel` makes the checkers, which
+// bind.
 pub fn symbol_count() -> i32 {
     let program = prog();
-    let unbound_replays = REPLAYED_PARSES.with(|noted| !noted.borrow().is_empty())
+    let unbound_parses = GO_PARSES.with(|noted| !noted.borrow().is_empty())
         && held_tables(program).bound_symbols.get().is_none();
     let mut count: u32 = 0;
     for file in program.source_files() {
-        if unbound_replays
-            && REPLAYED_PARSES.with(|noted| noted.borrow().contains(&file.root.file_index()))
+        if unbound_parses
+            && GO_PARSES.with(|noted| noted.borrow().contains_key(&file.root.file_index()))
         {
             continue;
         }

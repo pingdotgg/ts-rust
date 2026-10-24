@@ -1,0 +1,1 @@
+{ "compilerOptions": { "strict": true, "rootDir": "..", "outDir": "out", "types": [], "lib": ["es2022"], "target": "es2022" }, "files": ["../s.ts", "a.ts"] }
