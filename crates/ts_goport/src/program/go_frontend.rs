@@ -1120,6 +1120,10 @@ fn build_program(
             .expect("a Go frontend program has shared state")
             .assert_include_diagnostics(np);
     }
+    // watchreset1r: the kept parses of `tsc -b --watch` that Go parses again
+    // here (`bind_all`).
+    tables.replayed_files =
+        crate::program::take_replayed_parses(files.iter().map(|file| file.store));
     drop(replaced);
     drop(previous);
     let program_state = ProgramState {

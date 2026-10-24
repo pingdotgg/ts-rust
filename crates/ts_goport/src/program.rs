@@ -365,6 +365,10 @@ struct IdCarry {
     /// the next symbol id and block of the loading thread when the pool was
     /// made. The loading thread takes the ids only when it gave none since.
     only_from: Option<(u64, u64)>,
+    /// The forget count of the loading thread when the pool was made
+    /// (`ast::forgotten_count`): the carry keeps no id of a range forgotten
+    /// after it (`bind_all`, `ast::carry_symbol_ids`).
+    forgets_seen: u64,
 }
 
 impl IdCarry {
@@ -485,7 +489,7 @@ impl CheckerPool {
         {
             return;
         }
-        crate::ast::carry_symbol_ids(|base| self.worker_symbol_ids(base));
+        crate::ast::carry_symbol_ids(carry.forgets_seen, |base| self.worker_symbol_ids(base));
     }
 
     /// True when every job sent to the checkers has given its result.
@@ -1007,6 +1011,10 @@ pub(crate) struct VersionTables {
     bound_symbols: OnceLock<Arc<SymbolArena>>,
     /// Go `Program.packagesMap`, made on first use (`get_packages_map`).
     packages_map: OnceLock<Arc<FxHashMap<String, bool>>>,
+    /// watchreset1r: the program files (store ids, sorted) whose parses
+    /// `tsc -b --watch` kept where Go parses them again
+    /// (`note_replayed_parse`). `bind_all` gives their symbols new ids.
+    replayed_files: Vec<usize>,
 }
 
 impl VersionTables {
@@ -1053,6 +1061,7 @@ impl VersionTables {
             file_versions: Vec::new(),
             bound_symbols: OnceLock::new(),
             packages_map: OnceLock::new(),
+            replayed_files: Vec::new(),
         }
     }
 
@@ -1678,9 +1687,64 @@ struct Lineage {
     // PERF: one entry per dead file version (32 bytes), as
     // `ast::free_lineage_symbol_ids` keeps one per edit.
     freed: Vec<(ArenaMark, ArenaMark)>,
+    /// The symbol indexes of each static file bound here, by file id, kept
+    /// only while `REPLAY_GO_PARSE_IDS` is on (`file_symbols`).
+    fixed: FxHashMap<usize, std::ops::Range<usize>>,
 }
 
 static LINEAGE: Mutex<Option<Lineage>> = Mutex::new(None);
+
+/// PORT: not in Go (watchreset1r). On in `tsc -b --watch`, which keeps a
+/// parse where Go parses the file again (`note_replayed_parse`). The
+/// lineage then keeps the symbol indexes of each static file too, so
+/// `bind_all` can forget their ids (`Lineage::file_symbols`).
+static REPLAY_GO_PARSE_IDS: AtomicBool = AtomicBool::new(false);
+
+/// Turns on the id replay of the parses that `tsc -b --watch` keeps
+/// (`note_replayed_parse`). `Orchestrator::start` calls it before the
+/// first build of a watch.
+pub fn replay_go_parse_ids() {
+    REPLAY_GO_PARSE_IDS.store(true, Ordering::Relaxed);
+}
+
+thread_local! {
+    /// The files (ids) of the parses that `tsc -b --watch` kept where Go
+    /// parses the file again (`note_replayed_parse`), until a program
+    /// that has them takes them (`take_replayed_parses`).
+    static REPLAYED_PARSES: RefCell<FxHashSet<usize>> = RefCell::default();
+}
+
+/// PORT: not in Go (watchreset1r). `tsc -b --watch` gives the kept parse of
+/// file `file` (a store id) where Go parses it again: a `.ts` or `.js` file
+/// in every program that loads it, a `.d.ts` or `.json` file in the first
+/// program of a cycle that loads it (build/host.go:50-56, orchestrator.go:511
+/// `resetCaches`). Go makes new symbols, with no ids, and binds them. The
+/// next program that has the file takes the note: its bind gives the file's
+/// symbols new ids (`bind_all`).
+pub fn note_replayed_parse(file: usize) {
+    REPLAYED_PARSES.with(|files| files.borrow_mut().insert(file));
+}
+
+/// Drops the notes of `note_replayed_parse` that no program took. A build
+/// watch cycle calls it at its end (`Orchestrator::reset_caches`), when Go
+/// drops the parses of the cycle.
+pub fn clear_replayed_parses() {
+    REPLAYED_PARSES.with(|files| files.borrow_mut().clear());
+}
+
+/// The files of `files` (store ids) that `note_replayed_parse` noted, sorted;
+/// their notes go.
+pub(crate) fn take_replayed_parses(files: impl Iterator<Item = usize>) -> Vec<usize> {
+    REPLAYED_PARSES.with(|noted| {
+        let mut noted = noted.borrow_mut();
+        if noted.is_empty() {
+            return Vec::new();
+        }
+        let mut taken: Vec<usize> = files.filter(|file| noted.remove(file)).collect();
+        taken.sort_unstable();
+        taken
+    })
+}
 
 /// The generation of the binder lineage (`LineageSeen::generation`), so a
 /// checker whose copy is current does not lock the lineage
@@ -1700,6 +1764,7 @@ fn with_lineage<R>(f: impl FnOnce(&mut Lineage) -> R) -> R {
         freeable: FxHashMap::default(),
         seen_dead: 0,
         freed: Vec::new(),
+        fixed: FxHashMap::default(),
     });
     lineage.free_dead();
     f(lineage)
@@ -1761,8 +1826,13 @@ impl Lineage {
         let arena = self.symbols_mut();
         if !freeable {
             let mark = arena.mark();
+            let first = arena.symbol_count();
             let result = add(arena);
             arena.freeze_since(mark);
+            if REPLAY_GO_PARSE_IDS.load(Ordering::Relaxed) {
+                let symbols = first..arena.symbol_count();
+                self.fixed.insert(file, symbols);
+            }
             self.changed();
             return result;
         }
@@ -1776,6 +1846,15 @@ impl Lineage {
         self.freeable.insert(file, entry);
         self.changed();
         result
+    }
+
+    /// The symbol indexes of file `file` in the lineage: a live freeable
+    /// version, or a static file bound while `REPLAY_GO_PARSE_IDS` is on.
+    fn file_symbols(&self, file: usize) -> Option<std::ops::Range<usize>> {
+        match self.freeable.get(&file) {
+            Some((_, _, symbols)) => Some(symbols.clone()),
+            None => self.fixed.get(&file).cloned(),
+        }
     }
 
     /// Go `binder.BindSourceFile` into the lineage (`bind_source_file`),
@@ -1855,15 +1934,28 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // earlier program version bound is not bound again. The binds give no
 // symbol ids; the ids that Go's binds give come after them
 // (`give_private_name_class_ids`).
+// watchreset1r: a bound file that `tsc -b --watch` kept where Go parses it
+// again (`VersionTables::replayed_files`) gets the ids of a new parse: this
+// thread forgets the ids of its symbols first
+// (`ast::forget_lineage_symbol_ids`), and its private name classes get ids
+// with those of the unbound files, as Go binds both.
 pub fn bind_all() {
     let program = prog();
-    held_tables(program).bound_symbols.get_or_init(|| {
+    let tables = held_tables(program);
+    tables.bound_symbols.get_or_init(|| {
+        let replayed = &tables.replayed_files;
+        let is_replayed = |file: &crate::ast::FileRef<GoFile>| {
+            !replayed.is_empty() && replayed.binary_search(&file.root.file_index()).is_ok()
+        };
         let unbound: Vec<Node> = program
             .source_files()
-            .filter(|file| file.file_bind.get().is_none())
+            .filter(|file| file.file_bind.get().is_none() || is_replayed(file))
             .map(|file| file.root)
             .collect();
         let symbols = with_lineage(|lineage| {
+            if !replayed.is_empty() {
+                forget_replayed_symbol_ids(lineage, replayed);
+            }
             if program.single_threaded() {
                 bind_files_last_queued_first(lineage);
             } else {
@@ -1887,6 +1979,37 @@ pub fn bind_all() {
         give_private_name_class_ids(&symbols, &unbound, program.single_threaded());
         symbols
     });
+}
+
+/// `bind_all` of a program with `replayed` files (sorted store ids): this
+/// thread forgets the ids of the symbols of each one that a program bound
+/// before (`ast::forget_lineage_symbol_ids`), as Go's parse makes new
+/// symbols. The carry of a checker pool made before the forget keeps none
+/// of the ids that its checkers gave them (`ast::carry_symbol_ids`).
+fn forget_replayed_symbol_ids(lineage: &Lineage, replayed: &[usize]) {
+    // A file that is not bound yet has no symbols here.
+    let ranges: Vec<std::ops::Range<usize>> = replayed
+        .iter()
+        .filter_map(|&file| lineage.file_symbols(file))
+        .collect();
+    crate::ast::forget_lineage_symbol_ids(&ranges, forgets_seen_by_every_carry());
+}
+
+/// The forget count (`ast::forgotten_count`) that every pool of this thread
+/// that still hands its ids on was made after: a forget up to it needs no
+/// range in the log (`ast::forget_lineage_symbol_ids`). 0 while the pools
+/// are borrowed.
+fn forgets_seen_by_every_carry() -> u64 {
+    POOLS.with(|pools| {
+        let Ok(pools) = pools.try_borrow() else {
+            return 0;
+        };
+        pools
+            .values()
+            .filter_map(|pool| pool.carry.map(|carry| carry.forgets_seen))
+            .min()
+            .unwrap_or_else(crate::ast::forgotten_count)
+    })
 }
 
 /// Go binder.go:375: Go's bind gives each class with private names its
@@ -4145,6 +4268,7 @@ fn symbol_id_carry_start(count: usize) -> Option<IdCarry> {
     Some(IdCarry {
         single,
         only_from: (!every).then(|| (next_ids().1, next_symbol_block_id())),
+        forgets_seen: crate::ast::forgotten_count(),
     })
 }
 

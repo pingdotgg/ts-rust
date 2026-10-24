@@ -38,6 +38,101 @@ thread_local! {
     // global ids that it gave and the blocks that it took
     // (`record_symbol_ids`).
     static ID_LOG: RefCell<Option<IdLog>> = const { RefCell::new(None) };
+    // The lineage ranges whose ids this thread forgot
+    // (`forget_lineage_symbol_ids`).
+    static FORGOTTEN: RefCell<ForgetLog> = const { RefCell::new(ForgetLog::new()) };
+}
+
+/// PORT: not in Go (watchreset1r). The lineage ranges whose ids a thread
+/// forgot (`forget_lineage_symbol_ids`), each with the number of the forget
+/// (1, 2, ...). A pool notes the count when it is made
+/// (`forgotten_count`); its carry drops the ids that its workers have in a
+/// range forgotten after that (`carry_symbol_ids`): they are the ids of the
+/// symbols of the old parse.
+struct ForgetLog {
+    count: u64,
+    ranges: Vec<(std::ops::Range<usize>, u64)>,
+}
+
+impl ForgetLog {
+    const fn new() -> Self {
+        Self {
+            count: 0,
+            ranges: Vec::new(),
+        }
+    }
+}
+
+/// The number of forgets on this thread so far
+/// (`forget_lineage_symbol_ids`).
+#[must_use]
+pub fn forgotten_count() -> u64 {
+    FORGOTTEN.with(|log| log.borrow().count)
+}
+
+/// PORT: not in Go (watchreset1r). Forgets this thread's ids of the binder
+/// lineage symbols in `ranges`, so they get ids again as the symbols of a
+/// new parse and bind do. `tsc -b --watch` keeps a parse that Go parses
+/// again (`program::bind_all`). Go's new symbols have no id, and its
+/// counters count on. Unlike `free_lineage_symbol_ids`, the symbols live
+/// on, and a later read gives a new id. The log keeps the ranges for the
+/// carry of each pool made before this forget (`carry_symbol_ids`); a
+/// range of a forget at or before `kept_from` goes: no such pool is left.
+pub(crate) fn forget_lineage_symbol_ids(ranges: &[std::ops::Range<usize>], kept_from: u64) {
+    FORGOTTEN.with(|log| {
+        let mut log = log.borrow_mut();
+        log.ranges.retain(|(_, count)| *count > kept_from);
+        if ranges.is_empty() {
+            return;
+        }
+        log.count += 1;
+        let count = log.count;
+        log.ranges
+            .extend(ranges.iter().map(|range| (range.clone(), count)));
+    });
+    SYMBOL_IDS.with(|ids| {
+        let mut ids = ids.borrow_mut();
+        for range in ranges {
+            ids.forget(range.clone());
+        }
+    });
+}
+
+/// The ranges that this thread forgot after forget `seen`, sorted and
+/// joined where they touch.
+fn forgotten_after(seen: u64) -> Vec<std::ops::Range<usize>> {
+    let mut ranges: Vec<std::ops::Range<usize>> = FORGOTTEN.with(|log| {
+        log.borrow()
+            .ranges
+            .iter()
+            .filter(|(_, count)| *count > seen)
+            .map(|(range, _)| range.clone())
+            .collect()
+    });
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut joined: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match joined.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => joined.push(range),
+        }
+    }
+    joined
+}
+
+/// Zeroes the cells of `cells`, the id chunk `chunk`, that `ranges`
+/// (sorted and apart, `forgotten_after`) hold.
+fn drop_forgotten_cells(
+    cells: &mut [IdCell; LINEAGE_ID_CHUNK],
+    chunk: usize,
+    ranges: &[std::ops::Range<usize>],
+) {
+    let first = chunk << LINEAGE_ID_SHIFT;
+    let end = first + LINEAGE_ID_CHUNK;
+    let from = ranges.partition_point(|range| range.end <= first);
+    for range in ranges[from..].iter().take_while(|range| range.start < end) {
+        cells[range.start.max(first) - first..range.end.min(end) - first].fill(0);
+    }
 }
 
 /// A symbol id as an id table keeps it: 0 for no id yet (Go ids start at
@@ -253,6 +348,23 @@ impl LineageIds {
             }
         }
         self.seen = freed.len();
+    }
+
+    /// Forgets the ids of lineage indexes `range` (`forget_lineage_symbol_ids`).
+    fn forget(&mut self, range: std::ops::Range<usize>) {
+        let mut index = range.start;
+        while index < range.end {
+            let chunk = index >> LINEAGE_ID_SHIFT;
+            let end = ((chunk + 1) << LINEAGE_ID_SHIFT).min(range.end);
+            if let Some(Some(cells)) = self.chunks.get_mut(chunk) {
+                let first = chunk << LINEAGE_ID_SHIFT;
+                cells[index - first..end - first].fill(0);
+            }
+            index = end;
+        }
+        if !self.big.is_empty() {
+            self.big.retain(|index, _| !range.contains(index));
+        }
     }
 
     /// True when `free_dead` freed id chunk `chunk`.
@@ -721,7 +833,15 @@ pub fn worker_symbol_ids(base: &SymbolIdBase) -> WorkerSymbolIds {
 // PERF: by id chunk. A chunk that one worker has keeps its cells when the
 // worker's ids keep their numbers (a one-checker pool), as in the copy of
 // the carry before (R228).
-pub fn carry_symbol_ids(collect: impl FnOnce(&SymbolIdBase) -> Vec<WorkerSymbolIds>) {
+// watchreset1r: `forgets_seen` is `forgotten_count` when the pool was made.
+// A lineage range that this thread forgot after that
+// (`forget_lineage_symbol_ids`) keeps none of the workers' ids: they are
+// ids of the old parse, which Go's new symbols do not have. Its global ids
+// and blocks still count, as those of a freed symbol do.
+pub fn carry_symbol_ids(
+    forgets_seen: u64,
+    collect: impl FnOnce(&SymbolIdBase) -> Vec<WorkerSymbolIds>,
+) {
     let base = SYMBOL_IDS.with(|ids| {
         let mut ids = ids.borrow_mut();
         ids.free_dead();
@@ -730,13 +850,18 @@ pub fn carry_symbol_ids(collect: impl FnOnce(&SymbolIdBase) -> Vec<WorkerSymbolI
     let mut workers = collect(&base);
     // Each worker dropped its copy of `base` before it sent its ids.
     let mut ids = std::sync::Arc::try_unwrap(base.0).unwrap_or_else(|ids| (*ids).clone());
-    merge_symbol_ids(&mut ids, &mut workers);
+    merge_symbol_ids(&mut ids, &mut workers, &forgotten_after(forgets_seen));
     SYMBOL_IDS.with(|cell| *cell.borrow_mut() = ids);
 }
 
 /// `carry_symbol_ids` after the collect: merges `workers` into `ids` and
-/// the counters of this thread.
-fn merge_symbol_ids(ids: &mut LineageIds, workers: &mut [WorkerSymbolIds]) {
+/// the counters of this thread, with no id in the lineage ranges
+/// `forgotten` (sorted and apart).
+fn merge_symbol_ids(
+    ids: &mut LineageIds,
+    workers: &mut [WorkerSymbolIds],
+    forgotten: &[std::ops::Range<usize>],
+) {
     // A cell that more workers have keeps the id with the lowest clock, then
     // of the first worker; the others drop it.
     let mut shared: Vec<(usize, usize, usize)> = Vec::new();
@@ -869,6 +994,9 @@ fn merge_symbol_ids(ids: &mut LineageIds, workers: &mut [WorkerSymbolIds]) {
         for (chunk, mut cells) in std::mem::take(&mut given.chunks) {
             if ids.is_freed(chunk) {
                 continue;
+            }
+            if !forgotten.is_empty() {
+                drop_forgotten_cells(&mut cells, chunk, forgotten);
             }
             let first = chunk << LINEAGE_ID_SHIFT;
             if !keeps || !given.big.is_empty() {
@@ -2638,7 +2766,7 @@ mod symbol_id_tests {
         // The carry of an empty worker moves nothing, with a log or without.
         for log in [Some(true), Some(false), None] {
             let seed = id_seed();
-            carry_symbol_ids(|base| {
+            carry_symbol_ids(forgotten_count(), |base| {
                 let base = base.clone();
                 vec![
                     std::thread::spawn(move || {
@@ -2706,7 +2834,7 @@ mod symbol_id_tests {
         let seed = id_seed();
         // The loading thread gives `late` an id after the seed.
         assert_eq!(get_symbol_id(&binder, late), 2);
-        carry_symbol_ids(|base| {
+        carry_symbol_ids(forgotten_count(), |base| {
             let a = worker(
                 seed.clone(),
                 base,
@@ -2757,7 +2885,7 @@ mod symbol_id_tests {
         for (log, [y, z], next) in [(Some(false), [y, z], 5), (None, [y2, z2], 7)] {
             let seed = id_seed();
             let block = next_symbol_block_id();
-            carry_symbol_ids(|base| {
+            carry_symbol_ids(forgotten_count(), |base| {
                 vec![worker(
                     seed,
                     base,
@@ -2827,6 +2955,74 @@ mod symbol_id_tests {
         assert_eq!(given[1].0, ids);
         assert_eq!(given[0].1, (vec![(0, 0), (256, 0)], 0));
         assert_eq!(given[1].1, (vec![(0, 0), (256, 256)], 260));
+    }
+
+    /// watchreset1r: a forgotten lineage range (`forget_lineage_symbol_ids`)
+    /// gets new ids, as the symbols of a new parse do. The carry of a pool
+    /// made before the forget keeps none of its workers' ids of the range,
+    /// the old one or a new one, but counts its global ids. The carry of a
+    /// pool made after it keeps them.
+    #[test]
+    fn forgotten_lineage_symbols_get_new_ids_and_stay_out_of_older_carries() {
+        let mut binder = SymbolArena::new();
+        let [a, b, c, d] =
+            ["a", "b", "c", "d"].map(|name| binder.new_symbol(SymbolFlags::NONE, name));
+        let binder = std::sync::Arc::new(binder);
+        let (a_at, b_at) = (
+            binder.id_slot(a).place as usize,
+            binder.id_slot(b).place as usize,
+        );
+        assert_eq!(b_at, a_at + 1);
+        assert_eq!(get_symbol_id(&binder, a), 1);
+        assert_eq!(get_symbol_id(&binder, c), 2);
+        let worker =
+            |seed: IdSeed, base: &SymbolIdBase, f: Box<dyn FnOnce(&SymbolArena) + Send>| {
+                let (binder, base) = (std::sync::Arc::clone(&binder), base.clone());
+                std::thread::spawn(move || {
+                    install_id_seed(seed);
+                    record_symbol_ids(false);
+                    f(&binder);
+                    worker_symbol_ids(&base)
+                })
+                .join()
+                .unwrap()
+            };
+
+        // A pool made before the forget.
+        let (seed, seen) = (id_seed(), forgotten_count());
+        forget_lineage_symbol_ids(&[a_at..b_at + 1], seen);
+        carry_symbol_ids(seen, |base| {
+            vec![worker(
+                seed,
+                base,
+                Box::new(move |binder| {
+                    assert_eq!(get_symbol_id(binder, a), 1);
+                    assert_eq!(get_symbol_id(binder, b), 3);
+                    assert_eq!(get_symbol_id(binder, d), 4);
+                }),
+            )]
+        });
+        assert_eq!(get_symbol_id(&binder, c), 2);
+        assert_eq!(get_symbol_id(&binder, d), 4);
+        assert_eq!(next_ids().1, 4, "b's id counts");
+
+        // A pool made after the forget.
+        let (seed, seen) = (id_seed(), forgotten_count());
+        carry_symbol_ids(seen, |base| {
+            vec![worker(
+                seed,
+                base,
+                Box::new(move |binder| assert_eq!(get_symbol_id(binder, a), 5)),
+            )]
+        });
+        assert_eq!(get_symbol_id(&binder, a), 5);
+        assert_eq!(get_symbol_id(&binder, b), 6);
+
+        // With no pool made before it, a forget leaves the log.
+        assert_eq!(forgotten_after(0), vec![a_at..b_at + 1]);
+        forget_lineage_symbol_ids(&[], forgotten_count());
+        assert!(forgotten_after(0).is_empty());
+        assert_eq!(get_symbol_id(&binder, a), 5);
     }
 
     /// An id chunk of `LineageIds` holds the symbols of one `SymbolArena`

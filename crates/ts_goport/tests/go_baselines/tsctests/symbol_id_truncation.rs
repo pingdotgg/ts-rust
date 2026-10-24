@@ -526,6 +526,218 @@ const bad: string = obj;
     );
 }
 
+/// The private name ids in `output` (`#<id>@#<name>`), in order, joined by
+/// spaces.
+fn private_name_ids(output: &str) -> String {
+    let mut ids = Vec::new();
+    for (at, _) in output.match_indices("@#") {
+        let digits = output[..at]
+            .bytes()
+            .rev()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if digits == 0 || !output[..at - digits].ends_with('#') {
+            continue;
+        }
+        let name: String = output[at + 2..]
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        ids.push(format!("#{}@#{name}", &output[at - digits..at]));
+    }
+    ids.join(" ")
+}
+
+/// The private name ids (`private_name_ids`) of each build of a
+/// `tsc -b -w --pretty false` session plus `extra` on `files` (with the
+/// bundled libs): the first build, then one cycle for each edit, which
+/// writes one file and sends its event.
+fn build_watch_ids(
+    files: Vec<(&str, String)>,
+    edits: &[(&str, String)],
+    extra: &[&str],
+) -> Vec<String> {
+    let sys = new_in_process_test_sys(&with_real_libs(files));
+    let mut args: Vec<String> = ["-b", "-w", "--pretty", "false"].map(String::from).to_vec();
+    args.extend(extra.iter().map(|arg| arg.to_string()));
+    let result = command_line_in_process(&context::background(), &sys, &args);
+    let mut w = result
+        .watcher
+        .expect("expected Watcher to be non-nil in watch mode");
+    let mut ids = vec![private_name_ids(&sys.output_text())];
+    for (name, text) in edits {
+        sys.set_output_bytes(Vec::new());
+        let path = format!("{PROJECT}/{name}");
+        let _ = sys.fs_from_file_map().write_file(&path, text);
+        sys.mock_watch_backend().send_events(vec![Event {
+            kind: EventKind::Update,
+            path,
+        }]);
+        w.do_cycle();
+        ids.push(private_name_ids(&sys.output_text()));
+    }
+    ids
+}
+
+/// The project config of the watchreset1 cases, with `rest` after the
+/// compiler options.
+fn composite_config(root_dir: &str, rest: &str) -> String {
+    format!(
+        r#"{{"compilerOptions":{{"strict":true,"composite":true,"emitDeclarationOnly":true,{root_dir}"outDir":"out","types":[],"lib":["es2022"],"target":"es2022"}},{rest}}}"#
+    )
+}
+
+// watchreset1r (option R). Go `tsc -b -w` parses every `.ts` file again in
+// each program that loads it, and each `.d.ts` file (the libs here) once
+// per cycle (build/host.go:50-56, orchestrator.go:511 `resetCaches`). The
+// new symbols have no ids, and the bind gives each class with private names
+// a new id. The port keeps the parses and gives their symbols new ids where
+// Go parses again (`program::note_replayed_parse`, `program::bind_all`). The
+// expected ids are the output of `tsgo-oracle-3e9236361fa9 -b -w --pretty
+// false` (with the same options) on watchreset1's `bw` case (6 of 6 runs
+// each mode, after231/watchreset1/logs/drive1.log): cycle 2 parses the libs
+// again in p2 (A=78 in cycle 3), and cycle 3 binds the unchanged p2/b.ts
+// again (G=117 in cycle 4).
+fn bw_ids(extra: &[&str]) -> Vec<String> {
+    let class2 =
+        |a: (&str, &str), b: (&str, &str)| symbol_class(a.0, a.1) + &symbol_class(b.0, b.1);
+    build_watch_ids(
+        vec![
+            (
+                "tsconfig.json",
+                r#"{"files":[],"references":[{"path":"p1"},{"path":"p2"}]}"#.into(),
+            ),
+            ("p1/a.ts", class2(("A", "a"), ("B", "b"))),
+            (
+                "p1/tsconfig.json",
+                composite_config("", r#""files":["a.ts"]"#),
+            ),
+            ("p2/b.ts", class2(("C", "c"), ("D", "d"))),
+            (
+                "p2/tsconfig.json",
+                composite_config("", r#""files":["b.ts"],"references":[{"path":"../p1"}]"#),
+            ),
+        ],
+        &[
+            (
+                "p2/b.ts",
+                class2(("E", "e"), ("F", "f"))
+                    + "declare const k9: unique symbol;\nconst o = { [k9]: 1, [Symbol.iterator]: 2 };\nconst bad: string = o;\n",
+            ),
+            (
+                "p1/a.ts",
+                class2(("A", "a"), ("B", "b"))
+                    + "export declare const k8: unique symbol;\nexport const p = { [k8]: 'x', [Symbol.hasInstance]: 3 };\nconst bad2: number = p;\n",
+            ),
+            ("p2/b.ts", class2(("G", "g"), ("H", "h"))),
+        ],
+        extra,
+    )
+}
+
+#[test]
+fn private_name_ids_follow_go_parses_across_build_watch_cycles() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_across_build_watch_cycles",
+        || {
+            assert_eq!(
+                bw_ids(&[]),
+                [
+                    "#1@#a #2@#b #37@#c #38@#d",
+                    "#1@#a #2@#b #41@#e #42@#f",
+                    "#78@#a #79@#b #41@#e #42@#f",
+                    "#78@#a #79@#b #117@#g #118@#h",
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn private_name_ids_follow_go_parses_across_build_watch_cycles_single_threaded() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_across_build_watch_cycles_single_threaded",
+        || {
+            assert_eq!(
+                bw_ids(&["--singleThreaded"]),
+                [
+                    "#1@#a #2@#b #38@#c #39@#d",
+                    "#1@#a #2@#b #42@#e #43@#f",
+                    "#79@#a #80@#b #42@#e #43@#f",
+                    "#79@#a #80@#b #118@#g #119@#h",
+                ]
+            );
+        },
+    );
+}
+
+// watchreset1r: `s.ts` is a file of both projects (no reference between
+// them), so Go parses it in each program, already in the first build, and
+// S gets a new id in p2 (go-note-check.md case `share`). The expected ids
+// are the output of `tsgo-oracle-3e9236361fa9 -b -w --pretty false` with
+// `--singleThreaded` and with `--builders 1` (5 of 5 runs each); the
+// default builders race in Go.
+fn share_ids(extra: &[&str]) -> Vec<String> {
+    let config = |file: &str| {
+        composite_config(
+            r#""rootDir":"..","#,
+            &format!(r#""files":["../s.ts","{file}"]"#),
+        )
+    };
+    build_watch_ids(
+        vec![
+            (
+                "tsconfig.json",
+                r#"{"files":[],"references":[{"path":"p1"},{"path":"p2"}]}"#.into(),
+            ),
+            ("s.ts", symbol_class("S", "s")),
+            ("p1/a.ts", symbol_class("A", "a")),
+            ("p1/tsconfig.json", config("a.ts")),
+            ("p2/b.ts", symbol_class("B", "b")),
+            ("p2/tsconfig.json", config("b.ts")),
+        ],
+        &[
+            ("s.ts", symbol_class("S", "s") + "const x: string = 1;\n"),
+            ("p2/b.ts", symbol_class("B", "b") + "const y: string = 2;\n"),
+        ],
+        extra,
+    )
+}
+
+#[test]
+fn private_name_ids_follow_go_parses_of_a_shared_file_in_build_watch() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_of_a_shared_file_in_build_watch",
+        || {
+            assert_eq!(
+                share_ids(&["--singleThreaded"]),
+                [
+                    "#1@#a #2@#s #38@#b #39@#s",
+                    "#42@#a #43@#s #79@#b #80@#s",
+                    "#42@#a #43@#s #83@#b #84@#s",
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn private_name_ids_follow_go_parses_of_a_shared_file_with_one_builder() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::private_name_ids_follow_go_parses_of_a_shared_file_with_one_builder",
+        || {
+            assert_eq!(
+                share_ids(&["--builders", "1"]),
+                [
+                    "#1@#a #2@#s #37@#b #38@#s",
+                    "#41@#a #42@#s #77@#b #78@#s",
+                    "#41@#a #42@#s #81@#b #82@#s",
+                ]
+            );
+        },
+    );
+}
+
 // followups38 items 2 and 4 (R186 reviewer item 1). In
 // `c.valueSymbolLinks.Get(s).f = <call>` Go reads the links of the new
 // symbol `s` (and gives its id) before the call on the right side, and a

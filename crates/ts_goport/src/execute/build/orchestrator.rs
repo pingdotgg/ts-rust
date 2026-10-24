@@ -603,6 +603,9 @@ impl Orchestrator {
                 // it does not change (`BuildHost::watch_source_file`).
                 crate::ast::set_watch_process();
                 self.host.watch_sources.replace(Some(FxHashMap::default()));
+                // The symbols of a kept parse get new ids where Go parses
+                // the file again (`program::note_replayed_parse`).
+                crate::program::replay_go_parse_ids();
                 (self
                     .watch_status_reporter
                     .as_ref()

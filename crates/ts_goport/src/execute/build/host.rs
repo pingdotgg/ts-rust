@@ -438,7 +438,9 @@ impl BuildHost {
             .and_then(|sources| sources.get(&key))
             .filter(|source| keep && source.mod_time == mod_time)
             .map(|source| source.file.clone());
-        if cached.is_some() {
+        if let Some(file) = &cached {
+            // watchreset1r: Go parses the file again here.
+            crate::program::note_replayed_parse(file.store);
             return cached;
         }
         // A kept parse from before a config change of this cycle: one with
@@ -452,6 +454,7 @@ impl BuildHost {
             if let Some(sources) = self.watch_sources.borrow_mut().as_mut() {
                 sources.insert(key, source);
             }
+            crate::program::note_replayed_parse(file.store);
             return Some(file);
         }
         let file = self.host.get_source_file(opts);

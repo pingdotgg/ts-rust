@@ -90,6 +90,8 @@ impl Orchestrator {
         // `BuildHost::watch_source_file`). This one has the `.d.ts` and
         // `.json` parses of the cycle (`BuildHost::get_source_file`).
         self.host.source_files.reset();
+        // PORT: not in Go (see `program::note_replayed_parse`).
+        crate::program::clear_replayed_parses();
         // PORT: not in Go (see `BuildHost::end_config_change_cycle`).
         self.host.end_config_change_cycle();
         *self.host.config_times.borrow_mut() = FxHashMap::default();
