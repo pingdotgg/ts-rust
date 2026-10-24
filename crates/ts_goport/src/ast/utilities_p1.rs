@@ -71,6 +71,21 @@ fn id_cell(id: u64) -> IdCell {
     }
 }
 
+/// The id in `cell`, or None for an empty cell (`cell_id`).
+#[inline(always)]
+fn known_cell_id<K: Eq + std::hash::Hash>(
+    cell: IdCell,
+    big: &FxHashMap<K, u64>,
+    place: K,
+) -> Option<u64> {
+    match cell {
+        0 => None,
+        BIG_ID => Some(big[&place]),
+        // A block cell is `BLOCK_CELL | n`: no branch.
+        id => Some(u64::from(id & !BLOCK_CELL) + (u64::from(id >> 31) * BLOCK_ID_OFFSET)),
+    }
+}
+
 /// The id in `cell`, assigned now by `give` when it has none. `big` keeps
 /// the ids that have no cell, by `place`.
 #[inline(always)]
@@ -182,6 +197,15 @@ impl LineageIds {
             );
         }
         self.id_in_new_chunk(index, give)
+    }
+
+    /// The id of lineage index `index` when it has one.
+    #[inline(always)]
+    fn known(&self, index: usize) -> Option<u64> {
+        let Some(Some(chunk)) = self.chunks.get(index >> LINEAGE_ID_SHIFT) else {
+            return None;
+        };
+        known_cell_id(chunk[index & (LINEAGE_ID_CHUNK - 1)], &self.big, index)
     }
 
     /// `id` when the chunk of `index` has no ids: frees the chunks of the
@@ -300,6 +324,16 @@ impl OwnSymbolIds {
             Some(cell) => cell_id(cell, &mut self.big, (key, place), give),
             None => self.id_past_end(key, place, give),
         }
+    }
+
+    /// The id of the own symbol at `place` of arena `key` when it has one.
+    /// None also when `key` is not the arena in `ids` (`id` switches).
+    #[inline(always)]
+    fn known(&self, key: u32, place: usize) -> Option<u64> {
+        if self.key != key {
+            return None;
+        }
+        known_cell_id(*self.ids.get(place)?, &self.big, (key, place))
     }
 
     /// `id` for a place past the end of `ids`: grows it to twice its length
@@ -970,10 +1004,8 @@ fn next_global_id() -> u64 {
 }
 
 /// Logs global id `id`, which this thread just gave, when it has a log
-/// (`record_symbol_ids`). Returns `id`.
-#[cold]
-#[inline(never)]
-fn log_global_id(id: u64) -> u64 {
+/// (`record_symbol_ids`).
+fn log_global_id(id: u64) {
     ID_LOG.with(|log| {
         if let Some(log) = log.borrow_mut().as_mut() {
             log.globals.push(GlobalIdGiven {
@@ -983,7 +1015,6 @@ fn log_global_id(id: u64) -> u64 {
             });
         }
     });
-    id
 }
 
 // Go: ast/utilities.go:24 GetNodeId
@@ -1012,17 +1043,42 @@ pub fn get_node_id(node: Node) -> u64 {
 // PORT: Go `ast.SymbolId` is a `uint64`; returned here as `u64`. A symbol
 // handle is an index into `symbols`, which gives the slot where the id is
 // kept (see `SymbolArena::id_slot`).
-// PERF: the log call comes after the id is stored, so no value lives across
-// it (a call between the read and the store of the id cell cost hono 0.007%
-// instructions).
+// PERF: an id that this thread has is read with no call and no test more
+// than R229's; a new id is given out of line (`give_symbol_id`), so its
+// log call holds no register of this path (a log call between the read and
+// the store of the id cell cost hono 0.007% instructions, a flag 0.004%).
 pub fn get_symbol_id(symbols: &SymbolArena, symbol: SymbolId) -> u64 {
+    match known_symbol_id(symbols, symbol) {
+        Some(id) => id,
+        None => give_symbol_id(symbols, symbol),
+    }
+}
+
+/// The id of `symbol` when this thread has one.
+#[inline(always)]
+fn known_symbol_id(symbols: &SymbolArena, symbol: SymbolId) -> Option<u64> {
+    let slot = symbols.id_slot(symbol);
+    let place = slot.place as usize;
+    if slot.key == 0 {
+        SYMBOL_IDS.with(|ids| ids.borrow().known(place))
+    } else {
+        OWN_SYMBOL_IDS.with(|own| own.borrow().known(slot.key, place))
+    }
+}
+
+/// `get_symbol_id` of a symbol that `known_symbol_id` has no id for: gives
+/// it one (Go `nextSymbolId.Add(1)`) unless it has one after all, and logs
+/// a new one (`log_global_id`).
+#[cold]
+#[inline(never)]
+fn give_symbol_id(symbols: &SymbolArena, symbol: SymbolId) -> u64 {
     let mut given = false;
     let id = symbol_id_or(symbols, symbol, || {
         given = true;
         next_global_id()
     });
     if given {
-        return log_global_id(id);
+        log_global_id(id);
     }
     id
 }
