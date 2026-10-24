@@ -2184,7 +2184,7 @@ mod tests {
     }
 
     /// The node tree of `n` (kind, range, flags, lists) with its eager
-    /// JSDoc, and its diagnostics, as the astdump tool writes them.
+    /// JSDoc, as the astdump tool writes it.
     fn dump(file: &ParsedSourceFile, n: Node, depth: usize, out: &mut String) {
         let mut lists = String::new();
         let mut children = Vec::new();
