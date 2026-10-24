@@ -1413,3 +1413,53 @@ fn test_content_mapper_project_error_diagnostics() {
     }
     t.finish();
 }
+
+/// TS6059 for a dynamic file outside `rootDir` explains why the file is in
+/// the program on both file systems. Go (program.go:1861) keys the include
+/// reason with `CaseSensitivity.PathKey`, which keeps the case of an encoded
+/// dynamic name. The answers are those of a followups79 probe of Go
+/// `GetProgramDiagnostics` at 3e9236361fa9.
+// PORT: no Go counterpart.
+#[test]
+fn test_root_dir_diagnostic_of_dynamic_file_explains_include() {
+    in_child(
+        module_path!(),
+        "test_root_dir_diagnostic_of_dynamic_file_explains_include",
+        || {
+            fn codes(diagnostic: &Diagnostic) -> String {
+                let chain: Vec<String> = diagnostic.message_chain.iter().map(codes).collect();
+                format!("{}[{}]", diagnostic.code, chain.join(","))
+            }
+            const DYNAMIC: &str = "^/~ts-uri~/custom/Authority/Src/A.ts";
+            for case_sensitive in [false, true] {
+                let map_fs = MapFs::from_map(Vec::<(String, MapFile)>::new(), case_sensitive);
+                install_map_fs(&map_fs, "/");
+                let _ = map_fs.fs().write_file("/src/a.ts", "export const y = 2;");
+                let _ = map_fs.fs().write_file(DYNAMIC, "export const z = 1;");
+                let program = new_program(
+                    map_fs.fs(),
+                    "/",
+                    &["/src/a.ts", DYNAMIC],
+                    CompilerOptions {
+                        skip_default_lib_check: Tristate::True,
+                        root_dir: "/src".to_string(),
+                        out_dir: "/out".to_string(),
+                        ..Default::default()
+                    },
+                );
+                let actual: Vec<String> = ls_program::get_program_diagnostics(&program)
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code == 6059)
+                    .map(|diagnostic| {
+                        format!("{} {}", codes(diagnostic), diagnostic.message_args[0])
+                    })
+                    .collect();
+                assert_eq!(
+                    actual,
+                    [format!("6059[1430[1427[]]] {DYNAMIC}")],
+                    "case_sensitive {case_sensitive}"
+                );
+            }
+        },
+    );
+}
