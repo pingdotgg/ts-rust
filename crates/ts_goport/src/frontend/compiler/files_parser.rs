@@ -952,12 +952,10 @@ impl FilesParser {
             };
 
         // PERF (collect1): sized as Go sizes it (filesparser.go:355). Only
-        // tests iterate this map, so its capacity changes no output.
+        // tests iterate this map, so its capacity changes no output (see
+        // `FileIncludeReasons`).
         let mut include_processor = IncludeProcessor {
-            file_include_reasons: Rc::new(FxHashMap::with_capacity_and_hasher(
-                total_file_count,
-                Default::default(),
-            )),
+            file_include_reasons: Rc::new(FileIncludeReasons::with_capacity(total_file_count)),
             ..IncludeProcessor::default()
         };
         let mut output_file_to_project_reference_source: Option<FxHashMap<Path, String>> =
@@ -1013,7 +1011,6 @@ impl FilesParser {
         // PORT: the Go closure `collectFiles` is an explicit recursive
         // function over a struct that holds its captured variables.
         struct Collector<'a> {
-            parser: &'a FilesParser,
             loader: &'a FileLoader,
             // PORT: Go `seen map[*parseTaskData]string` is keyed by pointer.
             // The key here is the `Rc` pointer of the task data, and the
@@ -1055,21 +1052,13 @@ impl FilesParser {
 
         impl Collector<'_> {
             /// The slot key of loaded task `t`: the pointer of its task
-            /// data. `task_data_by_path` keeps every task data while the
-            /// parser lives, so a set link points to the live data.
-            // PERF (collect1): the pointer of the task's link
-            // (`ParseTask::data`) with no upgrade, else the data of its path.
-            fn data_key(&self, t: &ParseTask) -> *const RefCell<ParseTaskData> {
-                let by_path = || {
-                    self.parser
-                        .task_data_by_path
-                        .get(&t.path)
-                        .expect("loaded parse task without task data")
-                };
-                if t.data.ptr_eq(&Weak::new()) {
-                    return Rc::as_ptr(by_path());
-                }
-                debug_assert_eq!(t.data.as_ptr(), Rc::as_ptr(by_path()));
+            /// data, Go's `seen` key. Only a task that `FilesParser::start`
+            /// queued is loaded, and `start` sets its link
+            /// (`ParseTask::data`) to the data of its path, which
+            /// `task_data_by_path` keeps while the parser lives.
+            // PERF (collect1): the link's pointer, with no upgrade and no
+            // lookup by path (Go looks the data up by path).
+            fn data_key(t: &ParseTask) -> *const RefCell<ParseTaskData> {
                 t.data.as_ptr()
             }
 
@@ -1116,7 +1105,7 @@ impl FilesParser {
                 } else if t.loaded
                     && let Some(reason) = reason
                 {
-                    let index = self.slot_of(self.data_key(&t));
+                    let index = self.slot_of(Self::data_key(&t));
                     self.push_reason(index, task, reason);
                 }
             }
@@ -1181,7 +1170,7 @@ impl FilesParser {
                     if !loaded {
                         continue;
                     }
-                    let data_key = self.data_key(&task.borrow());
+                    let data_key = Self::data_key(&task.borrow());
                     let index = self.slot_of(data_key);
                     if add_reason
                         && !redirected
@@ -1287,7 +1276,7 @@ impl FilesParser {
                         };
                         if let Some(first) = first {
                             let other = first.borrow();
-                            self.sync_reasons(self.data_key(&other));
+                            self.sync_reasons(Self::data_key(&other));
                             self.include_processor
                                 .add_processing_diagnostics_for_file_casing(
                                     &other.path,
@@ -1311,15 +1300,12 @@ impl FilesParser {
 
                     let file = t.file.clone();
                     // PERF (parload1 step 4): the task's link to its data
-                    // (`ParseTask::data`), else the lookup by path.
-                    let data = t.data.upgrade().unwrap_or_else(|| {
-                        self.parser
-                            .task_data_by_path
-                            .get(&t.path)
-                            .cloned()
-                            .expect("loaded parse task without task data")
-                    });
-                    debug_assert_eq!(Rc::as_ptr(&data), data_key);
+                    // (`ParseTask::data`, see `data_key`), not a lookup by
+                    // path.
+                    let data = t
+                        .data
+                        .upgrade()
+                        .expect("loaded parse task without task data");
                     let data = data.borrow();
                     let data_lowest_depth = data.lowest_depth;
                     if let Some(package_id_to_source_file) = self.package_id_to_source_file.as_mut()
@@ -1472,7 +1458,6 @@ impl FilesParser {
             source_files_found_searching_node_modules,
         } = FileMaps::collect(self.single_threaded, |file_maps| {
             let mut collector = Collector {
-                parser: self,
                 loader,
                 slot_index: FxHashMap::with_capacity_and_hasher(
                     self.task_data_by_path.len(),
