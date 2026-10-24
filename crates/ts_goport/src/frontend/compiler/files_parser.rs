@@ -2116,66 +2116,38 @@ impl TakenParse {
     }
 }
 
-/// The worker-made memory that the loader is done with: the taken preps
-/// (with their names and commit) and the metadata of the taken parses.
-/// Freeing them on the loader put the reads and frees of memory that a
-/// worker wrote on the serial path (loadstamp1 C5).
+/// The preps that the loader took (`TakenParse::take_prep`), with their
+/// names and commit, once it is done with them. Freeing them on the loader
+/// put the reads and frees of memory that a worker wrote on the serial
+/// path (loadstamp1 C5).
 // PERF (loadfree1): they free on the free thread (`drop_in_background`),
 // in batches, as Go's GC frees them beside the load. Not in Go.
-struct WorkerGarbage {
-    preps: Vec<Box<FilePrep>>,
-    metas: Vec<WorkerMeta>,
-}
+type WorkerGarbage = Vec<Box<FilePrep>>;
 
-/// The values in one batch of `WorkerGarbage`.
+/// The preps in one batch of `WorkerGarbage`.
 const WORKER_GARBAGE_BATCH: usize = 256;
 
 thread_local! {
     /// The `WorkerGarbage` of the load on this thread.
-    static WORKER_GARBAGE: RefCell<WorkerGarbage> = const {
-        RefCell::new(WorkerGarbage {
-            preps: Vec::new(),
-            metas: Vec::new(),
-        })
-    };
+    static WORKER_GARBAGE: RefCell<WorkerGarbage> = const { RefCell::new(Vec::new()) };
 }
 
-/// Puts worker-made memory in the loader's `WorkerGarbage`, and sends the
-/// batch to the free thread when it is full.
-fn free_off_loader(add: impl FnOnce(&mut WorkerGarbage)) {
+/// Frees a prep that the loader took off the loader: it goes in the
+/// loader's `WorkerGarbage`, and a full batch goes to the free thread.
+pub(crate) fn free_prep_off_loader(prep: Box<FilePrep>) {
     WORKER_GARBAGE.with(|garbage| {
         let mut garbage = garbage.borrow_mut();
-        add(&mut garbage);
-        if garbage.preps.len() + garbage.metas.len() >= WORKER_GARBAGE_BATCH {
-            let full = std::mem::replace(
-                &mut *garbage,
-                WorkerGarbage {
-                    preps: Vec::with_capacity(WORKER_GARBAGE_BATCH),
-                    metas: Vec::with_capacity(WORKER_GARBAGE_BATCH),
-                },
-            );
+        garbage.push(prep);
+        if garbage.len() >= WORKER_GARBAGE_BATCH {
+            let full = std::mem::replace(&mut *garbage, Vec::with_capacity(WORKER_GARBAGE_BATCH));
             crate::execute::build::build_task::drop_in_background(full);
         }
     });
 }
 
-/// Frees a prep that the loader took (`TakenParse::take_prep`) off the
-/// loader (`WorkerGarbage`).
-pub(crate) fn free_prep_off_loader(prep: Box<FilePrep>) {
-    free_off_loader(|garbage| garbage.preps.push(prep));
-}
-
 /// The `WorkerGarbage` of this thread's load, at the end of the load.
 fn take_worker_garbage() -> WorkerGarbage {
-    WORKER_GARBAGE.with(|garbage| {
-        std::mem::replace(
-            &mut *garbage.borrow_mut(),
-            WorkerGarbage {
-                preps: Vec::new(),
-                metas: Vec::new(),
-            },
-        )
-    })
+    WORKER_GARBAGE.with(|garbage| std::mem::take(&mut *garbage.borrow_mut()))
 }
 
 /// The metadata of `file_name` that its parse worker found, when the
@@ -5717,16 +5689,11 @@ pub fn take_prefetched(
     let Some(PrefetchResult {
         text: worker_text,
         parse,
-        meta,
         ..
     }) = result
     else {
         return Prefetched::Nothing;
     };
-    // The load read the metadata before (`take_prefetched_meta`).
-    if let Some(meta) = meta {
-        free_off_loader(|garbage| garbage.metas.push(meta));
-    }
     let unusable = || shared.count(|c| c.unusable.push(opts.file_name.clone()));
     if text.is_some_and(|text| text != &*worker_text) {
         unusable();
