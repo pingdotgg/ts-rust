@@ -1514,3 +1514,55 @@ fn test_contains_file_path() {
         );
     }
 }
+
+// Go: typed_paths_test.go:595-597 (TestContainsFilePath: the PathKey
+// asserts) and typed_paths_test.go:94 (a dynamic key compares with case),
+// with the answers of a followups76r2 probe of Go `PathKey.ContainsPath` at
+// 3e9236361fa9 (keys from `CaseSensitivity.PathKey`). `to_path` is Go's
+// `PathKey`; `true` is Go `CaseSensitive`. On a case-insensitive file
+// system Go's key folds case with ToLower, which keeps 'ſ' and 'ς' (EqualFold
+// would match them to 's' and 'σ') and makes the Kelvin sign 'k'.
+#[test]
+fn test_path_key_contains_path() {
+    let cases: &[(bool, &str, &str, bool)] = &[
+        (true, "C:/project", "c:/project/a.ts", true),
+        (false, "/ws/\u{17f}", "/ws/s/a", false),
+        (false, "/ws/S", "/ws/s/a", true),
+        (false, "/ws/\u{3c2}", "/ws/\u{3c3}/a", false),
+        (false, "/ws/\u{212a}", "/ws/k/a", true),
+        (true, "C:/ws", "c:/ws/a", true),
+        (true, "c:/", "C:/a", true),
+        (true, "/ws", "/WS/a", false),
+        (true, "/", "/a", true),
+        (true, "/ws", "/ws", true),
+        (true, "/ws", "/wsx", false),
+        (true, "/ws/", "/ws/a", true),
+        (true, "//Server/share/ws", "//server/share/ws/a", true),
+        (
+            false,
+            "^/~ts-uri~/custom/Authority/src",
+            "^/~ts-uri~/custom/Authority/src/a.ts",
+            true,
+        ),
+        (
+            false,
+            "^/~ts-uri~/custom/Authority/src",
+            "^/~ts-uri~/custom/authority/src/a.ts",
+            false,
+        ),
+    ];
+    for &(case_sensitive, parent, child, contained) in cases {
+        let parent_key = tspath::to_path(parent, "", case_sensitive);
+        let child_key = tspath::to_path(child, "", case_sensitive);
+        assert_eq!(
+            tspath::contains_path_key(&parent_key, &child_key),
+            contained,
+            "{parent} {child} {case_sensitive}"
+        );
+    }
+    // Go typed_paths_test.go:94 builds the keys directly.
+    assert!(!tspath::contains_path_key(
+        "^/~ts-uri~/custom/Authority/src",
+        "^/~ts-uri~/custom/authority/src/file.ts"
+    ));
+}

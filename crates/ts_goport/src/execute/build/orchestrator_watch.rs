@@ -279,8 +279,8 @@ impl Orchestrator {
 
     // Go: build/orchestrator.go:670 (*Orchestrator).packageJsonLookupChanged
     // PORT: Go ranges over a map (random order); the result does not depend
-    // on the order.
-    fn package_json_lookup_changed(
+    // on the order. Public for the go_baselines test (`execute_tests.rs`).
+    pub fn package_json_lookup_changed(
         &self,
         package_json: &str,
         changed_paths: &FxHashMap<Path, fswatch::EventKind>,
@@ -290,12 +290,10 @@ impl Orchestrator {
             return true;
         }
         for (changed_path, kind) in changed_paths {
+            // Go: changedPath.ContainsPath(packageJsonPath), a path key test
+            // (pathkey.go:155).
             if *kind == fswatch::EventKind::Delete
-                && contains_path(
-                    changed_path.as_str(),
-                    package_json_path.as_str(),
-                    &self.compare_paths_options,
-                )
+                && contains_path_key(changed_path, &package_json_path)
             {
                 return true;
             }

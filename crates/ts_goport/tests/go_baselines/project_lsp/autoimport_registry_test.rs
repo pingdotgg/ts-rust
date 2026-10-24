@@ -4,8 +4,18 @@
 
 use std::rc::Rc;
 
+use rustc_hash::FxHashSet;
+use ts_goport::core::Node;
+use ts_goport::frontend::compiler::NewProgram;
+use ts_goport::frontend::module;
+use ts_goport::frontend::packagejson::InfoCacheEntry;
 use ts_goport::frontend::tspath;
-use ts_goport::ls::autoimport::registry::{BucketStats, CacheStats, ProjectID, Registry};
+use ts_goport::frontend::vfs::Fs;
+use ts_goport::gostd::context;
+use ts_goport::ls::autoimport::registry::{
+    BucketStats, CacheStats, ProjectID, Registry, RegistryCloneHost, new_registry,
+    new_registry_builder,
+};
 use ts_goport::ls::lsconv;
 use ts_goport::ls::lsutil;
 use ts_goport::lsp::lsproto;
@@ -1776,5 +1786,93 @@ child_test! {
                 "{file}"
             );
         }
+    }
+}
+
+// followups76r2: the clone host of Go's probe `TestF76R2DiscoverProbe`
+// (target/continuation-r97-goport/after228/followups76r2/tools/goprobe): every
+// package.json directory exists, and the file system resolves the symlinks.
+struct DiscoverHost {
+    fs: Rc<dyn Fs>,
+    current_directory: String,
+}
+
+impl module::ResolutionHost for DiscoverHost {
+    fn fs(&self) -> &dyn Fs {
+        &*self.fs
+    }
+    fn get_current_directory(&self) -> &str {
+        &self.current_directory
+    }
+}
+
+impl RegistryCloneHost for DiscoverHost {
+    fn get_default_project(
+        &self,
+        _path: &tspath::Path,
+    ) -> (Option<ProjectID>, Option<Rc<NewProgram>>) {
+        (None, None)
+    }
+    fn get_program_for_project(&self, _project_id: &ProjectID) -> Option<Rc<NewProgram>> {
+        None
+    }
+    fn get_package_json(&self, file_name: &str) -> Option<Rc<InfoCacheEntry>> {
+        Some(Rc::new(InfoCacheEntry {
+            package_directory: tspath::get_directory_path(file_name),
+            directory_exists: true,
+            contents: None,
+        }))
+    }
+    fn get_source_file(&self, _file_name: &str, _path: &tspath::Path) -> Node {
+        Node::NIL
+    }
+    fn dispose(&self) {}
+}
+
+// followups76r2: Go discoverBucketPackages marks a package local when the
+// path key of the builder's current directory holds the path key of its
+// realpath (`PathKey.ContainsPath`, registry.go:1428-1432). Go's
+// case-insensitive key folds case with ToLower, which keeps 'ſ' and 'ς'
+// (EqualFold would match them to 's' and 'σ'): "/ws/ſ" does not hold
+// "/ws/s/a"; "/ws/S" does. The answers come from a probe of Go at
+// 3e9236361fa9 (`TestF76R2DiscoverProbe`).
+#[test]
+fn discover_bucket_packages_tests_path_keys_like_go() {
+    for (cwd, real, is_local) in [
+        ("/ws/\u{17f}", "/ws/s/a", false),
+        ("/ws/S", "/ws/s/a", true),
+        ("/ws/\u{3c2}", "/ws/\u{3c3}/a", false),
+        ("/ws/\u{17f}", "/ws/\u{17f}/a", true),
+        ("/ws/S", "/ws/s/x/node_modules/a", false),
+    ] {
+        let fs = vfstest::from_map(
+            [
+                (format!("{cwd}/node_modules/a"), vfstest::symlink(real)),
+                (
+                    format!("{real}/package.json"),
+                    vfstest::MapFile::from(r#"{"name":"a"}"#),
+                ),
+            ],
+            false,
+        );
+        let host = Rc::new(DiscoverHost {
+            fs,
+            current_directory: cwd.to_string(),
+        });
+        let registry = new_registry(
+            Rc::new(|f: &str| tspath::to_path(f, "", false)),
+            lsutil::UserPreferences::default(),
+        );
+        let builder = new_registry_builder(Rc::new(registry), host);
+        let names: FxHashSet<String> = ["a".to_string()].into_iter().collect();
+        let got = builder.discover_bucket_packages(
+            &context::background(),
+            Some(&names),
+            cwd,
+            &tspath::to_path(cwd, "", false),
+        );
+        assert_eq!(got.len(), 1, "{cwd} {real}");
+        assert_eq!(got[0].realpath, real, "{cwd} {real}");
+        assert_eq!(got[0].is_local, is_local, "{cwd} {real}");
     }
 }
