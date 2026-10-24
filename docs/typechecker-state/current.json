@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "status": "active",
   "decision": "REVIEW",
-  "updated": "2026-10-24T11:04:40.950272+00:00",
-  "reason": "R233 bound in batch recovery-continuation-go-checker-port-112.",
+  "updated": "2026-10-24T13:19:24.335069+00:00",
+  "reason": "R234 bound in batch recovery-continuation-go-checker-port-112.",
   "goalAuthorization": {
     "date": "2026-09-07T23:13:28.547569+00:00",
     "instruction": "Continue working toward the active thread goal. Keep iterating on the ts-rust port until it is Able to properly type-check Tanstack Core and Hono.",
@@ -1299,12 +1299,12 @@
     "ordinaryQuery": null,
     "localCheck": null,
     "acceptance": null,
-    "recoveryRevision": 233,
-    "hypothesis": "R233 repairs the R232 STOP: int98 keeps every R231 pass at pin 3e9236361fa9 (3 protected expectations change to Go pin values with Go evidence: N1, N2 nil-signal address 0x58, J1 jsnum bits) and adds followups77, followups76, nilsig1, propcounts1, loadparity1 (round 3: in tsc -b --watch a JS file whose bind can set the CommonJS indicator is parsed again per program, as Go, so the explainFiles CommonJS line equals Go) and scanintern1; gate projects byte-equal; every perf cell faster than R231",
-    "sourceFingerprint": "cbcf49776cbf777ab36966ab348735e61bb9e91be4f85896d0f32f543ba595f4",
-    "beforeEditingSourceFingerprint": "92a842770ea8fcd465cf8aeffdde1ec4b35224b3dabeccf6a5d9c356c827c642",
+    "recoveryRevision": 234,
+    "hypothesis": "R234 closes the R232 and R233 STOP by withdrawing loadparity1: int98 without loadparity1 keeps every R231 pass at pin 3e9236361fa9 (3 protected expectations change to Go pin values with Go evidence: N1, N2 nil-signal address 0x58, J1 jsnum bits) and adds followups77 (TS4094 private-name text as Go), followups76 (rooted path checks at 12 sites, jsnum Go bits, read order, test-hunks.py), nilsig1 (nil-signal addresses at the pin), propcounts1 (Go ts#64804) and scanintern1 (faster scan and interning); gate projects byte-equal; every perf cell faster than R231",
+    "sourceFingerprint": "de8b856698b73d92d3af9a71f41cab62113f83ac9021358908a457bf15c05331",
+    "beforeEditingSourceFingerprint": "cbcf49776cbf777ab36966ab348735e61bb9e91be4f85896d0f32f543ba595f4",
     "sourceBindingStatus": "SOURCE_BOUND",
-    "commit": "214c299b5",
+    "commit": "98fae8c46",
     "completedRuns": [],
     "compilerAccepted": false,
     "passingCredit": false,
@@ -1316,9 +1316,9 @@
     "reviewer": {
       "role": "independent_reviewer",
       "agent": "ad42210d5a05ac17e",
-      "verdict": "STOP"
+      "verdict": "PENDING"
     },
-    "nextPermittedAction": "Run the R233 pipeline (candidate.sh side)."
+    "nextPermittedAction": "Run the R234 pipeline (candidate.sh side)."
   },
   "parallelModelPreference": {
     "model": "GPT-6 Astra",
