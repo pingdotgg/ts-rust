@@ -478,7 +478,8 @@ impl Checker {
         self.signature_count += 1;
         let id = SignatureId(u32::try_from(self.signatures.len()).expect("signature overflow"));
         debug_assert_eq!(id.0, self.signature_count);
-        self.signatures.push(Signature {
+        // Go: checker/checker.go:25837 `c.signatureArena.New()`.
+        self.signatures.push_with(|| Signature {
             id,
             flags,
             declaration,

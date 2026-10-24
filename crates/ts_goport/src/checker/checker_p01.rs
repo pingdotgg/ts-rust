@@ -1282,7 +1282,9 @@ pub struct Checker {
     /// not interfaces or tuples, at `ObjectType::instantiations` (see
     /// `ObjectType`). Index 0 is a dummy, so `InstantiationMapId::NIL` is 0.
     pub object_type_instantiations: Vec<InstantiationMap>,
-    pub signatures: Vec<Signature>,
+    // PERF (sigchunk1): a `ChunkedArena`, as Go `signatureArena`
+    // (checker.go:676): a doubling `Vec` copied every signature when it grew.
+    pub signatures: ChunkedArena<Signature>,
     pub index_infos: Vec<IndexInfo>,
     pub type_predicates: Vec<TypePredicate>,
     pub mappers: ChunkedArena<TypeMapper>,
@@ -1783,7 +1785,7 @@ impl Checker {
             symbols,
             types: ChunkedArena::with_nil(Type::default()),
             object_type_instantiations: vec![InstantiationMap::default()],
-            signatures: vec![Signature::default()],
+            signatures: ChunkedArena::with_nil(Signature::default()),
             index_infos: vec![IndexInfo::default()],
             type_predicates: vec![TypePredicate::default()],
             mappers: ChunkedArena::with_nil(TypeMapper::default()),

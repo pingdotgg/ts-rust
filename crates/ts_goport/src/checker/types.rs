@@ -2883,7 +2883,8 @@ pub const LANGUAGE_FEATURE_MINIMUM_TARGET: LanguageFeatureMinimumTargetMap =
 pub type StringLiteralType = Type;
 
 // PORT: no Go counterpart. Go allocates each `Type` and `TypeMapper` on its
-// own; the port keeps them in index arenas. A plain `Vec` arena doubles and
+// own, and signatures in chunks (`signatureArena`, checker.go:676); the port
+// keeps them in index arenas. A plain `Vec` arena doubles and
 // copies every entry when it grows, and keeps up to half its capacity unused.
 // `ChunkedArena` stores entries in chunks of `ARENA_CHUNK_LEN`, so growing it
 // never moves an entry of a later chunk. Index 0 is the nil dummy, like the
@@ -2917,6 +2918,7 @@ const ARENA_CHUNK_STEP: usize = ARENA_CHUNK_LEN / 4;
 const ARENA_FIRST_CAPACITY: usize = 64;
 const _: () = assert!(std::mem::size_of::<Type>() * ARENA_CHUNK_LEN < ARENA_CHUNK_MAX_BYTES);
 const _: () = assert!(std::mem::size_of::<TypeMapper>() * ARENA_CHUNK_LEN < ARENA_CHUNK_MAX_BYTES);
+const _: () = assert!(std::mem::size_of::<Signature>() * ARENA_CHUNK_LEN < ARENA_CHUNK_MAX_BYTES);
 
 impl<T> ChunkedArena<T> {
     /// Creates an arena that holds only `nil`, the dummy entry at index 0.
