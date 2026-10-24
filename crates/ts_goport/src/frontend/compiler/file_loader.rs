@@ -1918,15 +1918,20 @@ impl FileLoader {
                             };
                             let resolved = &answer.value;
                             // No JS file: the commit asks no mapper.
-                            assert!(
-                                !resolved.is_resolved()
-                                    || file_extension_is_one_of(
-                                        &resolved.resolved_file_name,
-                                        SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT,
-                                    ),
-                                "commit of {}",
-                                file.file_name()
-                            );
+                            // muiload1 probe: or a JS file with no project
+                            // references (the mapper gives nil).
+                            let no_references = self
+                                .project_reference_file_mapper
+                                .borrow()
+                                .config_to_project_reference
+                                .is_empty();
+                            let is_js = resolved.is_resolved()
+                                && !resolved.resolved_using_extra_extensions
+                                && !file_extension_is_one_of(
+                                    &resolved.resolved_file_name,
+                                    SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT,
+                                );
+                            assert!(!is_js || no_references, "commit of {}", file.file_name());
                             let key = ModeAwareCacheKey {
                                 name: module_name.to_string(),
                                 mode,
@@ -1942,6 +1947,7 @@ impl FileLoader {
                             if resolved.is_resolved()
                                 && get_resolution_diagnostic(&options_for_file, resolved, &file)
                                     .is_none()
+                                && !(is_js && !options_for_file.get_allow_js())
                                 && (index < imports_start as usize || add != Some(false))
                             {
                                 adds.push(index);
@@ -1966,7 +1972,7 @@ impl FileLoader {
                                 file_name: add.file_name,
                                 path: add.path,
                                 increase_depth: add.increase_depth,
-                                elide_on_depth: false,
+                                elide_on_depth: add.elide_on_depth,
                                 include_reason: Some(new_file_include_reason(
                                     FileIncludeKind::IMPORT,
                                     FileIncludeData::ReferencedFile(ReferencedFileData {

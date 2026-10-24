@@ -2042,6 +2042,8 @@ pub(crate) struct PrepAdd {
     pub(crate) path: Path,
     pub(crate) package_id: PackageId,
     pub(crate) increase_depth: bool,
+    /// Go `isJsFileFromNodeModules` (muiload1 probe: JS answers).
+    pub(crate) elide_on_depth: bool,
 }
 
 impl PrepCommit {
@@ -2058,6 +2060,7 @@ impl PrepCommit {
         answer: Option<&SharedResolution<Arc<ResolvedModule>>>,
         adds: bool,
         options: &CompilerOptions,
+        js_commit: bool,
     ) -> bool {
         let Some(answer) = answer else {
             return false;
@@ -2084,6 +2087,45 @@ impl PrepCommit {
             EXTENSION_JSON => options.get_resolve_json_module(),
             _ => false,
         };
+        // muiload1 probe: a JS answer (Go `GetResolutionDiagnostic` for
+        // `.js`, `.mjs`, `.cjs` and `.jsx`, then `isJsFile` with no
+        // project references, fileloader.go:919 to :934).
+        let js = js_commit
+            && !resolved.resolved_using_extra_extensions
+            && !file_extension_is_one_of(
+                &resolved.resolved_file_name,
+                SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT,
+            )
+            && matches!(
+                resolved.extension.as_str(),
+                EXTENSION_JS | EXTENSION_MJS | EXTENSION_CJS | EXTENSION_JSX
+            );
+        if js {
+            let need_jsx = resolved.extension == EXTENSION_JSX && options.jsx == JsxEmit::NONE;
+            let need_allow_js = !(options.get_allow_js()
+                || !options
+                    .no_implicit_any
+                    .default_if_unknown(options.strict)
+                    .is_true());
+            let should_add = adds && !need_jsx && !need_allow_js && options.get_allow_js();
+            if should_add {
+                let file_name = &resolved.resolved_file_name;
+                self.adds.push(PrepAdd {
+                    index,
+                    file_name: if is_normalized_path(file_name) {
+                        file_name.clone()
+                    } else {
+                        normalize_path(file_name)
+                    },
+                    path: resolved.resolved_path.clone(),
+                    package_id: resolved.package_id.clone(),
+                    increase_depth: resolved.is_external_library_import,
+                    elide_on_depth: resolved.is_external_library_import
+                        && file_name.contains("/node_modules/"),
+                });
+            }
+            return true;
+        }
         if !no_diagnostic
             || resolved.resolved_using_extra_extensions
             || !file_extension_is_one_of(
@@ -2105,6 +2147,7 @@ impl PrepCommit {
                 path: resolved.resolved_path.clone(),
                 package_id: resolved.package_id.clone(),
                 increase_depth: resolved.is_external_library_import,
+                elide_on_depth: false,
             });
         }
         true
@@ -2725,6 +2768,16 @@ struct WorkerResolveConfig {
     /// True when, with `names`, the workers make the commit of the
     /// answers (`FilePrep::commit`): `GOPORT_LOAD_COMMIT` is not `0`.
     commit: bool,
+    /// muiload1 probe: the commit also takes JS answers. Only with no
+    /// project references: then Go `getRedirectParsedCommandLineForResolution`
+    /// is nil for every file and reads no state, so `isJsFile` is the
+    /// extension test. `GOPORT_MUILOAD_JSCOMMIT=1` (an A/B switch).
+    js_commit: bool,
+}
+
+/// muiload1 probe: `GOPORT_MUILOAD_JSCOMMIT=1`.
+fn js_commit_enabled() -> bool {
+    std::env::var_os("GOPORT_MUILOAD_JSCOMMIT").is_some_and(|value| value == "1")
 }
 
 impl WorkerResolveConfig {
@@ -2773,7 +2826,14 @@ impl WorkerResolveConfig {
                 redirects.insert(path.clone(), (reference.source.clone(), index));
             }
         }
+        let js_commit = js_commit_enabled()
+            && loader
+                .project_reference_file_mapper
+                .borrow()
+                .config_to_project_reference
+                .is_empty();
         Some(WorkerResolveConfig {
+            js_commit,
             options: (**options).clone(),
             typings_location: loader.opts.typings_location.clone(),
             project_name: loader.opts.project_name.clone(),
@@ -2801,6 +2861,7 @@ impl WorkerResolveConfig {
             return None;
         }
         Some(WorkerResolveConfig {
+            js_commit: js_commit_enabled(),
             options: (**options).clone(),
             typings_location: String::new(),
             project_name: String::new(),
@@ -2828,6 +2889,7 @@ impl WorkerResolveConfig {
             && self.extra_extensions == other.extra_extensions
             && self.references == other.references
             && self.redirects == other.redirects
+            && self.js_commit == other.js_commit
             && self.prep == other.prep
             && self.names == other.names
             && self.commit == other.commit
@@ -4570,7 +4632,15 @@ impl WorkerResolver {
                 // takes, not `resolved`.
                 if let Some(committed) = &mut commit {
                     let adds = usage.is_none_or(|(_, _, adds, _)| adds != Some(false));
-                    if !committed.push(index, specifier, mode, answer.as_ref(), adds, &options) {
+                    if !committed.push(
+                        index,
+                        specifier,
+                        mode,
+                        answer.as_ref(),
+                        adds,
+                        &options,
+                        config.js_commit,
+                    ) {
                         commit = None;
                     }
                 }
