@@ -1258,6 +1258,11 @@ impl Checker {
     // views (`NodeRef`): the kind, parent and flags reads of this function
     // and its predicates do one registry lookup for the node, none for a
     // parent in its store.
+    // PERF: effinline1. Never inline: in the int98 PGO builds, PGO put a copy
+    // of this body (about 17 KB hot) into the Effect rule
+    // `run_stability_api_usage`, and effect with the plugin ran +0.85% more
+    // cycles at flat instructions. Every checker caller calls it out of line.
+    #[inline(never)]
     pub fn get_symbol_at_location(&mut self, node: Node, ignore_errors: bool) -> SymbolId {
         let node_ref = NodeRef::new(node);
         let kind = node_ref.kind();
