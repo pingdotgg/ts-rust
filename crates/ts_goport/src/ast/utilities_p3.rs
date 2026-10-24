@@ -1820,3 +1820,91 @@ mod node_at_position_cursor_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod module_instance_state_tests {
+    use super::*;
+    use crate::frontend::parser::{SourceFileParseOptions, parse_source_file};
+    use crate::frontend::tspath::Path;
+
+    /// The state of namespace `O` in `body`, which goes in
+    /// `declare const y: number; declare namespace O { ... }`.
+    fn state_of_o(body: &str) -> ModuleInstanceState {
+        let text =
+            format!("export {{}};\ndeclare const y: number;\ndeclare namespace O {{\n{body}\n}}\n");
+        let options = SourceFileParseOptions {
+            file_name: "/index.ts".to_string(),
+            path: Path("/index.ts".to_string()),
+            ..Default::default()
+        };
+        let file = parse_source_file(&options, text.leak(), ScriptKind::TS).root;
+        let o = file
+            .statements()
+            .to_vec()
+            .into_iter()
+            .find(|s| s.kind() == SyntaxKind::ModuleDeclaration);
+        get_module_instance_state(o.unwrap())
+    }
+
+    /// Go's `ancestors` slices share backing arrays, so the walk for one
+    /// export specifier can write over stack entries that a later walk
+    /// reads. Each case gives the state of the Go oracle at the pin
+    /// (NonInstantiated: TS2708 at `let v = O;`), not the state of the real
+    /// scope, which is the other one in the first three cases
+    /// (ancshare1 go-note, cases s1 to s4 and ladder m1).
+    #[test]
+    fn state_reads_shared_ancestor_arrays_like_go() {
+        let non = ModuleInstanceState::NON_INSTANTIATED;
+        let inst = ModuleInstanceState::INSTANTIATED;
+        let cases = [
+            // T's chain writes over I and its block, so `y` finds `interface y`.
+            (
+                "s1",
+                "namespace I { export { T, y }; } namespace T { interface y {} }",
+                non,
+            ),
+            // T's block goes where P's block was, so `y` skips `interface y` in P.
+            (
+                "s2",
+                "namespace P { interface y {} namespace I { export { T, y }; } } namespace T { }",
+                inst,
+            ),
+            // Two export lists of one block share its array.
+            (
+                "s3",
+                "namespace P { namespace I { export { T }; export { y }; } } namespace T { interface y {} }",
+                non,
+            ),
+            // The array is full, so the second export list copies it first.
+            (
+                "s4",
+                "namespace I { export { T }; export { y }; } namespace T { interface y {} }",
+                inst,
+            ),
+            // Two merged declarations of N: the walk of the first writes over the block of the second.
+            (
+                "merged",
+                "namespace A { namespace B { export { N }; } namespace N { export { Z }; } \
+                 namespace N { export { y }; } } namespace Z { interface y {} }",
+                non,
+            ),
+            // The inner walk for Z writes in the cap-8 array while T's chain fits in it, not after.
+            (
+                "m1-k1",
+                "namespace I1 { export { T, y }; } namespace T { namespace D1 { export { Z }; } } \
+                 namespace Z { interface y {} }",
+                non,
+            ),
+            (
+                "m1-k2",
+                "namespace I1 { export { T, y }; } \
+                 namespace T { namespace D1 { namespace D2 { export { Z }; } } } \
+                 namespace Z { interface y {} }",
+                inst,
+            ),
+        ];
+        for (name, body, want) in cases {
+            assert_eq!(state_of_o(body), want, "{name}");
+        }
+    }
+}
