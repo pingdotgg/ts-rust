@@ -415,12 +415,7 @@ pub fn contains_file_ancestor(node: Option<&RequestPathNodeRef>, path: &tspath::
     false
 }
 
-// Go: api/requestfilesystem/pathtree.go requestPathContains
+// Go: api/requestfilesystem/pathtree.go:265 requestPathContains
 pub fn request_path_contains(parent: &tspath::Path, path: &tspath::Path) -> bool {
-    *path == *parent
-        || path
-            .as_str()
-            .starts_with(&tspath::ensure_trailing_directory_separator(
-                parent.as_str(),
-            ))
+    parent.contains_path(path)
 }
