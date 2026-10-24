@@ -905,8 +905,15 @@ fn syntax_error_cycle_symbols(extra: &[&str]) -> Vec<u64> {
 fn diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind() {
     run_test_in_child(
         "tsctests::symbol_id_truncation::diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind",
+        || assert_eq!(syntax_error_cycle_symbols(&[]), [10_596, 832, 10_596]),
+    );
+}
+
+#[test]
+fn diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind_single_threaded() {
+    run_test_in_child(
+        "tsctests::symbol_id_truncation::diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind_single_threaded",
         || {
-            assert_eq!(syntax_error_cycle_symbols(&[]), [10_596, 832, 10_596]);
             assert_eq!(
                 syntax_error_cycle_symbols(&["--singleThreaded"]),
                 [7_846, 208, 7_846]
