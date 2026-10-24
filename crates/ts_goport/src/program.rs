@@ -1934,15 +1934,15 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // earlier program version bound is not bound again. The binds give no
 // symbol ids; the ids that Go's binds give come after them
 // (`give_private_name_class_ids`).
-// watchreset1r: a bound file that `tsc -b --watch` kept where Go parses it
-// again (`VersionTables::replayed_files`) gets the ids of a new parse: this
-// thread forgets the ids of its symbols first
-// (`ast::forget_lineage_symbol_ids`), and its private name classes get ids
-// with those of the unbound files, as Go binds both.
 pub fn bind_all() {
     let program = prog();
     let tables = held_tables(program);
     tables.bound_symbols.get_or_init(|| {
+        // watchreset1r: a bound file that `tsc -b --watch` kept where Go
+        // parses it again (`VersionTables::replayed_files`) gets the ids of
+        // a new parse: this thread forgets the ids of its symbols first
+        // (`forget_replayed_symbol_ids`), and its private name classes get
+        // ids with those of the unbound files, as Go binds both.
         let replayed = &tables.replayed_files;
         let is_replayed = |file: &crate::ast::FileRef<GoFile>| {
             !replayed.is_empty() && replayed.binary_search(&file.root.file_index()).is_ok()
