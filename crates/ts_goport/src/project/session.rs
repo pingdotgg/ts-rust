@@ -624,7 +624,7 @@ impl Session {
             // Go: change.Type (a nil element panics)
             let change = change
                 .as_ref()
-                // Go N' loads `change.Type` (offset 0x10): addr=0x10 (session.go:428).
+                // Go loads `change.Type` (offset 0x10): addr=0x10 (session.go:428).
                 .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x10));
             let kind = match change.type_ {
                 lsproto::FileChangeType::CREATED => FileChangeKind::WATCH_CREATE,

@@ -1091,9 +1091,9 @@ impl Checker {
             if mapped_type.is_nil() {
                 // Go reads `mappedType.AsMappedType()` on both branches: a
                 // symbol of another checker has no links here.
-                // Go N' loads the type word of `t.data` in `AsMappedType` (offset 0x28): addr=0x28
-                // (types.go:716).
-                crate::core::go_nil_dereference_at(0x28);
+                // Go loads `t.kind` in the `castType` of `AsMappedType` (offset 0xc): addr=0xc
+                // (types.go:821, checker.go:21430 and :21433).
+                crate::core::go_nil_dereference_at(0xc);
             }
             if !pushed {
                 self.ty_mut(mapped_type).as_mapped_type_mut().contains_error = true;

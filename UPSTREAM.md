@@ -132,6 +132,22 @@ when the condition no longer holds.
   types). Check: `grep -nE '\.flags (\|=|&\^=|=) ' internal/checker/*.go` for a new write
   to a `*Type`'s flags, and `grep -n '\.types = ' internal/checker/*.go` for a new write of
   members. If a new write can reach a type that is already a member, drop the mask.
+- `UnionCalls` (`checker/checker_p28.rs`, unionmemo1): `get_union_type_ex` keeps the result of a
+  call with no origin and no subtype reduction, and gives it to a later call with the same
+  reduction, alias and types in the same order without Go's worker (`getUnionTypeWorker`,
+  checker.go:26251 at `3e9236361fa9`). That is exact only while the data that the worker's sort and
+  key read does not change once a type can be a member: the sort (`CompareTypes`, utilities.go:418)
+  reads `Declarations()[0]` of a type's symbol, also through `compareSymbolsWorker`
+  (utilities.go:366). One case is open: `mergeSymbol` (checker.go:14422) appends declarations in
+  place when its target is transient (checker.go:14454), and at check time `combineSymbolTables`
+  (checker.go:14372) merges. If such a merge gives a transient type symbol its first declaration
+  between two equal calls, Go sorts again and can make another union, and the memo gives the old
+  one. No case is known, and Go's own `unionTypes` cache (`getUnionKey`, checker.go:17940) rests on
+  the same condition. Check: `grep -n 'SetDeclarations(' internal/checker/*.go` for a write that
+  can reach the symbol of a type that already exists, the callers of `mergeSymbol`, and what
+  `CompareTypes`, `compareSymbolsWorker` and the worker read. If such a write is found, or the
+  worker gets a new effect (a counter, a cache write, a new type), drop the memo or move
+  `UnionCalls::mark` at that step.
 
 ## Pins in microsoft/TypeScript
 
