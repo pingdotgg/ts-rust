@@ -14,6 +14,9 @@ BASE (default origin/main) and HEAD (default HEAD), and HEAD. For each file with
   changed helpers  other test code (a mock, a helper fn) that HEAD changes, by enclosing item
   removed lines    each removed or changed line of base test code, with its enclosing fn (as int95's tool did)
 
+A comment or blank line counts with the item below it (a doc comment with its item), for the helpers and the
+removed lines.
+
 Test code is a file under a tests/ dir, a file that a test-only `mod NAME;` declares, and the item after a
 test-only attribute: #[test], #[tokio::test], or a #[cfg(P)] whose P holds only in a test build (test,
 all(..., test, ...), any(test, ...) with test-only arguments; not(test) is production). An item with an item
@@ -288,6 +291,12 @@ class Rust:
             else:
                 # Before the first top item: the enclosing #[cfg(test)] mod, or the file top.
                 self.top.append(last.get(base[k]) or last.get(base[k] - 1) or "(file top)")
+        # A comment or blank line belongs to the item of the next code line (a doc comment to its item).
+        for k in range(len(code_lines) - 2, -1, -1):
+            if code_lines[k].strip() == "":
+                self.label[k] = self.label[k + 1]
+                if self.top[k] is not None and self.top[k + 1] is not None:
+                    self.top[k] = self.top[k + 1]
 
     def fn_text(self, key):
         a, b = self.fns[key]
