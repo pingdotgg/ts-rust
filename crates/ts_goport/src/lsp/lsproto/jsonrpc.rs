@@ -32,7 +32,7 @@ pub fn new_id(raw_value: &IntegerOrString) -> crate::jsonrpc::ID {
     crate::jsonrpc::new_id_int(
         raw_value
             .integer
-            // Go N' loads `*rawValue.Integer`: addr=0x0 (jsonrpc.go:16).
+            // Go loads `*rawValue.Integer`: addr=0x0 (jsonrpc.go:16).
             .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0)),
     )
 }

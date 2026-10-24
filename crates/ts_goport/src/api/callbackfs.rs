@@ -561,7 +561,7 @@ impl Fs for CallbackFS {
                     // Go reads the fields of the nil pointer that `null`
                     // gives.
                     let raw_entries =
-                        // Go N' loads `rawEntries.Files` (offset 0): addr=0x0 (callbackfs.go:264).
+                        // Go loads `rawEntries.Files` (offset 0): addr=0x0 (callbackfs.go:264).
                         raw_entries.unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0));
                     return Entries {
                         files: raw_entries.files,
