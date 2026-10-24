@@ -338,6 +338,10 @@ struct CheckerPool {
     /// (`send_thread_job`).
     #[cfg(target_family = "wasm")]
     checkers: Vec<InlineChecker>,
+    /// wasm: the program of the pool. It is current while a checker is made
+    /// for the carry (`make_unmade_checkers`), which runs outside a job.
+    #[cfg(target_family = "wasm")]
+    program: &'static GoProgram,
     /// The program's emit pool, made on its first job
     /// (`send_emit_pool_jobs`). It stops with the checkers. wasm has none.
     #[cfg(not(target_family = "wasm"))]
@@ -452,7 +456,11 @@ impl CheckerPool {
     #[cfg(target_family = "wasm")]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
         self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
-        let CheckerPool { checkers, carry: _ } = self;
+        let CheckerPool {
+            checkers,
+            carry: _,
+            program: _,
+        } = self;
         for slot in checkers {
             if let InlineChecker::Made(checker, mut ids) = slot {
                 ids.run(|| drop(checker));
@@ -529,26 +537,21 @@ impl CheckerPool {
             .collect()
     }
 
-    /// wasm: the symbol ids of each checker that `base` does not have. A
-    /// checker that no job has made is made first, as Go makes every
-    /// checker of the pool.
+    /// wasm: the symbol ids of each checker that `base` does not have, in
+    /// pool order. The caller made every checker first
+    /// (`make_unmade_checkers`): this runs inside the `POOLS` borrow, where
+    /// no checker can be made.
     #[cfg(target_family = "wasm")]
     fn worker_symbol_ids(&mut self, base: &SymbolIdBase) -> Vec<WorkerSymbolIds> {
-        let count = self.checkers.len();
-        (0..count)
-            .filter_map(|index| {
-                let slot = &mut self.checkers[index];
-                if matches!(slot, InlineChecker::Unmade(_)) {
-                    let (checker, ids) =
-                        std::mem::replace(slot, InlineChecker::Busy).into_checker(index, count);
-                    *slot = InlineChecker::Made(checker, ids);
+        self.checkers
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, slot)| match slot {
+                InlineChecker::Made(_, ids) | InlineChecker::Released(ids) => {
+                    Some(ids.run(|| worker_symbol_ids(base)))
                 }
-                match slot {
-                    InlineChecker::Made(_, ids) | InlineChecker::Released(ids) => {
-                        Some(ids.run(|| worker_symbol_ids(base)))
-                    }
-                    InlineChecker::Unmade(_) | InlineChecker::Busy => None,
-                }
+                InlineChecker::Unmade(_) => panic!("checker {index} not made before the carry"),
+                InlineChecker::Busy => None,
             })
             .collect()
     }
@@ -2774,12 +2777,12 @@ fn take_early_bind() -> Option<EarlyBind> {
 
 /// Starts the parallel bind (`bind_files_parallel`) of the program files of
 /// a one-program `tsc` process when they are published
-/// (`go_frontend::build_program`, after `set_prog`). `roots` are the program
-/// files in file order, all published by this program. Each bind thread
-/// holds the files that it bound; `bind_all` gives the offsets of the first
-/// file and joins them (`EarlyBind::join`). Off with `--singleThreaded`,
-/// with tracing, with fewer than 2 bind threads and with
-/// `GOPORT_EARLY_BIND=0`.
+/// (`go_frontend::build_program`, after `set_prog`). `parsed` are the
+/// program files in file order, all published by this program. Each bind
+/// thread holds the files that it bound; `bind_all` gives the offsets of the
+/// first file and joins them (`EarlyBind::join`). Off with
+/// `--singleThreaded`, with tracing, with fewer than 2 bind threads, with
+/// `GOPORT_EARLY_BIND=0` and when a file has a syntactic diagnostic.
 // PORT: not in Go (bindgap1, go-note 5.2 B1). Go binds when the program is
 // made (program.go:600 BindSourceFiles), and the bind reads only its file
 // (binder.go:120 to :130, `file.BindOnce`), so an early bind gives the same
@@ -2789,31 +2792,39 @@ fn take_early_bind() -> Option<EarlyBind> {
 // and the other `GoFile` cells stay empty, so the "Symbols" sum and the
 // file format lines read no bind. A bind writes the node records and the
 // binder bits of their flags (`BINDER_ADDED_FLAGS`) while it runs; no code
-// from the publish to `bind_all` reads them (bindgap1 report section 2). A
-// program that never binds (syntax errors and no `--diagnostics`, Go
-// program.go:2077) keeps the binds until the process ends. A hit on a bind
+// from the publish to `bind_all` reads them (bindgap1 report section 2).
+// Go binds a program with a syntactic diagnostic only to emit it or for
+// `--diagnostics` (program.go:2066-2080), so such a program starts no
+// early bind: an early bind could crash a program that Go never binds (a
+// deep file overflows the bind thread stack; R235 reviewer B2). Its late
+// bind is the bind of `bind_all`, as before bindgap1. The check reads the
+// lists of the parse in the loop that finds the unbound files, so it adds
+// no pass over the files. A program that does not reach `bind_all` (the
+// `program_created` hook of `goport_emit` can stop it) keeps the binds
+// until the process ends. A hit on a bind
 // thread fails its bind, so these threads count no unported hit
 // (`core::skip_unported_hits`): the serial bind of `bind_all` counts it,
 // and a program that does not bind has none. PERF: the binds run while this
 // thread builds the program tables and the syntactic diagnostics
 // (loadstamp1: 5.8 ms on Sentry, 2.7 ms on VS Code, dbook-lan).
-pub(crate) fn start_early_bind(roots: impl Iterator<Item = Node>) {
+pub(crate) fn start_early_bind(parsed: &[Rc<crate::frontend::parser::ParsedSourceFile>]) {
     if single_threaded()
         || crate::tracing::get().is_some()
         || std::env::var_os("GOPORT_EARLY_BIND").is_some_and(|value| value == "0")
     {
         return;
     }
-    let files: Vec<(Node, bool)> = roots
-        .filter_map(|root| {
-            let go_file = crate::ast::go_file(root.file_index());
-            go_file
-                .file_bind
-                .get()
-                .is_none()
-                .then(|| (root, go_file.version().is_some()))
-        })
-        .collect();
+    let options = &prog().options;
+    let mut files: Vec<(Node, bool)> = Vec::with_capacity(parsed.len());
+    for file in parsed {
+        if has_syntactic_diagnostics(file, options) {
+            return;
+        }
+        let go_file = crate::ast::go_file(file.root.file_index());
+        if go_file.file_bind.get().is_none() {
+            files.push((file.root, go_file.version().is_some()));
+        }
+    }
     let threads = bind_thread_count(files.len()).min(files.len());
     if threads < 2 {
         return;
@@ -3475,6 +3486,9 @@ fn release_program_with(
         "program {} is released while it is current",
         program.id
     );
+    // The stop of a pool that carries hands on the ids of every checker.
+    #[cfg(target_family = "wasm")]
+    make_unmade_checkers(program.id);
     let pool = POOLS.with(|pools| pools.borrow_mut().remove(&program.id));
     if let Some(pool) = pool {
         shut_down(pool);
@@ -4355,6 +4369,8 @@ impl Drop for CarryEveryPool {
 /// that one's ids. The ids of tasks that build at the same time race in Go;
 /// here a task that is not built yet hands its ids on later.
 pub fn carry_symbol_ids_of(program: &'static GoProgram) {
+    #[cfg(target_family = "wasm")]
+    make_unmade_checkers(program.id);
     POOLS.with(|pools| {
         if let Some(pool) = pools.borrow_mut().get_mut(&program.id) {
             pool.carry_symbol_ids(pool.carry.is_some_and(|carry| carry.single));
@@ -4393,13 +4409,21 @@ fn symbol_id_carry_start(count: usize) -> Option<IdCarry> {
 /// next such program takes them before it gives ids
 /// (`give_private_name_class_ids`).
 fn carry_last_pool_symbol_ids() {
-    POOLS.with(|pools| {
-        let mut pools = pools.borrow_mut();
-        let last = pools
-            .iter_mut()
+    let last = POOLS.with(|pools| {
+        pools
+            .borrow()
+            .iter()
             .filter(|(_, pool)| pool.carry.is_some_and(|carry| carry.single))
-            .max_by_key(|&(&id, _)| id);
-        if let Some((_, pool)) = last {
+            .map(|(&id, _)| id)
+            .max()
+    });
+    let Some(id) = last else {
+        return;
+    };
+    #[cfg(target_family = "wasm")]
+    make_unmade_checkers(id);
+    POOLS.with(|pools| {
+        if let Some(pool) = pools.borrow_mut().get_mut(&id) {
             pool.carry_symbol_ids(true);
         }
     });
@@ -4497,7 +4521,11 @@ fn start_checkers(count: usize) -> CheckerPool {
             InlineChecker::Unmade(ids)
         })
         .collect();
-    CheckerPool { checkers, carry }
+    CheckerPool {
+        checkers,
+        carry,
+        program: prog(),
+    }
 }
 
 /// wasm: a checker of the inline pool. Making it on its first job, and
@@ -4529,6 +4557,48 @@ impl InlineChecker {
             InlineChecker::Busy => panic!("checker {index} in use"),
             InlineChecker::Released(_) => panic!("checker {index} used after its release"),
         }
+    }
+}
+
+/// wasm: makes each checker of the pool of program `id` that no job has
+/// made, when the pool carries its symbol ids (`CheckerPool::carry`). The
+/// carry calls it first, so it hands on the ids that each `NewChecker`
+/// gives, as Go and a native worker do: Go makes every checker of the pool
+/// at once (checkerpool.go:367), and each native worker makes its checker
+/// when it starts. A checker gets no job when the build emits with no check
+/// (a syntax error stops the check, program.go:2066) and it owns no emitted
+/// file. As in `send_thread_job`, each checker is made outside the `POOLS`
+/// borrow, here with the pool's program current: the carry runs outside a
+/// job, where no program or another one can be current.
+// PORT: Go's `NewChecker` takes a symbol id block in each link store that
+// it reads (the links of `initializeChecker`), so leaving a checker out
+// would carry a lower block counter than Go's.
+#[cfg(target_family = "wasm")]
+fn make_unmade_checkers(id: u32) {
+    let Some((program, count)) = POOLS.with(|pools| {
+        let pools = pools.borrow();
+        let pool = pools.get(&id).filter(|pool| pool.carry.is_some())?;
+        Some((pool.program, pool.checkers.len()))
+    }) else {
+        return;
+    };
+    let _program = crate::core::enter_program(Some(program));
+    for index in 0..count {
+        let slot = POOLS.with(|pools| {
+            let mut pools = pools.borrow_mut();
+            let slot = pools.get_mut(&id)?.checkers.get_mut(index)?;
+            matches!(slot, InlineChecker::Unmade(_))
+                .then(|| std::mem::replace(slot, InlineChecker::Busy))
+        });
+        let Some(slot) = slot else {
+            continue;
+        };
+        let (checker, ids) = slot.into_checker(index, count);
+        POOLS.with(|pools| {
+            if let Some(pool) = pools.borrow_mut().get_mut(&id) {
+                pool.checkers[index] = InlineChecker::Made(checker, ids);
+            }
+        });
     }
 }
 
@@ -5196,6 +5266,25 @@ pub fn get_syntactic_diagnostics(source_file: Node) -> Vec<Diagnostic> {
         }
         diags
     })
+}
+
+/// True when `get_syntactic_diagnostics` of `file`, a published file of the
+/// current program, is not empty. The parse gives every list but the one of
+/// `get_additional_js_syntactic_diagnostics`, which walks only the nodes of
+/// an unchecked JS file that contain a decorator. `start_early_bind` uses
+/// it.
+// PORT: Go `GetSyntacticDiagnostics` filters the list (`filterAndSortDiagnostics`
+// drops some unnecessary-code suggestions of a mapped file). This does not,
+// so it can be true where Go's list is empty; then a program only binds late.
+fn has_syntactic_diagnostics(
+    file: &crate::frontend::parser::ParsedSourceFile,
+    options: &CompilerOptions,
+) -> bool {
+    !file.diagnostics.is_empty()
+        || !file.js_diagnostics.is_empty()
+        || matches!(file.script_kind, ScriptKind::JS | ScriptKind::JSX)
+            && !is_check_js_enabled_for_file(file.root, options)
+            && !get_additional_js_syntactic_diagnostics(file.root, options).is_empty()
 }
 
 // Go: compiler/program.go:791 getAdditionalJSSyntacticDiagnostics

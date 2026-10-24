@@ -12,9 +12,11 @@
 #        testbox-remote.sh tests KEY COMMIT RUN    build-goport-tests.sh at COMMIT, goport-tests.sh at pin KEY,
 #                                                  pack the results and logs in RUN/out.tar.gz (after a failed build,
 #                                                  its cargo logs in testbin.new/logs)
-#        testbox-remote.sh np-suite KEY LABEL RUN  a stable release tsgo, np-suite.sh run LABEL at pin KEY, pack
-#                                                  the label dir in RUN/out.tar.gz, then remove the label dir
-#                                                  (after a failed build, only its build.log)
+#        testbox-remote.sh np-suite KEY LABEL RUN [BIN]
+#                                                  np-suite.sh run LABEL at pin KEY on BIN (no build), else on a stable
+#                                                  release tsgo built here (build.log starts with its tree, rustc and
+#                                                  CPU), pack the label dir and build.log in RUN/out.tar.gz, then remove
+#                                                  the label dir (after a failed build, only its build.log)
 #        testbox-remote.sh exec CMD...             run CMD (the step of testbox.sh job)
 #        testbox-remote.sh source DIR COMMIT [BUNDLE]
 #                                                  DIR (a zbook path under target/) as a git worktree of this repo
@@ -158,22 +160,35 @@ case $cmd in
     exit "$rc"
     ;;
   np-suite)
-    (($# == 3)) || die "usage: np-suite KEY LABEL RUN"
-    key=$1 label=$2 run=$3
+    (($# == 3 || $# == 4)) || die "usage: np-suite KEY LABEL RUN [BIN]"
+    key=$1 label=$2 run=$3 bin=${4:-}
     [[ ! -e $run ]] || die "$run exists"
     on_testbox
     checkout "$key"
     mkdir -p "$run"
-    # Stable and not incremental, as candidate.sh builds release bins.
-    TS_CARGO_NIGHTLY=0 TS_CARGO_INCREMENTAL=0 scripts/run-cargo-capped.sh build --release --locked -p ts_goport --bin tsgo \
-      > "$run/build.log" 2>&1 || {
-      tail -20 "$run/build.log"
-      tar -czf "$run/out.tar.gz" -C "$run" build.log
-      die "tsgo build failed"
-    }
+    if [[ -n $bin ]]; then
+      [[ -f $bin && -x $bin ]] || die "not an executable file: $bin"
+      echo "no build: $bin, sha256 $(sha256sum < "$bin" | cut -d' ' -f1)" > "$run/build.log"
+    else
+      # What the bytes depend on. jemalloc's configure takes LG_VADDR from the CPU's virtual address bits (cpuid
+      # 0x80000008), so a 57-bit host builds another tsgo from the same tree (npbuild1: c428ad2d2 gives
+      # 6a4e7a3a7784 with LG_VADDR 57 and 54433ccd1aa8 with 48).
+      {
+        echo "tree $(git rev-parse HEAD), $(git status --porcelain --untracked-files=no | wc -l) modified tracked files"
+        echo "$(rustc -V); cpu family $(awk '/^cpu family/ {print $4; exit}' /proc/cpuinfo) model $(awk '/^model\t/ {print $3; exit}' /proc/cpuinfo),$(grep -m1 'address sizes' /proc/cpuinfo | cut -d: -f2)"
+      } > "$run/build.log" 2>&1
+      # Stable and not incremental, as candidate.sh builds release bins.
+      TS_CARGO_NIGHTLY=0 TS_CARGO_INCREMENTAL=0 scripts/run-cargo-capped.sh build --release --locked -p ts_goport --bin tsgo \
+        >> "$run/build.log" 2>&1 || {
+        tail -20 "$run/build.log"
+        tar -czf "$run/out.tar.gz" -C "$run" build.log
+        die "tsgo build failed"
+      }
+      bin=$PWD/target/release/tsgo
+    fi
     np=target/continuation-r97-goport/compat-backlog/np-suite
     rc=0
-    NP_GO_DIR=$(pin path goCheckout "$key") scripts/goport/np-suite.sh run "$label" "$PWD/target/release/tsgo" || rc=$?
+    NP_GO_DIR=$(pin path goCheckout "$key") scripts/goport/np-suite.sh run "$label" "$bin" || rc=$?
     tar -czf "$run/out.tar.gz" -C "$run" build.log -C "$PWD/$np" "$label"
     # The local copy is the record: the sticky target/ keeps no label dirs.
     rm -rf "${np:?}/${label:?}"

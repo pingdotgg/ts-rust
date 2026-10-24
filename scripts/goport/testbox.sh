@@ -41,10 +41,15 @@
 #                                             exist), print compare-tests.py BASE OUT. After a failed build, print its
 #                                             compiler errors (OUT/testbin.new/logs).
 #                                             HEAD must be pushed; crates/, Cargo.toml and Cargo.lock must be clean
-#        testbox.sh np-suite [--pin KEY] LABEL [BASE]
-#                                             a stable release tsgo and np-suite.sh run LABEL on the testbox, fetched to
-#                                             the main checkout's np-suite dir (LABEL must not exist), then
-#                                             np-suite.sh diff BASE LABEL
+#        testbox.sh np-suite [--pin KEY] [--bins DIR | --expect SHA256] LABEL [BASE]
+#                                             np-suite.sh run LABEL on the testbox, fetched to the main checkout's
+#                                             np-suite dir (LABEL must not exist), then np-suite.sh diff BASE LABEL.
+#                                             --bins DIR: push DIR/tsgo (checked against DIR/bins.sha256 when there)
+#                                             and run on it, no build; a meta.txt sha256 that differs is an error.
+#                                             Use it for revision evidence (the candidate's release bins).
+#                                             Without --bins: a stable release tsgo built on the testbox. Its bytes
+#                                             depend on the host (jemalloc's configure reads the CPU's virtual address
+#                                             bits), so --expect SHA256 (12 to 64 hex) warns when it differs
 #        testbox.sh perf [--mode M] [--rounds N] LABEL BIN... [-- TSGO_ARG...]
 #                                             perf.sh on the testbox (default --mode both, 3 rounds): pushes the
 #                                             bins, fetches the result to the main checkout's perf dir (LABEL must
@@ -386,14 +391,32 @@ case "$cmd" in
     exit "$rc"
     ;;
   np-suite)
-    (($# == 1 || $# == 2)) || { echo "usage: testbox.sh np-suite [--pin KEY] LABEL [BASE]" >&2; exit 2; }
+    np_usage="usage: testbox.sh np-suite [--pin KEY] [--bins DIR | --expect SHA256] LABEL [BASE]"
+    bin='' want='' expect=''
+    if [[ ${1:-} == --bins ]]; then
+      (($# >= 2)) || { echo "$np_usage" >&2; exit 2; }
+      bin=$(realpath -s -- "$2/tsgo")
+      shift 2
+      [[ -f $bin && -x $bin ]] || { echo "not an executable file: $bin" >&2; exit 2; }
+      want=$(sha256sum < "$bin" | cut -d' ' -f1)
+      # The bins dir of a side run or a lane: its tsgo line must name these bytes.
+      [[ ! -f ${bin%/tsgo}/bins.sha256 ]] || grep -qxE "$want  (\./)?tsgo" "${bin%/tsgo}/bins.sha256" ||
+        { echo "$bin: sha256 $want is not the tsgo line of ${bin%/tsgo}/bins.sha256" >&2; exit 2; }
+    elif [[ ${1:-} == --expect ]]; then
+      (($# >= 2)) && [[ $2 =~ ^[0-9a-f]{12,64}$ ]] || { echo "$np_usage" >&2; exit 2; }
+      expect=$2
+      shift 2
+    fi
+    (($# == 1 || $# == 2)) || { echo "$np_usage" >&2; exit 2; }
     # One dir name: the result moves to $np/LABEL, and np-suite.sh diff takes labels.
     [[ -n $1 && $1 != */* ]] || { echo "LABEL must be a dir name without /: $1" >&2; exit 2; }
     np=/home/theo/Code/sandbox/ts-rust/target/continuation-r97-goport/compat-backlog/np-suite
     [[ ! -e $np/$1 ]] || { echo "$np/$1 exists (results are never replaced)" >&2; exit 2; }
+    # The same absolute path there, so meta.txt names the zbook file.
+    [[ -z $bin ]] || push_paths "$bin"
     run=target/testbox-runs/np-$(date -u +%Y%m%dT%H%M%S)-$1
     rc=0
-    job "$run" np-suite "$pin_key" "$1" "$run" || rc=$?
+    job "$run" np-suite "$pin_key" "$1" "$run" ${bin:+"$bin"} || rc=$?
     mkdir -p "$np" target
     tmp=$(mktemp -d "$repo_root/target/testbox-np.XXXXXX")
     fetch "$run" "$tmp"
@@ -404,6 +427,16 @@ case "$cmd" in
     rmdir "$tmp"
     cat "$np/$1/summary.txt"
     [[ -z ${2:-} ]] || scripts/goport/np-suite.sh diff "$2" "$1" | tail -20
+    # Last, so it is not lost above the diff: which tsgo the run used (np-suite.sh writes its sha256 in meta.txt).
+    got=$(awk '$1 == "sha256" {print $2}' "$np/$1/meta.txt")
+    if [[ -n $bin && $got != "$want" ]]; then
+      echo "error: np-suite $1 ran a tsgo with sha256 '$got', not $bin ($want)" >&2
+      rc=1
+    elif [[ -n $expect && $got != "$expect"* ]]; then
+      echo "warning: the tsgo built on the testbox has sha256 $got, not $expect: $1 is not a run of those bins (use --bins)" >&2
+    else
+      echo "np-suite $1: tsgo sha256 $got${bin:+ ($bin)}"
+    fi
     exit "$rc"
     ;;
   perf)
