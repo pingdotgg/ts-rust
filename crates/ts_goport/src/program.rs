@@ -1939,9 +1939,9 @@ pub fn bind_all() {
         // (`forget_replayed_symbol_ids`), and its private name classes get
         // ids with those of the unbound files, as Go binds both. The bind
         // takes the notes, not the making of the program: a build program
-        // that stops before its bind (syntax errors with `noEmit`, or no
-        // incremental state) leaves Go's new parse of a shared `.d.ts`
-        // unbound for the next program of the cycle.
+        // that stops before its bind (no incremental state, a syntax error,
+        // and `noEmit` or `noEmitOnError`) leaves Go's new parse of a
+        // shared `.d.ts` unbound for the next program of the cycle.
         let replayed =
             take_replayed_parses(program.source_files().map(|file| file.root.file_index()));
         let replayed = replayed.as_slice();
