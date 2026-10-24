@@ -1956,14 +1956,19 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 pub fn bind_all() {
     let program = prog();
     held_tables(program).bound_symbols.get_or_init(|| {
+        let unbound: Vec<Node> = program
+            .source_files()
+            .filter(|file| file.file_bind.get().is_none())
+            .map(|file| file.root)
+            .collect();
         // watchreset1r: in `tsc -b --watch` a file with a Go parse that no
         // bind took (`note_go_parse`) and that a program bound before (a
         // kept parse, or another program of this cycle that bound first)
         // gets the ids of a new parse: this thread forgets the ids of its
         // symbols first (`forget_replayed_symbol_ids`), and its private
-        // name classes get ids with those of the unbound files, as Go
-        // binds both. The bind takes the notes, not the making of the
-        // program: a build program that stops before its bind (no
+        // name classes get ids with those of the unbound files, in program
+        // order, as Go binds both. The bind takes the notes, not the making
+        // of the program: a build program that stops before its bind (no
         // incremental state, a syntax error, and `noEmit` or
         // `noEmitOnError`) leaves Go's new parse of a shared `.d.ts`
         // unbound for the next program of the cycle. A program takes one
@@ -1971,14 +1976,18 @@ pub fn bind_all() {
         // the file gives it new ids in any bind order.
         let replayed = take_go_parses(program.source_files().map(|file| file.root.file_index()));
         let replayed = replayed.as_slice();
-        let is_replayed = |file: &crate::ast::FileRef<GoFile>| {
-            !replayed.is_empty() && replayed.binary_search(&file.root.file_index()).is_ok()
+        let unbound: Vec<Node> = if replayed.is_empty() {
+            unbound
+        } else {
+            program
+                .source_files()
+                .filter(|file| {
+                    file.file_bind.get().is_none()
+                        || replayed.binary_search(&file.root.file_index()).is_ok()
+                })
+                .map(|file| file.root)
+                .collect()
         };
-        let unbound: Vec<Node> = program
-            .source_files()
-            .filter(|file| file.file_bind.get().is_none() || is_replayed(file))
-            .map(|file| file.root)
-            .collect();
         let symbols = with_lineage(|lineage| {
             if !replayed.is_empty() {
                 forget_replayed_symbol_ids(lineage, replayed);
