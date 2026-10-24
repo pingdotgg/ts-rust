@@ -1133,7 +1133,26 @@
     "runtimeAuthorized": true,
     "expectedCompilerRecoveries": [],
     "expectationUpdates": [],
-    "verdictHistory": [],
+    "verdictHistory": [
+      {
+        "role": "audit_accepted_roster",
+        "agent": "a872de580c4d90656",
+        "verdict": "PASS",
+        "batchId": "recovery-continuation-go-checker-port-113",
+        "revision": 235,
+        "sourceFingerprint": "bddcdb8a96f582bdcea415c028107fe25eb2e2976df14d1fef625178018cae80",
+        "file": "target/continuation-r235-auditor-verdict.txt"
+      },
+      {
+        "role": "independent_reviewer",
+        "agent": "abb6d104a54043bee",
+        "verdict": "STOP",
+        "batchId": "recovery-continuation-go-checker-port-113",
+        "revision": 235,
+        "sourceFingerprint": "bddcdb8a96f582bdcea415c028107fe25eb2e2976df14d1fef625178018cae80",
+        "file": "target/continuation-r235-reviewer-verdict.txt"
+      }
+    ],
     "focusedResults": [],
     "runtimeToolHandles": [],
     "commands": [],
@@ -1173,7 +1192,7 @@
     "reviewer": {
       "role": "independent_reviewer",
       "agent": "abb6d104a54043bee",
-      "verdict": "PENDING"
+      "verdict": "STOP"
     },
     "nextPermittedAction": "Run the R235 pipeline (candidate.sh side)."
   },
