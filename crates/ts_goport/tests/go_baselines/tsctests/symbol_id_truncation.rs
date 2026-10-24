@@ -866,10 +866,11 @@ fn private_name_ids_follow_go_parses_after_a_no_emit_build_program_with_no_bind(
 // `SymbolCount` sums the file counts of these unbound parses before
 // `ForEachCheckerParallel` makes the checkers, which bind
 // (compiler/program.go:1743). So only the checkers' own symbols count. The
-// port keeps the parses: R234 summed their old binds (32,612 and 33,284).
-// The expected counts are the output of `tsgo-oracle-3e9236361fa9 -b -w
-// --diagnostics` (loadparity1r3 skeptic tool `diagwatch.sh`;
-// after231/watchreset1r2/logs/diagwatch-dev1.log).
+// port keeps the parses: R234 summed their old binds (5,764 and 6,388
+// here). The expected counts are the output of `tsgo-oracle-3e9236361fa9
+// -b -w --pretty false --diagnostics` on the same files (the loadparity1r3
+// skeptic case with lib and target es2022; 2 of 2 runs in each mode,
+// after231/watchreset1r2/tools/diagcase.sh, logs/diagcase.log).
 fn syntax_error_cycle_symbols(extra: &[&str]) -> Vec<u64> {
     let mut args = vec!["--diagnostics"];
     args.extend_from_slice(extra);
@@ -880,7 +881,7 @@ fn syntax_error_cycle_symbols(extra: &[&str]) -> Vec<u64> {
             ("package.json", "{}\n".into()),
             (
                 "tsconfig.json",
-                r#"{"compilerOptions":{"allowJs":true,"module":"node16","noEmit":true,"types":[]},"include":["src"]}"#.into(),
+                r#"{"compilerOptions":{"allowJs":true,"module":"node16","noEmit":true,"types":[],"lib":["es2022"],"target":"es2022"},"include":["src"]}"#.into(),
             ),
         ],
         &[
@@ -905,10 +906,10 @@ fn diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind() 
     run_test_in_child(
         "tsctests::symbol_id_truncation::diagnostics_symbols_of_a_build_watch_syntax_error_cycle_count_no_kept_bind",
         || {
-            assert_eq!(syntax_error_cycle_symbols(&[]), [59_787, 896, 59_787]);
+            assert_eq!(syntax_error_cycle_symbols(&[]), [10_596, 832, 10_596]);
             assert_eq!(
                 syntax_error_cycle_symbols(&["--singleThreaded"]),
-                [56_936, 224, 56_936]
+                [7_846, 208, 7_846]
             );
         },
     );
