@@ -73,6 +73,35 @@ when the condition no longer holds.
 
 - `crates/ts_goport/src/flags.rs` holds Go's integer flag and enum consts, kept in step by hand.
   Compare it with `internal/{ast,binder,checker,core}` at the new pin.
+- Identity matching in inference (identmatch1) keeps each member's normalized type between the
+  pairs of one `inferFromMatchingTypes` call, so it holds second copies of Go code (Go lines at
+  `3e9236361fa9`): `infer_from_identical_types` (`checker/inference_p1.rs`) copies the loop of
+  `inferFromMatchingTypes` (inference.go:381, port `infer_from_matching_types`);
+  `is_type_identical_in_matching` (`checker/inference_p2.rs`) copies `isTypeRelatedTo`
+  (relater.go:169, port `is_type_related_to_kind` in `checker/relater_p1.rs`);
+  `is_normalized_type_identical_in_matching` copies the start of `isRelatedToEx`
+  (relater.go:2634-2665, port `is_related_to_ex` in `checker/relater_p3.rs`); and
+  `check_normalized_type_identical_to` copies `checkTypeRelatedToEx` (relater.go:358, port
+  `check_type_related_to_ex`) and the end of isRelatedToEx's identity branch (relater.go:2666).
+  Check: a Go change in any of these functions goes into both copies. A kept type is exact only
+  while a repeat of `getNormalizedType` (checker.go:28470) gives the first result. The guard
+  covers two things. First, a repeat that makes something moves one of the counts that
+  `normalize_for_matching` compares (instantiations, types, symbols, signatures, diagnostics), or
+  emits only a tracer event (no type is kept with `--generateTrace`). Second, the path reads
+  lazily set state that it does not compute in one place: `IsEmptyAnonymousObjectType`
+  (checker.go:27077; for example in getIntersectionType and shouldNormalizeIntersection) reads
+  `MembersResolved` and does not resolve. So its answer for an anonymous type goes
+  from false to true when the type's members are first resolved and are empty, also between two
+  pairs. `Checker::empty_anonymous_resolves` counts these resolves
+  (`resolve_structured_type_members_slow`, `checker/checker_p21.rs`): a normalization during which
+  it moves is not kept, and a kept type is used only while the count is the one it was kept with.
+  The other reads on the path read cached or computed-once values, and a repeat reads what the
+  first normalization read (audit of identmatch1 round 3,
+  `target/continuation-r97-goport/int97/r230repair/identmatch1r3/audit.md`). At a bump, check
+  `getNormalizedType` and the functions it calls (getReducedType, getIntersectionType,
+  getUnionType, the simplifications) for a new step that makes or changes state that no count sees,
+  and for a new read of lazily set state that does not compute it (another `MembersResolved` read,
+  or a field that is set later). Add a count for it or drop the slots.
 - `Checker::is_distribution_dependent` (`checker/relater_p5.rs`) keeps the answer of its first walk
   on the conditional root (chkperf3). That is exact only while the walk
   (`isTypeParameterPossiblyReferenced`, checker.go:22891 at `fed0bf24149f`) reads only state that
@@ -103,6 +132,22 @@ when the condition no longer holds.
   types). Check: `grep -nE '\.flags (\|=|&\^=|=) ' internal/checker/*.go` for a new write
   to a `*Type`'s flags, and `grep -n '\.types = ' internal/checker/*.go` for a new write of
   members. If a new write can reach a type that is already a member, drop the mask.
+- `UnionCalls` (`checker/checker_p28.rs`, unionmemo1): `get_union_type_ex` keeps the result of a
+  call with no origin and no subtype reduction, and gives it to a later call with the same
+  reduction, alias and types in the same order without Go's worker (`getUnionTypeWorker`,
+  checker.go:26251 at `3e9236361fa9`). That is exact only while the data that the worker's sort and
+  key read does not change once a type can be a member: the sort (`CompareTypes`, utilities.go:418)
+  reads `Declarations()[0]` of a type's symbol, also through `compareSymbolsWorker`
+  (utilities.go:366). One case is open: `mergeSymbol` (checker.go:14422) appends declarations in
+  place when its target is transient (checker.go:14454), and at check time `combineSymbolTables`
+  (checker.go:14372) merges. If such a merge gives a transient type symbol its first declaration
+  between two equal calls, Go sorts again and can make another union, and the memo gives the old
+  one. No case is known, and Go's own `unionTypes` cache (`getUnionKey`, checker.go:17940) rests on
+  the same condition. Check: `grep -n 'SetDeclarations(' internal/checker/*.go` for a write that
+  can reach the symbol of a type that already exists, the callers of `mergeSymbol`, and what
+  `CompareTypes`, `compareSymbolsWorker` and the worker read. If such a write is found, or the
+  worker gets a new effect (a counter, a cache write, a new type), drop the memo or move
+  `UnionCalls::mark` at that step.
 
 ## Pins in microsoft/TypeScript
 

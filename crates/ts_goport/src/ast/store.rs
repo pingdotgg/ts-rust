@@ -2692,6 +2692,10 @@ impl FileStore {
 // hashes the text and interns it. A text the cache has is interned already,
 // so the cache does not change which call interns a text first: name ids
 // and their order stay as without it.
+// PERF: scanintern1 C3. A text of at most `IdentKey::WHOLE` bytes is found
+// by its key alone (`IdentNames::find_whole`), so a hit makes no call and
+// saves no registers. A longer text and a miss go to `identifier_name_slow`
+// (VS Code load: 70 instructions per call, 93% first-way hits, 5% misses).
 #[inline(never)]
 fn identifier_name(names: &mut IdentNames, text: &str) -> (Name, bool) {
     // `Name::from("")` is `Name::default()`, and "" is no keyword. Only a
@@ -2700,7 +2704,24 @@ fn identifier_name(names: &mut IdentNames, text: &str) -> (Name, bool) {
         return (Name::default(), false);
     }
     let key = IdentKey::new(text.as_bytes());
-    if let Some(found) = names.find(key, text) {
+    if key.len <= IdentKey::WHOLE
+        && let Some(found) = names.find_whole(key)
+    {
+        return found;
+    }
+    identifier_name_slow(names, text)
+}
+
+/// `identifier_name` of a text that `IdentNames::find_whole` did not find:
+/// a text over `IdentKey::WHOLE` bytes (found with a text compare) or a text
+/// that is not in the cache (interned, then put in).
+#[cold]
+#[inline(never)]
+fn identifier_name_slow(names: &mut IdentNames, text: &str) -> (Name, bool) {
+    let key = IdentKey::new(text.as_bytes());
+    if key.len > IdentKey::WHOLE
+        && let Some(found) = names.find(key, text)
+    {
         return found;
     }
     let found = intern_identifier(text);
@@ -2797,11 +2818,18 @@ impl IdentEntry {
     /// True when this entry holds the text `text`, whose key is `key`.
     #[inline]
     fn holds(&self, key: IdentKey, text: &str) -> bool {
+        self.holds_key(key)
+            && (key.len <= IdentKey::WHOLE || Name::from_id(self.id).as_str() == text)
+    }
+
+    /// True when this entry has the key `key`: it holds the text of `key`
+    /// when the text has at most `IdentKey::WHOLE` bytes.
+    #[inline]
+    fn holds_key(&self, key: IdentKey) -> bool {
         self.a == key.a
             && self.b == key.b
             && self.c == key.c
             && self.len_keyword & !IDENT_KEYWORD == key.len
-            && (key.len <= IdentKey::WHOLE || Name::from_id(self.id).as_str() == text)
     }
 
     #[inline]
@@ -2862,6 +2890,23 @@ impl IdentNames {
             return Some(first.value());
         }
         if second.holds(key, text) {
+            std::mem::swap(first, second);
+            return Some(first.value());
+        }
+        None
+    }
+
+    /// `find` of a text of at most `IdentKey::WHOLE` bytes, whose key is the
+    /// whole text: no text compare.
+    #[inline]
+    fn find_whole(&mut self, key: IdentKey) -> Option<(Name, bool)> {
+        debug_assert!(key.len <= IdentKey::WHOLE);
+        let set = self.sets.get_mut((key.set_hash() >> self.shift) as usize)?;
+        let [first, second] = &mut set.0;
+        if first.holds_key(key) {
+            return Some(first.value());
+        }
+        if second.holds_key(key) {
             std::mem::swap(first, second);
             return Some(first.value());
         }

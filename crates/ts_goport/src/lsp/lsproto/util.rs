@@ -78,17 +78,17 @@ fn diagnostic_codes_equal(
     code1: Option<&IntegerOrString>,
     code2: Option<&IntegerOrString>,
 ) -> bool {
-    // Go N' loads `code1.String` (offset 8): addr=0x8 (util.go:70).
+    // Go loads `code1.String` (offset 8): addr=0x8 (util.go:70).
     let code1 = code1.unwrap_or_else(|| crate::core::go_nil_dereference_at(0x8));
     if let Some(s1) = &code1.string {
-        // Go N' loads `code2.String` (offset 8): addr=0x8 (util.go:70).
+        // Go loads `code2.String` (offset 8): addr=0x8 (util.go:70).
         let code2 = code2.unwrap_or_else(|| crate::core::go_nil_dereference_at(0x8));
         if let Some(s2) = &code2.string {
             return s1 == s2;
         }
     }
     if let Some(i1) = code1.integer {
-        // Go N' loads `code2.Integer` (offset 0): addr=0x0 (util.go:73).
+        // Go loads `code2.Integer` (offset 0): addr=0x0 (util.go:73).
         let code2 = code2.unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0));
         if let Some(i2) = code2.integer {
             return i1 == i2;
@@ -140,7 +140,7 @@ impl Diagnostic {
             "{} ({}:{}-{}:{}): {}",
             self.code
                 .as_ref()
-                // Go N' copies `*elem.Code` and loads offset 0 first: addr=0x0 (util.go:106).
+                // Go copies `*elem.Code` and loads offset 0 first: addr=0x0 (util.go:106).
                 .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0))
                 .as_string(),
             self.range.start.line,
@@ -158,7 +158,7 @@ impl Diagnostic {
             "Code({})",
             self.code
                 .as_ref()
-                // Go N' copies `*elem.Code` and loads offset 0 first: addr=0x0 (util.go:110).
+                // Go copies `*elem.Code` and loads offset 0 first: addr=0x0 (util.go:110).
                 .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0))
                 .as_string()
         )

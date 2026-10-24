@@ -928,17 +928,22 @@ so Go prints a second line, `[signal SIGSEGV: segmentation violation
 code=0x1 addr=<fault address> pc=<pc>]` (runtime `dopanic_m`), before the
 goroutine trace. A site that knows Go's fault address uses
 `core::go_nil_dereference_at(address)`, and the port prints the line with
-`pc=0x0`: Go's `pc` is an instruction of its own binary (0xc5efe9 in
-tsgo-oracle-fed0bf24149f). The d.ts signature site
-(`diagnostic_to_string_builder`) has it (0x68). gopanicout2 gave 39 more
+`pc=0x0`: Go's `pc` is an instruction of its own binary (0xc1d449 in
+tsgo-oracle-3e9236361fa9). The d.ts signature site
+(`diagnostic_to_string_builder`) has it (0x58). gopanicout2 gave 39 more
 sites their address: the CLI, build, checker, transformer, API and IPC
 sites, and the LSP sites that a client message reaches (a nil element in
 `changes` or `files`, a code lens without `data`). gopanicout3 gave the 2
 sites of `initialized` theirs: before `initialize`, and a null workspace
-folder (server.go:1716 and 1752). Each address is the
+folder (server.go:1717 and 1753). Each address is the
 first load through the nil pointer in Go's compiled code, read from
 `go tool objdump` of the pinned oracle; 6 of them are checked against
-Go's own output (tests/go_nil_signal.rs). The other `go_nil_dereference()`
+Go's own output (tests/go_nil_signal.rs). nilsig1 read every address
+again at 3e9236361fa9: there `ast.Node` has no `data` field and
+`checker.Type` has no `data` field (a `kind` byte at 0xc), so the d.ts
+signature site went from 0x68 to 0x58, `get_emit_module_format_of_file`
+from 0x60 to 0x50 and `get_type_of_mapped_symbol` from 0x28 to 0xc. The
+other `go_nil_dereference()`
 sites print no signal line: the `checker::types` accessors (Go returns a
 nil pointer there, and the fault address is the field that each caller
 reads) and LSP and project sites that no known input reaches (Go N'

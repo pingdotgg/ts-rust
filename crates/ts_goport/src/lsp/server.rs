@@ -4251,7 +4251,7 @@ impl Server {
             // Go: file.OldUri (a nil element panics)
             let file = file
                 .as_ref()
-                // Go N' loads `file.OldUri` (offset 0): addr=0x0 (server.go:2016).
+                // Go loads `file.OldUri` (offset 0): addr=0x0 (server.go:2016).
                 .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x0));
             uris.push(file.old_uri.clone());
         }
@@ -4739,7 +4739,7 @@ impl Server {
             &code_lens
                 .data
                 .as_ref()
-                // Go N' loads `codeLens.Data.Uri` (offset 0x10): addr=0x10 (server.go:2271).
+                // Go loads `codeLens.Data.Uri` (offset 0x10): addr=0x10 (server.go:2271).
                 .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x10))
                 .uri,
             req_msg,

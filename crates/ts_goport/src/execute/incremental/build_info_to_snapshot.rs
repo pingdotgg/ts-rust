@@ -254,11 +254,11 @@ impl ToSnapshot<'_> {
                     .semantic_diagnostics_per_file
                     .shift_remove(&file_path); // does not have cached diagnostics
             } else {
-                // Go: buildinfotosnapshot.go:166 reads
+                // Go: buildinfotosnapshot.go:163 reads
                 // `diagnostic.Diagnostics.FileId`. A plain file id 0 has no
                 // diagnostics, and Go dereferences nil.
                 let Some(diagnostics) = diagnostic.diagnostics.as_ref() else {
-                    // Go N' loads `Diagnostics.FileId` (offset 0): addr=0x0
+                    // Go loads `Diagnostics.FileId` (offset 0): addr=0x0
                     // (buildinfotosnapshot.go:163).
                     crate::core::go_nil_dereference_at(0x0);
                 };

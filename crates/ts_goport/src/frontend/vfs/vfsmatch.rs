@@ -99,11 +99,6 @@ fn get_base_paths(
     let mut base_paths = vec![path.to_string()];
 
     if !includes.is_empty() {
-        let compare_paths_options = ComparePathsOptions {
-            current_directory: path.to_string(),
-            use_case_sensitive_file_names,
-        };
-
         // Storage for literal base paths amongst the include patterns.
         let mut include_base_paths: Vec<String> = Vec::new();
         for include in includes {
@@ -134,9 +129,11 @@ fn get_base_paths(
 
         // Iterate over each include base path and include unique base paths that are not a
         // subpath of an existing base path
+        // Go tests rooted paths (`CaseSensitivity.ContainsPath`, vfsmatch.go:89):
+        // `path` and the include base paths are rooted and normalized.
         for include_base_path in include_base_paths {
             if base_paths.iter().all(|basepath| {
-                !contains_path(basepath, &include_base_path, &compare_paths_options)
+                !contains_rooted_path(basepath, &include_base_path, use_case_sensitive_file_names)
             }) {
                 base_paths.push(include_base_path);
             }
@@ -1320,6 +1317,26 @@ pub fn new_spec_matcher(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // followups76 (R228 reviewer item 9): Go getBasePaths keeps an include
+    // base path that no base path contains, by Go's rooted test
+    // (`CaseSensitivity.ContainsPath`, vfsmatch.go:89). On a case-insensitive
+    // file system Go folds case with ToLower, which keeps 'ſ' (EqualFold
+    // would match it to 's'): "/p/s" does not contain "/p/ſ/a"; it contains
+    // "/p/S/a". Go answers from a probe at 3e9236361fa9 (`TestF76VfsmatchProbe`).
+    #[test]
+    fn base_paths_test_rooted_paths_like_go() {
+        for (include, want) in [
+            ("/p/\u{17f}/a/*.ts", &["/p/s", "/p/\u{17f}/a"][..]),
+            ("/p/S/a/*.ts", &["/p/s"][..]),
+        ] {
+            assert_eq!(
+                get_base_paths("/p/s", &[include.to_string()], false),
+                want,
+                "{include}"
+            );
+        }
+    }
 
     // cfgwalk1: the prefix states (`GlobMatcher::matches_file_in` and
     // `matches_directory_in`) give the results of `match_path_parts` for

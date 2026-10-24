@@ -300,7 +300,7 @@ impl<T> StdioFile<T> {
     // (the text of os.File `wrapErr(op, ErrClosed)`).
     fn file(&mut self, op: &str, name: &str) -> std::io::Result<&mut T> {
         match self {
-            // Go N' loads `Read` or `Write` from the method table of the nil `io.Reader` or
+            // Go loads `Read` or `Write` from the method table of the nil `io.Reader` or
             // `io.Writer`: addr=0x18.
             StdioFile::Nil => crate::core::go_nil_dereference_at(0x18),
             StdioFile::Open(file) => Ok(file),
@@ -312,7 +312,7 @@ impl<T> StdioFile<T> {
     // or `Stdout` leaves the process stream open and reports no error.
     fn close(&mut self, name: &str) -> Result<(), GoError> {
         match self {
-            // Go N' loads `Close` from the method table of the nil `io.ReadCloser` or
+            // Go loads `Close` from the method table of the nil `io.ReadCloser` or
             // `io.WriteCloser`: addr=0x18 (transport.go:111, :112 at 3e9236361fa9).
             StdioFile::Nil => crate::core::go_nil_dereference_at(0x18),
             StdioFile::Open(_) => {

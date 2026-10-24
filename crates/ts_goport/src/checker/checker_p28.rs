@@ -1853,8 +1853,8 @@ struct UnionCall<'a> {
 
 impl UnionCall<'_> {
     #[inline]
-    fn alias_symbol(&self) -> u32 {
-        self.alias.map_or(u32::MAX, |alias| alias.symbol.0)
+    fn alias_symbol(&self) -> Option<SymbolId> {
+        self.alias.map(|alias| alias.symbol)
     }
 
     #[inline]
@@ -1866,7 +1866,9 @@ impl UnionCall<'_> {
     fn hash(&self) -> u64 {
         let mut h = rustc_hash::FxHasher::default();
         h.write_u32(self.reduction.0 as u32);
-        h.write_u32(self.alias_symbol());
+        // u32::MAX for no alias only spreads the hash; `UnionCalls::get`
+        // compares the alias exactly.
+        h.write_u32(self.alias.map_or(u32::MAX, |alias| alias.symbol.0));
         for t in self.alias_type_arguments() {
             h.write_u32(t.0);
         }
@@ -1888,7 +1890,7 @@ struct KeptUnionCall {
     /// 0 in an empty slot: a kept call has at least 2 types.
     types: u32,
     alias_type_arguments: u32,
-    alias: u32,
+    alias: Option<SymbolId>,
     reduction: i32,
     answer: TypeId,
 }
