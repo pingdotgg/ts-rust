@@ -1127,9 +1127,11 @@ fn slot_tables(id: u32, slot: &Mutex<Option<Arc<VersionTables>>>) -> Arc<Version
 }
 
 /// A copy of the tables of the current program, for a new thread
-/// (`WorkerSeed`). None for the program of a one-program process.
+/// (`WorkerSeed`). None for the program of a one-program process, also
+/// before `build_program` gives it its state (`start_early_bind`).
 fn current_tables() -> Option<(u32, Arc<VersionTables>)> {
     let program = prog();
+    program.state.get()?;
     match held_tables(program) {
         HeldTables::Leaked(_) => None,
         HeldTables::Version(tables) => Some((program.id, tables)),
@@ -1791,7 +1793,9 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // last-queued-first (`bind_files_last_queued_first`). A file that an
 // earlier program version bound is not bound again. The binds give no
 // symbol ids; the ids that Go's binds give come after them
-// (`give_private_name_class_ids`).
+// (`give_private_name_class_ids`). In a one-program `tsc` process the bind
+// threads start when the files are published (`start_early_bind`), and
+// this joins their files.
 pub fn bind_all() {
     let program = prog();
     held_tables(program).bound_symbols.get_or_init(|| {
@@ -2345,7 +2349,8 @@ struct BindQueueState {
     counts: Vec<Option<ArenaMark>>,
     /// The id offsets of file `i` at index `i`. They are known when every
     /// earlier file is bound: each file adds its counts to the offsets of the
-    /// file before it.
+    /// file before it. Empty until `bind_all` gives the offsets of the first
+    /// file (`release`) for an early bind (`BindQueue::held`).
     offsets: Vec<ArenaOffsets>,
     /// Whether file `i` is a freeable file version. It and the file after
     /// it start at a chunk start (`ArenaOffsets::aligned`), as
@@ -2358,11 +2363,15 @@ impl BindQueue {
     /// bind threads, the first file at the offsets `first` (or at the next
     /// chunk start when it is freeable).
     fn new(freeable: Vec<bool>, first: ArenaOffsets, threads: usize) -> Self {
-        let first = if freeable.first() == Some(&true) {
-            first.aligned()
-        } else {
-            first
-        };
+        let queue = Self::held(freeable, threads);
+        queue.lock().release(first);
+        queue
+    }
+
+    /// `new` with the offsets of the first file not known yet: the threads
+    /// bind the files and hold each one until `release` gives them
+    /// (`start_early_bind`).
+    fn held(freeable: Vec<bool>, threads: usize) -> Self {
         BindQueue {
             state: Mutex::new(BindQueueState {
                 next: 0,
@@ -2370,13 +2379,20 @@ impl BindQueue {
                 binders: threads,
                 stop: false,
                 counts: vec![None; freeable.len()],
-                offsets: vec![first],
+                offsets: Vec::new(),
                 freeable,
             }),
             changed: std::sync::Condvar::new(),
             #[cfg(test)]
             panic_before_run: None,
         }
+    }
+
+    /// Gives the first file of a `held` queue the offsets `first`, so the
+    /// threads move the ids of the files they hold (`bind_all`).
+    fn release(&self, first: ArenaOffsets) {
+        self.lock().release(first);
+        self.changed.notify_all();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, BindQueueState> {
@@ -2403,7 +2419,30 @@ impl BindQueueState {
     /// made the offsets of more files known.
     fn record(&mut self, i: usize, counts: ArenaMark) -> bool {
         self.counts[i] = Some(counts);
+        self.extend_offsets()
+    }
+
+    /// Gives file 0 the offsets `first` (or the next chunk start when it is
+    /// freeable), and each file whose earlier files are bound its offsets.
+    fn release(&mut self, first: ArenaOffsets) {
+        debug_assert!(self.offsets.is_empty(), "the first offsets came two times");
+        let first = if self.freeable.first() == Some(&true) {
+            first.aligned()
+        } else {
+            first
+        };
+        self.offsets.push(first);
+        self.extend_offsets();
+    }
+
+    /// Adds the offsets of each file whose earlier files have their counts.
+    /// Returns true when that made the offsets of more files known. Before
+    /// `release` no offsets are known.
+    fn extend_offsets(&mut self) -> bool {
         let known = self.offsets.len();
+        if known == 0 {
+            return false;
+        }
         while let Some(&Some(file_counts)) = self.counts.get(self.offsets.len() - 1) {
             let file = self.offsets.len() - 1;
             let mut next = self.offsets[file].after(file_counts);
@@ -2483,23 +2522,67 @@ fn bind_files_parallel(lineage: &mut Lineage) {
         .filter(|file| file.file_bind.get().is_none())
         .map(|file| (file.root, file.version().is_some()))
         .collect();
+    if let Some(early) = take_early_bind() {
+        if early.program == prog().id && early.binds.files == files {
+            early.join(lineage);
+            return;
+        }
+        early.drop_binds();
+    }
     let threads = bind_thread_count(files.len()).min(files.len());
     if single_threaded() || threads < 2 {
         return;
     }
     let unported = unported_report();
-    let order = bind_order(&files);
-    let queue = BindQueue::new(
-        files.iter().map(|&(_, freeable)| freeable).collect(),
-        lineage.symbols.next_file_offsets(),
-        threads,
-    );
-    // The work of one bind thread, after it installed its seed. `sender`
-    // takes its files to the loading thread.
-    let run = |sender: std::sync::mpsc::Sender<ParallelBind>, link: &mut LinkBinders<'_>| {
+    let binds = ParallelBinds {
+        order: bind_order(&files),
+        queue: BindQueue::new(
+            files.iter().map(|&(_, freeable)| freeable).collect(),
+            lineage.symbols.next_file_offsets(),
+            threads,
+        ),
+        files,
+    };
+    let run = |sender, link: &mut LinkBinders<'_>| binds.run(sender, link);
+    let (sender, receiver) = std::sync::mpsc::channel::<ParallelBind>();
+    let complete = std::thread::scope(|scope| {
+        // PERF (bindonce1): a seed copies the synthetic nodes of this thread,
+        // 0.13 to 1.9 ms each on TypeORM, so 16 seeds took 3.9 ms of this
+        // thread before it built the lazy state below. This thread now takes
+        // one, and the bind threads take the others (`spawn_bind_chain`).
+        spawn_bind_chain(scope, threads, &run, &binds.queue, sender);
+        // PERF (progstart1): the bind threads do not read the shared state
+        // that the program makes on first use (the symlink cache), so this
+        // thread builds it while they bind, not before they start. A later
+        // seed (the checker pool) finds it built. It took 3.6 to 5.7 ms of
+        // this thread before the first bind thread started (colyseus,
+        // outline, umami). Go builds it on first use (program.go:2330).
+        go_frontend::build_lazy_shared_state();
+        binds.join(&receiver, lineage)
+    });
+    if !complete {
+        // The serial bind counts the hits of the files that it binds again.
+        restore_unported(&unported);
+    }
+}
+
+/// The files of a parallel bind, the order in which the bind threads take
+/// them, and their queue (`bind_files_parallel`).
+struct ParallelBinds {
+    /// Each file with whether it is a freeable file version.
+    files: Vec<(Node, bool)>,
+    order: Vec<usize>,
+    queue: BindQueue,
+}
+
+impl ParallelBinds {
+    /// The work of one bind thread, after it installed its seed. `sender`
+    /// takes its files to the thread that joins them (`join`).
+    fn run(&self, sender: std::sync::mpsc::Sender<ParallelBind>, link: &mut LinkBinders<'_>) {
+        let files = &self.files;
         run_bind_link(
-            &queue,
-            &order,
+            &self.queue,
+            &self.order,
             link,
             |i| {
                 let (file, _) = files[i];
@@ -2537,47 +2620,175 @@ fn bind_files_parallel(lineage: &mut Lineage) {
         // drop only at thread exit. Let go of the program tables now, so a
         // release after the bind frees them (`WorkerSeed`).
         drop(TABLES.with(|cache| cache.borrow_mut().take()));
-    };
-    let (sender, receiver) = std::sync::mpsc::channel::<ParallelBind>();
-    let complete = std::thread::scope(|scope| {
-        // PERF (bindonce1): a seed copies the synthetic nodes of this thread,
-        // 0.13 to 1.9 ms each on TypeORM, so 16 seeds took 3.9 ms of this
-        // thread before it built the lazy state below. This thread now takes
-        // one, and the bind threads take the others (`spawn_bind_chain`).
-        spawn_bind_chain(scope, threads, &run, &queue, sender);
-        // PERF (progstart1): the bind threads do not read the shared state
-        // that the program makes on first use (the symlink cache), so this
-        // thread builds it while they bind, not before they start. A later
-        // seed (the checker pool) finds it built. It took 3.6 to 5.7 ms of
-        // this thread before the first bind thread started (colyseus,
-        // outline, umami). Go builds it on first use (program.go:2330).
-        go_frontend::build_lazy_shared_state();
-        // Join the files in order as they arrive.
+    }
+
+    /// Joins the files into `lineage` in file order as they arrive on
+    /// `receiver`. Returns whether every file joined. The join stops at a
+    /// file that failed, or that no bind thread reached because each one
+    /// failed first. No later file was installed: its offsets need the
+    /// counts of that file.
+    fn join(
+        &self,
+        receiver: &std::sync::mpsc::Receiver<ParallelBind>,
+        lineage: &mut Lineage,
+    ) -> bool {
         let mut pending = FxHashMap::default();
         let mut joined = 0;
-        'join: for (i, result) in &receiver {
+        'join: for (i, result) in receiver {
             pending.insert(i, result);
             while let Some(result) = pending.remove(&joined) {
                 let Some(prepared) = result else {
-                    queue.stop();
+                    self.queue.stop();
                     break 'join;
                 };
-                let (file, freeable) = files[joined];
+                let (file, freeable) = self.files[joined];
                 lineage.add_file(file.file_index(), freeable, |symbols| {
                     symbols.append_prepared_file_arena(prepared)
                 });
                 joined += 1;
             }
         }
-        // The join stops at a file that failed, or that no bind thread
-        // reached because each one failed first. No later file was
-        // installed: its offsets need the counts of that file.
-        joined == files.len()
-    });
-    if !complete {
-        // The serial bind counts the hits of the files that it binds again.
-        restore_unported(&unported);
+        joined == self.files.len()
     }
+}
+
+/// The early bind of the program of a one-program process
+/// (`start_early_bind`), until `bind_all` takes it.
+static EARLY_BIND: Mutex<Option<EarlyBind>> = Mutex::new(None);
+
+/// Bind threads that started before `bind_all` (`start_early_bind`). They
+/// hold each file that they bound until `bind_all` gives the offsets of the
+/// first file (`BindQueue::held`).
+struct EarlyBind {
+    /// The `GoProgram::id` of the program.
+    program: u32,
+    binds: Arc<ParallelBinds>,
+    receiver: std::sync::mpsc::Receiver<ParallelBind>,
+    /// The thread whose scope holds the bind threads. It ends after them.
+    host: std::thread::JoinHandle<()>,
+}
+
+impl EarlyBind {
+    /// `bind_files_parallel` with these bind threads: gives the first file
+    /// the offsets that `lineage` gives now, then joins the files in file
+    /// order. When the join stops, `bind_all` binds the rest serially, and
+    /// the serial bind counts their unported hits (an early bind thread
+    /// counts none, `start_early_bind`).
+    fn join(self, lineage: &mut Lineage) {
+        self.binds
+            .queue
+            .release(lineage.symbols.next_file_offsets());
+        // PERF (progstart1): as in `bind_files_parallel`.
+        go_frontend::build_lazy_shared_state();
+        let _ = self.binds.join(&self.receiver, lineage);
+        self.end();
+    }
+
+    /// Stops the bind threads with no join. Each bind that they hold drops
+    /// and sets its node records back (`binder::NodeBindRecords`).
+    fn drop_binds(self) {
+        self.binds.queue.stop();
+        self.end();
+    }
+
+    /// Waits for the bind threads, and raises a panic of one of them on this
+    /// thread, as the scope of `bind_files_parallel` does.
+    fn end(self) {
+        if let Err(payload) = self.host.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+/// The early bind that `start_early_bind` left, if any.
+fn take_early_bind() -> Option<EarlyBind> {
+    EARLY_BIND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+}
+
+/// Starts the parallel bind (`bind_files_parallel`) of the program files of
+/// a one-program `tsc` process when they are published
+/// (`go_frontend::build_program`, after `set_prog`). `roots` are the program
+/// files in file order, all published by this program. Each bind thread
+/// holds the files that it bound; `bind_all` gives the offsets of the first
+/// file and joins them (`EarlyBind::join`). Off with `--singleThreaded`,
+/// with tracing, with fewer than 2 bind threads and with
+/// `GOPORT_EARLY_BIND=0`.
+// PORT: not in Go (bindgap1, go-note 5.2 B1). Go binds when the program is
+// made (program.go:600 BindSourceFiles), and the bind reads only its file
+// (binder.go:120 to :130, `file.BindOnce`), so an early bind gives the same
+// output when nothing sees it before `bind_all`. The ids, the join and
+// `give_private_name_class_ids` stay in `bind_all`, in file order, from the
+// lineage at that time. Nothing is installed before `bind_all`: `file_bind`
+// and the other `GoFile` cells stay empty, so the "Symbols" sum and the
+// file format lines read no bind. A bind writes the node records and the
+// binder bits of their flags (`BINDER_ADDED_FLAGS`) while it runs; no code
+// from the publish to `bind_all` reads them (bindgap1 report section 2). A
+// program that never binds (syntax errors and no `--diagnostics`, Go
+// program.go:2077) keeps the binds until the process ends. A hit on a bind
+// thread fails its bind, so these threads count no unported hit
+// (`core::skip_unported_hits`): the serial bind of `bind_all` counts it,
+// and a program that does not bind has none. PERF: the binds run while this
+// thread builds the program tables and the syntactic diagnostics
+// (loadstamp1: 5.8 ms on Sentry, 2.7 ms on VS Code, dbook-lan).
+pub(crate) fn start_early_bind(roots: impl Iterator<Item = Node>) {
+    if single_threaded()
+        || crate::tracing::get().is_some()
+        || std::env::var_os("GOPORT_EARLY_BIND").is_some_and(|value| value == "0")
+    {
+        return;
+    }
+    let files: Vec<(Node, bool)> = roots
+        .filter_map(|root| {
+            let go_file = crate::ast::go_file(root.file_index());
+            go_file
+                .file_bind
+                .get()
+                .is_none()
+                .then(|| (root, go_file.version().is_some()))
+        })
+        .collect();
+    let threads = bind_thread_count(files.len()).min(files.len());
+    if threads < 2 {
+        return;
+    }
+    let binds = Arc::new(ParallelBinds {
+        order: bind_order(&files),
+        queue: BindQueue::held(
+            files.iter().map(|&(_, freeable)| freeable).collect(),
+            threads,
+        ),
+        files,
+    });
+    // The program has no state yet, so the seed has no tables. A one-program
+    // process leaks its tables, so a seed never has them (`current_tables`).
+    let seed = WorkerSeed::take_unbuilt();
+    let (sender, receiver) = std::sync::mpsc::channel::<ParallelBind>();
+    let host = {
+        let binds = Arc::clone(&binds);
+        crate::core::GoThread::new().spawn(move || {
+            let run = |sender, link: &mut LinkBinders<'_>| {
+                crate::core::skip_unported_hits();
+                binds.run(sender, link);
+            };
+            std::thread::scope(|scope| {
+                spawn_bind_chain_with(scope, threads, &run, &binds.queue, sender, seed);
+            });
+        })
+    };
+    let early = EarlyBind {
+        program: prog().id,
+        binds,
+        receiver,
+        host,
+    };
+    let old = EARLY_BIND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(early);
+    assert!(old.is_none(), "two early binds");
 }
 
 /// The work of one bind thread of `bind_files_parallel`, after it installed
@@ -2644,8 +2855,12 @@ fn run_bind_link<T>(
         // its offsets: from a bind in progress, or from a file that is left
         // for a thread that can bind. Else a file before it failed, or no
         // thread can bind the files before it, and the join stops there.
+        // Before the offsets of the first file are given (a `held` queue),
+        // every file bound here waits for them.
         if waiting.is_empty()
-            || (state.binding == 0 && (state.next >= order.len() || state.binders == 0))
+            || (!state.offsets.is_empty()
+                && state.binding == 0
+                && (state.next >= order.len() || state.binders == 0))
         {
             break;
         }
@@ -2679,7 +2894,28 @@ fn spawn_bind_chain<'scope, F>(
 ) where
     F: Fn(std::sync::mpsc::Sender<ParallelBind>, &mut LinkBinders<'scope>) + Sync,
 {
-    let seed = WorkerSeed::take_unbuilt();
+    spawn_bind_chain_with(
+        scope,
+        threads,
+        run,
+        queue,
+        sender,
+        WorkerSeed::take_unbuilt(),
+    );
+}
+
+/// `spawn_bind_chain` whose first thread starts from `seed`, a copy of the
+/// loading thread's state (`start_early_bind`).
+fn spawn_bind_chain_with<'scope, F>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    threads: usize,
+    run: &'scope F,
+    queue: &'scope BindQueue,
+    sender: std::sync::mpsc::Sender<ParallelBind>,
+    seed: WorkerSeed,
+) where
+    F: Fn(std::sync::mpsc::Sender<ParallelBind>, &mut LinkBinders<'scope>) + Sync,
+{
     spawn_bind_thread(scope, move || {
         let mut binders = LinkBinders {
             queue,
@@ -2999,11 +3235,13 @@ pub fn get_source_of_project_reference_if_output_included(file: Node) -> String 
 
 /// Go `compiler.NewProgram` for a config that is already parsed, in a
 /// one-program process (`tsc`, `goport`). It installs the program for the
-/// process, so call it once. `opts.host` carries the trace writer.
+/// process, so call it once. `opts.host` carries the trace writer. The
+/// files start to bind when they are published (`start_early_bind`): the
+/// caller must not read their bind data before `bind_all`.
 pub fn install_new_program(
     opts: crate::frontend::compiler::ProgramOptions,
 ) -> Result<&'static GoProgram, String> {
-    go_frontend::install_new_program(opts)
+    go_frontend::install_new_program(opts, true)
 }
 
 /// Go `compiler.NewProgram` for a multi-program process (watch, language
@@ -6605,6 +6843,67 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("the bind chain does not end");
         assert_eq!(result, (true, 0, 1));
+    }
+
+    // bindgap1: the queue of an early bind (`BindQueue::held`,
+    // `start_early_bind`) holds every bound file until `release` gives the
+    // offsets of the first file; then each file reaches the join with its
+    // offsets. A stop before the release drops the held files: none reaches
+    // the join, and the chain ends.
+    #[test]
+    fn a_held_bind_queue_holds_its_files_until_the_release() {
+        let program = small_program("goport-bind-held");
+        for release in [true, false] {
+            let (done, ended) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _program = crate::core::enter_program(Some(program));
+                let order = [0, 1, 2, 3];
+                let queue = BindQueue::held(vec![false; 4], 2);
+                let (joined, arrived) = std::sync::mpsc::channel();
+                let joined = Mutex::new(joined);
+                let run = |_, link: &mut LinkBinders<'_>| {
+                    let joined = joined.lock().unwrap().clone();
+                    run_bind_link(
+                        &queue,
+                        &order,
+                        link,
+                        |_| Some(((), SymbolArena::new_file().mark())),
+                        |i, ready| {
+                            let _ = joined.send((i, ready.is_some()));
+                        },
+                    );
+                };
+                let (sender, _receiver) = std::sync::mpsc::channel();
+                let mut early = Vec::new();
+                std::thread::scope(|scope| {
+                    spawn_bind_chain(scope, 2, &run, &queue, sender);
+                    // Every file is bound, and none reaches the join.
+                    while queue.files_left() || queue.lock().binding > 0 {
+                        std::thread::yield_now();
+                    }
+                    early.extend(arrived.try_iter());
+                    if release {
+                        queue.release(SymbolArena::new().next_file_offsets());
+                    } else {
+                        queue.stop();
+                    }
+                });
+                drop(joined);
+                let mut late: Vec<(usize, bool)> = arrived.iter().collect();
+                late.sort_unstable();
+                let _ = done.send((early, late));
+            });
+            let (early, late) = ended
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .expect("the held bind chain does not end");
+            assert_eq!(early, Vec::new(), "a file joined before the release");
+            let expected: Vec<(usize, bool)> = if release {
+                (0..4).map(|i| (i, true)).collect()
+            } else {
+                Vec::new()
+            };
+            assert_eq!(late, expected, "release {release}");
+        }
     }
 
     // followups63 (R214 reviewer item 2): a real bind that fails on a bind
