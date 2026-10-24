@@ -3913,6 +3913,13 @@ fn checker_count() -> usize {
 // changes no state that the threads copied (`WorkerSeed`).
 fn create_checkers() -> CheckerPool {
     bind_all();
+    // Go builds the include processor diagnostics at their first read, and
+    // a checker reads them only after the bind that its creation runs. The
+    // checker threads read the copy that this thread builds here, after the
+    // bind (`go_frontend::fill_include_diagnostics`).
+    if let Some(np) = go_frontend_program() {
+        go_frontend::fill_include_diagnostics(&np);
+    }
     let count = checker_count();
     let pool = start_checkers(count);
     let program = prog();
@@ -4952,6 +4959,7 @@ pub fn get_program_diagnostics() -> Vec<Diagnostic> {
     };
     // Go builds the include processor diagnostics here.
     go.include_processor.mark_diagnostics_read();
+    go_frontend::fill_include_diagnostics(&go);
     let mut diagnostics = go.program_diagnostics.clone();
     // #4712
     diagnostics.extend(content_mapper_diagnostics());
