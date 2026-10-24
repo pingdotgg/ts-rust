@@ -143,6 +143,7 @@ dependencies = [
  "bumpalo",
  "flate2",
  "goport_util",
+ "hashbrown",
  "indexmap",
  "jiff",
  "memchr",

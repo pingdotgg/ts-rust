@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Default)]
 pub struct IncludeProcessor {
     /// Shared by the program versions that `UpdateProgram` makes, as in Go.
-    pub file_include_reasons: Rc<FxHashMap<Path, Vec<Rc<FileIncludeReason>>>>,
+    pub file_include_reasons: Rc<FileIncludeReasons>,
     pub processing_diagnostics: Vec<Rc<ProcessingDiagnostic>>,
     // PORT: Go `checkSourceFilesBelongToPath` appends processing diagnostics
     // from `CommonSourceDirectory`, which takes `&self` here. They are kept
@@ -53,6 +53,53 @@ pub struct IncludeProcessor {
     pub(crate) diagnostics_read: Arc<AtomicBool>,
     // PORT: Go nil `*ast.ObjectLiteralExpression` is `Node::NIL`.
     pub(crate) compiler_options_syntax: OnceCell<Node>,
+}
+
+/// Go `fileIncludeReasons`: the include reasons of each file, by path.
+// Go: includeprocessor.go:16 fileIncludeData: fileIncludeReasons
+// PORT: the order of an iteration of this map is not Go's. It depends on
+// the capacity and on the order of the inserts, and Go iterates a map in
+// random order. Since collect1 the capacity is Go's
+// (filesparser.go:355 getProcessedFiles: one entry per loaded file).
+// No output depends on the order, because the program only looks reasons
+// up by path, as Go does:
+// - filesparser.go:598 addIncludeReason: the walk adds a reason;
+// - includeprocessor.go:66 addProcessingDiagnosticsForFileCasing: the
+//   casing check;
+// - processingDiagnostic.go:102 createDiagnosticExplainingFile: the
+//   include details of a diagnostic;
+// - program.go:2167 ExplainFiles: `--explainFiles`.
+// So this type gives no iteration. Only tests take the whole map, through
+// `map_for_tests` (Go `GetIncludeReasons`, "Testing only"). The test
+// `whole_include_reasons_map_readers` fails when a new reader in `src`
+// takes it.
+#[derive(Clone, Default)]
+pub struct FileIncludeReasons(FxHashMap<Path, Vec<Rc<FileIncludeReason>>>);
+
+impl FileIncludeReasons {
+    /// An empty map with room for `capacity` files.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(FxHashMap::with_capacity_and_hasher(
+            capacity,
+            Default::default(),
+        ))
+    }
+
+    /// The reasons of the file at `path`.
+    pub fn get(&self, path: &Path) -> Option<&Vec<Rc<FileIncludeReason>>> {
+        self.0.get(path)
+    }
+
+    /// Sets the reasons of the file at `path`.
+    pub fn insert(&mut self, path: Path, reasons: Vec<Rc<FileIncludeReason>>) {
+        self.0.insert(path, reasons);
+    }
+
+    /// The whole map. For tests only: program code must not depend on its
+    /// order (see the type).
+    pub fn map_for_tests(&self) -> &FxHashMap<Path, Vec<Rc<FileIncludeReason>>> {
+        &self.0
+    }
 }
 
 /// Go `includeReasonDiagnosticKey` (ts#64519).
@@ -387,5 +434,51 @@ impl IncludeProcessor {
         }
 
         Some(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    /// Lists the readers in `src` that take the whole include reasons map
+    /// (`FileIncludeReasons::map_for_tests`, `Program::get_include_reasons`),
+    /// so it fails when program code adds one: the map's order is not Go's
+    /// (see `FileIncludeReasons`). A new test reader goes in the list.
+    #[test]
+    fn whole_include_reasons_map_readers() {
+        fn visit(src: &Path, dir: &Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(src, &path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let name = path.strip_prefix(src).unwrap().to_string_lossy();
+                    let name = name.replace('\\', "/");
+                    for method in ["map_for_tests", "get_include_reasons"] {
+                        let call = format!(".{method}()");
+                        found.extend(text.matches(&call).map(|_| format!("{name} {method}")));
+                    }
+                }
+            }
+        }
+        // This file builds in the goport_core crate
+        // (crates/ts_goport/parts/goport_core), whose files stay in
+        // crates/ts_goport/src.
+        let src = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"));
+        let mut found = Vec::new();
+        visit(src, src, &mut found);
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                // Its unit test include_reason_diagnostics_are_program_local.
+                "frontend/compiler/file_loader.rs get_include_reasons",
+                "frontend/compiler/file_loader.rs get_include_reasons",
+                // Program::get_include_reasons (Go "Testing only").
+                "frontend/compiler/program_lookup.rs map_for_tests",
+            ]
+        );
     }
 }

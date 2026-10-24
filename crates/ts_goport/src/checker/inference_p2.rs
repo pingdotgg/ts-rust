@@ -520,13 +520,13 @@ impl Checker {
                 && self.ty(s).flags.intersects(TypeFlags::NUMBER_LITERAL)
     }
 
-    // Go: checker/relater.go:117 isTypeIdenticalTo for one pair of inferFromMatchingTypes (inference.go:381).
+    // Go: checker/relater.go:117 isTypeIdenticalTo for one pair of `inferFromMatchingTypes` (inference.go:381).
     // `slots` are the pair's source and target slots of `infer_from_identical_types`.
-    // PORT: perf (identmatch1). This is Go's isTypeRelatedTo (relater.go:169) with identityRelation. A pair that Go
-    // sends to isRelatedToEx's normalization (relater.go:2654) runs that part in
+    // PORT: perf (identmatch1). This is Go's `isTypeRelatedTo` (relater.go:169) with identityRelation. A pair that
+    // Go sends to the normalization of isRelatedToEx (relater.go:2654 getNormalizedType) runs that part in
     // `is_normalized_type_identical_in_matching`, without the relater, and with the slots in place of a repeat
     // normalization.
-    // Second copy: this repeats Go's isTypeRelatedTo (relater.go:169), whose port is `is_type_related_to_kind`
+    // Second copy: this repeats Go's `isTypeRelatedTo` (relater.go:169), whose port is `is_type_related_to_kind`
     // (relater_p1.rs). A pin bump that changes isTypeRelatedTo changes both (UPSTREAM.md, "Pin bump checks").
     pub(crate) fn is_type_identical_in_matching(
         &mut self,
@@ -595,11 +595,11 @@ impl Checker {
         false
     }
 
-    // Go: checker/relater.go:358 checkTypeRelatedToEx and isRelatedToEx (:2634) with identityRelation and no error
+    // Go: checker/relater.go:358 checkTypeRelatedToEx and :2634 isRelatedToEx with identityRelation and no error
     // node, for a pair of `is_type_identical_in_matching` that Go normalizes. `source` and `target` are the pair
     // after the fresh literal step.
     // PORT: perf (identmatch1). Not inlined, so the entry above stays small for the pairs that end before it.
-    // Second copy: this repeats the start of Go's isRelatedToEx (relater.go:2634-2665, the object to primitive
+    // Second copy: this repeats the start of Go's `isRelatedToEx` (relater.go:2634-2665, the object to primitive
     // test is in the entry above), whose port is `is_related_to_ex` (relater_p3.rs). A pin bump that changes that
     // part changes both (UPSTREAM.md, "Pin bump checks").
     #[inline(never)]
@@ -609,15 +609,15 @@ impl Checker {
         target: TypeId,
         (source_slot, target_slot): (&mut NormalizedSlot, &mut NormalizedSlot),
     ) -> bool {
-        // Go: relater.go:369. checkTypeRelatedToEx reads the relation size before isRelatedToEx normalizes.
+        // Go: relater.go:369 checkTypeRelatedToEx: it reads the relation size before isRelatedToEx normalizes.
         let relation_size = self.identity_relation.borrow().size();
-        // Go: relater.go:2654, the source before the target.
+        // Go: relater.go:2654-2655 getNormalizedType, the source before the target.
         let normalized_source =
             self.normalize_for_matching(source, false /*writing*/, source_slot);
         let normalized_target =
             self.normalize_for_matching(target, true /*writing*/, target_slot);
-        // Go: relater.go:2656-2665. These ends set no overflow and no error chain, so Go's checkTypeRelatedToEx
-        // only takes and puts back a relater.
+        // Go: relater.go:2656-2665 isRelatedToEx: these ends set no overflow and no error chain, so Go's
+        // checkTypeRelatedToEx only takes and puts back a relater.
         if normalized_source == normalized_target {
             return true;
         }
@@ -637,29 +637,40 @@ impl Checker {
         )
     }
 
-    // Go: checker/relater.go:2654 getNormalizedType (checker.go:28470) of one member of an identity pair of
-    // inferFromMatchingTypes, at Go's place in Go's order. `slot` is the member's slot in the current call.
+    // Go: checker/relater.go:2654 getNormalizedType (checker.go:28470 getNormalizedType) of one member of an
+    // identity pair of inferFromMatchingTypes, at Go's place in Go's order. `slot` is the member's slot in the
+    // current call.
     // PORT: perf (identmatch1). Not in Go. Go normalizes a member again at each pair. A repeat gives the type of
     // the first normalization when each read in it gives the value that it gave the first time. A read of a
     // cached or computed-once value (the reduced type caches, the IsGenericType, CouldContainTypeVariables and
     // IsNeverIntersection flags, cachedTypes, the relation caches, the interned types) does: the first
     // normalization computed that value or read it, and a value is computed again only by a computation that
     // was in progress before this call started, which ends after the call. One read does not:
-    // IsEmptyAnonymousObjectType (checker.go:27077; for example in getIntersectionType and
+    // `IsEmptyAnonymousObjectType` (checker.go:27077; for example in getIntersectionType and
     // shouldNormalizeIntersection) reads MembersResolved and does not resolve. So its answer for an anonymous type
     // goes from false to true when the type's members are first resolved and are empty, in a normalization or
     // between two pairs (identity relation, inferFromTypes). `empty_anonymous_resolves` counts these resolves.
+    // A resolve can also give a different answer for a short time, in a window that opens and closes in its own
+    // frame. In resolveAnonymousTypeMembers: the placeholder members (checker.go:21089,21099 setStructuredTypeMembers),
+    // and the module and class path from :21120 setStructuredTypeMembers until it sets the signatures. In
+    // getResolvedMembersOrExportsOfSymbol: the early table (:16349 getResolvedMembersOrExportsOfSymbol: read by the
+    // TypeLiteral test) before the late-bound members are added. A matching call cannot see a window open at one
+    // read and closed at a later read. When the call is nested in the resolve, the window is outer to the call and
+    // is open for the whole call. When the resolve starts in the call, the window is nested in one normalization or
+    // in the work between two pairs, and is closed before the next read. After it, the answer is the answer before
+    // the resolve, or true when the members are empty, and then the count moves.
     // Audit: target/continuation-r97-goport/int97/r230repair/identmatch1r3/audit.md. So:
     // - a result is kept only when its normalization changed no instantiation, type, symbol, signature,
     //   diagnostic or `empty_anonymous_resolves` count, and started under the instantiation limits
-    //   (checker.go:22608). A repeat can still instantiate (the Index branch: isGenericMappedType and
-    //   getIndexTypeForMappedType on a mapped type with an `as` clause). An empty resolve in the first
-    //   normalization changes the next ones (`X & T` before the resolve of an empty `X`, `T` after it).
+    //   (checker.go:22608 instantiateTypeWithAlias: 100 levels, 5,000,000 instantiations). A repeat can still
+    //   instantiate (the Index branch: isGenericMappedType and getIndexTypeForMappedType on a mapped type with an
+    //   `as` clause). An empty resolve in the first normalization changes the next ones (`X & T` before the resolve
+    //   of an empty `X`, `T` after it).
     // - a kept type is used only while `empty_anonymous_resolves` has the count it was kept with, and under the
     //   count limit. The stack depth is the same at each pair of one call.
     // With `--generateTrace` on, nothing is kept: a repeat can emit a tracer event and change no count
-    // (checkCrossProductUnion_DepthLimit, checker.go:27256, after the intern miss in getIntersectionTypeEx, which
-    // does not store the error type), and Go emits it at each repeat.
+    // (checker.go:27256 checkCrossProductUnion: the checkCrossProductUnion_DepthLimit event, after the intern miss
+    // in getIntersectionTypeEx, which does not store the error type), and Go emits it at each repeat.
     fn normalize_for_matching(
         &mut self,
         t: TypeId,
@@ -697,12 +708,14 @@ impl Checker {
     }
 
     // Go: checker/relater.go:358 checkTypeRelatedToEx with identityRelation and no error node, from the end of
-    // isRelatedToEx's identity branch (relater.go:2666) on: `source` and `target` are the pair after the fresh
-    // literal step, `normalized_*` its normalized types, `relation_size` the size read before they were made.
+    // isRelatedToEx's identity branch (relater.go:2666 traceUnionsOrIntersectionsTooLarge) on: `source` and
+    // `target` are the pair after the fresh literal step, `normalized_*` its normalized types, `relation_size` the
+    // size read before they were made.
     // PORT: perf (identmatch1). Not in Go as a function. It saves the second normalization of the pair.
-    // Second copy: this repeats Go's checkTypeRelatedToEx (relater.go:358, whose port is
-    // `check_type_related_to_ex` in relater_p1.rs) and the identity branch end of isRelatedToEx (relater.go:2666,
-    // `is_related_to_ex`). A pin bump that changes either changes both (UPSTREAM.md, "Pin bump checks").
+    // Second copy: this repeats Go's `checkTypeRelatedToEx` (relater.go:358, whose port is
+    // `check_type_related_to_ex` in relater_p1.rs) and the identity branch end of isRelatedToEx
+    // (from relater.go:2666 traceUnionsOrIntersectionsTooLarge; its port is `is_related_to_ex`). A pin bump that
+    // changes either changes both (UPSTREAM.md, "Pin bump checks").
     fn check_normalized_type_identical_to(
         &mut self,
         source: TypeId,

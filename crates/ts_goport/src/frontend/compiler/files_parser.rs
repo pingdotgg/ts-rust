@@ -5,7 +5,9 @@ use super::file_loader::{ImportNames, SyntheticImports};
 use crate::frontend::prelude::*;
 use crate::gostd::slices::stable_sort_by;
 use crate::program::ThreadBudget;
+use rustc_hash::FxBuildHasher;
 use std::cell::Cell;
+use std::hash::BuildHasher;
 use std::rc::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -54,6 +56,13 @@ pub struct ParseTask {
     // `collectFiles`; the link saves the string hash per visit. A `Weak`
     // link makes no `Rc` cycle (task, data, task).
     pub data: Weak<RefCell<ParseTaskData>>,
+    /// The hash of `path` in `task_data_by_path` (`FxBuildHasher`) that a
+    /// parse worker made (`PrepAdd::path_hash`), or 0: `start` makes it (a
+    /// worker hash of 0 is made again).
+    // PERF (loadfree1 C6): `start` then does not read the path for the
+    // hash on the loader. A `u64`, not an `Option`: the `Rc` of a task stays
+    // in the 512-byte size class. Not in Go.
+    pub path_hash: u64,
 }
 
 /// Go `*parseTask`.
@@ -280,15 +289,17 @@ impl ParseTask {
         if !is_normalized_path(&ref_.file_name) {
             ref_.file_name = normalize_path(&ref_.file_name);
         }
-        self.add_normalized_sub_task(ref_, lib_file);
+        self.add_normalized_sub_task(ref_, lib_file, 0);
     }
 
     /// `add_sub_task` of a ref whose name is normalized already (a parse
-    /// worker normalized it, `PrepAdd`).
+    /// worker normalized it, `PrepAdd`). `path_hash`: the hash of its path
+    /// that the worker made, or 0 (`ParseTask::path_hash`).
     pub(crate) fn add_normalized_sub_task(
         &mut self,
         ref_: ResolvedRef,
         lib_file: Option<Rc<LibFile>>,
+        path_hash: u64,
     ) {
         let sub_task = Rc::new(RefCell::new(ParseTask {
             normalized_file_path: ref_.file_name,
@@ -298,6 +309,7 @@ impl ParseTask {
             elide_on_depth: ref_.elide_on_depth,
             include_reason: ref_.include_reason,
             package_id: ref_.package_id,
+            path_hash,
             ..Default::default()
         }));
         self.sub_tasks.push(sub_task);
@@ -344,6 +356,12 @@ fn set_task_path(loader: &FileLoader, task: &mut ParseTask) {
     }
 }
 
+/// Go `filesParser.taskDataByPath`.
+// PERF (loadfree1 C6): hashbrown's map (the map of std) with
+// `FxBuildHasher`, as `FxHashMap`: `start` looks a path up with the hash
+// that a parse worker made (`ParseTask::path_hash`).
+pub type TaskDataByPath = hashbrown::HashMap<Path, Rc<RefCell<ParseTaskData>>, FxBuildHasher>;
+
 /// One queued run of the closure that Go `filesParser.start` passes to
 /// `wg.Queue`, with the values it captures.
 pub(crate) struct QueuedParseTask {
@@ -366,7 +384,7 @@ pub(crate) struct QueuedParseTask {
 // order do not change.
 pub struct FilesParser {
     pub(crate) queue: Vec<QueuedParseTask>,
-    pub task_data_by_path: FxHashMap<Path, Rc<RefCell<ParseTaskData>>>,
+    pub task_data_by_path: TaskDataByPath,
     pub max_depth: i32,
     /// Go `singleThreaded`: no parse workers.
     pub single_threaded: bool,
@@ -396,7 +414,7 @@ impl Drop for FilesParser {
 
 /// The parse tasks of a dropped `FilesParser`. The drop takes their links
 /// out, which frees the task graph (see the `FilesParser` drop).
-struct ParseTaskLinks(FxHashMap<Path, Rc<RefCell<ParseTaskData>>>);
+struct ParseTaskLinks(TaskDataByPath);
 
 impl Drop for ParseTaskLinks {
     fn drop(&mut self) {
@@ -617,8 +635,9 @@ impl FilesParser {
         // the last reference now. Not in Go. The free thread is one per
         // process (`goport-free`): the first load with workers starts it,
         // also in the LSP and API servers, and it then waits on its queue
-        // for the frees of later loads and builds.
-        crate::execute::build::build_task::drop_in_background(shared);
+        // for the frees of later loads and builds. The last batch of the
+        // loader's `WorkerGarbage` goes with it.
+        crate::execute::build::build_task::drop_in_background((shared, take_worker_garbage()));
     }
 
     /// Go `parse` without the workers: queue the root tasks and run the
@@ -686,7 +705,22 @@ impl FilesParser {
             // and the port does not (root, lib, automatic type directive
             // and redirect tasks) get it here.
             set_task_path(loader, &mut task.borrow_mut());
-            let existing = self.task_data_by_path.get(&task.borrow().path).cloned();
+            // Go `taskDataByPath.LoadOrStore(task.path, ..)`
+            // (filesparser.go:279), the load part, with the hash that the
+            // worker made when the task has one.
+            let existing = {
+                let task = task.borrow();
+                let hasher = self.task_data_by_path.hasher();
+                let hash = match task.path_hash {
+                    0 => hasher.hash_one(&task.path),
+                    hash => hash,
+                };
+                debug_assert_eq!(hash, hasher.hash_one(&task.path), "{}", task.path.0);
+                self.task_data_by_path
+                    .raw_entry()
+                    .from_key_hashed_nocheck(hash, &task.path)
+                    .map(|(_, data)| data.clone())
+            };
             let (data, loaded) = match existing {
                 Some(data) => {
                     // No queued task of this path ran yet, so the loader
@@ -952,12 +986,10 @@ impl FilesParser {
             };
 
         // PERF (collect1): sized as Go sizes it (filesparser.go:355). Only
-        // tests iterate this map, so its capacity changes no output.
+        // tests iterate this map, so its capacity changes no output (see
+        // `FileIncludeReasons`).
         let mut include_processor = IncludeProcessor {
-            file_include_reasons: Rc::new(FxHashMap::with_capacity_and_hasher(
-                total_file_count,
-                Default::default(),
-            )),
+            file_include_reasons: Rc::new(FileIncludeReasons::with_capacity(total_file_count)),
             ..IncludeProcessor::default()
         };
         let mut output_file_to_project_reference_source: Option<FxHashMap<Path, String>> =
@@ -1013,7 +1045,6 @@ impl FilesParser {
         // PORT: the Go closure `collectFiles` is an explicit recursive
         // function over a struct that holds its captured variables.
         struct Collector<'a> {
-            parser: &'a FilesParser,
             loader: &'a FileLoader,
             // PORT: Go `seen map[*parseTaskData]string` is keyed by pointer.
             // The key here is the `Rc` pointer of the task data, and the
@@ -1055,21 +1086,13 @@ impl FilesParser {
 
         impl Collector<'_> {
             /// The slot key of loaded task `t`: the pointer of its task
-            /// data. `task_data_by_path` keeps every task data while the
-            /// parser lives, so a set link points to the live data.
-            // PERF (collect1): the pointer of the task's link
-            // (`ParseTask::data`) with no upgrade, else the data of its path.
-            fn data_key(&self, t: &ParseTask) -> *const RefCell<ParseTaskData> {
-                let by_path = || {
-                    self.parser
-                        .task_data_by_path
-                        .get(&t.path)
-                        .expect("loaded parse task without task data")
-                };
-                if t.data.ptr_eq(&Weak::new()) {
-                    return Rc::as_ptr(by_path());
-                }
-                debug_assert_eq!(t.data.as_ptr(), Rc::as_ptr(by_path()));
+            /// data, Go's `seen` key. Only a task that `FilesParser::start`
+            /// queued is loaded, and `start` sets its link
+            /// (`ParseTask::data`) to the data of its path, which
+            /// `task_data_by_path` keeps while the parser lives.
+            // PERF (collect1): the link's pointer, with no upgrade and no
+            // lookup by path (Go looks the data up by path).
+            fn data_key(t: &ParseTask) -> *const RefCell<ParseTaskData> {
                 t.data.as_ptr()
             }
 
@@ -1116,7 +1139,7 @@ impl FilesParser {
                 } else if t.loaded
                     && let Some(reason) = reason
                 {
-                    let index = self.slot_of(self.data_key(&t));
+                    let index = self.slot_of(Self::data_key(&t));
                     self.push_reason(index, task, reason);
                 }
             }
@@ -1181,7 +1204,7 @@ impl FilesParser {
                     if !loaded {
                         continue;
                     }
-                    let data_key = self.data_key(&task.borrow());
+                    let data_key = Self::data_key(&task.borrow());
                     let index = self.slot_of(data_key);
                     if add_reason
                         && !redirected
@@ -1287,7 +1310,7 @@ impl FilesParser {
                         };
                         if let Some(first) = first {
                             let other = first.borrow();
-                            self.sync_reasons(self.data_key(&other));
+                            self.sync_reasons(Self::data_key(&other));
                             self.include_processor
                                 .add_processing_diagnostics_for_file_casing(
                                     &other.path,
@@ -1311,15 +1334,12 @@ impl FilesParser {
 
                     let file = t.file.clone();
                     // PERF (parload1 step 4): the task's link to its data
-                    // (`ParseTask::data`), else the lookup by path.
-                    let data = t.data.upgrade().unwrap_or_else(|| {
-                        self.parser
-                            .task_data_by_path
-                            .get(&t.path)
-                            .cloned()
-                            .expect("loaded parse task without task data")
-                    });
-                    debug_assert_eq!(Rc::as_ptr(&data), data_key);
+                    // (`ParseTask::data`, see `data_key`), not a lookup by
+                    // path.
+                    let data = t
+                        .data
+                        .upgrade()
+                        .expect("loaded parse task without task data");
                     let data = data.borrow();
                     let data_lowest_depth = data.lowest_depth;
                     if let Some(package_id_to_source_file) = self.package_id_to_source_file.as_mut()
@@ -1472,7 +1492,6 @@ impl FilesParser {
             source_files_found_searching_node_modules,
         } = FileMaps::collect(self.single_threaded, |file_maps| {
             let mut collector = Collector {
-                parser: self,
                 loader,
                 slot_index: FxHashMap::with_capacity_and_hasher(
                     self.task_data_by_path.len(),
@@ -2035,6 +2054,8 @@ pub(crate) struct PrepAdd {
     /// The resolved file name, normalized.
     pub(crate) file_name: String,
     pub(crate) path: Path,
+    /// The hash of `path` in `task_data_by_path` (`ParseTask::path_hash`).
+    pub(crate) path_hash: u64,
     pub(crate) package_id: PackageId,
     pub(crate) increase_depth: bool,
 }
@@ -2098,6 +2119,7 @@ impl PrepCommit {
                     normalize_path(file_name)
                 },
                 path: resolved.resolved_path.clone(),
+                path_hash: FxBuildHasher.hash_one(&resolved.resolved_path),
                 package_id: resolved.package_id.clone(),
                 increase_depth: resolved.is_external_library_import,
             });
@@ -2188,6 +2210,40 @@ impl TakenParse {
         }
         prep
     }
+}
+
+/// The preps that the loader took (`TakenParse::take_prep`), with their
+/// names and commit, once it is done with them. Freeing them on the loader
+/// put the reads and frees of memory that a worker wrote on the serial
+/// path (loadstamp1 C5).
+// PERF (loadfree1): they free on the free thread (`drop_in_background`),
+// in batches, as Go's GC frees them beside the load. Not in Go.
+type WorkerGarbage = Vec<Box<FilePrep>>;
+
+/// The preps in one batch of `WorkerGarbage`.
+const WORKER_GARBAGE_BATCH: usize = 256;
+
+thread_local! {
+    /// The `WorkerGarbage` of the load on this thread.
+    static WORKER_GARBAGE: RefCell<WorkerGarbage> = const { RefCell::new(Vec::new()) };
+}
+
+/// Frees a prep that the loader took off the loader: it goes in the
+/// loader's `WorkerGarbage`, and a full batch goes to the free thread.
+pub(crate) fn free_prep_off_loader(prep: Box<FilePrep>) {
+    WORKER_GARBAGE.with(|garbage| {
+        let mut garbage = garbage.borrow_mut();
+        garbage.push(prep);
+        if garbage.len() >= WORKER_GARBAGE_BATCH {
+            let full = std::mem::replace(&mut *garbage, Vec::with_capacity(WORKER_GARBAGE_BATCH));
+            crate::execute::build::build_task::drop_in_background(full);
+        }
+    });
+}
+
+/// The `WorkerGarbage` of this thread's load, at the end of the load.
+fn take_worker_garbage() -> WorkerGarbage {
+    WORKER_GARBAGE.with(|garbage| std::mem::take(&mut *garbage.borrow_mut()))
 }
 
 /// The metadata of `file_name` that its parse worker found, when the

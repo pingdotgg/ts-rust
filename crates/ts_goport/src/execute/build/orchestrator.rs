@@ -1106,6 +1106,15 @@ impl Orchestrator {
     // Go: build/orchestrator.go:955 (*Orchestrator).buildOrCleanProject,
     // after the build (ts#64220).
     fn task_built(&self, task: &mut BuildTask) {
+        // PORT: Go's symbol id counters are per process, so the tasks that
+        // start after this one count on from its ids.
+        if let Some(program) = task
+            .result
+            .as_ref()
+            .and_then(|result| result.program.as_ref())
+        {
+            crate::program::carry_symbol_ids_of(program.get_program());
+        }
         if self.opts.testing.is_none() {
             // The program is only needed by Testing.OnProgram at report time; drop it now so a task
             // that has finished but is not yet reported does not keep its program alive.

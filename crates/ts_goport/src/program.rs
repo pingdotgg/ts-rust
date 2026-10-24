@@ -342,11 +342,40 @@ struct CheckerPool {
     /// (`send_emit_pool_jobs`). It stops with the checkers. wasm has none.
     #[cfg(not(target_family = "wasm"))]
     emit: Option<EmitPool>,
-    /// `--singleThreaded`: the next symbol id and block of the loading
-    /// thread when the pool was made. The pool's checker hands its symbol
-    /// ids to the next pool (`symbol_id_carry_start`) or back to the loading
-    /// thread when it stops (`carry_symbol_ids`). None for other pools.
-    carry_from: Option<(u64, u64)>,
+    /// How the checkers hand their symbol ids back to the loading thread
+    /// (`carry_symbol_ids`). None for a pool that does not, or did.
+    carry: Option<IdCarry>,
+    /// The jobs sent to the checkers that have not given their result yet
+    /// (`send_thread_job`, `idle`).
+    #[cfg(not(target_family = "wasm"))]
+    pending: Arc<AtomicUsize>,
+}
+
+/// How a checker pool hands the symbol ids of its checkers back to the
+/// loading thread (`CheckerPool::carry_symbol_ids`), so the next program
+/// counts on from them as in Go (`symbol_id_carry_start`).
+#[derive(Clone, Copy)]
+struct IdCarry {
+    /// A one-checker `--singleThreaded` pool: the carry waits for the
+    /// checker's jobs when the next such pool is made, the next such
+    /// program binds, or the pool stops. Other pools carry only when they
+    /// have no job.
+    single: bool,
+    /// Outside `tsc -b` and watch mode (`carry_symbol_ids_of_every_pool`):
+    /// the next symbol id and block of the loading thread when the pool was
+    /// made. The loading thread takes the ids only when it gave none since.
+    only_from: Option<(u64, u64)>,
+}
+
+impl IdCarry {
+    /// What each worker of a pool of `count` checkers records for the carry
+    /// (`ast::record_symbol_ids`): None for no log, else whether it counts
+    /// its block ids. An `only_from` pool has one worker, whose ids keep
+    /// their numbers, so it needs no log. Only a merge of two workers or
+    /// more reads the block ids before each id (`ast::IdLog::clock`).
+    fn log(self, count: usize) -> Option<bool> {
+        self.only_from.is_none().then_some(count > 1)
+    }
 }
 
 impl CheckerPool {
@@ -391,12 +420,13 @@ impl CheckerPool {
     /// threads, with the threads of the emit pool.
     #[cfg(not(target_family = "wasm"))]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
-        self.carry_symbol_ids();
+        self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
         let CheckerPool {
             workers,
             mut threads,
             emit,
-            carry_from: _,
+            carry: _,
+            pending: _,
         } = self;
         // A pool that only ends with the process forgets its checkers and
         // synthetic nodes (see `create_checkers`); a released program frees
@@ -421,11 +451,8 @@ impl CheckerPool {
     /// until the process (the wasm instance) ends.
     #[cfg(target_family = "wasm")]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
-        self.carry_symbol_ids();
-        let CheckerPool {
-            checkers,
-            carry_from: _,
-        } = self;
+        self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
+        let CheckerPool { checkers, carry: _ } = self;
         for slot in checkers {
             if let InlineChecker::Made(checker, mut ids) = slot {
                 ids.run(|| drop(checker));
@@ -434,60 +461,96 @@ impl CheckerPool {
         Vec::new()
     }
 
-    /// A `--singleThreaded` pool (`carry_from`): makes the symbol ids of its
-    /// checker the symbol ids of this thread (the loading thread), so the
-    /// next program's checker starts from them (`WorkerSeed`). When this
-    /// thread gave ids after the pool was made, or took the ids of a later
-    /// pool, it keeps its own.
+    /// Hands the symbol ids of the checkers to this thread (the loading
+    /// thread), so the next program's checkers start from them
+    /// (`WorkerSeed`, `ast::carry_symbol_ids`). With `wait`, after the jobs
+    /// sent so far; else only when the pool has no job, so this thread does
+    /// not wait for a check. A pool hands its ids on once: the ids that its
+    /// checkers give later stay on their threads.
     // PORT: Go's symbol id counters (global and block) are per process, so
     // the ids of the next program (`tsc -b`, a watch cycle) count on from the
-    // last one, and a bound file keeps the ids of its symbols
-    // (`ast::SymbolIdCarry`). With more checkers Go's ids race, and each
-    // checker here counts on its own, so only a one-checker
-    // `--singleThreaded` pool hands its ids on.
-    fn carry_symbol_ids(&mut self) {
-        let Some(from) = self.carry_from else {
+    // last one, and a bound file keeps the ids of its symbols. Here each
+    // checker counts on its own (`ast::id_seed`).
+    fn carry_symbol_ids(&mut self, wait: bool) {
+        let Some(carry) = self.carry else {
             return;
         };
-        if (next_ids().1, next_symbol_block_id()) != from {
+        if !wait && !self.idle() {
             return;
         }
-        if let Some(carry) = self.symbol_ids() {
-            install_symbol_ids(carry);
+        self.carry = None;
+        if carry
+            .only_from
+            .is_some_and(|from| (next_ids().1, next_symbol_block_id()) != from)
+        {
+            return;
         }
+        crate::ast::carry_symbol_ids(|base| self.worker_symbol_ids(base));
     }
 
-    /// A copy of the symbol ids of the pool's first checker, after the jobs
-    /// sent to it so far.
+    /// True when every job sent to the checkers has given its result.
     #[cfg(not(target_family = "wasm"))]
-    fn symbol_ids(&self) -> Option<SymbolIdCarry> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.workers
-            .first()?
-            .send(Box::new(move || {
-                let _ = sender.send(copy_symbol_ids());
-            }))
-            .ok()?;
-        receiver.recv().ok()
+    fn idle(&self) -> bool {
+        self.pending.load(Ordering::Acquire) == 0
     }
 
-    /// wasm: a copy of the symbol ids of the pool's first checker, made
-    /// first if no job has made it yet.
+    /// wasm: each job runs when it is sent.
     #[cfg(target_family = "wasm")]
-    fn symbol_ids(&mut self) -> Option<SymbolIdCarry> {
+    fn idle(&self) -> bool {
+        true
+    }
+
+    /// The symbol ids of each checker that `base` (the loading thread's)
+    /// does not have, after the jobs sent to it so far
+    /// (`ast::worker_symbol_ids`), in pool order.
+    #[cfg(not(target_family = "wasm"))]
+    fn worker_symbol_ids(&self, base: &SymbolIdBase) -> Vec<WorkerSymbolIds> {
+        let receivers: Vec<_> = self
+            .workers
+            .iter()
+            .filter_map(|worker| {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let base = base.clone();
+                worker
+                    .send(Box::new(move || {
+                        let ids = worker_symbol_ids(&base);
+                        // Before the send: the loading thread takes its
+                        // lineage ids back (`ast::carry_symbol_ids`).
+                        drop(base);
+                        let _ = sender.send(ids);
+                    }))
+                    .ok()?;
+                Some(receiver)
+            })
+            .collect();
+        receivers
+            .into_iter()
+            .filter_map(|receiver| receiver.recv().ok())
+            .collect()
+    }
+
+    /// wasm: the symbol ids of each checker that `base` does not have. A
+    /// checker that no job has made is made first, as Go makes every
+    /// checker of the pool.
+    #[cfg(target_family = "wasm")]
+    fn worker_symbol_ids(&mut self, base: &SymbolIdBase) -> Vec<WorkerSymbolIds> {
         let count = self.checkers.len();
-        let slot = self.checkers.first_mut()?;
-        if matches!(slot, InlineChecker::Unmade(_)) {
-            let (checker, ids) =
-                std::mem::replace(slot, InlineChecker::Busy).into_checker(0, count);
-            *slot = InlineChecker::Made(checker, ids);
-        }
-        match slot {
-            InlineChecker::Made(_, ids) | InlineChecker::Released(ids) => {
-                Some(ids.run(copy_symbol_ids))
-            }
-            InlineChecker::Unmade(_) | InlineChecker::Busy => None,
-        }
+        (0..count)
+            .filter_map(|index| {
+                let slot = &mut self.checkers[index];
+                if matches!(slot, InlineChecker::Unmade(_)) {
+                    let (checker, ids) =
+                        std::mem::replace(slot, InlineChecker::Busy).into_checker(index, count);
+                    *slot = InlineChecker::Made(checker, ids);
+                }
+                match slot {
+                    InlineChecker::Made(_, ids) | InlineChecker::Released(ids) => {
+                        Some(ids.run(|| worker_symbol_ids(base)))
+                    }
+                    InlineChecker::Unmade(_) | InlineChecker::Busy => None,
+                }
+            })
+            .collect()
     }
 }
 
@@ -1127,9 +1190,11 @@ fn slot_tables(id: u32, slot: &Mutex<Option<Arc<VersionTables>>>) -> Arc<Version
 }
 
 /// A copy of the tables of the current program, for a new thread
-/// (`WorkerSeed`). None for the program of a one-program process.
+/// (`WorkerSeed`). None for the program of a one-program process, also
+/// before `build_program` gives it its state (`start_early_bind`).
 fn current_tables() -> Option<(u32, Arc<VersionTables>)> {
     let program = prog();
+    program.state.get()?;
     match held_tables(program) {
         HeldTables::Leaked(_) => None,
         HeldTables::Version(tables) => Some((program.id, tables)),
@@ -1791,7 +1856,9 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // last-queued-first (`bind_files_last_queued_first`). A file that an
 // earlier program version bound is not bound again. The binds give no
 // symbol ids; the ids that Go's binds give come after them
-// (`give_private_name_class_ids`).
+// (`give_private_name_class_ids`). In a one-program `tsc` process the bind
+// threads start when the files are published (`start_early_bind`), and
+// this joins their files.
 pub fn bind_all() {
     let program = prog();
     held_tables(program).bound_symbols.get_or_init(|| {
@@ -1917,10 +1984,11 @@ fn trace_bind_source_file(file: Node) -> Option<crate::tracing::Pop> {
 /// thread's state, so anything it adds would be lost. The early emit
 /// (`execute::incremental::Program::start_emit`) also reads it:
 /// an emit pool starts from a copy of the same state.
-pub(crate) fn bind_thread_fingerprint() -> (usize, (u64, u64), usize) {
+pub(crate) fn bind_thread_fingerprint() -> (usize, (u64, u64), u64, usize) {
     (
         synthetic_slot_count(),
         next_ids(),
+        next_symbol_block_id(),
         go_frontend::lazy_jsdoc_count(),
     )
 }
@@ -2345,7 +2413,8 @@ struct BindQueueState {
     counts: Vec<Option<ArenaMark>>,
     /// The id offsets of file `i` at index `i`. They are known when every
     /// earlier file is bound: each file adds its counts to the offsets of the
-    /// file before it.
+    /// file before it. Empty until `bind_all` gives the offsets of the first
+    /// file (`release`) for an early bind (`BindQueue::held`).
     offsets: Vec<ArenaOffsets>,
     /// Whether file `i` is a freeable file version. It and the file after
     /// it start at a chunk start (`ArenaOffsets::aligned`), as
@@ -2358,11 +2427,15 @@ impl BindQueue {
     /// bind threads, the first file at the offsets `first` (or at the next
     /// chunk start when it is freeable).
     fn new(freeable: Vec<bool>, first: ArenaOffsets, threads: usize) -> Self {
-        let first = if freeable.first() == Some(&true) {
-            first.aligned()
-        } else {
-            first
-        };
+        let queue = Self::held(freeable, threads);
+        queue.lock().release(first);
+        queue
+    }
+
+    /// `new` with the offsets of the first file not known yet: the threads
+    /// bind the files and hold each one until `release` gives them
+    /// (`start_early_bind`).
+    fn held(freeable: Vec<bool>, threads: usize) -> Self {
         BindQueue {
             state: Mutex::new(BindQueueState {
                 next: 0,
@@ -2370,13 +2443,20 @@ impl BindQueue {
                 binders: threads,
                 stop: false,
                 counts: vec![None; freeable.len()],
-                offsets: vec![first],
+                offsets: Vec::new(),
                 freeable,
             }),
             changed: std::sync::Condvar::new(),
             #[cfg(test)]
             panic_before_run: None,
         }
+    }
+
+    /// Gives the first file of a `held` queue the offsets `first`, so the
+    /// threads move the ids of the files they hold (`bind_all`).
+    fn release(&self, first: ArenaOffsets) {
+        self.lock().release(first);
+        self.changed.notify_all();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, BindQueueState> {
@@ -2403,7 +2483,30 @@ impl BindQueueState {
     /// made the offsets of more files known.
     fn record(&mut self, i: usize, counts: ArenaMark) -> bool {
         self.counts[i] = Some(counts);
+        self.extend_offsets()
+    }
+
+    /// Gives file 0 the offsets `first` (or the next chunk start when it is
+    /// freeable), and each file whose earlier files are bound its offsets.
+    fn release(&mut self, first: ArenaOffsets) {
+        debug_assert!(self.offsets.is_empty(), "the first offsets came two times");
+        let first = if self.freeable.first() == Some(&true) {
+            first.aligned()
+        } else {
+            first
+        };
+        self.offsets.push(first);
+        self.extend_offsets();
+    }
+
+    /// Adds the offsets of each file whose earlier files have their counts.
+    /// Returns true when that made the offsets of more files known. Before
+    /// `release` no offsets are known.
+    fn extend_offsets(&mut self) -> bool {
         let known = self.offsets.len();
+        if known == 0 {
+            return false;
+        }
         while let Some(&Some(file_counts)) = self.counts.get(self.offsets.len() - 1) {
             let file = self.offsets.len() - 1;
             let mut next = self.offsets[file].after(file_counts);
@@ -2483,23 +2586,67 @@ fn bind_files_parallel(lineage: &mut Lineage) {
         .filter(|file| file.file_bind.get().is_none())
         .map(|file| (file.root, file.version().is_some()))
         .collect();
+    if let Some(early) = take_early_bind() {
+        if early.program == prog().id && early.binds.files == files {
+            early.join(lineage);
+            return;
+        }
+        early.drop_binds();
+    }
     let threads = bind_thread_count(files.len()).min(files.len());
     if single_threaded() || threads < 2 {
         return;
     }
     let unported = unported_report();
-    let order = bind_order(&files);
-    let queue = BindQueue::new(
-        files.iter().map(|&(_, freeable)| freeable).collect(),
-        lineage.symbols.next_file_offsets(),
-        threads,
-    );
-    // The work of one bind thread, after it installed its seed. `sender`
-    // takes its files to the loading thread.
-    let run = |sender: std::sync::mpsc::Sender<ParallelBind>, link: &mut LinkBinders<'_>| {
+    let binds = ParallelBinds {
+        order: bind_order(&files),
+        queue: BindQueue::new(
+            files.iter().map(|&(_, freeable)| freeable).collect(),
+            lineage.symbols.next_file_offsets(),
+            threads,
+        ),
+        files,
+    };
+    let run = |sender, link: &mut LinkBinders<'_>| binds.run(sender, link);
+    let (sender, receiver) = std::sync::mpsc::channel::<ParallelBind>();
+    let complete = std::thread::scope(|scope| {
+        // PERF (bindonce1): a seed copies the synthetic nodes of this thread,
+        // 0.13 to 1.9 ms each on TypeORM, so 16 seeds took 3.9 ms of this
+        // thread before it built the lazy state below. This thread now takes
+        // one, and the bind threads take the others (`spawn_bind_chain`).
+        spawn_bind_chain(scope, threads, &run, &binds.queue, sender);
+        // PERF (progstart1): the bind threads do not read the shared state
+        // that the program makes on first use (the symlink cache), so this
+        // thread builds it while they bind, not before they start. A later
+        // seed (the checker pool) finds it built. It took 3.6 to 5.7 ms of
+        // this thread before the first bind thread started (colyseus,
+        // outline, umami). Go builds it on first use (program.go:2330).
+        go_frontend::build_lazy_shared_state();
+        binds.join(&receiver, lineage)
+    });
+    if !complete {
+        // The serial bind counts the hits of the files that it binds again.
+        restore_unported(&unported);
+    }
+}
+
+/// The files of a parallel bind, the order in which the bind threads take
+/// them, and their queue (`bind_files_parallel`).
+struct ParallelBinds {
+    /// Each file with whether it is a freeable file version.
+    files: Vec<(Node, bool)>,
+    order: Vec<usize>,
+    queue: BindQueue,
+}
+
+impl ParallelBinds {
+    /// The work of one bind thread, after it installed its seed. `sender`
+    /// takes its files to the thread that joins them (`join`).
+    fn run(&self, sender: std::sync::mpsc::Sender<ParallelBind>, link: &mut LinkBinders<'_>) {
+        let files = &self.files;
         run_bind_link(
-            &queue,
-            &order,
+            &self.queue,
+            &self.order,
             link,
             |i| {
                 let (file, _) = files[i];
@@ -2537,47 +2684,175 @@ fn bind_files_parallel(lineage: &mut Lineage) {
         // drop only at thread exit. Let go of the program tables now, so a
         // release after the bind frees them (`WorkerSeed`).
         drop(TABLES.with(|cache| cache.borrow_mut().take()));
-    };
-    let (sender, receiver) = std::sync::mpsc::channel::<ParallelBind>();
-    let complete = std::thread::scope(|scope| {
-        // PERF (bindonce1): a seed copies the synthetic nodes of this thread,
-        // 0.13 to 1.9 ms each on TypeORM, so 16 seeds took 3.9 ms of this
-        // thread before it built the lazy state below. This thread now takes
-        // one, and the bind threads take the others (`spawn_bind_chain`).
-        spawn_bind_chain(scope, threads, &run, &queue, sender);
-        // PERF (progstart1): the bind threads do not read the shared state
-        // that the program makes on first use (the symlink cache), so this
-        // thread builds it while they bind, not before they start. A later
-        // seed (the checker pool) finds it built. It took 3.6 to 5.7 ms of
-        // this thread before the first bind thread started (colyseus,
-        // outline, umami). Go builds it on first use (program.go:2330).
-        go_frontend::build_lazy_shared_state();
-        // Join the files in order as they arrive.
+    }
+
+    /// Joins the files into `lineage` in file order as they arrive on
+    /// `receiver`. Returns whether every file joined. The join stops at a
+    /// file that failed, or that no bind thread reached because each one
+    /// failed first. No later file was installed: its offsets need the
+    /// counts of that file.
+    fn join(
+        &self,
+        receiver: &std::sync::mpsc::Receiver<ParallelBind>,
+        lineage: &mut Lineage,
+    ) -> bool {
         let mut pending = FxHashMap::default();
         let mut joined = 0;
-        'join: for (i, result) in &receiver {
+        'join: for (i, result) in receiver {
             pending.insert(i, result);
             while let Some(result) = pending.remove(&joined) {
                 let Some(prepared) = result else {
-                    queue.stop();
+                    self.queue.stop();
                     break 'join;
                 };
-                let (file, freeable) = files[joined];
+                let (file, freeable) = self.files[joined];
                 lineage.add_file(file.file_index(), freeable, |symbols| {
                     symbols.append_prepared_file_arena(prepared)
                 });
                 joined += 1;
             }
         }
-        // The join stops at a file that failed, or that no bind thread
-        // reached because each one failed first. No later file was
-        // installed: its offsets need the counts of that file.
-        joined == files.len()
-    });
-    if !complete {
-        // The serial bind counts the hits of the files that it binds again.
-        restore_unported(&unported);
+        joined == self.files.len()
     }
+}
+
+/// The early bind of the program of a one-program process
+/// (`start_early_bind`), until `bind_all` takes it.
+static EARLY_BIND: Mutex<Option<EarlyBind>> = Mutex::new(None);
+
+/// Bind threads that started before `bind_all` (`start_early_bind`). They
+/// hold each file that they bound until `bind_all` gives the offsets of the
+/// first file (`BindQueue::held`).
+struct EarlyBind {
+    /// The `GoProgram::id` of the program.
+    program: u32,
+    binds: Arc<ParallelBinds>,
+    receiver: std::sync::mpsc::Receiver<ParallelBind>,
+    /// The thread whose scope holds the bind threads. It ends after them.
+    host: std::thread::JoinHandle<()>,
+}
+
+impl EarlyBind {
+    /// `bind_files_parallel` with these bind threads: gives the first file
+    /// the offsets that `lineage` gives now, then joins the files in file
+    /// order. When the join stops, `bind_all` binds the rest serially, and
+    /// the serial bind counts their unported hits (an early bind thread
+    /// counts none, `start_early_bind`).
+    fn join(self, lineage: &mut Lineage) {
+        self.binds
+            .queue
+            .release(lineage.symbols.next_file_offsets());
+        // PERF (progstart1): as in `bind_files_parallel`.
+        go_frontend::build_lazy_shared_state();
+        let _ = self.binds.join(&self.receiver, lineage);
+        self.end();
+    }
+
+    /// Stops the bind threads with no join. Each bind that they hold drops
+    /// and sets its node records back (`binder::NodeBindRecords`).
+    fn drop_binds(self) {
+        self.binds.queue.stop();
+        self.end();
+    }
+
+    /// Waits for the bind threads, and raises a panic of one of them on this
+    /// thread, as the scope of `bind_files_parallel` does.
+    fn end(self) {
+        if let Err(payload) = self.host.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+/// The early bind that `start_early_bind` left, if any.
+fn take_early_bind() -> Option<EarlyBind> {
+    EARLY_BIND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+}
+
+/// Starts the parallel bind (`bind_files_parallel`) of the program files of
+/// a one-program `tsc` process when they are published
+/// (`go_frontend::build_program`, after `set_prog`). `roots` are the program
+/// files in file order, all published by this program. Each bind thread
+/// holds the files that it bound; `bind_all` gives the offsets of the first
+/// file and joins them (`EarlyBind::join`). Off with `--singleThreaded`,
+/// with tracing, with fewer than 2 bind threads and with
+/// `GOPORT_EARLY_BIND=0`.
+// PORT: not in Go (bindgap1, go-note 5.2 B1). Go binds when the program is
+// made (program.go:600 BindSourceFiles), and the bind reads only its file
+// (binder.go:120 to :130, `file.BindOnce`), so an early bind gives the same
+// output when nothing sees it before `bind_all`. The ids, the join and
+// `give_private_name_class_ids` stay in `bind_all`, in file order, from the
+// lineage at that time. Nothing is installed before `bind_all`: `file_bind`
+// and the other `GoFile` cells stay empty, so the "Symbols" sum and the
+// file format lines read no bind. A bind writes the node records and the
+// binder bits of their flags (`BINDER_ADDED_FLAGS`) while it runs; no code
+// from the publish to `bind_all` reads them (bindgap1 report section 2). A
+// program that never binds (syntax errors and no `--diagnostics`, Go
+// program.go:2077) keeps the binds until the process ends. A hit on a bind
+// thread fails its bind, so these threads count no unported hit
+// (`core::skip_unported_hits`): the serial bind of `bind_all` counts it,
+// and a program that does not bind has none. PERF: the binds run while this
+// thread builds the program tables and the syntactic diagnostics
+// (loadstamp1: 5.8 ms on Sentry, 2.7 ms on VS Code, dbook-lan).
+pub(crate) fn start_early_bind(roots: impl Iterator<Item = Node>) {
+    if single_threaded()
+        || crate::tracing::get().is_some()
+        || std::env::var_os("GOPORT_EARLY_BIND").is_some_and(|value| value == "0")
+    {
+        return;
+    }
+    let files: Vec<(Node, bool)> = roots
+        .filter_map(|root| {
+            let go_file = crate::ast::go_file(root.file_index());
+            go_file
+                .file_bind
+                .get()
+                .is_none()
+                .then(|| (root, go_file.version().is_some()))
+        })
+        .collect();
+    let threads = bind_thread_count(files.len()).min(files.len());
+    if threads < 2 {
+        return;
+    }
+    let binds = Arc::new(ParallelBinds {
+        order: bind_order(&files),
+        queue: BindQueue::held(
+            files.iter().map(|&(_, freeable)| freeable).collect(),
+            threads,
+        ),
+        files,
+    });
+    // The program has no state yet, so the seed has no tables. A one-program
+    // process leaks its tables, so a seed never has them (`current_tables`).
+    let seed = WorkerSeed::take_unbuilt();
+    let (sender, receiver) = std::sync::mpsc::channel::<ParallelBind>();
+    let host = {
+        let binds = Arc::clone(&binds);
+        crate::core::GoThread::new().spawn(move || {
+            let run = |sender, link: &mut LinkBinders<'_>| {
+                crate::core::skip_unported_hits();
+                binds.run(sender, link);
+            };
+            std::thread::scope(|scope| {
+                spawn_bind_chain_with(scope, threads, &run, &binds.queue, sender, seed);
+            });
+        })
+    };
+    let early = EarlyBind {
+        program: prog().id,
+        binds,
+        receiver,
+        host,
+    };
+    let old = EARLY_BIND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(early);
+    assert!(old.is_none(), "two early binds");
 }
 
 /// The work of one bind thread of `bind_files_parallel`, after it installed
@@ -2644,8 +2919,12 @@ fn run_bind_link<T>(
         // its offsets: from a bind in progress, or from a file that is left
         // for a thread that can bind. Else a file before it failed, or no
         // thread can bind the files before it, and the join stops there.
+        // Before the offsets of the first file are given (a `held` queue),
+        // every file bound here waits for them.
         if waiting.is_empty()
-            || (state.binding == 0 && (state.next >= order.len() || state.binders == 0))
+            || (!state.offsets.is_empty()
+                && state.binding == 0
+                && (state.next >= order.len() || state.binders == 0))
         {
             break;
         }
@@ -2679,7 +2958,28 @@ fn spawn_bind_chain<'scope, F>(
 ) where
     F: Fn(std::sync::mpsc::Sender<ParallelBind>, &mut LinkBinders<'scope>) + Sync,
 {
-    let seed = WorkerSeed::take_unbuilt();
+    spawn_bind_chain_with(
+        scope,
+        threads,
+        run,
+        queue,
+        sender,
+        WorkerSeed::take_unbuilt(),
+    );
+}
+
+/// `spawn_bind_chain` whose first thread starts from `seed`, a copy of the
+/// loading thread's state (`start_early_bind`).
+fn spawn_bind_chain_with<'scope, F>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    threads: usize,
+    run: &'scope F,
+    queue: &'scope BindQueue,
+    sender: std::sync::mpsc::Sender<ParallelBind>,
+    seed: WorkerSeed,
+) where
+    F: Fn(std::sync::mpsc::Sender<ParallelBind>, &mut LinkBinders<'scope>) + Sync,
+{
     spawn_bind_thread(scope, move || {
         let mut binders = LinkBinders {
             queue,
@@ -2999,11 +3299,13 @@ pub fn get_source_of_project_reference_if_output_included(file: Node) -> String 
 
 /// Go `compiler.NewProgram` for a config that is already parsed, in a
 /// one-program process (`tsc`, `goport`). It installs the program for the
-/// process, so call it once. `opts.host` carries the trace writer.
+/// process, so call it once. `opts.host` carries the trace writer. The
+/// files start to bind when they are published (`start_early_bind`): the
+/// caller must not read their bind data before `bind_all`.
 pub fn install_new_program(
     opts: crate::frontend::compiler::ProgramOptions,
 ) -> Result<&'static GoProgram, String> {
-    go_frontend::install_new_program(opts)
+    go_frontend::install_new_program(opts, true)
 }
 
 /// Go `compiler.NewProgram` for a multi-program process (watch, language
@@ -4016,36 +4318,89 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
     checker
 }
 
-/// `CheckerPool::carry_from` of a new pool of `count` checkers: the next
-/// symbol id and block of this thread for a one-checker `--singleThreaded`
-/// pool (`singleThreaded` on the command line or in the project tsconfig).
-/// Watch mode makes the next program before it releases the last one, so
-/// the pool of the last program can still be here: its symbol ids become
-/// this thread's first (`CheckerPool::carry_symbol_ids`). With more `tsc -b`
-/// builders the last pool can still be checking: the copy then waits for
-/// its jobs, so such projects check one after the other (PORTING.md,
+thread_local! {
+    /// Set on the loading thread of `tsc -b` and watch mode while they
+    /// build (`carry_symbol_ids_of_every_pool`).
+    static CARRY_EVERY_POOL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `tsc -b` and watch mode call it on their loading thread for each build:
+/// while the result lives, every checker pool that this thread makes hands
+/// its symbol ids back to it, so the programs made after count on from
+/// them, as Go's process counters do (`CheckerPool::carry_symbol_ids`). A
+/// pool does so when its `tsc -b` task is built, before watch mode makes
+/// the next program (`carry_symbol_ids_of`), or else when its program is
+/// released. Elsewhere only a one-checker `--singleThreaded` pool does (the
+/// API `emitProgram`); the language server's checkers are not in pools.
+pub fn carry_symbol_ids_of_every_pool() -> CarryEveryPool {
+    CarryEveryPool(CARRY_EVERY_POOL.with(|every| every.replace(true)))
+}
+
+/// `carry_symbol_ids_of_every_pool` until it drops: then the flag is as it
+/// was before. A pool keeps the carry that it was made with.
+#[must_use = "the pools of this thread carry their ids only while it lives"]
+pub struct CarryEveryPool(bool);
+
+impl Drop for CarryEveryPool {
+    fn drop(&mut self) {
+        CARRY_EVERY_POOL.with(|every| every.set(self.0));
+    }
+}
+
+/// The checker pool of `program`, whose check and emit are done, hands its
+/// symbol ids back to this thread (`CheckerPool::carry_symbol_ids`): when
+/// its `tsc -b` task is built, or before watch mode makes the next program.
+/// The programs made after count on from them. Go's builders share the
+/// counters, so a task that starts after another is built counts on from
+/// that one's ids. The ids of tasks that build at the same time race in Go;
+/// here a task that is not built yet hands its ids on later.
+pub fn carry_symbol_ids_of(program: &'static GoProgram) {
+    POOLS.with(|pools| {
+        if let Some(pool) = pools.borrow_mut().get_mut(&program.id) {
+            pool.carry_symbol_ids(pool.carry.is_some_and(|carry| carry.single));
+        }
+    });
+}
+
+/// `CheckerPool::carry` of a new pool of `count` checkers: every pool in
+/// `tsc -b` and watch mode (`carry_symbol_ids_of_every_pool`), and
+/// elsewhere a one-checker `--singleThreaded` pool (`singleThreaded` on the
+/// command line or in the project tsconfig). A `--singleThreaded` pool
+/// first takes the ids of the last such pool of this thread
+/// (`carry_last_pool_symbol_ids`): watch mode makes the next program
+/// before it releases the last one, so that pool can still be here. With
+/// more `tsc -b` builders it can still be checking: the carry then waits
+/// for its jobs, so such projects check one after the other (PORTING.md,
 /// Threads).
-fn symbol_id_carry_start(count: usize) -> Option<(u64, u64)> {
-    if count != 1 || !single_threaded() {
+fn symbol_id_carry_start(count: usize) -> Option<IdCarry> {
+    let single = count == 1 && single_threaded();
+    let every = CARRY_EVERY_POOL.with(std::cell::Cell::get);
+    if !single && !every {
         return None;
     }
-    carry_last_pool_symbol_ids();
-    Some((next_ids().1, next_symbol_block_id()))
+    if single {
+        carry_last_pool_symbol_ids();
+    }
+    Some(IdCarry {
+        single,
+        only_from: (!every).then(|| (next_ids().1, next_symbol_block_id())),
+    })
 }
 
 /// The carry of `symbol_id_carry_start`: the last one-checker
 /// `--singleThreaded` pool of this thread hands its symbol ids to this
-/// thread (`CheckerPool::carry_symbol_ids`). The bind of the next program
-/// takes them before it gives ids (`give_private_name_class_ids`).
+/// thread after its jobs (`CheckerPool::carry_symbol_ids`). The bind of the
+/// next such program takes them before it gives ids
+/// (`give_private_name_class_ids`).
 fn carry_last_pool_symbol_ids() {
     POOLS.with(|pools| {
         let mut pools = pools.borrow_mut();
         let last = pools
             .iter_mut()
-            .filter(|(_, pool)| pool.carry_from.is_some())
+            .filter(|(_, pool)| pool.carry.is_some_and(|carry| carry.single))
             .max_by_key(|&(&id, _)| id);
         if let Some((_, pool)) = last {
-            pool.carry_symbol_ids();
+            pool.carry_symbol_ids(true);
         }
     });
 }
@@ -4071,7 +4426,7 @@ fn start_checkers(count: usize) -> CheckerPool {
     let claims = arena
         .is_none()
         .then(Arc::<crate::jemalloc_layout::ArenaClaims>::default);
-    let carry_from = symbol_id_carry_start(count);
+    let carry = symbol_id_carry_start(count);
     let (workers, threads): (Vec<_>, Vec<_>) = (0..count)
         .map(|index| {
             let (sender, receiver) = std::sync::mpsc::channel::<Job>();
@@ -4090,6 +4445,9 @@ fn start_checkers(count: usize) -> CheckerPool {
                     #[cfg(all(feature = "jemalloc", target_os = "linux"))]
                     let _manual_arena = claims.and_then(|claims| claims.claim());
                     seed.install();
+                    if let Some(count_block_ids) = carry.and_then(|carry| carry.log(count)) {
+                        record_symbol_ids(count_block_ids);
+                    }
                     let checker = new_pool_checker(index, count);
                     WORKER_CHECKER.with(|slot| *slot.borrow_mut() = Some(checker));
                     WORKER_INDEX.with(|slot| slot.set(Some(index)));
@@ -4117,7 +4475,8 @@ fn start_checkers(count: usize) -> CheckerPool {
         workers,
         threads,
         emit: None,
-        carry_from,
+        carry,
+        pending: Arc::default(),
     }
 }
 
@@ -4128,14 +4487,17 @@ fn start_checkers(count: usize) -> CheckerPool {
 fn start_checkers(count: usize) -> CheckerPool {
     // First, as on native: the carry of the last pool becomes this thread's
     // ids, and each checker starts from them (`id_seed`).
-    let carry_from = symbol_id_carry_start(count);
+    let carry = symbol_id_carry_start(count);
     let checkers = (0..count)
-        .map(|_| InlineChecker::Unmade(WorkerIds(id_seed().into())))
+        .map(|_| {
+            let mut ids = WorkerIds(id_seed().into());
+            if let Some(count_block_ids) = carry.and_then(|carry| carry.log(count)) {
+                ids.run(|| record_symbol_ids(count_block_ids));
+            }
+            InlineChecker::Unmade(ids)
+        })
         .collect();
-    CheckerPool {
-        checkers,
-        carry_from,
-    }
+    CheckerPool { checkers, carry }
 }
 
 /// wasm: a checker of the inline pool. Making it on its first job, and
@@ -4321,11 +4683,16 @@ fn send_thread_job<R: Send + 'static>(
     f: impl FnOnce() -> R + Send + 'static,
 ) -> JobReceiver<R> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let job: Job = Box::new(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        let _ = sender.send(result);
-    });
     with_pool(|pool| {
+        let pending = Arc::clone(&pool.pending);
+        pending.fetch_add(1, Ordering::Relaxed);
+        let job: Job = Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            // Before the result: a thread that has every result sees the
+            // pool idle (`CheckerPool::idle`). A job gives no id after it.
+            pending.fetch_sub(1, Ordering::Release);
+            let _ = sender.send(result);
+        });
         pool.workers[index]
             .send(job)
             .expect("checker thread stopped");
@@ -6605,6 +6972,67 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("the bind chain does not end");
         assert_eq!(result, (true, 0, 1));
+    }
+
+    // bindgap1: the queue of an early bind (`BindQueue::held`,
+    // `start_early_bind`) holds every bound file until `release` gives the
+    // offsets of the first file; then each file reaches the join with its
+    // offsets. A stop before the release drops the held files: none reaches
+    // the join, and the chain ends.
+    #[test]
+    fn a_held_bind_queue_holds_its_files_until_the_release() {
+        let program = small_program("goport-bind-held");
+        for release in [true, false] {
+            let (done, ended) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _program = crate::core::enter_program(Some(program));
+                let order = [0, 1, 2, 3];
+                let queue = BindQueue::held(vec![false; 4], 2);
+                let (joined, arrived) = std::sync::mpsc::channel();
+                let joined = Mutex::new(joined);
+                let run = |_, link: &mut LinkBinders<'_>| {
+                    let joined = joined.lock().unwrap().clone();
+                    run_bind_link(
+                        &queue,
+                        &order,
+                        link,
+                        |_| Some(((), SymbolArena::new_file().mark())),
+                        |i, ready| {
+                            let _ = joined.send((i, ready.is_some()));
+                        },
+                    );
+                };
+                let (sender, _receiver) = std::sync::mpsc::channel();
+                let mut early = Vec::new();
+                std::thread::scope(|scope| {
+                    spawn_bind_chain(scope, 2, &run, &queue, sender);
+                    // Every file is bound, and none reaches the join.
+                    while queue.files_left() || queue.lock().binding > 0 {
+                        std::thread::yield_now();
+                    }
+                    early.extend(arrived.try_iter());
+                    if release {
+                        queue.release(SymbolArena::new().next_file_offsets());
+                    } else {
+                        queue.stop();
+                    }
+                });
+                drop(joined);
+                let mut late: Vec<(usize, bool)> = arrived.iter().collect();
+                late.sort_unstable();
+                let _ = done.send((early, late));
+            });
+            let (early, late) = ended
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .expect("the held bind chain does not end");
+            assert_eq!(early, Vec::new(), "a file joined before the release");
+            let expected: Vec<(usize, bool)> = if release {
+                (0..4).map(|i| (i, true)).collect()
+            } else {
+                Vec::new()
+            };
+            assert_eq!(late, expected, "release {release}");
+        }
     }
 
     // followups63 (R214 reviewer item 2): a real bind that fails on a bind

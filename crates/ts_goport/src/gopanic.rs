@@ -8,9 +8,26 @@
 static UNPORTED_NAMES: std::sync::Mutex<std::collections::BTreeMap<&'static str, u64>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
+thread_local! {
+    /// Set on a thread whose unported hits do not count
+    /// (`skip_unported_hits`).
+    static SKIP_HITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// From now on, the unported hits of this thread do not count. An early
+/// bind thread sets it (`program::start_early_bind`): a hit fails its bind,
+/// and the file binds again in `bind_all`, which counts the hit, or the
+/// program never binds and Go makes no hit.
+pub fn skip_unported_hits() {
+    SKIP_HITS.set(true);
+}
+
 /// Records one hit of unported Go code. The runner reports every name.
 /// A run with any hit is not a match.
 pub fn record_unported(go_name: &'static str) {
+    if SKIP_HITS.get() {
+        return;
+    }
     let mut names = UNPORTED_NAMES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

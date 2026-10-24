@@ -217,7 +217,9 @@ pub(super) fn try_load_with(
     // port's `NewProgram` is `install_new_program`, which also builds the
     // Go files, as the build task times `new_program` and `new_program_version`.
     let parse_start = std::time::Instant::now();
-    let program = install_new_program(opts);
+    // No early bind: a caller such as `astdump` reads node flags with no
+    // bind.
+    let program = install_new_program(opts, false);
     times.parse_time = parse_start.elapsed();
     program
 }
@@ -946,7 +948,12 @@ fn load_config(
 
 /// Go `compiler.NewProgram` for a config that is already parsed. It builds
 /// the Go files and installs the program for the process. Call it once.
-pub(super) fn install_new_program(opts: ProgramOptions) -> Result<&'static GoProgram, String> {
+/// With `early_bind` the files start to bind when they are published
+/// (`program::start_early_bind`).
+pub(super) fn install_new_program(
+    opts: ProgramOptions,
+    early_bind: bool,
+) -> Result<&'static GoProgram, String> {
     let cwd = current_directory()?;
     // PERF: the program of a one-program process is never freed, so its
     // loader state is not freed either (`with_loader_state_forgotten`). The
@@ -954,13 +961,20 @@ pub(super) fn install_new_program(opts: ProgramOptions) -> Result<&'static GoPro
     // exit, so the exit does not free it either.
     let new_program = Rc::new(with_loader_state_forgotten(|| new_program(opts)));
     std::mem::forget(Rc::clone(&new_program));
-    Ok(build_program(&new_program, Entry::Only, cwd, None))
+    Ok(build_program(
+        &new_program,
+        Entry::Only { early_bind },
+        cwd,
+        None,
+    ))
 }
 
 /// How `build_program` makes a program known.
 enum Entry {
-    /// The program of a one-program process (`core::set_prog`).
-    Only,
+    /// The program of a one-program process (`core::set_prog`). With
+    /// `early_bind` its files start to bind after the publish
+    /// (`program::start_early_bind`).
+    Only { early_bind: bool },
     /// A program version of a multi-program process
     /// (`core::register_program_version`). The caller parses and builds it
     /// inside `core::enter_program(None)`.
@@ -1008,7 +1022,7 @@ fn build_program(
     }
     // PERF (serialgap1): the checker split of a one-program process runs
     // beside the build and the bind (`start_checker_associations`).
-    if matches!(entry, Entry::Only) {
+    if matches!(entry, Entry::Only { .. }) {
         super::ls_program::start_checker_associations(np);
     }
     let parsed = match &replaced {
@@ -1065,8 +1079,13 @@ fn build_program(
         state: OnceLock::new(),
     }));
     let one_program = match entry {
-        Entry::Only => {
+        Entry::Only { early_bind } => {
             set_prog(program);
+            // PERF (bindgap1): the files bind while this thread builds the
+            // tables, only when this program published every file.
+            if early_bind && parsed.len() == files.len() {
+                super::start_early_bind(files.iter().map(|file| file.root));
+            }
             true
         }
         Entry::Version => {
