@@ -179,6 +179,9 @@ pub struct Parser<'a> {
 
     pub current_parent: Node,
     pub reparsed_clones: Vec<Node>,
+    /// `ParsedSourceFile::has_decorated_parameter`: set when this parse
+    /// made a parameter with a decorator (`parse_parameter_ex`).
+    pub has_decorated_parameter: bool,
 
     pub store: usize,
 
@@ -224,6 +227,7 @@ pub fn new_parser<'a>() -> Parser<'a> {
         reparse_list: Vec::new(),
         current_parent: Node::NIL,
         reparsed_clones: Vec::new(),
+        has_decorated_parameter: false,
         store: 0,
         jsdoc_cut_text: None,
         jsdoc_tail_first: i32::MAX,
@@ -894,6 +898,7 @@ impl<'a> Parser<'a> {
         result.is_declaration_file = is_declaration_file;
         result.language_variant = self.language_variant;
         result.script_kind = self.script_kind;
+        result.has_decorated_parameter = self.has_decorated_parameter;
         set_node_flags(result.root, result.root.flags() | self.source_flags);
         result.node_count = self.factory.node_count();
         result.text_count = self.factory.text_count();

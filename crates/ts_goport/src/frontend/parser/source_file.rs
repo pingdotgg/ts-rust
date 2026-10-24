@@ -57,6 +57,13 @@ pub struct ParsedSourceFile {
     /// If this is the SourceFile itself, then this module was "forced"
     /// to be an external module (previously "true").
     pub external_module_indicator: Node,
+    /// True when the parse made a parameter with a decorator. When false, Go
+    /// `getAdditionalJSSyntacticDiagnostics` finds nothing in the file, as it
+    /// reports only decorated parameters (`program::has_syntactic_diagnostics`).
+    // PORT: no Go field (bindgapcost1). It can be true where that walk finds
+    // nothing (a decorated parameter under type syntax, a speculative parse
+    // that was not kept); then the walk decides.
+    pub has_decorated_parameter: bool,
     /// The owner of this file version when it can be freed: set by the
     /// language server parse cache for a path that was published before
     /// (`ast::freeable_path`). Every holder of the parse keeps the version
@@ -109,6 +116,7 @@ impl ParsedSourceFile {
             text_count: 0,
             common_js_module_indicator: Node::NIL,
             external_module_indicator: Node::NIL,
+            has_decorated_parameter: false,
             version: std::cell::OnceCell::new(),
         }
     }
