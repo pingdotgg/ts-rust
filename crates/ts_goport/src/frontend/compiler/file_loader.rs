@@ -279,7 +279,7 @@ pub fn process_all_program_files(
         },
         files_parser: RefCell::new(FilesParser {
             queue: Vec::new(),
-            task_data_by_path: FxHashMap::default(),
+            task_data_by_path: Default::default(),
             max_depth: max_node_module_js_depth,
             single_threaded,
             load_stats: Cell::new(None),
@@ -1951,6 +1951,7 @@ impl FileLoader {
                                 package_id: add.package_id,
                             },
                             None,
+                            Some(add.path_hash),
                         );
                     }
                     let resolutions = std::mem::take(&mut commit.resolutions);
