@@ -1566,6 +1566,12 @@ impl<'a> Scanner<'a> {
                             self.scanner_state.token = SyntaxKind::EndOfFile;
                             break 'sw;
                         }
+                        // PERF: scanintern1 C1. The ASCII fast path of the
+                        // `scanIdentifier` call below, inline.
+                        if let Some(token) = self.scan_ascii_identifier() {
+                            self.scanner_state.token = token;
+                            break 'sw;
+                        }
                         if self.scan_identifier(0, IdentifierVariant::STANDARD) {
                             self.scanner_state.token =
                                 get_identifier_token(self.scanner_state.token_value);

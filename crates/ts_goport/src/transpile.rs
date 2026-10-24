@@ -390,7 +390,7 @@ fn set_options_for_transpile(options: &mut CompilerOptions, declaration: bool) {
 // panics.
 // PORT: Go embeds a nil `vfs.FS`, so any other method dereferences nil
 // (`go_nil_dereference_at`, with the offset of the method in the method
-// table of Go N's nil interface).
+// table of the pinned Go's nil interface).
 struct TranspileFs {
     files: FxHashMap<String, String>,
 }
@@ -423,17 +423,17 @@ impl Fs for TranspileFs {
     }
 
     fn write_file(&self, _path: &str, _data: &str) -> Result<(), FsError> {
-        // Go N' loads `WriteFile` from the method table of the nil `vfs.FS`: addr=0x68.
+        // Go loads `WriteFile` from the method table of the nil `vfs.FS`: addr=0x68.
         crate::core::go_nil_dereference_at(0x68)
     }
 
     fn append_file(&self, _path: &str, _data: &str) -> Result<(), FsError> {
-        // Go N' loads `AppendFile` from the method table of the nil `vfs.FS`: addr=0x18.
+        // Go loads `AppendFile` from the method table of the nil `vfs.FS`: addr=0x18.
         crate::core::go_nil_dereference_at(0x18)
     }
 
     fn remove(&self, _path: &str) -> Result<(), FsError> {
-        // Go N' loads `Remove` from the method table of the nil `vfs.FS`: addr=0x58.
+        // Go loads `Remove` from the method table of the nil `vfs.FS`: addr=0x58.
         crate::core::go_nil_dereference_at(0x58)
     }
 
@@ -443,7 +443,7 @@ impl Fs for TranspileFs {
         _a_time: Option<SystemTime>,
         _m_time: Option<SystemTime>,
     ) -> Result<(), FsError> {
-        // Go N' loads `Chtimes` from the method table of the nil `vfs.FS`: addr=0x28.
+        // Go loads `Chtimes` from the method table of the nil `vfs.FS`: addr=0x28.
         crate::core::go_nil_dereference_at(0x28)
     }
 
@@ -456,12 +456,12 @@ impl Fs for TranspileFs {
     }
 
     fn get_accessible_entries(&self, _path: &str) -> Entries {
-        // Go N' loads `GetAccessibleEntries` from the method table of the nil `vfs.FS`: addr=0x40.
+        // Go loads `GetAccessibleEntries` from the method table of the nil `vfs.FS`: addr=0x40.
         crate::core::go_nil_dereference_at(0x40)
     }
 
     fn stat(&self, _path: &str) -> Option<FileInfo> {
-        // Go N' loads `Stat` from the method table of the nil `vfs.FS`: addr=0x60.
+        // Go loads `Stat` from the method table of the nil `vfs.FS`: addr=0x60.
         crate::core::go_nil_dereference_at(0x60)
     }
 

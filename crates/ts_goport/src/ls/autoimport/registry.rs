@@ -2306,23 +2306,20 @@ impl RegistryBuilder {
                     .fs()
                     .realpath(&types_package_json.package_directory);
             }
-            // PORT: Go N' (ts#64159, registry.go:1428) compares path keys
+            // Go: registry.go:1427-1432 compares the path keys
             // (`PathKey.ContainsPath`) of the builder's current directory and
-            // the realpath. Both are rooted and normalized, so the N
-            // `tspath.ContainsPath` gives the same answer; the host's current
-            // directory is the builder's (see `RegistryCloneHost`).
+            // the realpath. The host's current directory is the builder's
+            // (see `RegistryCloneHost`).
+            let use_case_sensitive_file_names = self.host.fs().use_case_sensitive_file_names();
             let is_local = !realpath.is_empty()
                 && !realpath.contains("/node_modules/")
-                && tspath::contains_path(
-                    self.host.get_current_directory(),
-                    &realpath,
-                    &tspath::ComparePathsOptions {
-                        use_case_sensitive_file_names: self
-                            .host
-                            .fs()
-                            .use_case_sensitive_file_names(),
-                        ..Default::default()
-                    },
+                && tspath::contains_path_key(
+                    &tspath::to_path(
+                        self.host.get_current_directory(),
+                        "",
+                        use_case_sensitive_file_names,
+                    ),
+                    &tspath::to_path(&realpath, "", use_case_sensitive_file_names),
                 );
             result.push(Rc::new(DiscoveredPackage {
                 package_name: package_name.clone(),

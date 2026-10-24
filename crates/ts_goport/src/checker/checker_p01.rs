@@ -874,6 +874,15 @@ pub struct Checker {
     pub type_parameters_origin_count: u32,
     pub class_type_parameters_origins: FxHashMap<TypeId, u32>,
     pub total_instantiation_count: u32,
+    /// PERF (identmatch1, not in Go): the count of member resolves of
+    /// anonymous object types (ObjectFlags `ANONYMOUS`, so also reverse
+    /// mapped types) that ended with an empty resolved type. Go's
+    /// IsEmptyAnonymousObjectType (checker.go:27077) reads
+    /// `MEMBERS_RESOLVED` and does not resolve, so its answer for such a
+    /// type goes from false to true at that resolve and at no other time
+    /// outside it. `normalize_for_matching` keeps a normalized type only
+    /// while this count does not move.
+    pub empty_anonymous_resolves: u32,
     pub instantiation_count: u32,
     pub instantiation_stack: Vec<TypeId>,
     pub conditional_constraint_depth: u32,
@@ -1264,6 +1273,10 @@ pub struct Checker {
     /// Not in Go. Set once at creation; on, `some_property_reduces_to_never`
     /// tests the names in the port's faster order.
     pub(crate) fast_never_order: bool,
+    /// Go `freePropertyCounts` (checker.go:694): the empty count maps that
+    /// `some_property_reduces_to_never` reuses
+    /// (`get_temporary_property_counts`).
+    pub(crate) free_property_counts: Vec<crate::checker::checker_p24::TemporaryPropertyCounts>,
 
     // Arenas (PORTING.md "Checker data"). Index 0 of each is a dummy entry
     // so handle value 0 stays nil.
@@ -1432,6 +1445,7 @@ impl Checker {
             type_parameters_origin_count: 0,
             class_type_parameters_origins: FxHashMap::default(),
             total_instantiation_count: 0,
+            empty_anonymous_resolves: 0,
             instantiation_count: 0,
             instantiation_stack: Vec::new(),
             conditional_constraint_depth: 0,
@@ -1770,6 +1784,7 @@ impl Checker {
             weak_bits_off: false,
             union_subset_answers: FxHashMap::default(),
             fast_never_order: crate::checker::checker_p24::fast_never_order_from_env(),
+            free_property_counts: Vec::new(),
             symbols,
             types: ChunkedArena::with_nil(Type::default()),
             object_type_instantiations: vec![InstantiationMap::default()],

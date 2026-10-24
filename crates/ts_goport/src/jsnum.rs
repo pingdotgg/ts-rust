@@ -41,6 +41,9 @@ impl Number {
         self.0
     }
 
+    // PORT: Go's `math.NaN()` has the bits 0x7ff8000000000001, Rust's
+    // `f64::NAN` 0x7ff8000000000000. A NaN prints as `NaN`, so its bits do
+    // not reach the output text.
     #[must_use]
     pub fn nan() -> Self {
         Self(f64::NAN)
@@ -529,8 +532,11 @@ fn round_half_even(magnitude: &BigUint, precision: u64) -> (BigUint, u64) {
 /// (`src/math`, the toolchain of the pinned tsgo) so that folded numbers equal
 /// tsgo's to the bit. Log and Exp follow the amd64 assembly (`log_amd64.s`,
 /// `exp_amd64.s`) that tsgo runs on x86-64. Like Go's, Exp uses fused
-/// multiply-add when the CPU has AVX and FMA. Other targets use the FMA path.
-/// No other code in this module depends on the CPU.
+/// multiply-add when the CPU has AVX and FMA. A build for another target
+/// (arm64 too) runs this amd64 math with the FMA path, so it equals Go on
+/// amd64 with FMA (the oracle's platform), not Go on arm64: there Go's Log
+/// is the pure Go `log.go` and its Exp is `exp_arm64.s`. No other code in
+/// this module depends on the CPU.
 mod go_math {
     const SHIFT: u32 = 52;
     const MASK: u64 = 0x7ff;
@@ -876,41 +882,46 @@ mod tests {
     use super::{
         BigInt, MAX_SAFE_INTEGER, MIN_SAFE_INTEGER, Number, PseudoBigInt, parse_pseudo_big_int,
     };
-    use num_traits::ToPrimitive;
 
+    // The expected bits are Go's: `math.Float64bits(float64(jsnum.FromString(text)))`
+    // at pin 3e9236361fa9 (Go 1.27.1, amd64). The last five literals are
+    // integers over 2^64 with a tie and one far 1 bit at the 53-bit rounding
+    // point: Go rounds them up, and num-bigint's `to_f64` (the old expected
+    // value of this test) rounds them down.
     #[test]
     fn small_integer_literals_parse_like_bigint() {
-        for text in [
-            "0",
-            "00",
-            "7",
-            "0012",
-            "9007199254740991",
-            "9007199254740992",
-            "9007199254740993",
-            "18446744073709551616",
-            "0x1F",
-            "0X0000ff",
-            "0b101",
-            "0o777",
-            "0x20000000000000",
-            "0x20000000000001",
-            "0xFFFFFFFFFFFFFFFFFF",
+        for (text, go_bits) in [
+            ("0", 0x0000_0000_0000_0000),
+            ("00", 0x0000_0000_0000_0000),
+            ("7", 0x401c_0000_0000_0000),
+            ("0012", 0x4028_0000_0000_0000),
+            ("9007199254740991", 0x433f_ffff_ffff_ffff),
+            ("9007199254740992", 0x4340_0000_0000_0000),
+            ("9007199254740993", 0x4340_0000_0000_0000),
+            ("18446744073709551616", 0x43f0_0000_0000_0000),
+            ("0x1F", 0x403f_0000_0000_0000),
+            ("0X0000ff", 0x406f_e000_0000_0000),
+            ("0b101", 0x4014_0000_0000_0000),
+            ("0o777", 0x407f_f000_0000_0000),
+            ("0x20000000000000", 0x4340_0000_0000_0000),
+            ("0x20000000000001", 0x4340_0000_0000_0000),
+            ("0xFFFFFFFFFFFFFFFFFF", 0x4470_0000_0000_0000),
+            ("0X100DBB81EB0C348000000000080000000", 0x47f0_0dbb_81eb_0c35),
+            (
+                "341423214327874980323079271629654589440",
+                0x47f0_0dbb_81eb_0c35,
+            ),
+            (
+                "0o4006673403654141510000000000000020000000000",
+                0x47f0_0dbb_81eb_0c35,
+            ),
+            ("0x10913d7b51169a8000800000000000000", 0x47f0_913d_7b51_169b),
+            (
+                "352348447587066043971605188579392749568",
+                0x47f0_913d_7b51_169b,
+            ),
         ] {
-            let (radix, digits) = match text.get(0..2).unwrap_or_default() {
-                "0b" | "0B" => (2, &text[2..]),
-                "0o" | "0O" => (8, &text[2..]),
-                "0x" | "0X" => (16, &text[2..]),
-                _ => (10, text),
-            };
-            let expected = BigInt::parse_bytes(digits.as_bytes(), radix)
-                .and_then(|integer| integer.to_f64())
-                .unwrap();
-            assert_eq!(
-                Number::from_string(text).0.to_bits(),
-                expected.to_bits(),
-                "{text}"
-            );
+            assert_eq!(Number::from_string(text).0.to_bits(), go_bits, "{text}");
         }
     }
 
