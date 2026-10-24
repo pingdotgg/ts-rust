@@ -2614,6 +2614,17 @@ pub mod bunrcount {
         }
     }
 
+    static TA_CALLERS: Mutex<Option<std::collections::HashMap<(&'static str, u32), u64>>> =
+        Mutex::new(None);
+
+    /// A call of `get_type_with_this_argument` from `loc`.
+    pub fn ta_caller(loc: &'static std::panic::Location<'static>) {
+        let mut m = TA_CALLERS.lock().unwrap();
+        *m.get_or_insert_with(Default::default)
+            .entry((loc.file(), loc.line()))
+            .or_insert(0) += 1;
+    }
+
     /// Entry of `get_intersection_type_ex`: its serial number.
     pub fn ix_enter() -> u64 {
         C[K::ix_calls as usize].fetch_add(1, Relaxed) + 1
@@ -2667,6 +2678,13 @@ pub mod bunrcount {
             let v = h.load(Relaxed);
             if v != 0 {
                 out.push_str(&format!("dn_len_{i} {v}\n"));
+            }
+        }
+        if let Some(m) = TA_CALLERS.lock().unwrap().as_ref() {
+            let mut v: Vec<_> = m.iter().collect();
+            v.sort();
+            for ((file, line), n) in v {
+                out.push_str(&format!("tacaller {file}:{line} {n}\n"));
             }
         }
         if let Ok(mut f) = std::fs::File::create(&p) {

@@ -102,6 +102,7 @@ impl Checker {
     }
 
     // Go: checker/checker.go:20009 getTypeWithThisArgument
+    #[track_caller] // PROBE bunrcount1
     pub fn get_type_with_this_argument(
         &mut self,
         t: TypeId,
@@ -116,6 +117,7 @@ impl Checker {
                 crate::checker::relater_p1::bunrcount::K::ta_calls,
                 1,
             );
+            crate::checker::relater_p1::bunrcount::ta_caller(std::panic::Location::caller());
         }
         if self.ty(t).object_flags.intersects(ObjectFlags::REFERENCE) {
             if bunr {
