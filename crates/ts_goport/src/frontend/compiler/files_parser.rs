@@ -56,11 +56,13 @@ pub struct ParseTask {
     // `collectFiles`; the link saves the string hash per visit. A `Weak`
     // link makes no `Rc` cycle (task, data, task).
     pub data: Weak<RefCell<ParseTaskData>>,
-    /// The hash of `path` in `task_data_by_path` (`FxBuildHasher`), when a
-    /// parse worker made it (`PrepAdd::path_hash`).
+    /// The hash of `path` in `task_data_by_path` (`FxBuildHasher`) that a
+    /// parse worker made (`PrepAdd::path_hash`), or 0: `start` makes it (a
+    /// worker hash of 0 is made again).
     // PERF (loadfree1 C6): `start` then does not read the path for the
-    // hash on the loader. Not in Go.
-    pub path_hash: Option<u64>,
+    // hash on the loader. A `u64`, not an `Option`: the `Rc` of a task stays
+    // in the 512-byte size class. Not in Go.
+    pub path_hash: u64,
 }
 
 /// Go `*parseTask`.
@@ -309,17 +311,17 @@ impl ParseTask {
         if !is_normalized_path(&ref_.file_name) {
             ref_.file_name = normalize_path(&ref_.file_name);
         }
-        self.add_normalized_sub_task(ref_, lib_file, None);
+        self.add_normalized_sub_task(ref_, lib_file, 0);
     }
 
     /// `add_sub_task` of a ref whose name is normalized already (a parse
     /// worker normalized it, `PrepAdd`). `path_hash`: the hash of its path
-    /// that the worker made (`ParseTask::path_hash`).
+    /// that the worker made, or 0 (`ParseTask::path_hash`).
     pub(crate) fn add_normalized_sub_task(
         &mut self,
         ref_: ResolvedRef,
         lib_file: Option<Rc<LibFile>>,
-        path_hash: Option<u64>,
+        path_hash: u64,
     ) {
         let sub_task = Rc::new(RefCell::new(ParseTask {
             normalized_file_path: ref_.file_name,
@@ -759,9 +761,10 @@ impl FilesParser {
                 let task = task.borrow();
                 let hasher = self.task_data_by_path.hasher();
                 let ls = crate::loadstamp::span(crate::loadstamp::C6_HASH);
-                let hash = task
-                    .path_hash
-                    .unwrap_or_else(|| hasher.hash_one(&task.path));
+                let hash = match task.path_hash {
+                    0 => hasher.hash_one(&task.path),
+                    hash => hash,
+                };
                 drop(ls);
                 debug_assert_eq!(hash, hasher.hash_one(&task.path), "{}", task.path.0);
                 let _ls = crate::loadstamp::span(crate::loadstamp::C6_GET);
