@@ -1273,12 +1273,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "ab6db91955b3902f7",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "ad42210d5a05ac17e",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R232 pipeline (candidate.sh side)."
