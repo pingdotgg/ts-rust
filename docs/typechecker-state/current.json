@@ -1257,6 +1257,24 @@
         "revision": 232,
         "sourceFingerprint": "92a842770ea8fcd465cf8aeffdde1ec4b35224b3dabeccf6a5d9c356c827c642",
         "file": "target/continuation-r232-reviewer-verdict.txt"
+      },
+      {
+        "role": "audit_accepted_roster",
+        "agent": "ab6db91955b3902f7",
+        "verdict": "PASS",
+        "batchId": "recovery-continuation-go-checker-port-112",
+        "revision": 233,
+        "sourceFingerprint": "cbcf49776cbf777ab36966ab348735e61bb9e91be4f85896d0f32f543ba595f4",
+        "file": "target/continuation-r233-auditor-verdict.txt"
+      },
+      {
+        "role": "independent_reviewer",
+        "agent": "ad42210d5a05ac17e",
+        "verdict": "STOP",
+        "batchId": "recovery-continuation-go-checker-port-112",
+        "revision": 233,
+        "sourceFingerprint": "cbcf49776cbf777ab36966ab348735e61bb9e91be4f85896d0f32f543ba595f4",
+        "file": "target/continuation-r233-reviewer-verdict.txt"
       }
     ],
     "focusedResults": [],
@@ -1298,7 +1316,7 @@
     "reviewer": {
       "role": "independent_reviewer",
       "agent": "ad42210d5a05ac17e",
-      "verdict": "PENDING"
+      "verdict": "STOP"
     },
     "nextPermittedAction": "Run the R233 pipeline (candidate.sh side)."
   },
