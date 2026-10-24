@@ -2850,18 +2850,18 @@ mod symbol_id_tests {
         // process frees this range.
         const START: usize = 1 << 26;
         let mut ids = LineageIds::new();
-        let kept = ids.id(START - 1, next_symbol_id);
-        let dying = ids.id(START + 5, next_symbol_id);
-        assert_eq!(ids.id(START + 5, next_symbol_id), dying);
+        let kept = ids.id(START - 1, next_global_id);
+        let dying = ids.id(START + 5, next_global_id);
+        assert_eq!(ids.id(START + 5, next_global_id), dying);
 
         free_lineage_symbol_ids(FILE, START..START + 2 * LINEAGE_ID_CHUNK);
         // Until the next new chunk the id stays.
-        assert_eq!(ids.id(START + 5, next_symbol_id), dying);
-        let later = ids.id(START + 2 * LINEAGE_ID_CHUNK, next_symbol_id);
+        assert_eq!(ids.id(START + 5, next_global_id), dying);
+        let later = ids.id(START + 2 * LINEAGE_ID_CHUNK, next_global_id);
         assert!(later > dying);
         assert!(ids.chunks[START >> LINEAGE_ID_SHIFT].is_none());
-        assert_eq!(ids.id(START - 1, next_symbol_id), kept);
-        ids.id(START + LINEAGE_ID_CHUNK + 1, next_symbol_id);
+        assert_eq!(ids.id(START - 1, next_global_id), kept);
+        ids.id(START + LINEAGE_ID_CHUNK + 1, next_global_id);
     }
 }
 
