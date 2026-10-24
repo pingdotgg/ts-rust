@@ -190,6 +190,11 @@ pub struct Parser<'a> {
     /// list or diagnostic that ends there or later may need a map to the
     /// file (`jsdoc_tail_pos`).
     pub jsdoc_tail_first: i32,
+    /// Not in Go (jsdocmem1): the speculative tag parses of the current
+    /// JSDoc comment whose result was discarded (`speculate_js_doc_tag`),
+    /// by the parser state where each one started. Emptied at the end of
+    /// each comment.
+    pub jsdoc_discards: FxHashMap<super::jsdoc::JsDocDiscardKey, super::jsdoc::JsDocDiscard>,
 }
 
 // Go: parser.go:104 newParser
@@ -227,6 +232,7 @@ pub fn new_parser<'a>() -> Parser<'a> {
         store: 0,
         jsdoc_cut_text: None,
         jsdoc_tail_first: i32::MAX,
+        jsdoc_discards: FxHashMap::default(),
     };
     res.initialize_closures();
     res
