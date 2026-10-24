@@ -2015,12 +2015,13 @@ pub fn is_global_typings_file(p: &NewProgram, file_name: &str) -> bool {
     if !tspath::is_declaration_file_name(file_name) {
         return false;
     }
-    // ts#64159 (program.go:1813): the file system's case sensitivity (N: the
-    // zero-value `comparePathsOptions`).
-    tspath::contains_path(
+    // ts#64159 (program.go:1826): Go tests rooted paths with the file
+    // system's case sensitivity (`CaseSensitivity.ContainsPath`). The
+    // typings location and the program's file names are rooted.
+    tspath::contains_rooted_path(
         &p.get_global_typings_cache_location(),
         file_name,
-        &p.case_sensitivity(),
+        p.use_case_sensitive_file_names(),
     )
 }
 

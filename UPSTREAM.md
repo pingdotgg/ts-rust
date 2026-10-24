@@ -106,6 +106,19 @@ when the condition no longer holds.
   is not checked. Check: `grep -n 'resolvedSymbol = ' internal/checker/*.go`, the callers of
   `mergeSymbol` and `mergeSymbolTable`, and the walk itself. If a new writer of `resolvedSymbol` can reach a TypeReference node (or the first
   identifier of a `typeof` query), or the walk reads other state, drop the memo or clear it there.
+- `Type::member_mask` (`checker/types.rs`, memberflags1): a new union or intersection stores the OR
+  of its members' flags and of nested members' masks, and `maybe_type_of_kind`
+  (`checker/checker_p30.rs`) tests that mask in place of Go's walk (`maybeTypeOfKind`,
+  checker.go:28211 at `3e9236361fa9`). That is exact only while no type's flags and no member list
+  change after the type can be a member. At `3e9236361fa9` Go writes `Type.flags` after
+  `newType` at 3 places, each before the type can be a member: checker.go:24476 (an enum union gets
+  `EnumLiteral`, port `checker_p26.rs`), 26351 (a 2-member boolean union gets `Boolean`,
+  `checker_p28.rs`) and 28795 (the regular type of an object literal, `checker_p31.rs`). Only
+  `newUnionType` and `newIntersectionType` (checker.go:25778, 25784) write the members of a union
+  or intersection (the other `.types` writes are of tuple element lists and template literal
+  types). Check: `grep -nE '\.flags (\|=|&\^=|=) ' internal/checker/*.go` for a new write
+  to a `*Type`'s flags, and `grep -n '\.types = ' internal/checker/*.go` for a new write of
+  members. If a new write can reach a type that is already a member, drop the mask.
 
 ## Pins in microsoft/TypeScript
 

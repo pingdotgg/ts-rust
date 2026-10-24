@@ -27,9 +27,7 @@ fn nb_e(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<EmitContext> {
 }
 
 fn nb_tracker(b: &Rc<RefCell<NodeBuilderImpl>>) -> Rc<dyn SymbolTracker> {
-    let ctx = nb_ctx(b);
-    let tracker = ctx.borrow().tracker.clone();
-    tracker
+    b.borrow().ctx.borrow().tracker.clone()
 }
 
 impl Checker {
@@ -425,7 +423,7 @@ impl Checker {
         if !self.finalize_boundary(b, &bound) {
             return Node::NIL;
         }
-        nb_ctx(b).borrow_mut().approximate_length += go_node_text_len(existing);
+        b.borrow().ctx.borrow_mut().approximate_length += go_node_text_len(existing);
         transformed
     }
 
@@ -511,7 +509,7 @@ impl Checker {
         &mut self,
         b: &Rc<RefCell<NodeBuilderImpl>>,
     ) -> Node {
-        let mut enc = nb_ctx(b).borrow().enclosing_declaration;
+        let mut enc = b.borrow().ctx.borrow().enclosing_declaration;
         while enc.is_some()
             && b.borrow_mut()
                 .links
@@ -658,10 +656,9 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
         override_enclosing: Node,
     ) -> (bool, Node, SymbolId) {
         let b = self.ctx.b;
-        let ctx = nb_ctx(b);
         let e = self.ctx.e;
         let f: &NodeFactory = e.factory();
-        let ctx_enclosing = ctx.borrow().enclosing_declaration;
+        let ctx_enclosing = b.borrow().ctx.borrow().enclosing_declaration;
         let mut enclosing_declaration = ctx_enclosing;
         if override_enclosing.is_some() {
             enclosing_declaration = override_enclosing;
@@ -1151,7 +1148,9 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
                 return self.visit_each_child(node);
             }
             // !!! TODO: this condition matches strada, but it just seems wrong? Or at the very least extraordinarily approximate, and doesn't flag a builder error...
-            let allow_unresolved_names = nb_ctx(b)
+            let allow_unresolved_names = b
+                .borrow()
+                .ctx
                 .borrow()
                 .internal_flags
                 .intersects(InternalNodeBuilderFlags::ALLOW_UNRESOLVED_NAMES);
@@ -1340,7 +1339,9 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
         }
 
         // style applications
-        let multiline_object_literals = nb_ctx(b)
+        let multiline_object_literals = b
+            .borrow()
+            .ctx
             .borrow()
             .flags
             .intersects(NodeBuilderFlags::MULTILINE_OBJECT_LITERALS);
@@ -1363,7 +1364,9 @@ impl<'a> ExistingNodeTreeVisitor<'a> {
             // rather than escaping them as ASCII Unicode escapes. Mirrors TypeScript's behavior
             // for synthesized string literal types in the node builder (checker.ts:6853).
             let mut c = factory.clone_node(node);
-            let use_single_quotes = nb_ctx(b)
+            let use_single_quotes = b
+                .borrow()
+                .ctx
                 .borrow()
                 .flags
                 .intersects(NodeBuilderFlags::USE_SINGLE_QUOTES_FOR_STRING_LITERAL_TYPE);

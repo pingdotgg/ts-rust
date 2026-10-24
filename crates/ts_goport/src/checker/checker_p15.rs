@@ -557,10 +557,11 @@ impl Checker {
             {
                 let left = self.symbols.get(props, &right_name);
                 if left.is_some() {
-                    let (left_value_declaration, left_name) = {
-                        let l = self.sym(left);
-                        (l.value_declaration, l.name.clone())
-                    };
+                    // PORT: a private name holds the key of its class, where
+                    // Go's `left.Name()` holds the class's symbol id, which
+                    // Go prints here (`go_symbol_name`).
+                    let left_value_declaration = self.sym(left).value_declaration;
+                    let left_name = go_symbol_name(&self.symbols, left);
                     // PORT: Go calls `c.error` (which adds the diagnostic) and then
                     // mutates the returned `*ast.Diagnostic` with `AddRelatedInfo`.
                     // Diagnostics are owned values here, so the related info is
@@ -1139,10 +1140,34 @@ impl Checker {
     }
 
     // Go: checker/checker.go:13913 isConstTypeVariable
+    // PERF (constvar1, not in Go): the answer of a union, intersection or
+    // conditional type is kept in `const_type_variable_memo` (see there).
     pub fn is_const_type_variable(&mut self, t: TypeId, depth: i32) -> bool {
         if depth >= 5 || t.is_nil() {
             return false;
         }
+        if !self
+            .ty(t)
+            .flags
+            .intersects(TypeFlags::UNION_OR_INTERSECTION | TypeFlags::CONDITIONAL)
+        {
+            return self.is_const_type_variable_walk(t, depth);
+        }
+        let key = ConstTypeVariableMemo::key(t, depth);
+        if let Some(answer) = self.const_type_variable_memo.get(key) {
+            return answer;
+        }
+        let mark = self.const_type_variable_memo.mark;
+        let answer = self.is_const_type_variable_walk(t, depth);
+        if self.const_type_variable_memo.mark == mark {
+            self.const_type_variable_memo.put(key, answer);
+        }
+        answer
+    }
+
+    /// The body of Go `isConstTypeVariable` after its first test: `t` is not
+    /// nil and `depth` is less than 5.
+    fn is_const_type_variable_walk(&mut self, t: TypeId, depth: i32) -> bool {
         let flags = self.ty(t).flags;
         if flags.intersects(TypeFlags::TYPE_PARAMETER) {
             let symbol = self.ty(t).symbol;
@@ -1809,6 +1834,111 @@ impl Checker {
             return self.diagnostics.add(diagnostic).clone();
         }
         diagnostic
+    }
+}
+
+/// PERF (constvar1, not in Go): `Checker::const_type_variable_memo`, the
+/// answers of `is_const_type_variable` for union, intersection and
+/// conditional types, keyed by (type, depth). Go walks again on every call.
+///
+/// A stored answer equals a fresh Go walk, and that walk has no side effects,
+/// because a repeat walk reads only immutable type data and lazy fields that
+/// the first walk filled (`bunsteal3/constvar1/go-note-check.md` section 3):
+/// - `mark` did not move during the first walk. It moves when
+///   `push_type_resolution` fails (a field read gave a value that is not
+///   cached), when `get_actual_type_variable` makes an indexed access again
+///   (that call can read lazy state that has no guard), and at the
+///   instantiation limits. An answer is stored only when `mark` did not move.
+/// - No later write replaced a non-nil value of a field that a walk reads:
+///   `resolved_default_constraint` and `resolved_constraint_of_distributive`
+///   of a conditional type, `constraint_type` of a mapped type and
+///   `resolved_type_arguments` of a type reference. These are last writer
+///   wins in Go. `overwrite` clears the memo when a write changes one.
+///
+/// A direct-mapped table: a slot holds `(key << 1) | answer`, and 0 is empty.
+pub(crate) struct ConstTypeVariableMemo {
+    /// A power of two of slots.
+    slots: Box<[u64]>,
+    /// A hash shifted right by this amount is a slot index.
+    shift: u32,
+    /// Answers stored since the table last grew.
+    added: usize,
+    /// Moves at each event that makes a walk in progress unsafe to store.
+    pub(crate) mark: u64,
+}
+
+impl Default for ConstTypeVariableMemo {
+    fn default() -> Self {
+        Self::with_slots(64)
+    }
+}
+
+impl ConstTypeVariableMemo {
+    const MOST_SLOTS: usize = 1 << 15;
+
+    fn with_slots(len: usize) -> Self {
+        Self {
+            slots: vec![0; len].into_boxed_slice(),
+            shift: 64 - len.trailing_zeros(),
+            added: 0,
+            mark: 0,
+        }
+    }
+
+    /// The key of (`t`, `depth`): never 0, because `depth` is 0 to 4.
+    #[inline]
+    fn key(t: TypeId, depth: i32) -> u64 {
+        (u64::from(t.0) << 3) | (depth as u64 + 1)
+    }
+
+    #[inline]
+    fn slot(&self, key: u64) -> usize {
+        (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> self.shift) as usize
+    }
+
+    #[inline]
+    fn get(&self, key: u64) -> Option<bool> {
+        let entry = self.slots[self.slot(key)];
+        (entry >> 1 == key).then_some(entry & 1 != 0)
+    }
+
+    #[inline]
+    fn put(&mut self, key: u64, answer: bool) {
+        if self.added == self.slots.len() && self.slots.len() < Self::MOST_SLOTS {
+            self.grow();
+        }
+        self.added += 1;
+        let slot = self.slot(key);
+        self.slots[slot] = (key << 1) | u64::from(answer);
+    }
+
+    #[cold]
+    fn grow(&mut self) {
+        let old = std::mem::replace(self, Self::with_slots(self.slots.len() * 4));
+        self.mark = old.mark;
+        for &entry in old.slots.iter().filter(|&&entry| entry != 0) {
+            let slot = self.slot(entry >> 1);
+            self.slots[slot] = entry;
+            self.added += 1;
+        }
+    }
+
+    /// Call before a last-writer-wins write of a field that the walk reads,
+    /// with `changed`: the field holds a non-nil value that is not the new
+    /// one. A re-entrant computation wrote it, and stored answers can come
+    /// from it. The walks in progress do not store either.
+    #[inline]
+    pub(crate) fn overwrite(&mut self, changed: bool) {
+        if changed {
+            self.clear();
+        }
+    }
+
+    #[cold]
+    fn clear(&mut self) {
+        self.slots.fill(0);
+        self.added = 0;
+        self.mark += 1;
     }
 }
 

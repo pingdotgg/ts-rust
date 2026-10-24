@@ -1385,7 +1385,8 @@ impl Checker {
 }
 
 /// PERF: not in Go. What `is_matching_reference` read about its last
-/// identifier `source`. Flow analysis compares one reference with each flow
+/// identifier `source`, and (in `access`) about its last synthetic property
+/// access `source`. Flow analysis compares one reference with each flow
 /// node on its path, so the same `source` comes again and again.
 ///
 /// Each value is stable once read: `is_this_in_type_query` only reads the
@@ -1414,15 +1415,25 @@ pub struct MatchingReferenceMemo {
 
 /// PERF: synthref1, not in Go. What `is_matching_reference` and
 /// `contains_matching_reference` read about their last synthetic property
-/// access `source`: the `this.<name>` reference of a constructor walk (Go
-/// `getFlowTypeInConstructor` and `isPropertyInitializedInConstructor`).
-/// The walk compares it with each assignment of the constructor, and each
-/// read of a synthetic node goes through the synthetic arena (its name text
-/// is also interned again), where Go reads a field.
+/// access `source`: the `this.<name>` reference of a constructor or static
+/// block walk (Go `getFlowTypeInConstructor`, `getFlowTypeInStaticBlocks`,
+/// `isPropertyInitializedInConstructor` and
+/// `isPropertyInitializedInStaticBlocks`). The walk compares it with each
+/// assignment of the constructor or the static blocks, and each read of a
+/// synthetic node goes through the synthetic arena (its name text is also
+/// interned again), where Go reads a field.
 ///
 /// The values are tree reads, so they are stable: the checker does not
 /// change the data of its own reference nodes, and a synthetic handle never
-/// names another node while the checker lives (`ast::synthetic`).
+/// names another node while the checker lives (`ast::synthetic`: a freed
+/// chunk leaves a hole that is never used again). That last rule holds
+/// because of two rules that no code checks: a checker never moves to
+/// another thread (the arena is thread-local), and no call replaces the
+/// thread's arena (`install_synthetic_seed`, `install_twin_synthetic_arena`,
+/// `forget_synthetic_nodes`, `free_synthetic_nodes`) while a checker lives
+/// on the thread. All 4 creators pass a `this` expression, so `expression`
+/// is never nil (with a nil expression Go's walk returns false, and
+/// `fill_synthetic_access_memo` would panic on the kind read).
 #[derive(Clone, Debug)]
 pub struct SyntheticAccessMemo {
     /// The synthetic property access (so its kind is

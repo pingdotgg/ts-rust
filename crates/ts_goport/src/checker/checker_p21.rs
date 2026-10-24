@@ -215,6 +215,8 @@ impl Checker {
             self.find_resolution_cycle_start_index(target, property_name);
         if resolution_cycle_start_index >= 0 {
             // A cycle was found
+            // constvar1: `ConstTypeVariableMemo`.
+            self.const_type_variable_memo.mark += 1;
             for i in resolution_cycle_start_index as usize..self.type_resolutions.len() {
                 self.type_resolutions[i].result = false;
             }
