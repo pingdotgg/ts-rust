@@ -2591,6 +2591,9 @@ pub mod bunrcount {
             (t as u64).wrapping_mul(31).wrapping_add(this as u64),
         );
         let key = (t, this);
+        if std::env::var_os("GOPORT_BUNRCOUNT_TA_TRACE").is_some() {
+            TA_TRACE.lock().unwrap().push(key);
+        }
         let mut ta = TA.lock().unwrap();
         let filled = ta.n.min(16);
         for i in 0..filled {
@@ -2613,6 +2616,8 @@ pub mod bunrcount {
             ta.memo[slot] = key;
         }
     }
+
+    static TA_TRACE: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
 
     static TA_CALLERS: Mutex<Option<std::collections::HashMap<(&'static str, u32), u64>>> =
         Mutex::new(None);
@@ -2689,6 +2694,15 @@ pub mod bunrcount {
         }
         if let Ok(mut f) = std::fs::File::create(&p) {
             let _ = f.write_all(out.as_bytes());
+        }
+        let trace = TA_TRACE.lock().unwrap();
+        if !trace.is_empty() {
+            let mut t = String::new();
+            for (a, b) in trace.iter() {
+                t.push_str(&format!("{a} {b}\n"));
+            }
+            p.push(".ta");
+            let _ = std::fs::write(&p, t);
         }
     }
 }
