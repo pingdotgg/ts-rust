@@ -50,6 +50,9 @@ pub(super) struct GoSharedState {
     /// The frontend `IncludeProcessor::diagnostics_read`: set where Go builds
     /// the include processor diagnostics (`get_include_processor_diagnostics`).
     include_diagnostics_read: Arc<std::sync::atomic::AtomicBool>,
+    /// The frontend `IncludeProcessor::program_bound`: set when the bind of
+    /// this program ran (`mark_program_bound`).
+    program_bound: Arc<std::sync::atomic::AtomicBool>,
     /// Go `projectReferenceFileMapper.realpathDtsToSource` after the load,
     /// by path: the entries with a source (`get_parse_file_redirect`).
     realpath_dts_to_source: FxHashMap<String, Arc<SourceOutputAndProjectReference>>,
@@ -1904,6 +1907,7 @@ impl GoSharedState {
             import_helpers_import_specifiers,
             include_diagnostics: OnceLock::new(),
             include_diagnostics_read: Arc::clone(&p.include_processor.diagnostics_read),
+            program_bound: Arc::clone(&p.include_processor.program_bound),
             realpath_dts_to_source,
             redirect_targets,
             references,
@@ -2104,6 +2108,14 @@ impl GoSharedState {
             .get(path)
             .copied()
             .unwrap_or(Node::NIL)
+    }
+
+    /// Marks the bind of this program as run (`program::bind_all`, any
+    /// thread). From then on the file format lines of the include processor
+    /// read the bound CommonJS indicator (`IncludeProcessor::program_bound`).
+    pub(super) fn mark_program_bound(&self) {
+        self.program_bound
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     // Go: compiler/program.go:869 GetIncludeProcessorDiagnostics (the
