@@ -946,7 +946,7 @@ impl Checker {
             let symbol = chain[index];
             // PORT: `typeParameterSymbolList` is keyed by `SymbolId` for Go
             // `ast.GetSymbolId(symbol)`. The two are one to one. The Go call
-            // gives the symbol its id, so it is made too (`ValueSymbolLinkStore`).
+            // gives the symbol its global id, so it is made too (`get_symbol_id`).
             get_symbol_id(&self.symbols, symbol);
             {
                 let b = b.borrow();

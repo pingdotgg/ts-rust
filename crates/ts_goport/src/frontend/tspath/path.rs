@@ -1164,6 +1164,20 @@ pub fn to_file_name_lower_case(file_name: &str) -> String {
     })
 }
 
+impl Path {
+    // Go: tspath/pathkey.go:84 PathKey.CaseInsensitiveKey: an encoded
+    // dynamic name keeps its case, as its path key does.
+    // PORT: the key is a `String`, the key type of the walk's
+    // `tasksSeenByNameIgnoreCase`.
+    #[must_use]
+    pub fn case_insensitive_key(&self) -> String {
+        if is_encoded_dynamic_file_name(&self.0) {
+            return self.0.clone();
+        }
+        to_file_name_lower_case(&self.0)
+    }
+}
+
 // Go: tspath/path.go:723 ToPath (at 673a5f17d713;
 // ts#64159 makes it CaseSensitivity.PathKey, tspath/pathkey.go:43)
 // ts#64544: an encoded dynamic file name keeps its case (see
@@ -1908,11 +1922,48 @@ pub fn contains_rooted_path(
         || relative.starts_with('/')
 }
 
+// Go: tspath/pathkey.go:155 PathKey.ContainsPath (ts#64159)
+// ContainsPath checks whether child is contained within or equal to p.
+// Both keys must have been created with the same CaseSensitivity.
+// PORT: `parent` and `child` are path keys (`to_path` of a rooted, normal
+// path). The roots compare without case (dynamic roots exactly, without
+// their last separator); the rest is a prefix test, as in Go.
+pub fn contains_path_key(parent: &str, child: &str) -> bool {
+    if parent.is_empty() {
+        return false;
+    }
+    let parent_root_length = get_root_length(parent);
+    let child_root_length = get_root_length(child);
+    let parent_root = &parent[..parent_root_length];
+    let child_root = &child[..child_root_length];
+    let roots_equal = if is_encoded_dynamic_file_name(parent) || is_encoded_dynamic_file_name(child)
+    {
+        parent_root.strip_suffix('/').unwrap_or(parent_root)
+            == child_root.strip_suffix('/').unwrap_or(child_root)
+    } else {
+        equate_string_case_insensitive(parent_root, child_root)
+    };
+    if !roots_equal {
+        return false;
+    }
+    let parent_rest = &parent[parent_root_length..];
+    let child_rest = &child[child_root_length..];
+    parent_rest == child_rest
+        || child_rest.len() > parent_rest.len()
+            && child_rest.starts_with(parent_rest)
+            && (parent_rest.is_empty()
+                || parent_rest.ends_with('/')
+                || child_rest.as_bytes()[parent_rest.len()] == b'/')
+}
+
 impl Path {
-    // Go: tspath/path.go:1111 Path.ContainsPath
+    // Go: tspath/path.go:1111 Path.ContainsPath (at 673a5f17d713; ts#64159
+    // makes it PathKey.ContainsPath, pathkey.go:155: `contains_path_key`)
     // ContainsPath checks whether child is contained within or equal to p.
     // Since Path values are already rooted, reduced, and case-canonicalized,
     // this is a simple string prefix check.
+    // PORT: the roots compare exactly here; Go N' compares them without case
+    // ("C:/x" holds "c:/x/a" on a case-sensitive file system).
     pub fn contains_path(&self, child: &Path) -> bool {
         let p = self.0.as_bytes();
         let c = child.0.as_bytes();

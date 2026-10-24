@@ -815,12 +815,13 @@ impl NewProgram {
 }
 
 /// Go `ast.IsExternalOrCommonJSModule(file)` for a file of the loader
-/// (tsgo#4712 `canReplaceFileInProgram`).
+/// (tsgo#4712 `canReplaceFileInProgram`, and the file format lines of
+/// `explainRedirectAndImpliedFormat`).
 // PORT: the binder sets Go `SourceFile.CommonJSModuleIndicator`. A
 // published file reads the indicators from its `source_file_info`, which has
 // the bind result once the file is bound (nil before, as in Go). A file that
 // is not published yet is not bound; its parse has both indicators.
-fn is_external_or_common_js_module_of(file: &ParsedSourceFile) -> bool {
+pub(crate) fn is_external_or_common_js_module_of(file: &ParsedSourceFile) -> bool {
     if crate::ast::is_published(file.store) {
         return is_external_or_common_js_module(file.root);
     }

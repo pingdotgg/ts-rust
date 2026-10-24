@@ -42,12 +42,12 @@ type IdCell = u32;
 const BIG_ID: IdCell = IdCell::MAX;
 const BLOCK_CELL: IdCell = 1 << 31;
 
-// Go: ast/utilities.go:48 BlockIdOffset
+// Go: ast/utilities.go:49 BlockIdOffset
 /// The first block id. A block id is always 15 digits long, and the text
 /// of a late-bound name holds it (`__@k@<id>`): the node builder counts its
 /// length, and `compare_symbols` compares names as text before ids.
 pub const BLOCK_ID_OFFSET: u64 = 0x1_0000_0000_0000;
-// Go: ast/utilities.go:49 BlockIdSize (core.LinkPageSize)
+// Go: ast/utilities.go:50 BlockIdSize (core.LinkPageSize)
 const BLOCK_ID_SIZE: u64 = 256;
 
 /// The cell of `id` (not 0): `BIG_ID` when it has none.

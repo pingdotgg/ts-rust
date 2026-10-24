@@ -3398,9 +3398,10 @@ pub fn get_emit_module_format_of_file(source_file: Node) -> ModuleKind {
     // (checker/nodebuilderimpl.go:687). The port's file info of nil has no
     // name.
     if source_file.is_nil() {
-        // Go N' `(*SourceFile).FileName` (not inlined here) loads `parseOptions.FileName` (offset
-        // 0x60): addr=0x60 (ast.go:2704).
-        crate::core::go_nil_dereference_at(0x60);
+        // Go calls `(*SourceFile).FileName` through the `HasFileName` method
+        // table (not inlined), which loads `parseOptions.FileName` (offset
+        // 0x50) first: addr=0x50 (ast.go:2629).
+        crate::core::go_nil_dereference_at(0x50);
     }
     let info = source_file_info(source_file);
     with_file_options_and_meta(source_file, |options, meta| {
@@ -3912,6 +3913,13 @@ fn checker_count() -> usize {
 // changes no state that the threads copied (`WorkerSeed`).
 fn create_checkers() -> CheckerPool {
     bind_all();
+    // Go builds the include processor diagnostics at their first read, and
+    // a checker reads them only after the bind that its creation runs. The
+    // checker threads read the copy that this thread builds here, after the
+    // bind (`go_frontend::fill_include_diagnostics`).
+    if let Some(np) = go_frontend_program() {
+        go_frontend::fill_include_diagnostics(&np);
+    }
     let count = checker_count();
     let pool = start_checkers(count);
     let program = prog();
@@ -4951,6 +4959,7 @@ pub fn get_program_diagnostics() -> Vec<Diagnostic> {
     };
     // Go builds the include processor diagnostics here.
     go.include_processor.mark_diagnostics_read();
+    go_frontend::fill_include_diagnostics(&go);
     let mut diagnostics = go.program_diagnostics.clone();
     // #4712
     diagnostics.extend(content_mapper_diagnostics());
@@ -6906,6 +6915,73 @@ mod tests {
                 && messages[1].contains(&format!("'\u{FFFD}#{l}@#y' is specified more than once"))
                 && messages[2].contains("'a' is specified more than once"),
             "TS2783 prints Go's private name ids: {messages:?}"
+        );
+    }
+
+    // TS4094 prints `propertySymbol.Name()` for a private or protected
+    // member, and `ast.SymbolName` for a private name, which is
+    // `symbol.Name()` for an object literal `#z` (nodebuilderimpl.go:2777,
+    // 2780). Go holds the class's symbol id in such a name: at pin
+    // 3e9236361fa9 Go prints the lines below with ids 2 (the class
+    // expression) and 1 (`K`), in `--singleThreaded` and in default mode.
+    // The port's name holds a class key, so the message must print Go's id.
+    #[test]
+    fn private_in_base_of_class_expression_prints_go_private_name_ids() {
+        let dir = std::env::temp_dir().join(format!("goport-ts4094-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let globals = "interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n\
+                       interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n\
+                       interface Number {}\ninterface Object {}\ninterface RegExp {}\n\
+                       interface String {}\n";
+        let a = "export const C = class { private #x = 1; protected #y = 2; };\n\
+                 export function f() { class K { m() { return { #z: 1 }; } } return new K().m(); }\n";
+        std::fs::write(dir.join("globals.d.ts"), globals).unwrap();
+        std::fs::write(dir.join("a.ts"), a).unwrap();
+        let config = dir.join("tsconfig.json");
+        std::fs::write(
+            &config,
+            r#"{ "compilerOptions": { "noLib": true, "types": [], "target": "es2022",
+                 "declaration": true, "emitDeclarationOnly": true },
+                 "files": ["globals.d.ts", "a.ts"] }"#,
+        )
+        .unwrap();
+        let (messages, start) = std::thread::spawn(move || {
+            let program = try_load_version(&config.to_string_lossy(), |_| {})
+                .unwrap_or_else(|e| panic!("cannot load {}: {e}", config.display()));
+            let scope = crate::core::enter_program(Some(program));
+            let start = next_ids().1;
+            bind_all();
+            let messages: Vec<String> = program
+                .source_files()
+                .flat_map(|file| get_declaration_diagnostics(file.root))
+                .filter(|d| d.code() == 4094)
+                .map(|d| format_diagnostic(&d))
+                .collect();
+            drop(scope);
+            release_program(program);
+            (messages, start)
+        })
+        .join()
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (k, c) = (start + 1, start + 2);
+        let property = |name: &str| {
+            format!("Property '{name}' of exported anonymous class type may not be private")
+        };
+        let want = [
+            property("#x"),
+            property("#y"),
+            property(&format!("\u{FFFD}#{c}@#x")),
+            property(&format!("\u{FFFD}#{c}@#y")),
+            property(&format!("\u{FFFD}#{k}@#z")),
+        ];
+        assert!(
+            messages.len() == want.len()
+                && messages
+                    .iter()
+                    .zip(&want)
+                    .all(|(m, w)| m.contains(w.as_str())),
+            "TS4094 prints Go's private name ids: {messages:?}"
         );
     }
 

@@ -997,7 +997,7 @@ impl Checker {
         if parent.is_nil() {
             // Go reads `deferred.parent.flags`: a symbol of another checker
             // has no links here.
-            // Go N' loads `parent.flags` (offset 0): addr=0x0 (checker.go:16791).
+            // Go loads `parent.flags` (offset 0): addr=0x0 (checker.go:16813).
             crate::core::go_nil_dereference_at(0x0);
         }
         let constituents = deferred.constituents.clone();
@@ -1050,7 +1050,7 @@ impl Checker {
             // Go reads `symbol.CheckFlags` and panics on nil, for example
             // on the target of an instantiated symbol of another checker,
             // which has no links here.
-            // Go N' loads `symbol.CheckFlags` (offset 4): addr=0x4 (checker.go:16821).
+            // Go loads `symbol.CheckFlags` (offset 4): addr=0x4 (checker.go:16843).
             crate::core::go_nil_dereference_at(0x4);
         }
         let check_flags = self.sym(symbol).check_flags;
@@ -1143,7 +1143,7 @@ impl Checker {
             // Go reads `symbol.CheckFlags` and panics on nil, for example
             // on the target of an instantiated symbol of another checker,
             // which has no links here.
-            // Go N' loads `symbol.CheckFlags` (offset 4): addr=0x4 (checker.go:16880).
+            // Go loads `symbol.CheckFlags` (offset 4): addr=0x4 (checker.go:16902).
             crate::core::go_nil_dereference_at(0x4);
         }
         let s = self.sym(symbol);

@@ -240,11 +240,16 @@ pub fn new_watched_files_for_paths(
     current_directory: &str,
     use_case_sensitive_file_names: bool,
 ) -> Rc<WatchedFiles<Vec<String>>> {
-    let compare_paths_options = tspath::ComparePathsOptions {
-        current_directory: current_directory.to_string(),
+    // Go: caseSensitivity.PathKey(workspaceDirectory.AsPath()), the same key
+    // for each file.
+    // PORT: the paths are rooted; `current_directory` is the base of `to_path`
+    // only (Go has no such parameter).
+    let workspace_key = tspath::to_path(
+        workspace_directory,
+        current_directory,
         use_case_sensitive_file_names,
-    };
-    let workspace_directory = workspace_directory.to_string();
+    );
+    let current_directory = current_directory.to_string();
     new_watched_files(
         name,
         watch_kind,
@@ -252,7 +257,9 @@ pub fn new_watched_files_for_paths(
         Rc::new(move |files: &Vec<String>| {
             let mut result = PatternsAndIgnored::default();
             for file in files {
-                if tspath::contains_path(&workspace_directory, file, &compare_paths_options) {
+                let file_key =
+                    tspath::to_path(file, &current_directory, use_case_sensitive_file_names);
+                if tspath::contains_path_key(&workspace_key, &file_key) {
                     result.patterns_inside_workspace.push(file.clone());
                 } else {
                     result
@@ -562,10 +569,17 @@ pub fn get_typings_locations_globs(
         current_directory: current_directory.to_string(),
         use_case_sensitive_file_names,
     };
+    // Go tests rooted paths (`CaseSensitivity.ContainsPath`, :396-398): the
+    // typings files, the typings location and the workspace are rooted and
+    // normalized.
     for file in typings_files {
-        if tspath::contains_path(typings_location, file, &compare_paths_options) {
+        if tspath::contains_rooted_path(typings_location, file, use_case_sensitive_file_names) {
             include_typings_location = true;
-        } else if !tspath::contains_path(workspace_directory, file, &compare_paths_options) {
+        } else if !tspath::contains_rooted_path(
+            workspace_directory,
+            file,
+            use_case_sensitive_file_names,
+        ) {
             let directory = tspath::get_directory_path(file);
             external_directories.insert(
                 tspath::to_path(&directory, current_directory, use_case_sensitive_file_names),
@@ -708,5 +722,85 @@ pub fn new_recursive_directory_watcher(
             ..Default::default()
         },
         kind: Some(kind),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // followups76 (R228 reviewer item 9): Go getTypingsLocationsGlobs tests
+    // rooted paths (`CaseSensitivity.ContainsPath`, watch.go:396-398). On a
+    // case-insensitive file system Go folds case with ToLower, which keeps
+    // 'ſ' (EqualFold would match it to 's'): the typings location
+    // "/cache/ſ" does not hold "/cache/s/...", so its directory is watched
+    // outside the workspace; "/cache/S" holds it. Go answers from a probe at
+    // 3e9236361fa9 (`TestF76WatchProbe`). Go collects the inside patterns
+    // from a map, so their order is not Go's: the test sorts them.
+    #[test]
+    fn typings_locations_globs_test_rooted_paths_like_go() {
+        let files = [
+            "/cache/s/node_modules/@types/a/index.d.ts".to_string(),
+            "/ws/node_modules/@types/b/index.d.ts".to_string(),
+        ];
+        for (location, outside, inside) in [
+            (
+                "/cache/\u{17f}",
+                &["/cache/s/node_modules/@types/a"][..],
+                &["/ws/**/*"][..],
+            ),
+            ("/cache/S", &[][..], &["/cache/S/**/*", "/ws/**/*"][..]),
+        ] {
+            let got = get_typings_locations_globs(&files, location, "/ws", "/ws", false);
+            let mut patterns = got.patterns_inside_workspace.clone();
+            patterns.sort();
+            assert_eq!(got.directories_outside_workspace, outside, "{location}");
+            assert_eq!(patterns, inside, "{location}");
+            assert!(got.ignored.is_empty(), "{location}");
+        }
+    }
+
+    // followups76r2: Go NewWatchedFilesForPaths tests the path keys of the
+    // workspace and of each file (`PathKey.ContainsPath`, watch.go:197). On a
+    // case-insensitive file system Go's key folds case with ToLower, which
+    // keeps 'ſ' and 'ς' (EqualFold would match them to 's' and 'σ'): the
+    // workspace "/ws/ſ" does not hold "/ws/s/tsconfig.json"; "/ws/S" does. Go
+    // answers from a probe at 3e9236361fa9 (`TestF76R2WatchPathsProbe`).
+    #[test]
+    fn watched_files_for_paths_test_path_keys_like_go() {
+        let files = vec![
+            "/ws/s/tsconfig.json".to_string(),
+            "/ws/\u{17f}/a/tsconfig.json".to_string(),
+            "/ws/\u{3c3}/tsconfig.json".to_string(),
+        ];
+        for (workspace, inside, outside) in [
+            (
+                "/ws/\u{17f}",
+                &["/ws/\u{17f}/a/tsconfig.json"][..],
+                &["/ws/s", "/ws/\u{3c3}"][..],
+            ),
+            (
+                "/ws/S",
+                &["/ws/s/tsconfig.json"][..],
+                &["/ws/\u{17f}/a", "/ws/\u{3c3}"][..],
+            ),
+            (
+                "/ws/\u{3c2}",
+                &[][..],
+                &["/ws/s", "/ws/\u{17f}/a", "/ws/\u{3c3}"][..],
+            ),
+        ] {
+            let w = new_watched_files_for_paths(
+                "t",
+                lsproto::WatchKind::CREATE,
+                true,
+                workspace,
+                "/",
+                false,
+            );
+            let got = (w.compute_glob_patterns)(&files);
+            assert_eq!(got.patterns_inside_workspace, inside, "{workspace}");
+            assert_eq!(got.directories_outside_workspace, outside, "{workspace}");
+        }
     }
 }

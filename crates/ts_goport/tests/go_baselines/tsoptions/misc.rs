@@ -225,6 +225,51 @@ fn get_wildcard_directories_drive_root() {
     assert_eq!(result.into_iter().collect::<HashMap<_, _>>(), expected);
 }
 
+// followups76r2: Go getWildcardDirectories removes a directory below a
+// recursive one with a path key test (`PathKey.ContainsPath`,
+// wildcarddirectories.go:78). Go's case-insensitive key folds case with
+// ToLower, which keeps 'ſ' and 'ς' (EqualFold would match them to 's' and
+// 'σ'), so "/p/ſ" does not hold "/p/s/x". The answers come from a probe of
+// Go getWildcardDirectories at 3e9236361fa9 (`TestF76R2WildcardProbe`).
+#[test]
+fn get_wildcard_directories_removes_subpaths_by_path_key() {
+    let cases: &[(&[&str], &[(&str, bool)])] = &[
+        (
+            &["\u{17f}/**/*", "s/x/*"],
+            &[("/p/\u{17f}", true), ("/p/s/x", false)],
+        ),
+        (&["S/**/*", "s/x/*"], &[("/p/S", true)]),
+        (
+            &["\u{3c2}/**/*", "\u{3c3}/x/*"],
+            &[("/p/\u{3c2}", true), ("/p/\u{3c3}/x", false)],
+        ),
+        (
+            &["s/x/*", "\u{17f}/**/*"],
+            &[("/p/\u{17f}", true), ("/p/s/x", false)],
+        ),
+    ];
+    for &(include, expected) in cases {
+        let include: Vec<String> = include.iter().map(|s| (*s).to_string()).collect();
+        let result = get_wildcard_directories(
+            &include,
+            &[],
+            &ComparePathsOptions {
+                current_directory: "/p".to_string(),
+                use_case_sensitive_file_names: false,
+            },
+        );
+        let expected: HashMap<String, bool> = expected
+            .iter()
+            .map(|&(path, recursive)| (path.to_string(), recursive))
+            .collect();
+        assert_eq!(
+            result.into_iter().collect::<HashMap<_, _>>(),
+            expected,
+            "{include:?}"
+        );
+    }
+}
+
 // Go: wildcarddirectories_test.go:39 TestGetWildcardDirectories_NonASCIICharacters
 #[test]
 fn get_wildcard_directories_non_ascii_characters() {

@@ -529,9 +529,10 @@ pub fn diagnostic_to_string_builder(
         // diagnostic with no file, such as a TS5033 of a failed write in the
         // d.ts `data.Diagnostics` (emitfileshandler.go:212). The inlined
         // `FileName` first loads the length of `parseOptions.FileName`
-        // (offset 0x60): Go N' faults at addr=0x68 (gopanicout1).
+        // (offset 0x50): Go faults at addr=0x58 (ast.go:2629, pc 0xc1d449 in
+        // tsgo-oracle-3e9236361fa9; nilsig1).
         if diagnostic.file().is_nil() {
-            crate::core::go_nil_dereference_at(0x68);
+            crate::core::go_nil_dereference_at(0x58);
         }
         // ts#64159: the file names (not the path keys), compared without
         // case; a file on another root keeps its absolute name
