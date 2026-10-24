@@ -612,8 +612,9 @@ fn build_reports_a_failed_write_as_go() {
 /// gopanicout1: stderr begins with Go's two runtime lines. The emit runs on
 /// a `sync.WaitGroup.Go` goroutine, so line 1 ends with
 /// ` [recovered, repanicked]`, except with `--singleThreaded`. Line 2 is the
-/// signal line (addr=0x68); Go's `pc` is an instruction of its binary
-/// (0xc5efe9 in tsgo-oracle-fed0bf24149f), the port's is 0x0. Go writes
+/// signal line (addr=0x58 at 3e9236361fa9, 0x68 at Go N'); Go's `pc` is an
+/// instruction of its binary (0xc1d449 in tsgo-oracle-3e9236361fa9), the
+/// port's is 0x0 (nilsig1). Go writes
 /// `b.js` and `b.d.ts` or not, by timing; both written is one of Go's
 /// results in each mode (gopanicout1 `w/go10-t2.jsonl`, 10 runs: 5, 3, 6
 /// and 4 runs).
@@ -670,7 +671,7 @@ const NIL_DEREFERENCE: &str =
 
 /// The signal line of that panic, with the port's `pc`.
 #[cfg(unix)]
-const NIL_SIGNAL: &str = "[signal SIGSEGV: segmentation violation code=0x1 addr=0x68 pc=0x0]";
+const NIL_SIGNAL: &str = "[signal SIGSEGV: segmentation violation code=0x1 addr=0x58 pc=0x0]";
 
 /// gopanicout1. The API build of a project with `sourceMap` and
 /// `declaration` (no incremental state is needed: the API orchestrator has

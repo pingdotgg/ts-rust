@@ -784,7 +784,7 @@ pub fn parse_json_config_file_content_worker(
                     "tsconfig.json"
                 };
                 let diagnostic_message = diag::The_files_list_in_config_file_0_is_empty;
-                // In Go (tsconfigparsing.go:1300) `nodeValue` is nil when the top
+                // In Go (tsconfigparsing.go:1199) `nodeValue` is nil when the top
                 // level is not an object (`[{"files": []}]`), and
                 // CreateDiagnosticForNodeInSourceFile (errors.go:93) then
                 // dereferences it.
@@ -792,7 +792,7 @@ pub fn parse_json_config_file_content_worker(
                     for_each_tsconfig_prop_array(source_file.source_file, "files", |property| {
                         Some(property.initializer())
                     })
-                    // Go N' loads `node.Loc.Pos()` (offset 8): addr=0x8 (errors.go:93).
+                    // Go loads `node.Loc.Pos()` (offset 8): addr=0x8 (errors.go:93).
                     .unwrap_or_else(|| crate::core::go_nil_dereference_at(0x8));
                 errors.push(create_diagnostic_for_node_in_source_file(
                     source_file.source_file,

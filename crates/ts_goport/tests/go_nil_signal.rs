@@ -7,7 +7,8 @@
 //!
 //! Each case is a `tsgo` run that Go N' (fed0bf24149f) ends with these two
 //! lines and exit code 2 in each run (gopanicout2 `go-model.md` section 1,
-//! `tools/cliprobe.py` and `tools/lspprobe.py`).
+//! `tools/cliprobe.py` and `tools/lspprobe.py`), and Go at 3e9236361fa9 with
+//! the same addresses (nilsig1, 5 runs of each case).
 #![cfg(target_os = "linux")]
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -325,8 +326,8 @@ fn json_field(body: &str, field: &str) -> Option<String> {
 /// LSP notifications and requests from a client with a nil element or a
 /// missing pointer field, which the sync part of the Go handler reads
 /// (no `recover`): `change.Type` (project/session.go:428, offset 0x10),
-/// `file.OldUri` (lsp/server.go:2015, offset 0) and `codeLens.Data.Uri`
-/// (lsp/server.go:2270, offset 0x10).
+/// `file.OldUri` (lsp/server.go:2016, offset 0) and `codeLens.Data.Uri`
+/// (lsp/server.go:2271, offset 0x10).
 #[test]
 fn lsp_messages_with_a_nil_element() {
     let range = r#"{"start":{"line":0,"character":0},"end":{"line":0,"character":5}}"#;
@@ -361,9 +362,9 @@ fn lsp_messages_with_a_nil_element() {
 
 /// gopanicout3. The handler of `initialized` (no `recover`) reads what
 /// `initialize` sets: `s.initializationOptions`, nil before `initialize`
-/// (lsp/server.go:1716, offset 0), and, when the client has the workspace
+/// (lsp/server.go:1717, offset 0), and, when the client has the workspace
 /// folders capability, the only folder of `workspaceFolders: [null]`
-/// (lsp/server.go:1752, offset 0x8: the length word of `Uri`).
+/// (lsp/server.go:1753, offset 0x8: the length word of `Uri`).
 #[test]
 fn lsp_initialized_reads_a_nil_initialize_state() {
     assert_eq!(
