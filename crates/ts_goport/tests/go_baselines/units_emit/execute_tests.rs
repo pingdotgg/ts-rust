@@ -584,7 +584,9 @@ fn package_json_lookup_changed_tests_path_keys_like_go() {
         ),
     ];
     for &(changed, kind, package_json, expected) in cases {
-        let changed_paths: FxHashMap<_, _> = [(orchestrator.to_path(changed), kind)].into();
+        let changed_paths: FxHashMap<_, _> = [(orchestrator.to_path(changed), kind)]
+            .into_iter()
+            .collect();
         assert_eq!(
             orchestrator.package_json_lookup_changed(package_json, &changed_paths),
             expected,
