@@ -7,6 +7,7 @@ mod explain_files_cache;
 mod extended_counts;
 mod file_delete;
 mod flag_bytes;
+mod identity_matching_slots;
 mod jsdoc_cut;
 mod large_union_order;
 mod never_intersection_order;

@@ -87,7 +87,8 @@ impl Checker {
         let t_symbol = self.ty(t).symbol;
         let index_infos = self.get_index_infos_of_type(t).to_vec();
         let result = self.new_anonymous_type(t_symbol, members, &[], &[], &index_infos);
-        // memberflags1: not the weak bit of `t`; `result` has more members.
+        // memberflags1: not the weak bits of `t`; `result` has other
+        // members (the missing elements) and no signatures.
         let object_flags = self.ty(t).object_flags.without(ObjectFlags::WEAK_BITS);
         self.ty_mut(result).object_flags = object_flags;
         result
