@@ -820,7 +820,11 @@ impl NewProgram {
 // PORT: the binder sets Go `SourceFile.CommonJSModuleIndicator`. A
 // published file reads the indicators from its `source_file_info`, which has
 // the bind result once the file is bound (nil before, as in Go). A file that
-// is not published yet is not bound; its parse has both indicators.
+// is not published yet is not bound; its parse has both indicators. A file
+// that `tsc --watch` or the project system keeps has the bind of an earlier
+// program, as in Go. `tsc -b --watch` keeps no parse whose bind can set the
+// CommonJS indicator (`BuildHost::watch_source_file`): Go gives each build
+// program a new parse of a `.js` file.
 pub(crate) fn is_external_or_common_js_module_of(file: &ParsedSourceFile) -> bool {
     if crate::ast::is_published(file.store) {
         return is_external_or_common_js_module(file.root);
