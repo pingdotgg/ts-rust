@@ -6199,7 +6199,8 @@ pub fn line_count() -> i32 {
 }
 
 // Go: compiler/program.go:1735 IdentifierCount
-pub fn identifier_count() -> i32 {
+// PORT: Go `int`, so `i64`: the sum can pass 2^31 (idcount64).
+pub fn identifier_count() -> i64 {
     let go = go_frontend().expect("identifier count of an alias resolver program");
     let mut count = 0;
     for file in go.source_files() {
