@@ -2709,15 +2709,20 @@ fn identifier_name(names: &mut IdentNames, text: &str) -> (Name, bool) {
     {
         return found;
     }
-    identifier_name_slow(names, text, key)
+    identifier_name_slow(names, text)
 }
 
-/// `identifier_name` of a text (key `key`) that `IdentNames::find_whole` did
-/// not find: a text over `IdentKey::WHOLE` bytes (found with a text compare)
-/// or a text that is not in the cache (interned, then put in).
+/// `identifier_name` of a text that `IdentNames::find_whole` did not find:
+/// a text over `IdentKey::WHOLE` bytes (found with a text compare) or a text
+/// that is not in the cache (interned, then put in).
+// PERF: this makes the key again, and does not take it from
+// `identifier_name`: a 32-byte argument goes through the stack, which the
+// hit path of `identifier_name` would pay for. Making it again costs only
+// the misses.
 #[cold]
 #[inline(never)]
-fn identifier_name_slow(names: &mut IdentNames, text: &str, key: IdentKey) -> (Name, bool) {
+fn identifier_name_slow(names: &mut IdentNames, text: &str) -> (Name, bool) {
+    let key = IdentKey::new(text.as_bytes());
     if key.len > IdentKey::WHOLE
         && let Some(found) = names.find_long(key, text)
     {
