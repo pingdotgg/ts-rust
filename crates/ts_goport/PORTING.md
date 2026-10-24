@@ -1216,14 +1216,19 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   pool here hands the ids of its checkers back to the loading thread
   (`program::CheckerPool::carry_symbol_ids`, `ast::carry_symbol_ids`), so
   the next program's checkers start from them:
-  - `tsc -b` and watch mode (`program::carry_symbol_ids_of_every_pool`):
-    every pool, when its task is built or before watch mode makes the next
-    program (`program::carry_symbol_ids_of`), or else when its program is
+  - `tsc -b` and watch mode (`program::carry_symbol_ids_of_every_pool`,
+    set while a build or a watch cycle runs): every pool made then, when its
+    task is built or before watch mode makes the next program
+    (`program::carry_symbol_ids_of`), or else when its program is
     released. Each worker logs the global ids that it gave and the blocks
     that it took. The merge keeps an id that the loading thread has. Else
     the worker that gave the symbol an id first wins, by a clock (the ids
     that the worker gave before it, of both kinds), as the first id wins in
-    Go. The global counter counts on by the winning global ids and the
+    Go. Only a pool of more than one worker counts its block ids for the
+    clock (`ast::record_symbol_ids`): each one then takes the slow path of
+    `SymbolIdGenerator`. One worker's log order is its clock order, so a
+    one-checker pool, a `--singleThreaded` program and a `tsc -p` without
+    watch pay nothing per block id. The global counter counts on by the winning global ids and the
     global ids of the workers' own symbols, in clock order; the block
     counter counts on by every block, whole blocks in clock order of the
     takes. The ids are new numbers, so two workers' ids do not collide.
@@ -1254,7 +1259,10 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
     `"singleThreaded": true`. Its one-checker compile pool is on the
     dispatch thread. When the pool stops or the next such pool is made, and
     the dispatch thread gave no ids after the pool was made, the dispatch
-    thread counts on from the ids of the emit. So the API symbol handles
+    thread counts on from the ids of the emit. Such a pool, outside `tsc -b`
+    and watch mode (`program::IdCarry::only_from`), keeps no log: its
+    worker's ids keep their numbers, and its counters become the dispatch
+    thread's. So the API symbol handles
     (symbol ids) that come after are larger. The handles that the client
     already has do not change. Go emits with the project's checkers, which
     share the one counter with the other requests, so its later handles

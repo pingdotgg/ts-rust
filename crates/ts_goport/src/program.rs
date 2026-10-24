@@ -367,6 +367,17 @@ struct IdCarry {
     only_from: Option<(u64, u64)>,
 }
 
+impl IdCarry {
+    /// What each worker of a pool of `count` checkers records for the carry
+    /// (`ast::record_symbol_ids`): None for no log, else whether it counts
+    /// its block ids. An `only_from` pool has one worker, whose ids keep
+    /// their numbers, so it needs no log. Only a merge of two workers or
+    /// more reads the block ids before each id (`ast::IdLog::clock`).
+    fn log(self, count: usize) -> Option<bool> {
+        self.only_from.is_none().then_some(count > 1)
+    }
+}
+
 impl CheckerPool {
     /// Stops the workers: each drops its checker and frees its synthetic
     /// nodes, then it closes their job queues and waits for each thread to
@@ -4069,21 +4080,32 @@ fn new_pool_checker(index: usize, count: usize) -> Checker {
 }
 
 thread_local! {
-    /// Set on the loading thread of `tsc -b` and watch mode
-    /// (`carry_symbol_ids_of_every_pool`).
+    /// Set on the loading thread of `tsc -b` and watch mode while they
+    /// build (`carry_symbol_ids_of_every_pool`).
     static CARRY_EVERY_POOL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// `tsc -b` and watch mode call it on their loading thread: from then on
-/// every checker pool of this thread hands its symbol ids back to it, so
-/// the programs made after count on from them, as Go's process counters do
-/// (`CheckerPool::carry_symbol_ids`). A pool does so when its `tsc -b` task
-/// is built, before watch mode makes the next program
-/// (`carry_symbol_ids_of`), or else when its program is released. Elsewhere only
-/// a one-checker `--singleThreaded` pool does (the API `emitProgram`); the
-/// language server's checkers are not in pools.
-pub fn carry_symbol_ids_of_every_pool() {
-    CARRY_EVERY_POOL.with(|every| every.set(true));
+/// `tsc -b` and watch mode call it on their loading thread for each build:
+/// while the result lives, every checker pool that this thread makes hands
+/// its symbol ids back to it, so the programs made after count on from
+/// them, as Go's process counters do (`CheckerPool::carry_symbol_ids`). A
+/// pool does so when its `tsc -b` task is built, before watch mode makes
+/// the next program (`carry_symbol_ids_of`), or else when its program is
+/// released. Elsewhere only a one-checker `--singleThreaded` pool does (the
+/// API `emitProgram`); the language server's checkers are not in pools.
+pub fn carry_symbol_ids_of_every_pool() -> CarryEveryPool {
+    CarryEveryPool(CARRY_EVERY_POOL.with(|every| every.replace(true)))
+}
+
+/// `carry_symbol_ids_of_every_pool` until it drops: then the flag is as it
+/// was before. A pool keeps the carry that it was made with.
+#[must_use = "the pools of this thread carry their ids only while it lives"]
+pub struct CarryEveryPool(bool);
+
+impl Drop for CarryEveryPool {
+    fn drop(&mut self) {
+        CARRY_EVERY_POOL.with(|every| every.set(self.0));
+    }
 }
 
 /// The checker pool of `program`, whose check and emit are done, hands its
@@ -4184,8 +4206,8 @@ fn start_checkers(count: usize) -> CheckerPool {
                     #[cfg(all(feature = "jemalloc", target_os = "linux"))]
                     let _manual_arena = claims.and_then(|claims| claims.claim());
                     seed.install();
-                    if carry.is_some() {
-                        record_symbol_ids();
+                    if let Some(count_block_ids) = carry.and_then(|carry| carry.log(count)) {
+                        record_symbol_ids(count_block_ids);
                     }
                     let checker = new_pool_checker(index, count);
                     WORKER_CHECKER.with(|slot| *slot.borrow_mut() = Some(checker));
@@ -4230,8 +4252,8 @@ fn start_checkers(count: usize) -> CheckerPool {
     let checkers = (0..count)
         .map(|_| {
             let mut ids = WorkerIds(id_seed().into());
-            if carry.is_some() {
-                ids.run(record_symbol_ids);
+            if let Some(count_block_ids) = carry.and_then(|carry| carry.log(count)) {
+                ids.run(|| record_symbol_ids(count_block_ids));
             }
             InlineChecker::Unmade(ids)
         })

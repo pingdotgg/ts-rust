@@ -468,6 +468,9 @@ impl Orchestrator {
     // Go: build/orchestrator.go:812 (*Orchestrator).DoCycle
     // PORT: Go unlocks with `defer`; the port unlocks before each return.
     pub fn do_cycle(&mut self) {
+        // PORT: Go's symbol id counters are per process
+        // (`program::carry_symbol_ids_of_every_pool`).
+        let _carry_ids = crate::program::carry_symbol_ids_of_every_pool();
         self.wm.borrow().lock();
 
         let (changed_paths, overflow) = self.wm.borrow().drain_events();
