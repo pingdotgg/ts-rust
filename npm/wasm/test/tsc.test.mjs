@@ -347,3 +347,36 @@ test("refuses JSON diagnostics for --build", async () => {
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /not supported with --build/);
 });
+
+test("builds projects after one with a syntax error (tsc -b)", async () => {
+    // A syntax error stops the check, so the emit makes only the checkers of
+    // p1's files. Before p2 counts on from p1's symbol ids, the build makes
+    // p1's other checkers (it panicked there before). Go and the native
+    // tsgo give the same output.
+    const config = files => JSON.stringify({
+        compilerOptions: { strict: true, outDir: "out", types: [], lib: ["es2022"], target: "es2022" },
+        files,
+    });
+    const files = {
+        "/w/p1/tsconfig.json": config(["a.ts", "b.ts"]),
+        "/w/p1/a.ts": "export const a: number = 1;\nconst x = (;\n",
+        "/w/p1/b.ts": "export const b = 2;\n",
+        "/w/p2/tsconfig.json": config(["c.ts"]),
+        "/w/p2/c.ts": "export class C { static readonly #c = Symbol(); static t() { const n: number = C.#c; } }\n",
+    };
+    const result = await tsc(["-b", "p1", "p2", "--pretty", "false"], { files, cwd: "/w" });
+    assert.equal(result.stderr, "");
+    assert.equal(
+        result.stdout,
+        "p1/a.ts(2,12): error TS1109: Expression expected.\n"
+            + "p2/c.ts(1,68): error TS2322: Type 'typeof import(\"/w/p2/c\").C.�#1@#c'"
+            + " is not assignable to type 'number'.\n",
+    );
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.files.get("/w/p1/out/a.js"), "export const a = 1;\nconst x = ();\n");
+    assert.equal(result.files.get("/w/p1/out/b.js"), "export const b = 2;\n");
+    assert.equal(
+        result.files.get("/w/p2/out/c.js"),
+        "export class C {\n    static #c = Symbol();\n    static t() { const n = C.#c; }\n}\n",
+    );
+});

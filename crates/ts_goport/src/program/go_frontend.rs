@@ -217,7 +217,9 @@ pub(super) fn try_load_with(
     // port's `NewProgram` is `install_new_program`, which also builds the
     // Go files, as the build task times `new_program` and `new_program_version`.
     let parse_start = std::time::Instant::now();
-    let program = install_new_program(opts);
+    // No early bind: a caller such as `astdump` reads node flags with no
+    // bind.
+    let program = install_new_program(opts, false);
     times.parse_time = parse_start.elapsed();
     program
 }
@@ -946,7 +948,12 @@ fn load_config(
 
 /// Go `compiler.NewProgram` for a config that is already parsed. It builds
 /// the Go files and installs the program for the process. Call it once.
-pub(super) fn install_new_program(opts: ProgramOptions) -> Result<&'static GoProgram, String> {
+/// With `early_bind` the files start to bind when they are published
+/// (`program::start_early_bind`).
+pub(super) fn install_new_program(
+    opts: ProgramOptions,
+    early_bind: bool,
+) -> Result<&'static GoProgram, String> {
     let cwd = current_directory()?;
     // PERF: the program of a one-program process is never freed, so its
     // loader state is not freed either (`with_loader_state_forgotten`). The
@@ -954,13 +961,20 @@ pub(super) fn install_new_program(opts: ProgramOptions) -> Result<&'static GoPro
     // exit, so the exit does not free it either.
     let new_program = Rc::new(with_loader_state_forgotten(|| new_program(opts)));
     std::mem::forget(Rc::clone(&new_program));
-    Ok(build_program(&new_program, Entry::Only, cwd, None))
+    Ok(build_program(
+        &new_program,
+        Entry::Only { early_bind },
+        cwd,
+        None,
+    ))
 }
 
 /// How `build_program` makes a program known.
 enum Entry {
-    /// The program of a one-program process (`core::set_prog`).
-    Only,
+    /// The program of a one-program process (`core::set_prog`). With
+    /// `early_bind` its files start to bind after the publish
+    /// (`program::start_early_bind`).
+    Only { early_bind: bool },
     /// A program version of a multi-program process
     /// (`core::register_program_version`). The caller parses and builds it
     /// inside `core::enter_program(None)`.
@@ -1008,7 +1022,7 @@ fn build_program(
     }
     // PERF (serialgap1): the checker split of a one-program process runs
     // beside the build and the bind (`start_checker_associations`).
-    if matches!(entry, Entry::Only) {
+    if matches!(entry, Entry::Only { .. }) {
         super::ls_program::start_checker_associations(np);
     }
     let parsed = match &replaced {
@@ -1065,8 +1079,14 @@ fn build_program(
         state: OnceLock::new(),
     }));
     let one_program = match entry {
-        Entry::Only => {
+        Entry::Only { early_bind } => {
             set_prog(program);
+            // PERF (bindgap1): the files bind while this thread builds the
+            // tables, only when this program published every file and no
+            // file has a syntactic diagnostic (`start_early_bind`).
+            if early_bind && parsed.len() == files.len() {
+                super::start_early_bind(files);
+            }
             true
         }
         Entry::Version => {
@@ -2800,5 +2820,107 @@ pub(super) mod tests {
             "a worker asked the disk again: the program cache keeps the first answer"
         );
         assert!(index);
+    }
+
+    /// Set in the child process of
+    /// `a_program_with_a_syntactic_diagnostic_starts_no_early_bind`: its case.
+    const EARLY_BIND_CHILD: &str = "GOPORT_TEST_EARLY_BIND_CASE";
+    const EARLY_BIND_TEST: &str =
+        "program::go_frontend::tests::a_program_with_a_syntactic_diagnostic_starts_no_early_bind";
+
+    // bindgap1 round 2 (R235 reviewer B2): Go binds a program with a
+    // syntactic diagnostic only to emit it or for `--diagnostics`
+    // (program.go:2066-2080), so the `tsc` install starts no early bind for
+    // it (`start_early_bind`). The cases: a parse error, a JS-only syntax
+    // error, and a parameter decorator in an unchecked JS file, which only
+    // the decorator check of the program finds (Go TS1206). A program with
+    // none starts one. A process installs one program, so each case runs in
+    // a child process.
+    #[test]
+    fn a_program_with_a_syntactic_diagnostic_starts_no_early_bind() {
+        // (case, second file, its text, early bind)
+        const CASES: [(&str, &str, &str, bool); 4] = [
+            ("none", "b.ts", "export const b = 1;\n", true),
+            ("parse error", "b.ts", "export const b = (1 + ;\n", false),
+            (
+                "JS syntax",
+                "b.js",
+                "export const b = (x: number) => x;\n",
+                false,
+            ),
+            (
+                "JS decorator",
+                "b.js",
+                "export class B { m(@d x) {} }\n",
+                false,
+            ),
+        ];
+        if let Ok(case) = std::env::var(EARLY_BIND_CHILD) {
+            let &(_, file, text, early) = CASES.iter().find(|c| c.0 == case).unwrap();
+            let config = format!(
+                r#"{{"compilerOptions":{{"noLib":true,"types":[],"allowJs":true,"noEmit":true}},"files":["a.ts","{file}"]}}"#
+            );
+            let dir = write_project(
+                "goport-early-bind-syntax",
+                &[
+                    ("tsconfig.json", &config),
+                    ("a.ts", "export const a = 1;\n"),
+                    (file, text),
+                ],
+            );
+            let opts = load_config(
+                &format!("{dir}/tsconfig.json"),
+                |_| {},
+                &mut CompileTimes::default(),
+            )
+            .unwrap();
+            crate::program::TEST_BIND_THREADS.set(Some(2));
+            install_new_program(opts, true).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            if case == "JS decorator" {
+                assert!(
+                    prog().source_files().all(|file| {
+                        let info = source_file_info(file.root);
+                        info.diagnostics.is_empty() && info.js_diagnostics.is_empty()
+                    }),
+                    "the parse found the decorator"
+                );
+            }
+            let started = crate::program::EARLY_BIND
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some();
+            assert_eq!(started, early, "{case}: early bind");
+            return;
+        }
+        // `/proc/self/exe` still names this binary when a build replaces it.
+        let proc_exe = std::path::Path::new("/proc/self/exe");
+        let exe = if proc_exe.exists() {
+            proc_exe.to_path_buf()
+        } else {
+            std::env::current_exe().expect("test binary")
+        };
+        for (case, ..) in CASES {
+            let output = std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    EARLY_BIND_TEST,
+                    "--nocapture",
+                    "--test-threads",
+                    "1",
+                ])
+                .env(EARLY_BIND_CHILD, case)
+                .env_remove("GOPORT_EARLY_BIND")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("run the child test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{case} ({}):\n{stdout}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }

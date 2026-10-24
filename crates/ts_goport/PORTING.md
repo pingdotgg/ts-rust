@@ -928,17 +928,22 @@ so Go prints a second line, `[signal SIGSEGV: segmentation violation
 code=0x1 addr=<fault address> pc=<pc>]` (runtime `dopanic_m`), before the
 goroutine trace. A site that knows Go's fault address uses
 `core::go_nil_dereference_at(address)`, and the port prints the line with
-`pc=0x0`: Go's `pc` is an instruction of its own binary (0xc5efe9 in
-tsgo-oracle-fed0bf24149f). The d.ts signature site
-(`diagnostic_to_string_builder`) has it (0x68). gopanicout2 gave 39 more
+`pc=0x0`: Go's `pc` is an instruction of its own binary (0xc1d449 in
+tsgo-oracle-3e9236361fa9). The d.ts signature site
+(`diagnostic_to_string_builder`) has it (0x58). gopanicout2 gave 39 more
 sites their address: the CLI, build, checker, transformer, API and IPC
 sites, and the LSP sites that a client message reaches (a nil element in
 `changes` or `files`, a code lens without `data`). gopanicout3 gave the 2
 sites of `initialized` theirs: before `initialize`, and a null workspace
-folder (server.go:1716 and 1752). Each address is the
+folder (server.go:1717 and 1753). Each address is the
 first load through the nil pointer in Go's compiled code, read from
 `go tool objdump` of the pinned oracle; 6 of them are checked against
-Go's own output (tests/go_nil_signal.rs). The other `go_nil_dereference()`
+Go's own output (tests/go_nil_signal.rs). nilsig1 read every address
+again at 3e9236361fa9: there `ast.Node` has no `data` field and
+`checker.Type` has no `data` field (a `kind` byte at 0xc), so the d.ts
+signature site went from 0x68 to 0x58, `get_emit_module_format_of_file`
+from 0x60 to 0x50 and `get_type_of_mapped_symbol` from 0x28 to 0xc. The
+other `go_nil_dereference()`
 sites print no signal line: the `checker::types` accessors (Go returns a
 nil pointer there, and the fault address is the field that each caller
 reads) and LSP and project sites that no known input reaches (Go N'
@@ -1166,74 +1171,123 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   `ast.GetSymbolId` call (node builder, symbol accessibility, key builder,
   enum relation key, emit resolver, `compareSymbols`, private names, LS,
   API) gives a global id. A symbol keeps its first id, of either kind. The
-  port gives each kind where Go does, so one checker gives Go's ids. The
-  store is a type of its own, so a read that gives no id does not compile;
-  the 2 reads of a pushed type resolution (`get_noted`) and the parameter
-  memo (`try_get_without_id`) are the named exceptions. Ids reach output:
-  a late-bound name holds an id (`__@k@<id>`), the node builder counts its
-  length toward truncation, and `compareSymbols` compares names as text
-  before ids (the member order of a mapped type over unique symbols). So
-  the block offset is Go's (15 digits). Go's node link stores also give
-  block node ids; the port gives none, as no node id reaches output. Each
-  thread keeps both counters (`ast::id_seed`, `ast::SymbolIdCarry`): a
-  lineage cell can hold a block id, so a thread must not count blocks from
-  0 again. Go's checkers share the counters: a worker skips the global ids
-  that the other checkers' `NewChecker` gave to their own symbols
-  (`program::new_pool_checker`; none at the pin, as `initializeChecker`
-  reads links). It does not skip block ids: only their order and length
-  reach output. It does not skip the ids of binder symbols that
-  `NewChecker` gave (merge error texts): Go gives each of those once in the
-  pool. It also does not skip the ids that other checkers give while they
-  check, which race in Go (a symbol that another Go checker gave a block id
-  first gets no global id). Go also gives each class with private
-  names an id at bind time (binder.go:375). The port's binds give no ids:
-  the binder notes the class (`FileBindData::private_name_classes`), and
+  port gives each kind where Go does. The store is a type of its own, so a
+  read that gives no id does not compile; the 2 reads of a pushed type
+  resolution (`get_noted`) and the parameter memo (`try_get_without_id`)
+  are the named exceptions. Ids reach output: a late-bound name holds an id
+  (`__@k@<id>`), the node builder counts its length toward truncation, and
+  `compareSymbols` compares names as text before ids (the member order of a
+  mapped type over unique symbols). So the block offset is Go's (15
+  digits). Go's node link stores also give block node ids; the port gives
+  none, as no node id reaches output. Each thread keeps both counters
+  (`ast::id_seed`): a lineage cell can hold a block id, so a thread must
+  not count blocks from 0 again. Go's checkers share the counters: a worker
+  skips the global ids that the other checkers' `NewChecker` gave to their
+  own symbols (`program::new_pool_checker`; none at the pin, as
+  `initializeChecker` reads links). It does not skip block ids: only their
+  order and length reach output. It does not skip the ids of binder
+  symbols that `NewChecker` gave (merge error texts): Go gives each of
+  those once in the pool. Go also gives each class with private names an
+  id at bind time (binder.go:375). The port's binds give no ids: the
+  binder notes the class (`FileBindData::private_name_classes`), and
   `program::bind_all` gives the ids on the loading thread after the binds,
   before the checkers copy its ids, in Go's `--singleThreaded` bind order
   (last file first; Go's parallel bind races). The names hold a class key,
-  and the node builder and the API print Go's id (`go_symbol_name`).
-  The 4 check-time private name sites give an
-  id to the symbol that they look in, as Go does: the class, or the symbol
-  of the type that the site looks in
-  (`Checker::private_identifier_symbol_name`).
-- Several programs in one process: Go's counters run on from one
-  program to the next, and a bound file keeps the ids of its symbols. The
-  one-checker pool of a program with `singleThreaded` (on the command line
-  or in the project tsconfig, `program::single_threaded`) hands the ids of
-  its checker to its loading thread, so the next program's checker starts
-  from them (`program::CheckerPool::carry_symbol_ids`): when the next such
-  pool is made (watch makes the next program before it releases the last)
-  or when the program is released (`tsc -b`). The loading thread takes them
-  only when it gave no ids after the pool was made. So `tsc -b
-  --singleThreaded` and the watch cycles of `--singleThreaded` give Go's
-  ids. Two more cases carry ids:
-  - `tsc -b` with more builders, for the projects whose tsconfig has
-    `"singleThreaded": true`. The pool of each such project first waits for
-    the check and emit of the last one (`symbol_id_carry_start`), so their
-    checks run one after the other, where Go's builders run them at once.
-    This is a speed cost only. A project that waits for its upstream
-    project gets Go's ids. When Go builds 2 such projects at once, its ids
-    race, and the port gives the ids of one order.
+  and the node builder and the API print Go's id (`go_symbol_name`). The 4
+  check-time private name sites give an id to the symbol that they look
+  in, as Go does: the class, or the symbol of the type that the site looks
+  in (`Checker::private_identifier_symbol_name`).
+
+  What is equal to Go and what is not:
+  - One checker (`--singleThreaded`, `--checkers 1`): each id comes where
+    Go's does, and the output of the gate projects is equal. The number of
+    blocks is not always equal: on Effect the port takes about 7% more
+    blocks than Go (linkids1 skeptic trace: Go 4,187, port 4,501; the first
+    difference is early). Only the order and length of block ids reach
+    output, so that output stays equal.
+  - More checkers in one program: each checker has its own id cells, and
+    does not see the ids that the other checkers gave. In Go the id is on
+    the symbol, so a checker sees them. Known gap: the idcarry1 case
+    b4only (a local `unique symbol` `hasInstance` and a mapped type over it
+    and `SymbolConstructor["hasInstance"]`) prints `2; 1` on Go with every
+    checker count (80 of 80 runs), and `1; 2` here with 3 and 4 checkers.
+    The fix is Go's model (one id per symbol for all threads, process
+    counters), which also makes the port's output race where Go's does.
+  - Ids that Go's checkers give at the same time race in Go (a lost
+    compare-and-swap burns an id, `ast/utilities.go:40`); the port burns
+    none.
+- Several programs in one process: Go's counters run on from one program
+  to the next, and a bound file keeps the ids of its symbols. Each checker
+  pool here hands the ids of its checkers back to the loading thread
+  (`program::CheckerPool::carry_symbol_ids`, `ast::carry_symbol_ids`), so
+  the next program's checkers start from them:
+  - `tsc -b` and watch mode (`program::carry_symbol_ids_of_every_pool`,
+    set while a build or a watch cycle runs): every pool made then, when its
+    task is built or before watch mode makes the next program
+    (`program::carry_symbol_ids_of`), or else when its program is
+    released. Each worker logs the global ids that it gave. The merge
+    keeps an id that the loading thread has. Else
+    the worker that gave the symbol an id first wins, by a clock (the ids
+    that the worker gave before it, of both kinds), as the first id wins in
+    Go. Only a pool of more than one worker counts its block ids for the
+    clock (`ast::record_symbol_ids`): each one then takes the other path of
+    `SymbolIdGenerator::next_id` (`at_last`). One worker's log order is
+    its clock order, so a one-checker pool, a `--singleThreaded` program
+    and a `tsc -p` without watch pay nothing per block id. A worker has one
+    generator and only it moves its block counter, so the log does not
+    list the blocks: block k starts k blocks after the counter at
+    `record_symbol_ids`, with k * 256 block ids before it. The global
+    counter counts on by the winning global ids and the
+    global ids of the workers' own symbols, in clock order; the block
+    counter counts on by every block, whole blocks in clock order of the
+    takes. The ids are new numbers, so two workers' ids do not collide.
+    With one worker and no id on the loading thread since the pool was
+    made, every id stays. This gives Go's output on the idcarry1 cases
+    build-def (default `#37 #38`, `--checkers 1` and `2` `#38 #39`), w1
+    (watch: default `#39`, `#40`, `--checkers 1` and `2` `#40`, `#41`) and
+    the main Go variant of b2 and build3def. The clock is a model of time:
+    with 4 checkers Go gives `SharedArrayBuffer` a block id before another
+    checker names it, and with 2 checkers the name comes first; the clock
+    picks both.
+  - A pool hands its ids on once, and only when it has no job, so the
+    loading thread does not wait for a check. Projects that Go's builders
+    build at the same time race in Go; here a task that is not built yet
+    when another starts hands its ids on later (idcarry1 privb-def: the
+    port prints `#1 #2 #3 #4`, one of Go's 4 variants; with `--builders 1`
+    both print `#1 #2 #5 #6`). Which tasks are built when another starts
+    depends on timing outside tests, as in Go; a test builds each task to
+    the end before the next one starts.
+  - wasm makes each checker of a pool at its first job. Before a pool
+    hands its ids on, it makes each checker that had no job
+    (`program::make_unmade_checkers`), with the pool's program current and
+    outside the `POOLS` borrow. Go makes every checker of a pool at once
+    (checkerpool.go:367), and a native worker makes its checker when it
+    starts, so the ids of each `NewChecker` count. A checker has no job
+    when a syntax error stops the check (program.go:2066) and it owns no
+    emitted file.
+  - A one-checker pool of a `--singleThreaded` program (on the command
+    line or in the project tsconfig, `program::single_threaded`) also
+    hands its ids on when the next such pool is made or the next such
+    program binds, after its jobs. With more `tsc -b` builders the pool of
+    each such project first waits for the check and emit of the last one
+    (`symbol_id_carry_start`), so their checks run one after the other,
+    where Go's builders run them at once. This is a speed cost only.
   - The API `emitProgram` of a project whose tsconfig has
     `"singleThreaded": true`. Its one-checker compile pool is on the
     dispatch thread. When the pool stops or the next such pool is made, and
     the dispatch thread gave no ids after the pool was made, the dispatch
-    thread counts on from the ids of the emit. So the API symbol handles
+    thread counts on from the ids of the emit. Such a pool, outside `tsc -b`
+    and watch mode (`program::IdCarry::only_from`), keeps no log: its
+    worker's ids keep their numbers, and its counters become the dispatch
+    thread's. So the API symbol handles
     (symbol ids) that come after are larger. The handles that the client
     already has do not change. Go emits with the project's checkers, which
     share the one counter with the other requests, so its later handles
     also count on after an emit, but not by the same number.
 
-  Other cases do not carry ids, and each program's checkers count from the
-  loading thread's ids: with more checkers (the default pool, `--checkers`
-  above 1) Go's ids race, and per-thread counters cannot give Go's process
-  count without one shared counter. The language server's programs and its
-  search threads do not carry ids either. Go's ids are also fixed with
-  `--checkers 1` when the programs run one at a time (`tsc -b --builders 1
-  --checkers 1`, watch with `--checkers 1`), but the port does not carry
-  them there: `program.rs` cannot tell that the programs run one at a time,
-  and with more builders a carry would make one program wait for the
-  checker of another.
+  Other API pools and the language server's programs and search threads
+  do not carry ids: each program's checkers count from the loading
+  thread's ids.
 - One thread can hold checkers of several programs (the language server's
   dispatch thread). Make a checker's program current while the checker runs
   (`core::enter_program`): the `program.rs` functions that checker code

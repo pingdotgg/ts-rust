@@ -11,6 +11,7 @@ use crate::support::child::{new_in_process_test_sys, run_test_in_child};
 use crate::support::runner::{FileMap, TscInput};
 use crate::support::test_sys::{TestSys, new_tsc_system};
 use crate::support::vfstest;
+use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use ts_goport::frontend::tsoptions::{
 };
 use ts_goport::frontend::vfs::Fs;
 use ts_goport::frontend::vfs::wrapvfs::{Replacements, wrapvfs_wrap};
+use ts_goport::fswatch::EventKind;
 use ts_goport::gostd::{GoError, context};
 
 // ---------------------------------------------------------------------------
@@ -532,6 +534,65 @@ interface String {}
         output: Rc::new(RefCell::new(Vec::new())),
         independent_started_while_leaf_built,
     })
+}
+
+// followups76r2: Go packageJsonLookupChanged tests a deleted path with a
+// path key test (`PathKey.ContainsPath`, orchestrator.go:676). Go's
+// case-insensitive key folds case with ToLower, which keeps 'ſ' and 'ς'
+// (EqualFold would match them to 's' and 'σ'): deleting "/p/ſ" does not
+// change "/p/s/package.json"; deleting "/p/S" does. The answers come from a
+// probe of Go at 3e9236361fa9 (`TestF76R2PackageJsonProbe`).
+#[test]
+fn package_json_lookup_changed_tests_path_keys_like_go() {
+    let sys: Rc<dyn System> = Rc::new(new_tsc_system(FileMap::new(), false, "/p"));
+    let build_command = parse_build_command_line(&[], &SystemParseConfigHost(&*sys));
+    let orchestrator = new_orchestrator(Options {
+        sys: Rc::clone(&sys),
+        command: Rc::new(build_command),
+        testing: None,
+    });
+    let cases: &[(&str, EventKind, &str, bool)] = &[
+        ("/p/\u{17f}", EventKind::Delete, "/p/s/package.json", false),
+        (
+            "/p/\u{17f}",
+            EventKind::Delete,
+            "/p/\u{3c3}/package.json",
+            false,
+        ),
+        ("/p/S", EventKind::Delete, "/p/s/package.json", true),
+        ("/p/S", EventKind::Delete, "/p/\u{3c3}/package.json", false),
+        ("/p/\u{3c2}", EventKind::Delete, "/p/s/package.json", false),
+        (
+            "/p/\u{3c2}",
+            EventKind::Delete,
+            "/p/\u{3c3}/package.json",
+            false,
+        ),
+        ("/p/S", EventKind::Update, "/p/s/package.json", false),
+        ("/p/S", EventKind::Update, "/p/\u{3c3}/package.json", false),
+        (
+            "/p/s/package.json",
+            EventKind::Update,
+            "/p/s/package.json",
+            true,
+        ),
+        (
+            "/p/s/package.json",
+            EventKind::Update,
+            "/p/\u{3c3}/package.json",
+            false,
+        ),
+    ];
+    for &(changed, kind, package_json, expected) in cases {
+        let changed_paths: FxHashMap<_, _> = [(orchestrator.to_path(changed), kind)]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            orchestrator.package_json_lookup_changed(package_json, &changed_paths),
+            expected,
+            "{changed} {kind:?} {package_json}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

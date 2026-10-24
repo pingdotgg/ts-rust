@@ -404,7 +404,8 @@ testbox, `testbox-data.sh` makes zbook's paths there, and `testbox-remote.sh` ho
 ```sh
 scripts/goport/testbox.sh warmup                                # about 1 min; TESTBOX_REF=<branch> for a workflow change
 scripts/goport/testbox.sh tests <out-dir> <base results.json>   # build-goport-tests.sh, goport-tests.sh, compare-tests.py
-scripts/goport/testbox.sh np-suite <label> [<base label>]       # np-suite.sh run, then np-suite.sh diff
+scripts/goport/testbox.sh np-suite --bins <bins dir> <label> [<base label>]
+                                                                 # np-suite.sh run on <bins dir>/tsgo, then np-suite.sh diff
 scripts/goport/testbox.sh perf <label> <bin>... [-- --noEmit]   # perf.sh: instructions:u and RSS (see "Timing")
 scripts/goport/testbox.sh release-build <out-dir>               # build-release.sh at HEAD, BOLT from instrumentation counts
 scripts/goport/testbox.sh push <bins dir>                       # then run gate.sh, lsp_oracle.py or api_oracle.py as on zbook,
@@ -454,6 +455,15 @@ scripts/goport/testbox.sh stop                                  # or release (se
   metadata, no binaries) and `<out-dir>/compare.json`. After a failed build it writes the cargo logs to
   `<out-dir>/testbin.new/logs` and prints the compiler errors. `np-suite` writes the label dir in the main
   checkout's np-suite dir, and `perf` in the main checkout's perf dir. None replaces an existing dir.
+- `np-suite --bins <dir>` pushes `<dir>/tsgo` (checked against `<dir>/bins.sha256`) and runs on it, so
+  meta.txt names its zbook path and sha256; another sha256 there is an error. Revision evidence uses it with
+  the candidate's release bins. Without `--bins` the step builds a stable release tsgo on the testbox, and
+  that build is not always byte-equal to another build of the same commit: jemalloc's configure takes
+  `LG_VADDR` from the build CPU's virtual address bits (cpuid). The perf host records show two testbox CPU
+  models: cpu family 26 model 68 (48 bits) and model 2 (EPYC Turin). On 2026-10-24 the npint98w build of
+  c428ad2d2 gave tsgo `6a4e7a3a7784`, the side build `54433ccd1aa8`; a rebuild with
+  `JEMALLOC_SYS_WITH_LG_VADDR=57` gives `6a4e7a3a7784` (npbuild1). `testbox-build.log` starts with the tree,
+  rustc and CPU, and `--expect <sha256>` warns when the built tsgo differs.
 - `perf`: pushes the bins to their zbook paths, runs `perf.sh --mode both` (3 rounds; `--mode` and `--rounds`
   pass through, and so do `-- <tsgo arg>...` and the variables of `perf.sh env`) and fetches the label dir. Without a saved testbox it warms one up
   (`TESTBOX_IDLE` 30) and stops it at the end. Read the instructions and the RSS: wall is not valid there.

@@ -557,10 +557,11 @@ impl Checker {
             {
                 let left = self.symbols.get(props, &right_name);
                 if left.is_some() {
-                    let (left_value_declaration, left_name) = {
-                        let l = self.sym(left);
-                        (l.value_declaration, l.name.clone())
-                    };
+                    // PORT: a private name holds the key of its class, where
+                    // Go's `left.Name()` holds the class's symbol id, which
+                    // Go prints here (`go_symbol_name`).
+                    let left_value_declaration = self.sym(left).value_declaration;
+                    let left_name = go_symbol_name(&self.symbols, left);
                     // PORT: Go calls `c.error` (which adds the diagnostic) and then
                     // mutates the returned `*ast.Diagnostic` with `AddRelatedInfo`.
                     // Diagnostics are owned values here, so the related info is
@@ -1840,9 +1841,11 @@ impl Checker {
 /// answers of `is_const_type_variable` for union, intersection and
 /// conditional types, keyed by (type, depth). Go walks again on every call.
 ///
-/// A stored answer equals a fresh Go walk, and that walk has no side effects,
-/// because a repeat walk reads only immutable type data and lazy fields that
-/// the first walk filled (`bunsteal3/constvar1/go-note-check.md` section 3):
+/// A stored answer equals a fresh Go walk (`isConstTypeVariable`,
+/// checker.go:13913), and that walk has no side effects, because a repeat
+/// walk reads only immutable type data and lazy fields that the first walk
+/// filled. Of those fields, the base constraint of a conditional type keeps
+/// its first value; the conditions below keep the others:
 /// - `mark` did not move during the first walk. It moves when
 ///   `push_type_resolution` fails (a field read gave a value that is not
 ///   cached), when `get_actual_type_variable` makes an indexed access again
@@ -1860,7 +1863,9 @@ pub(crate) struct ConstTypeVariableMemo {
     slots: Box<[u64]>,
     /// A hash shifted right by this amount is a slot index.
     shift: u32,
-    /// Answers stored since the table last grew.
+    /// Puts since the table last grew or was cleared (a put that evicts an
+    /// entry counts too), plus the entries that the growth copied in. The
+    /// table grows when this reaches its length.
     added: usize,
     /// Moves at each event that makes a walk in progress unsafe to store.
     pub(crate) mark: u64,
@@ -1873,6 +1878,9 @@ impl Default for ConstTypeVariableMemo {
 }
 
 impl ConstTypeVariableMemo {
+    /// The table grows (4 times the slots) only while it has fewer slots
+    /// than this: from 64 slots it reaches 2^16 slots (512 KiB per checker)
+    /// at most, and then only evicts.
     const MOST_SLOTS: usize = 1 << 15;
 
     fn with_slots(len: usize) -> Self {

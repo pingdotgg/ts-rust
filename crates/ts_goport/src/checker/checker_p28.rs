@@ -8,7 +8,7 @@ use crate::prelude::*;
 use rustc_hash::FxBuildHasher;
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::hash::BuildHasher;
+use std::hash::{BuildHasher, Hasher};
 
 impl Checker {
     // Go: checker/checker.go:25626 newUniqueESSymbolType
@@ -1092,9 +1092,14 @@ impl Checker {
         // first changed element every mapped type equals its non-nil source,
         // so the mapped list is built only from the first change, and a
         // mapping that changes nothing costs no copy (Go `changed` is
-        // `mapped_types.is_some()`).
+        // `mapped_types.is_some()`). The list is a stack `TypeSet`, as Go's
+        // `getTemporaryTypeSet` (`inline [16]`); it holds at most `count`.
+        // PERF (typeset1): the prefix is copied with an iterator, as
+        // `extend_from_slice` on a `SmallVec` costs a memmove and a memcpy
+        // call. Go keeps spilled sets on a free list; a port of that list
+        // measured slower than these stack sets, so the port has none.
         let count = self.ty(owner).types().len();
-        let mut mapped_types: Option<Vec<TypeId>> = None;
+        let mut mapped_types: Option<TypeSet> = None;
         for i in 0..count {
             let s = self.type_at(owner, i);
             let mapped = if self.ty(s).flags.intersects(TypeFlags::UNION) {
@@ -1107,8 +1112,8 @@ impl Checker {
                     list.push(mapped);
                 }
             } else if mapped != s {
-                let mut list: Vec<TypeId> = Vec::with_capacity(count.max(16));
-                list.extend_from_slice(&self.ty(owner).types()[..i]);
+                let mut list = TypeSet::with_capacity(count);
+                list.extend(self.ty(owner).types()[..i].iter().copied());
                 if mapped.is_some() {
                     list.push(mapped);
                 }
@@ -1211,7 +1216,37 @@ impl Checker {
             }
             return t;
         }
+        // PERF (unionmemo1, not in Go): the memo of recent calls.
+        if origin.is_nil() && union_reduction != UnionReduction::SUBTYPE {
+            return self.get_union_type_kept(types, union_reduction, alias);
+        }
         self.get_union_type_worker(types, union_reduction, alias, origin)
+    }
+
+    /// PERF (unionmemo1, not in Go): `get_union_type_worker` for a call with
+    /// no origin and no subtype reduction, through the memo of recent calls
+    /// (`UnionCalls`). Go runs the worker again on every call.
+    fn get_union_type_kept(
+        &mut self,
+        types: &[TypeId],
+        union_reduction: UnionReduction,
+        alias: Option<Rc<TypeAlias>>,
+    ) -> TypeId {
+        let call = UnionCall {
+            reduction: union_reduction,
+            alias: alias.as_deref(),
+            types,
+        };
+        let hash = call.hash();
+        if let Some(t) = self.union_calls.get(hash, &call) {
+            return t;
+        }
+        let mark = self.union_calls.mark;
+        let t = self.get_union_type_worker(types, union_reduction, alias.clone(), TypeId::NIL);
+        if self.union_calls.mark == mark && t != self.error_type {
+            self.union_calls.put(hash, &call, t);
+        }
+        t
     }
 
     // Go: checker/checker.go:26251 getUnionTypeWorker
@@ -1266,9 +1301,11 @@ impl Checker {
             if includes.intersects(TypeFlags::STRING_LITERAL)
                 && includes.intersects(TypeFlags::TEMPLATE_LITERAL | TypeFlags::STRING_MAPPING)
             {
+                self.union_calls.mark += 1;
                 self.remove_string_literals_matched_by_template_literals(&mut type_set);
             }
             if includes.intersects(TypeFlags::INCLUDES_CONSTRAINED_TYPE_VARIABLE) {
+                self.union_calls.mark += 1;
                 self.remove_constrained_type_variables(&mut type_set);
             }
             if union_reduction == UnionReduction::SUBTYPE
@@ -1331,6 +1368,7 @@ impl Checker {
                     let (inserted, _) = self.insert_type(&reduced_types, t);
                     reduced_types = inserted;
                 }
+                self.union_calls.mark += 1;
                 origin = self.new_union_type(ObjectFlags::NONE, &reduced_types);
             }
         }
@@ -1806,5 +1844,209 @@ impl Checker {
         }
         self.subtype_reduction_cache.insert(key, types.to_vec());
         true
+    }
+}
+
+/// One call of `Checker::get_union_type_kept`, the key of `UnionCalls`.
+struct UnionCall<'a> {
+    reduction: UnionReduction,
+    alias: Option<&'a TypeAlias>,
+    /// The types as the caller passed them (not flattened, sorted or
+    /// deduplicated).
+    types: &'a [TypeId],
+}
+
+impl UnionCall<'_> {
+    #[inline]
+    fn alias_symbol(&self) -> Option<SymbolId> {
+        self.alias.map(|alias| alias.symbol)
+    }
+
+    #[inline]
+    fn alias_type_arguments(&self) -> &[TypeId] {
+        self.alias.map_or(&[], |alias| &alias.type_arguments)
+    }
+
+    #[inline]
+    fn hash(&self) -> u64 {
+        let mut h = rustc_hash::FxHasher::default();
+        h.write_u32(self.reduction.0 as u32);
+        // u32::MAX for no alias only spreads the hash; `UnionCalls::get`
+        // compares the alias exactly.
+        h.write_u32(self.alias.map_or(u32::MAX, |alias| alias.symbol.0));
+        for t in self.alias_type_arguments() {
+            h.write_u32(t.0);
+        }
+        h.write_usize(self.types.len());
+        for t in self.types {
+            h.write_u32(t.0);
+        }
+        h.finish()
+    }
+}
+
+/// A slot of `UnionCalls`.
+#[derive(Clone, Copy, Default)]
+struct KeptUnionCall {
+    hash: u64,
+    /// The call's types, then its alias type arguments, start here in
+    /// `UnionCalls::types`.
+    start: u32,
+    /// 0 in an empty slot: a kept call has at least 2 types.
+    types: u32,
+    alias_type_arguments: u32,
+    alias: Option<SymbolId>,
+    reduction: i32,
+    answer: TypeId,
+}
+
+/// PERF (unionmemo1, not in Go; Bun `UnionCalls`, `check/unions.rs`):
+/// `Checker::union_calls`, the results of recent `get_union_type_ex` calls
+/// that have no origin and no subtype reduction and do not take Go's 2-type
+/// union-of-unions path. The key is (reduction, alias, the types in call
+/// order). A hit skips `add_types_to_union`, the reductions and the union
+/// key. Go runs `getUnionTypeWorker` again on every call.
+///
+/// A kept result is what Go's worker returns for the same call at any later
+/// time, and that later worker makes nothing:
+/// - It reads only data that does not change once a type exists: type flags,
+///   the object flags that it tests, alias, union origin and members, the
+///   fresh and regular links of literals, and the sort data of
+///   `compare_types` (memberflags1 Go note section 1.4; Go writes `alias`
+///   and `origin` only directly after it makes the type).
+/// - Its sort makes the comparisons of the first call, so it asks only for
+///   lazy symbol ids that the first call assigned.
+/// - `union_types` only grows, so its lookup in
+///   `get_union_type_from_sorted_list` finds the union that the first call
+///   found or made. So a hit makes no type: type ids and creation order stay
+///   Go's.
+/// - A call is kept only if `mark` did not move during its worker. The
+///   template literal and constrained type variable reductions move it (they
+///   relate and instantiate), and so does a new named-union origin (Go makes
+///   a new origin type on each such call). An `error_type` result is not
+///   kept.
+///
+/// Direct-mapped, at most 4096 slots. The types of the kept calls take at
+/// most 2^18 places (1 MiB): when they are full, the types of overwritten
+/// calls go (`compact`), and all calls go when the rest fill half of them. A
+/// call with more than 2^16 types is not kept.
+pub(crate) struct UnionCalls {
+    /// A power of two of slots.
+    slots: Box<[KeptUnionCall]>,
+    /// A hash shifted right by this amount is a slot index.
+    shift: u32,
+    /// Calls kept since the table last grew or was cleared.
+    added: usize,
+    /// The types and alias type arguments of the kept calls, end to end.
+    types: Vec<TypeId>,
+    /// Moves at each step of `get_union_type_worker` that makes its call
+    /// unsafe to keep.
+    pub(crate) mark: u64,
+}
+
+impl Default for UnionCalls {
+    fn default() -> Self {
+        Self::with_slots(64)
+    }
+}
+
+impl UnionCalls {
+    const MOST_SLOTS: usize = 1 << 12;
+    const MOST_TYPES: usize = 1 << 18;
+
+    fn with_slots(len: usize) -> Self {
+        Self {
+            slots: vec![KeptUnionCall::default(); len].into_boxed_slice(),
+            shift: 64 - len.trailing_zeros(),
+            added: 0,
+            types: Vec::new(),
+            mark: 0,
+        }
+    }
+
+    #[inline]
+    fn slot(&self, hash: u64) -> usize {
+        (hash.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> self.shift) as usize
+    }
+
+    #[inline]
+    fn get(&self, hash: u64, call: &UnionCall<'_>) -> Option<TypeId> {
+        let kept = &self.slots[self.slot(hash)];
+        let args = call.alias_type_arguments();
+        if kept.hash != hash
+            || kept.types as usize != call.types.len()
+            || kept.alias_type_arguments as usize != args.len()
+            || kept.reduction != call.reduction.0
+            || kept.alias != call.alias_symbol()
+        {
+            return None;
+        }
+        let (types, rest) = self.types[kept.start as usize..].split_at(call.types.len());
+        (types == call.types && &rest[..args.len()] == args).then_some(kept.answer)
+    }
+
+    fn put(&mut self, hash: u64, call: &UnionCall<'_>, answer: TypeId) {
+        let args = call.alias_type_arguments();
+        let len = call.types.len() + args.len();
+        if len > Self::MOST_TYPES / 4 {
+            return;
+        }
+        if self.types.len() + len > Self::MOST_TYPES {
+            self.compact();
+            if self.types.len() + len > Self::MOST_TYPES / 2 {
+                self.clear();
+            }
+        }
+        if self.added == self.slots.len() && self.slots.len() < Self::MOST_SLOTS {
+            self.grow();
+        }
+        self.added += 1;
+        let slot = self.slot(hash);
+        self.slots[slot] = KeptUnionCall {
+            hash,
+            start: self.types.len() as u32,
+            types: call.types.len() as u32,
+            alias_type_arguments: args.len() as u32,
+            alias: call.alias_symbol(),
+            reduction: call.reduction.0,
+            answer,
+        };
+        self.types.extend_from_slice(call.types);
+        self.types.extend_from_slice(args);
+    }
+
+    #[cold]
+    fn grow(&mut self) {
+        let len = self.slots.len() * 4;
+        let old = std::mem::replace(
+            &mut self.slots,
+            vec![KeptUnionCall::default(); len].into_boxed_slice(),
+        );
+        self.shift = 64 - len.trailing_zeros();
+        self.added = 0;
+        for kept in old.iter().filter(|kept| kept.types != 0) {
+            let slot = self.slot(kept.hash);
+            self.slots[slot] = *kept;
+        }
+    }
+
+    /// Keeps only the types of the calls in the slots.
+    #[cold]
+    fn compact(&mut self) {
+        let mut types = Vec::with_capacity(self.types.capacity());
+        for kept in self.slots.iter_mut().filter(|kept| kept.types != 0) {
+            let start = kept.start as usize;
+            let end = start + (kept.types + kept.alias_type_arguments) as usize;
+            kept.start = types.len() as u32;
+            types.extend_from_slice(&self.types[start..end]);
+        }
+        self.types = types;
+    }
+
+    #[cold]
+    fn clear(&mut self) {
+        self.slots.fill(KeptUnionCall::default());
+        self.types.clear();
+        self.added = 0;
     }
 }

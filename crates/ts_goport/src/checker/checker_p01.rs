@@ -874,6 +874,15 @@ pub struct Checker {
     pub type_parameters_origin_count: u32,
     pub class_type_parameters_origins: FxHashMap<TypeId, u32>,
     pub total_instantiation_count: u32,
+    /// PERF (identmatch1, not in Go): the count of member resolves of
+    /// anonymous object types (ObjectFlags `ANONYMOUS`, so also reverse
+    /// mapped types) that ended with an empty resolved type. Go's
+    /// IsEmptyAnonymousObjectType (checker.go:27077) reads
+    /// `MEMBERS_RESOLVED` and does not resolve, so its answer for such a
+    /// type goes from false to true at that resolve and at no other time
+    /// outside it. `normalize_for_matching` keeps a normalized type only
+    /// while this count does not move.
+    pub empty_anonymous_resolves: u32,
     pub instantiation_count: u32,
     pub instantiation_stack: Vec<TypeId>,
     pub conditional_constraint_depth: u32,
@@ -960,6 +969,8 @@ pub struct Checker {
     pub tuple_types: CacheKeyMap<TypeId>,
     pub union_types: FxHashMap<CacheHashKey, TypeId>,
     pub union_of_union_types: FxHashMap<UnionOfUnionKey, TypeId>,
+    /// PERF (unionmemo1, not in Go): see `UnionCalls`.
+    pub(crate) union_calls: crate::checker::checker_p28::UnionCalls,
     pub intersection_types: CacheKeyMap<TypeId>,
     pub properties_types: FxHashMap<PropertiesTypesKey, TypeId>,
     pub diagnostics: DiagnosticsCollection,
@@ -1248,9 +1259,13 @@ pub struct Checker {
     /// a merge adds knows when to read them again (`MatchingReferenceMemo`,
     /// `global_spelling_suggestions`).
     pub(crate) merge_version: u64,
-    /// PERF: not in Go (memberflags1). Set when `merge_symbol` makes a
-    /// transient property optional in place. From then on, `is_weak_type`
-    /// does not read or store `ObjectFlags::WEAK_BITS`.
+    /// PERF: not in Go (memberflags1). Set when `merge_symbol` adds
+    /// `OPTIONAL` in place to a transient target. The test looks at any
+    /// transient symbol, not only a property, so it can turn the bits off
+    /// when no property changed. From then on, `is_weak_type` does not read
+    /// or store `ObjectFlags::WEAK_BITS`. It never resets: a long-lived
+    /// checker (an editor session) then runs without the cache. That costs
+    /// only speed.
     pub(crate) weak_bits_off: bool,
     /// PERF: not in Go. See `is_type_subset_of_union`.
     pub(crate) union_subset_answers: FxHashMap<(TypeId, TypeId), bool>,
@@ -1258,6 +1273,10 @@ pub struct Checker {
     /// Not in Go. Set once at creation; on, `some_property_reduces_to_never`
     /// tests the names in the port's faster order.
     pub(crate) fast_never_order: bool,
+    /// Go `freePropertyCounts` (checker.go:694): the empty count maps that
+    /// `some_property_reduces_to_never` reuses
+    /// (`get_temporary_property_counts`).
+    pub(crate) free_property_counts: Vec<crate::checker::checker_p24::TemporaryPropertyCounts>,
 
     // Arenas (PORTING.md "Checker data"). Index 0 of each is a dummy entry
     // so handle value 0 stays nil.
@@ -1426,6 +1445,7 @@ impl Checker {
             type_parameters_origin_count: 0,
             class_type_parameters_origins: FxHashMap::default(),
             total_instantiation_count: 0,
+            empty_anonymous_resolves: 0,
             instantiation_count: 0,
             instantiation_stack: Vec::new(),
             conditional_constraint_depth: 0,
@@ -1511,6 +1531,7 @@ impl Checker {
             tuple_types: CacheKeyMap::default(),
             union_types: FxHashMap::default(),
             union_of_union_types: FxHashMap::default(),
+            union_calls: Default::default(),
             intersection_types: CacheKeyMap::default(),
             properties_types: FxHashMap::default(),
             diagnostics: DiagnosticsCollection::default(),
@@ -1763,6 +1784,7 @@ impl Checker {
             weak_bits_off: false,
             union_subset_answers: FxHashMap::default(),
             fast_never_order: crate::checker::checker_p24::fast_never_order_from_env(),
+            free_property_counts: Vec::new(),
             symbols,
             types: ChunkedArena::with_nil(Type::default()),
             object_type_instantiations: vec![InstantiationMap::default()],

@@ -15,24 +15,28 @@ use crate::pseudochecker::{self, PseudoChecker, PseudoTypeKind};
 // that layout changes, only these helpers change. They are free functions so
 // they do not clash with methods of other node builder files.
 
-/// Runs `f` with a shared borrow of `b.ctx`.
+/// Runs `f` with a shared borrow of `b.ctx` (Go `b.ctx.<field>`).
+///
+/// `f` runs while `b` and `b.ctx` are borrowed, with no `Rc` clone of the
+/// context (nbctx1). So `f` must only read context fields: it must not use
+/// `b`, the Checker or the tracker.
 pub(super) fn nb_ctx<R>(
     b: &Rc<RefCell<NodeBuilderImpl>>,
     f: impl FnOnce(&NodeBuilderContext) -> R,
 ) -> R {
-    // PORT: `ctx` is an `Rc<RefCell<..>>`; clone it out so no borrow of `b` is held during `f`.
-    let ctx = b.borrow().ctx.clone();
-    let r = f(&ctx.borrow());
+    let b = b.borrow();
+    let r = f(&b.ctx.borrow());
     r
 }
 
-/// Runs `f` with a mutable borrow of `b.ctx`.
+/// Runs `f` with a mutable borrow of `b.ctx`. The rule of `nb_ctx` holds:
+/// `f` must only read or write context fields.
 pub(super) fn nb_ctx_mut<R>(
     b: &Rc<RefCell<NodeBuilderImpl>>,
     f: impl FnOnce(&mut NodeBuilderContext) -> R,
 ) -> R {
-    let ctx = b.borrow().ctx.clone();
-    let r = f(&mut ctx.borrow_mut());
+    let b = b.borrow();
+    let r = f(&mut b.ctx.borrow_mut());
     r
 }
 
@@ -1091,15 +1095,28 @@ impl Checker {
                 {
                     continue;
                 }
+                // PORT: a private name holds the key of its class, where Go's
+                // `propertySymbol.Name()` holds the class's symbol id, which
+                // TS4094 prints (`go_symbol_name`).
                 if self
                     .get_declaration_modifier_flags_from_symbol(property_symbol)
                     .intersects(ModifierFlags::PRIVATE | ModifierFlags::PROTECTED)
                 {
-                    let name = self.sym(property_symbol).name.clone();
+                    let name = go_symbol_name(&self.symbols, property_symbol);
                     tracker_report_private_in_base_of_class_expression(self, b, &name);
                 }
                 if self.is_private_identifier_symbol(property_symbol) {
-                    let name = symbol_name(&self.symbols, property_symbol);
+                    // `ast.SymbolName` gives `#x` for a private class element,
+                    // and `symbol.Name()` for any other private name (an
+                    // object literal `#x`).
+                    let value_declaration = self.sym(property_symbol).value_declaration;
+                    let name = if value_declaration.is_some()
+                        && is_private_identifier_class_element_declaration(value_declaration)
+                    {
+                        symbol_name(&self.symbols, property_symbol)
+                    } else {
+                        go_symbol_name(&self.symbols, property_symbol)
+                    };
                     tracker_report_private_in_base_of_class_expression(self, b, &name);
                 }
             }
