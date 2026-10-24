@@ -354,6 +354,14 @@ fn set_task_path(loader: &FileLoader, task: &mut ParseTask) {
             task.normalized_file_path
         );
     }
+    // `start` looks the path up with the hash that a parse worker made
+    // (`ParseTask::path_hash`, loadfree1). A wrong hash would miss the task
+    // data of the path and replace it with no error.
+    debug_assert!(
+        task.path_hash == 0 || task.path_hash == FxBuildHasher.hash_one(&task.path),
+        "worker path hash of task {}",
+        task.normalized_file_path
+    );
 }
 
 /// Go `filesParser.taskDataByPath`.
@@ -707,15 +715,13 @@ impl FilesParser {
             set_task_path(loader, &mut task.borrow_mut());
             // Go `taskDataByPath.LoadOrStore(task.path, ..)`
             // (filesparser.go:279), the load part, with the hash that the
-            // worker made when the task has one.
+            // worker made when the task has one (`set_task_path` checks it).
             let existing = {
                 let task = task.borrow();
-                let hasher = self.task_data_by_path.hasher();
                 let hash = match task.path_hash {
-                    0 => hasher.hash_one(&task.path),
+                    0 => self.task_data_by_path.hasher().hash_one(&task.path),
                     hash => hash,
                 };
-                debug_assert_eq!(hash, hasher.hash_one(&task.path), "{}", task.path.0);
                 self.task_data_by_path
                     .raw_entry()
                     .from_key_hashed_nocheck(hash, &task.path)
