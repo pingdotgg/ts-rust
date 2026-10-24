@@ -1,3 +1,4 @@
+mod build_extends_cycle_order;
 mod build_info_corrupt;
 mod build_prefetch_rereads;
 mod checker_common_source_directory;

@@ -323,17 +323,28 @@ impl Orchestrator {
     }
 
     // Go: build/orchestrator.go:174 (*Orchestrator).createBuildTasks
-    // PORT: Go parses the configs in parallel on a work group; here they
-    // parse depth first on one thread. The task map and each task's
-    // `resolved` are the same, because a path is taken by the first
-    // `LoadOrStore` in both. Threads match the file names of the configs
-    // ahead of this thread (`start_config_prefetch`).
+    // PORT: Go queues the parse of each config on a work group (:263), and
+    // each parse queues the parses of its references. The "already a task"
+    // check (`LoadOrStore`, :198) runs when a parse runs. With
+    // `--singleThreaded` the work group is a stack (core/workgroup.go:78
+    // `pop` takes the last queued), so the configs parse depth first, each
+    // list last first. `stack` here is that work group, in both modes, on
+    // one thread. Go's default work group is parallel: it has no fixed
+    // order, and it can deadlock on an extends cycle. The order changes a
+    // task's `resolved` only when two projects enter an extends cycle at
+    // different files, because the extended config cache keeps the cut
+    // options of the first parse (tsconfigparsing.go:925). So each task's
+    // `resolved` is that of Go `--singleThreaded`, and that of Go's default
+    // mode when no such cycle is there. Threads match the file names of
+    // the configs ahead of this thread (`start_config_prefetch`).
     fn create_build_tasks(
         &mut self,
         old_tasks: Option<&FxHashMap<Path, Rc<RefCell<BuildTask>>>>,
         configs: &[String],
     ) {
-        for config in configs {
+        let mut stack = configs.to_vec();
+        while let Some(config) = stack.pop() {
+            let config = &config;
             let path = self.to_path(config);
             let mut task: Option<Rc<RefCell<BuildTask>>> = None;
             let mut build_info: Option<BuildInfoEntry> = None;
@@ -375,14 +386,14 @@ impl Orchestrator {
                 task.up_stream = Vec::new();
             }
             if let Some(resolved) = resolved {
-                let references = resolved.resolved_project_reference_paths().to_vec();
+                let references = resolved.resolved_project_reference_paths();
                 if old_tasks.is_none() {
-                    self.start_config_prefetch(&references);
+                    self.start_config_prefetch(references);
                     if let Some(prefetch) = &*self.host.config_prefetch.borrow() {
                         prefetch.queue_read(&path, &resolved);
                     }
                 }
-                self.create_build_tasks(old_tasks, &references);
+                stack.extend_from_slice(references);
             }
         }
     }
