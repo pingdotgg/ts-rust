@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "status": "active",
   "decision": "REVIEW",
-  "updated": "2026-10-24T02:07:34.717139+00:00",
-  "reason": "Batch recovery-continuation-go-checker-port-110 accepted at R229. Batch recovery-continuation-go-checker-port-111 opened at R230.",
+  "updated": "2026-10-24T04:42:14.954230+00:00",
+  "reason": "R231 bound in batch recovery-continuation-go-checker-port-111.",
   "goalAuthorization": {
     "date": "2026-09-07T23:13:28.547569+00:00",
     "instruction": "Continue working toward the active thread goal. Keep iterating on the ts-rust port until it is Able to properly type-check Tanstack Core and Hono.",
@@ -1165,12 +1165,12 @@
     "ordinaryQuery": null,
     "localCheck": null,
     "acceptance": null,
-    "recoveryRevision": 230,
-    "hypothesis": "int97 keeps every R229 pass at pin 3e9236361fa9 and adds: identmatch1 (Go inferFromMatchingTypes at the two identity sites with one normalization slot per call and a full guard; no slot while tracing, so trace events equal Go) and collect1 (a cheaper getProcessedFiles walk: seen keyed by the task, one walk slot per task data, Go's visit and reason order); gate projects byte-equal; no cell over a cost bar",
-    "sourceFingerprint": "4eefd8890c1756ec5e30207529924b588491970932f6a07cd099e4eeb9bc1cf2",
-    "beforeEditingSourceFingerprint": "76dc1e349fbbbb22dc32a1d164916b95dd1850123a6743824326aebf41e642aa",
+    "recoveryRevision": 231,
+    "hypothesis": "R231 repairs the R230 STOP: int97 keeps every R229 pass at pin 3e9236361fa9 and adds identmatch1 (Go inferFromMatchingTypes at the two identity sites with one guarded normalization slot per call; round 3: a slot or a new normalization is used only while the count of empty anonymous member resolves is unchanged, so IsEmptyAnonymousObjectType reads equal Go; none while tracing) and collect1 (a cheaper getProcessedFiles walk); the reviewer cases c1, c6, c7 equal Go; gate projects byte-equal; every perf cell faster than R229",
+    "sourceFingerprint": "dc0c3483663f4c1c7e0d177d25b0eed0bf97d0accada308784220afae48f6d3d",
+    "beforeEditingSourceFingerprint": "4eefd8890c1756ec5e30207529924b588491970932f6a07cd099e4eeb9bc1cf2",
     "sourceBindingStatus": "SOURCE_BOUND",
-    "commit": "c006dbbee",
+    "commit": "149e118da",
     "completedRuns": [],
     "compilerAccepted": false,
     "passingCredit": false,
@@ -1182,9 +1182,9 @@
     "reviewer": {
       "role": "independent_reviewer",
       "agent": "ab07b21c4d4cd5bc0",
-      "verdict": "STOP"
+      "verdict": "PENDING"
     },
-    "nextPermittedAction": "Run the R230 pipeline (candidate.sh side)."
+    "nextPermittedAction": "Run the R231 pipeline (candidate.sh side)."
   },
   "parallelModelPreference": {
     "model": "GPT-6 Astra",
