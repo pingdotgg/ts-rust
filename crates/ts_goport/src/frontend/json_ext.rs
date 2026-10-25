@@ -1029,16 +1029,49 @@ impl<T: MarshalerTo> MarshalerTo for Option<T> {
 // Go: arshal_default.go:1742 makePointerArshaler (unmarshal): null sets nil;
 // otherwise a nil pointer gets a new zero value and the value decodes into
 // the pointee (merging into an existing one).
+// PORT: the body is `unmarshal_option_dyn`, so each `T` adds only the two
+// `OptionSink` methods.
 impl<T: UnmarshalerFrom + Default> UnmarshalerFrom for Option<T> {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        if dec.peek_kind() == b'n' {
-            dec.read_token()?;
-            *self = None;
-            return Ok(());
-        }
-        let v = self.get_or_insert_with(T::default);
-        json_unmarshal_decode(dec, v)
+        unmarshal_option_dyn(dec, self)
     }
+}
+
+// The parts of the pointer arshaler that depend on the pointee type.
+trait OptionSink {
+    fn set_none(&mut self);
+    // The pointee, made zero when there is none, and the
+    // `std::any::type_name` of its type.
+    fn get_or_insert_default(&mut self) -> (&mut dyn UnmarshalerFrom, &'static str);
+}
+
+impl<T: UnmarshalerFrom + Default> OptionSink for Option<T> {
+    fn set_none(&mut self) {
+        *self = None;
+    }
+
+    fn get_or_insert_default(&mut self) -> (&mut dyn UnmarshalerFrom, &'static str) {
+        (
+            self.get_or_insert_with(T::default),
+            std::any::type_name::<T>(),
+        )
+    }
+}
+
+// The pointer arshaler for an `Option` whose pointee type is erased: one
+// copy for all pointee types.
+#[inline(never)]
+fn unmarshal_option_dyn(
+    dec: &mut JsonDecoder<'_>,
+    v: &mut dyn OptionSink,
+) -> Result<(), JsonError> {
+    if dec.peek_kind() == b'n' {
+        dec.read_token()?;
+        v.set_none();
+        return Ok(());
+    }
+    let (e, pointee_type) = v.get_or_insert_default();
+    json_unmarshal_decode_dyn(dec, e, pointee_type)
 }
 
 // PORT: `Box<T>` is a Go pointer on a type cycle. `null` is handled by the
