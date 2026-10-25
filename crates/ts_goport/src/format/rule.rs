@@ -1,12 +1,13 @@
 use crate::format::prelude::*;
 
 use crate::flags_macros::{go_enum, go_flags};
-use std::sync::Arc;
 
 // Go: format/rule.go:5 ruleImpl
+// PORT: the rules are static data (rules.rs), so the name and the context are
+// `&'static` and a rule is shared as `&'static RuleImpl`.
 pub struct RuleImpl {
-    pub debug_name: String,
-    pub context: Vec<ContextPredicate>,
+    pub debug_name: &'static str,
+    pub context: &'static [ContextPredicate],
     pub action: RuleAction,
     pub flags: RuleFlags,
 }
@@ -20,8 +21,8 @@ impl RuleImpl {
 
     // Go: format/rule.go:16 Context
     #[must_use]
-    pub fn context(&self) -> &[ContextPredicate] {
-        &self.context
+    pub fn context(&self) -> &'static [ContextPredicate] {
+        self.context
     }
 
     // Go: format/rule.go:20 Flags
@@ -33,13 +34,13 @@ impl RuleImpl {
     // Go: format/rule.go:24 String
     #[must_use]
     pub fn string(&self) -> String {
-        self.debug_name.clone()
+        self.debug_name.to_string()
     }
 }
 
 impl std::fmt::Display for RuleImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.debug_name)
+        f.write_str(self.debug_name)
     }
 }
 
@@ -54,7 +55,34 @@ pub struct TokenRange {
 pub struct RuleSpec {
     pub left_token_range: TokenRange,
     pub right_token_range: TokenRange,
-    pub rule: Arc<RuleImpl>,
+    pub rule: &'static RuleImpl,
+}
+
+/// One rule of the static rule lists in rules.rs: Go's `rule(...)` call
+/// before it builds the token ranges.
+pub struct RuleDef {
+    pub left: RuleTokens,
+    pub right: RuleTokens,
+    pub rule: RuleImpl,
+}
+
+// Go: format/rule.go:51 rule's `left any, right any`
+// PORT: Go switches on the dynamic type in toTokenRange (`ast.Kind`,
+// `[]ast.Kind` or `tokenRange`). A static rule names its side: `Kind` and
+// `Kinds` are the first two cases, and the other variants are the
+// tokenRange values that getAllRules computes from allTokens
+// (`AnyTokenExcept` is `anyTokenExcept(...)`). get_all_rules makes the
+// tokenRange.
+#[derive(Clone, Copy)]
+pub enum RuleTokens {
+    Kind(SyntaxKind),
+    Kinds(&'static [SyntaxKind]),
+    AnyToken,
+    AnyTokenExcept(&'static [SyntaxKind]),
+    AnyTokenIncludingMultilineComments,
+    AnyTokenIncludingEof,
+    Keywords,
+    BinaryOperators,
 }
 
 /**
@@ -70,75 +98,57 @@ pub struct RuleSpec {
  * @param flags whether the rule deletes a line or not, defaults to no-op
  */
 // Go: format/rule.go:51 rule
-// PORT: Go `left any, right any` switch on the dynamic type in toTokenRange;
-// here they are `impl Into<TokenRange>` (see the `From` impls below). Go
-// `flags ...ruleFlags` is a slice; only the first element is read.
-pub fn rule(
-    debug_name: &str,
-    left: impl Into<TokenRange>,
-    right: impl Into<TokenRange>,
-    context: Vec<ContextPredicate>,
+// PORT: a `const fn` for the static rule lists; the token ranges are made
+// later (see RuleTokens). Go `flags ...ruleFlags` is a slice; only the first
+// element is read.
+#[must_use]
+pub const fn rule(
+    debug_name: &'static str,
+    left: RuleTokens,
+    right: RuleTokens,
+    context: &'static [ContextPredicate],
     action: RuleAction,
     flags: &[RuleFlags],
-) -> RuleSpec {
+) -> RuleDef {
     let mut flag = RuleFlags::NONE;
     if !flags.is_empty() {
         flag = flags[0];
     }
-    let left_range = to_token_range(left);
-    let right_range = to_token_range(right);
-    let rule = Arc::new(RuleImpl {
-        debug_name: debug_name.to_string(),
-        context,
-        action,
-        flags: flag,
-    });
-    RuleSpec {
-        left_token_range: left_range,
-        right_token_range: right_range,
-        rule,
+    RuleDef {
+        left,
+        right,
+        rule: RuleImpl {
+            debug_name,
+            context,
+            action,
+            flags: flag,
+        },
     }
 }
-
-// Go: format/rule.go:71 toTokenRange
-// PORT: the Go type switch is the `From` impls below. Go panics for any other
-// argument type ("Unknown argument type passed to toTokenRange - only
-// ast.Kind, []ast.Kind, and tokenRange supported"); in Rust that case does
-// not compile.
-pub fn to_token_range(e: impl Into<TokenRange>) -> TokenRange {
-    e.into()
-}
-
-// Go: format/rule.go:73 `case ast.Kind`
-impl From<SyntaxKind> for TokenRange {
-    fn from(t: SyntaxKind) -> Self {
-        TokenRange {
-            is_specific: true,
-            tokens: vec![t],
-        }
-    }
-}
-
-// Go: format/rule.go:75 `case []ast.Kind`
-impl From<Vec<SyntaxKind>> for TokenRange {
-    fn from(t: Vec<SyntaxKind>) -> Self {
-        TokenRange {
-            is_specific: true,
-            tokens: t,
-        }
-    }
-}
-
-// Go: format/rule.go:77 `case tokenRange` is the identity `From<T> for T`.
 
 // Go: format/rule.go:83 contextPredicate
-// PORT: Go `func(ctx *FormattingContext) bool`. The rules map is a
-// process-wide static, so predicates are `Send + Sync`. `&mut` because the
-// FormattingContext getters cache tristates (Go mutates through the pointer).
-pub type ContextPredicate = Arc<dyn Fn(&mut FormattingContext) -> bool + Send + Sync>;
+// PORT: Go `func(ctx *FormattingContext) bool`. The rules are static data, so
+// a predicate is a value: `Fn` is a plain predicate function and the other
+// variants are the closures that rulecontext.go's option helpers return
+// (isOptionEnabled and so on; see `ContextPredicate::call`). `&mut` because
+// the FormattingContext getters cache tristates (Go mutates through the
+// pointer).
+#[derive(Clone, Copy)]
+pub enum ContextPredicate {
+    Fn(fn(&mut FormattingContext) -> bool),
+    OptionEquals(
+        AnyOptionSelector<lsutil::SemicolonPreference>,
+        lsutil::SemicolonPreference,
+    ),
+    OptionEnabled(OptionSelector),
+    OptionDisabled(OptionSelector),
+    OptionDisabledOrUndefined(OptionSelector),
+    OptionDisabledOrUndefinedOrTokensOnSameLine(OptionSelector),
+    OptionEnabledOrUndefined(OptionSelector),
+}
 
 // Go: format/rule.go:85 anyContext
-pub static ANY_CONTEXT: Vec<ContextPredicate> = Vec::new();
+pub const ANY_CONTEXT: &[ContextPredicate] = &[];
 
 // Go: format/rule.go:87 ruleAction
 go_flags!(RuleAction, i32 {

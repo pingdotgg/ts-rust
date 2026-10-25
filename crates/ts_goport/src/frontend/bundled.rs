@@ -26,10 +26,11 @@ mod noembed;
 pub use noembed::*;
 
 /// Bundled lib files with at least this many text bytes get a lib parse and
-/// bind snapshot (`binder::lib_snapshot::MIN_TEXT_LEN`): lib.dom (2.3 MB),
-/// lib.webworker (0.8 MB) and lib.es5 (0.2 MB). The next largest lib has
-/// 40 KB and binds in well under a millisecond, so its section would add
-/// binary size for almost no time.
+/// bind snapshot (`binder::lib_snapshot::MIN_TEXT_LEN`): lib.dom (2.3 MB)
+/// and lib.es5 (0.2 MB). lib.webworker (0.8 MB) is also over the limit but
+/// gets no section (`binder::lib_snapshot::SKIPPED_LIBS`). The next largest
+/// lib has 40 KB and binds in well under a millisecond, so its section would
+/// add binary size for almost no time.
 // PORT: not in Go.
 pub const SNAPSHOT_TEXT_MIN: usize = 200_000;
 

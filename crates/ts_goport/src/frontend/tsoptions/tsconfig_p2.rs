@@ -373,7 +373,12 @@ pub fn parse_config(
         options.paths_base_path = base_path.clone();
     }
 
-    if let Some(extended_config_paths) = own_config.extended_config_path.clone() {
+    // Go: `len(ownConfig.extendedConfigPaths) != 0`. The json parse always
+    // gives `Some`, and the source file parse gives `Some` for any
+    // `extends` (`"extends": []` too), so the length is checked.
+    if let Some(extended_config_paths) = own_config.extended_config_path.clone()
+        && !extended_config_paths.is_empty()
+    {
         // copy the resolution stack so it is never reused between branches in potential diamond-problem scenarios.
         let resolution_stack = resolution_stack.push(resolved_path.clone());
         let mut result = ExtendsResult::default();
@@ -2510,6 +2515,100 @@ mod property_assignment_tests {
                     for_each_property_assignment(options, key, Some, key2),
                     node_reads_find(options, key, key2),
                     "{key} {key2:?}"
+                );
+            }
+        }
+    }
+
+    /// The `compilerOptions` object literal of a new tsconfig file.
+    fn compiler_options(file_name: &str, text: &str) -> Node {
+        let source_file =
+            new_tsconfig_source_file_from_file_path(file_name, to_path(file_name, "", true), text)
+                .source_file;
+        let root = get_tsconfig_object_literal_expression(source_file);
+        for_each_property_assignment(root, "compilerOptions", |p| Some(p.initializer()), &[])
+            .expect("compilerOptions")
+    }
+
+    /// `scan_property_assignments` for `key` over the properties of
+    /// `object_literal`, as `find_property_assignment` calls it.
+    fn scan(object_literal: Node, key: &str) -> Option<Result<Option<Node>, usize>> {
+        let (file, ids) = object_literal.properties().store_ids().expect("store ids");
+        with_build_store_reads(file, |reads| {
+            scan_property_assignments(reads, ids, &|name: &str| name == key)
+        })
+    }
+
+    // pathsdiag1: escaped names, quotes and numeric spellings. The scan
+    // reads the text columns that `Node::text` reads, so it finds each key
+    // with no `Node` reads.
+    #[test]
+    fn build_store_scan_reads_escaped_names() {
+        let options = compiler_options(
+            "/p/tsconfig.json",
+            r#"{ "compilerOptions": { "a": 1, b: 2, "c\"d": 3, 'e\'': 4, "\x66": 5, "😀": 6, 1e3: 7, 0x10: 8 } }"#,
+        );
+        for key in [
+            "a",
+            "b",
+            "c\"d",
+            "e'",
+            "f",
+            "\u{1F600}",
+            "1000",
+            "16",
+            "1e3",
+            "x",
+        ] {
+            let found = node_reads_find(options, key, &[]);
+            assert_eq!(scan(options, key), Some(Ok(found)), "{key}");
+            assert_eq!(
+                for_each_property_assignment(options, key, Some, &[]),
+                found,
+                "{key}"
+            );
+        }
+        for key in ["a", "b", "c\"d", "e'", "f"] {
+            assert!(node_reads_find(options, key, &[]).is_some(), "{key}");
+        }
+    }
+
+    // pathsdiag1: in a store with alias slots (a child of another store),
+    // the scan reads each id through its record. A property or a name of
+    // another store (another file, synthetic) stops the scan there, and the
+    // `Node` reads go on from it. A parsed file is finished (no new nodes),
+    // so the own nodes are in a new store.
+    #[test]
+    fn build_store_scan_with_alias_slots_finds_the_go_property() {
+        let other = compiler_options(
+            "/q/tsconfig.json",
+            r#"{ "compilerOptions": { "c": 3, "a": 4 } }"#,
+        );
+        let other: Vec<Node> = other.properties().iter().collect();
+        let f = NodeFactory::for_file(new_file_store("/p/aliases.json", ""));
+        let property = |name: Node| {
+            let initializer = f.new_numeric_literal("1", TokenFlags::NONE);
+            f.new_property_assignment(ModifierList::NIL, name, Node::NIL, Node::NIL, initializer)
+        };
+        let own_a = property(f.new_string_literal("a", TokenFlags::NONE));
+        let own_b = property(f.new_identifier("b"));
+        let synthetic_name = property(NodeFactory::new().new_string_literal("d", TokenFlags::NONE));
+        let other_file = f.new_object_literal_expression(
+            f.new_node_list(&[own_a, other[0], other[1], own_b]),
+            false,
+        );
+        let synthetic = f
+            .new_object_literal_expression(f.new_node_list(&[own_b, synthetic_name, own_a]), false);
+        assert_eq!(scan(other_file, "a"), Some(Ok(Some(own_a))));
+        assert_eq!(scan(other_file, "b"), Some(Err(1)));
+        assert_eq!(scan(synthetic, "b"), Some(Ok(Some(own_b))));
+        assert_eq!(scan(synthetic, "a"), Some(Err(1)));
+        for object_literal in [other_file, synthetic] {
+            for key in ["a", "b", "c", "d", "x"] {
+                assert_eq!(
+                    for_each_property_assignment(object_literal, key, Some, &[]),
+                    node_reads_find(object_literal, key, &[]),
+                    "{key}"
                 );
             }
         }
