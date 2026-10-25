@@ -43,11 +43,11 @@ mod by_index {
         if x.len() < 2 {
             return;
         }
-        let mut order = indexes(x);
+        let mut order = indexes(x.len());
         sort_indexes_cmp(&mut order, &mut |a, b| {
             cmp(&x[*a as usize], &x[*b as usize])
         });
-        put_in_order(x, &mut order);
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
     /// Go `slices.SortStableFunc` (see `sort_stable_func_hot`).
@@ -55,11 +55,11 @@ mod by_index {
         if x.len() < 2 {
             return;
         }
-        let mut order = indexes(x);
+        let mut order = indexes(x.len());
         stable_sort_indexes_cmp(&mut order, &mut |a, b| {
             cmp(&x[*a as usize], &x[*b as usize])
         });
-        put_in_order(x, &mut order);
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
     /// Go `sort.Slice` (`sort/slice.go:24`; the algorithm is `pdqsort_func`).
@@ -67,11 +67,11 @@ mod by_index {
         if x.len() < 2 {
             return;
         }
-        let mut order = indexes(x);
+        let mut order = indexes(x.len());
         sort_indexes_less(&mut order, &mut |a, b| {
             less(&x[*a as usize], &x[*b as usize])
         });
-        put_in_order(x, &mut order);
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
     /// Rust's stable `x.sort_by(cmp)`, for a `cmp` that is a strict weak
@@ -83,11 +83,11 @@ mod by_index {
         if x.len() < 2 {
             return;
         }
-        let mut order = indexes(x);
+        let mut order = indexes(x.len());
         sort_indexes(&mut order, &mut |a, b| {
             cmp(&x[*a as usize], &x[*b as usize])
         });
-        put_in_order(x, &mut order);
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
     // The sorts of `order`, each in one function: without `inline(never)`
@@ -121,14 +121,17 @@ mod by_index {
         order.sort_by(cmp);
     }
 
-    /// The indexes of `x`, in order.
-    fn indexes<T>(x: &[T]) -> Vec<u32> {
-        (0..u32::try_from(x.len()).expect("a slice of under 4G elements")).collect()
+    /// The indexes `0..len`, in order.
+    #[inline(never)]
+    fn indexes(len: usize) -> Vec<u32> {
+        (0..u32::try_from(len).expect("a slice of under 4G elements")).collect()
     }
 
     /// Moves the element at `order[i]` of `x` to `i`, for each `i`, by
     /// following each cycle of `order` with swaps. Leaves `order` as `0..n`.
-    fn put_in_order<T>(x: &mut [T], order: &mut [u32]) {
+    /// `swap(i, j)` swaps elements `i` and `j` of `x`.
+    #[inline(never)]
+    fn put_in_order(order: &mut [u32], swap: &mut dyn FnMut(usize, usize)) {
         for start in 0..order.len() {
             let mut current = start;
             loop {
@@ -137,7 +140,7 @@ mod by_index {
                 if next == start {
                     break;
                 }
-                x.swap(current, next);
+                swap(current, next);
                 current = next;
             }
         }
