@@ -210,6 +210,10 @@ impl CommandLineOption {
 // code, each literal was a few hundred bytes of machine code; as static data
 // each list is one table, and its LazyLock leaks one CommandLineOption per
 // entry, so an option has one address in every list (Go pointer identity).
+// A message is the address of its `diag` static (`&diag::X`), and `leak`
+// reads the static: Go compares `*diagnostics.Message` pointers (help and
+// showConfig use `std::ptr::eq`), and a `&Message` copied at compile time
+// into this table is not the pointer that the static holds.
 #[derive(Clone, Copy)]
 pub(crate) struct OptionDecl {
     pub name: &'static str,
@@ -218,10 +222,10 @@ pub(crate) struct OptionDecl {
     pub is_file_path: bool,
     pub is_ts_config_only: bool,
     pub is_command_line_only: bool,
-    pub description: Option<&'static Message>,
+    pub description: Option<&'static &'static Message>,
     pub default_value_description: DefaultValue,
     pub show_in_simplified_help_view: bool,
-    pub category: Option<&'static Message>,
+    pub category: Option<&'static &'static Message>,
     pub extra_validation: ExtraValidation,
     pub min_value: i32,
     pub allow_config_dir_template_substitution: bool,
@@ -240,14 +244,15 @@ pub(crate) struct OptionDecl {
 }
 
 /// The `DefaultValueDescription` values of the static declarations, as
-/// CompilerOptionsValue variants that are Copy (`String` is a static text).
+/// CompilerOptionsValue variants that are Copy (`String` is a static text,
+/// `Message` the address of a `diag` static, as in OptionDecl).
 #[derive(Clone, Copy)]
 pub(crate) enum DefaultValue {
     Nil,
     Bool(bool),
     Int(i64),
     String(&'static str),
-    Message(&'static Message),
+    Message(&'static &'static Message),
     Tristate(Tristate),
     ScriptTarget(ScriptTarget),
 }
@@ -259,7 +264,7 @@ impl DefaultValue {
             DefaultValue::Bool(b) => CompilerOptionsValue::Bool(b),
             DefaultValue::Int(i) => CompilerOptionsValue::Int(i),
             DefaultValue::String(s) => CompilerOptionsValue::String(s.to_string()),
-            DefaultValue::Message(m) => CompilerOptionsValue::Message(m),
+            DefaultValue::Message(m) => CompilerOptionsValue::Message(*m),
             DefaultValue::Tristate(t) => CompilerOptionsValue::Tristate(t),
             DefaultValue::ScriptTarget(t) => CompilerOptionsValue::ScriptTarget(t),
         }
@@ -306,10 +311,10 @@ impl OptionDecl {
             is_file_path: self.is_file_path,
             is_ts_config_only: self.is_ts_config_only,
             is_command_line_only: self.is_command_line_only,
-            description: self.description,
+            description: self.description.copied(),
             default_value_description: self.default_value_description.value(),
             show_in_simplified_help_view: self.show_in_simplified_help_view,
-            category: self.category,
+            category: self.category.copied(),
             extra_validation: self.extra_validation,
             min_value: self.min_value,
             allow_config_dir_template_substitution: self.allow_config_dir_template_substitution,
