@@ -1058,28 +1058,60 @@ impl<T: UnmarshalerFrom + ?Sized> UnmarshalerFrom for Box<T> {
 // Go: arshal_default.go:1528 makeSliceArshaler (unmarshal): null sets nil,
 // each element starts from its zero value, `[]` sets an empty slice.
 // PORT: nil and empty are both an empty `Vec`.
+// PORT: the body is `unmarshal_vec_dyn`, so each `T` adds only the two
+// `VecSink` methods.
 impl<T: UnmarshalerFrom + Default> UnmarshalerFrom for Vec<T> {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let tok = dec.read_token()?;
-        match tok {
-            JsonToken::Null => {
-                self.clear();
-                Ok(())
-            }
-            JsonToken::BeginArray => {
-                self.clear();
-                while dec.peek_kind() != b']' {
-                    self.push(T::default());
-                    let v = self.last_mut().expect("element was just pushed");
-                    json_unmarshal_decode(dec, v)?;
-                }
-                dec.read_token()?;
-                Ok(())
-            }
-            // Go `newUnmarshalErrorAfterWithSkipping` skips the rest of the
-            // value only with legacy semantics.
-            _ => Err(unmarshal_kind_error(tok.kind(), &go_type_name::<Self>())),
+        unmarshal_vec_dyn(dec, self, std::any::type_name::<Self>())
+    }
+}
+
+// The parts of the slice arshaler that depend on the element type.
+trait VecSink {
+    fn clear_elements(&mut self);
+    // Pushes a zero element; returns it and the `std::any::type_name` of
+    // its type.
+    fn push_default(&mut self) -> (&mut dyn UnmarshalerFrom, &'static str);
+}
+
+impl<T: UnmarshalerFrom + Default> VecSink for Vec<T> {
+    fn clear_elements(&mut self) {
+        self.clear();
+    }
+
+    fn push_default(&mut self) -> (&mut dyn UnmarshalerFrom, &'static str) {
+        self.push(T::default());
+        let v = self.last_mut().expect("element was just pushed");
+        (v, std::any::type_name::<T>())
+    }
+}
+
+// The slice arshaler for a `Vec` whose element type is erased: one copy for
+// all element types. `rust_type` is the `std::any::type_name` of the `Vec`.
+#[inline(never)]
+fn unmarshal_vec_dyn(
+    dec: &mut JsonDecoder<'_>,
+    v: &mut dyn VecSink,
+    rust_type: &'static str,
+) -> Result<(), JsonError> {
+    let tok = dec.read_token()?;
+    match tok {
+        JsonToken::Null => {
+            v.clear_elements();
+            Ok(())
         }
+        JsonToken::BeginArray => {
+            v.clear_elements();
+            while dec.peek_kind() != b']' {
+                let (e, elem_type) = v.push_default();
+                json_unmarshal_decode_dyn(dec, e, elem_type)?;
+            }
+            dec.read_token()?;
+            Ok(())
+        }
+        // Go `newUnmarshalErrorAfterWithSkipping` skips the rest of the
+        // value only with legacy semantics.
+        _ => Err(unmarshal_kind_error(tok.kind(), &go_type_string(rust_type))),
     }
 }
 
