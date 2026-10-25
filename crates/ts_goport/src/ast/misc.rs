@@ -401,12 +401,14 @@ impl Diagnostic {
             return self.message_text.clone();
         }
         let message = (!is_nil_message(self.message)).then_some(self.message);
-        crate::diagnostics_loc::localize(
-            locale,
-            message,
-            self.message_key(),
-            &self.display_message_args(),
-        )
+        // The key goes only with the nil message: a catalog message makes
+        // its key on demand (`Message::key`).
+        let key = if message.is_some() {
+            ""
+        } else {
+            self.message_key()
+        };
+        crate::diagnostics_loc::localize(locale, message, key, &self.display_message_args())
     }
 
     // Go: ast/diagnostic.go:125 String
