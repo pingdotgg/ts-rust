@@ -1,20 +1,28 @@
 use crate::format::prelude::*;
 
-use std::sync::Arc;
+use RuleTokens::{
+    AnyToken, AnyTokenExcept, AnyTokenIncludingEof, AnyTokenIncludingMultilineComments,
+    BinaryOperators, Keywords, Kind, Kinds,
+};
 
-// Builds a Go `[]contextPredicate{...}` literal. A bare predicate function
-// becomes an `Arc`; a call such as `is_option_enabled(x)` or
-// `option_equals(x, v)` already returns a `ContextPredicate`.
+// Builds a Go `[]contextPredicate{...}` literal as a static slice. A bare
+// predicate function becomes `ContextPredicate::Fn`; a call such as
+// `is_option_enabled(x)` or `option_equals(x, v)` already makes a
+// `ContextPredicate`.
 macro_rules! preds {
     (@one $f:ident ( $($args:tt)* )) => { $f($($args)*) };
-    (@one $f:ident) => { Arc::new($f) as ContextPredicate };
+    (@one $f:ident) => { ContextPredicate::Fn($f) };
     ($($f:ident $(( $($args:tt)* ))?),* $(,)?) => {
-        vec![$(preds!(@one $f $(( $($args)* ))?)),*]
+        &[$(preds!(@one $f $(( $($args)* ))?)),*]
     };
 }
 
 // Go: format/rules.go:10 getAllRules
 pub fn get_all_rules() -> Vec<RuleSpec> {
+    // PORT: Go builds every rule here at run time. The rule lists and the
+    // fixed token lists are static data in Go's order; the token ranges that
+    // Go computes from allTokens are made below, and the result is the same
+    // []ruleSpec.
     let mut all_tokens: Vec<SyntaxKind> = Vec::with_capacity(
         (SyntaxKind::LAST_TOKEN as usize) - (SyntaxKind::FIRST_TOKEN as usize) + 1,
     );
@@ -61,7 +69,24 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         SyntaxKind::FIRST_BINARY_OPERATOR,
         SyntaxKind::LAST_BINARY_OPERATOR,
     );
-    let binary_keyword_operators: Vec<SyntaxKind> = vec![
+
+    // Go: format/rule.go:71 toTokenRange (`case ast.Kind`, `case []ast.Kind`
+    // and `case tokenRange`) for the left and right side of each rule.
+    let token_range = |tokens: RuleTokens| -> TokenRange {
+        match tokens {
+            Kind(kind) => token_range_from(&[kind]),
+            Kinds(kinds) => token_range_from(kinds),
+            AnyToken => any_token.clone(),
+            AnyTokenExcept(except) => any_token_except(except),
+            AnyTokenIncludingMultilineComments => any_token_including_multiline_comments.clone(),
+            AnyTokenIncludingEof => any_token_including_eof.clone(),
+            Keywords => keywords.clone(),
+            BinaryOperators => binary_operators.clone(),
+        }
+    };
+
+    // Go: format/rules.go getAllRules binaryKeywordOperators
+    const BINARY_KEYWORD_OPERATORS: &[SyntaxKind] = &[
         SyntaxKind::InKeyword,
         SyntaxKind::InstanceOfKeyword,
         SyntaxKind::OfKeyword,
@@ -69,13 +94,15 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         SyntaxKind::IsKeyword,
         SyntaxKind::SatisfiesKeyword,
     ];
-    let unary_prefix_operators: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules unaryPrefixOperators
+    const UNARY_PREFIX_OPERATORS: &[SyntaxKind] = &[
         SyntaxKind::PlusPlusToken,
         SyntaxKind::MinusToken,
         SyntaxKind::TildeToken,
         SyntaxKind::ExclamationToken,
     ];
-    let unary_prefix_expressions: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules unaryPrefixExpressions
+    const UNARY_PREFIX_EXPRESSIONS: &[SyntaxKind] = &[
         SyntaxKind::NumericLiteral,
         SyntaxKind::BigIntLiteral,
         SyntaxKind::Identifier,
@@ -85,35 +112,41 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         SyntaxKind::ThisKeyword,
         SyntaxKind::NewKeyword,
     ];
-    let unary_preincrement_expressions: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules unaryPreincrementExpressions
+    const UNARY_PREINCREMENT_EXPRESSIONS: &[SyntaxKind] = &[
         SyntaxKind::Identifier,
         SyntaxKind::OpenParenToken,
         SyntaxKind::ThisKeyword,
         SyntaxKind::NewKeyword,
     ];
-    let unary_postincrement_expressions: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules unaryPostincrementExpressions
+    const UNARY_POSTINCREMENT_EXPRESSIONS: &[SyntaxKind] = &[
         SyntaxKind::Identifier,
         SyntaxKind::CloseParenToken,
         SyntaxKind::CloseBracketToken,
         SyntaxKind::NewKeyword,
     ];
-    let unary_predecrement_expressions: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules unaryPredecrementExpressions
+    const UNARY_PREDECREMENT_EXPRESSIONS: &[SyntaxKind] = &[
         SyntaxKind::Identifier,
         SyntaxKind::OpenParenToken,
         SyntaxKind::ThisKeyword,
         SyntaxKind::NewKeyword,
     ];
-    let unary_postdecrement_expressions: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules unaryPostdecrementExpressions
+    const UNARY_POSTDECREMENT_EXPRESSIONS: &[SyntaxKind] = &[
         SyntaxKind::Identifier,
         SyntaxKind::CloseParenToken,
         SyntaxKind::CloseBracketToken,
         SyntaxKind::NewKeyword,
     ];
-    let comments: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules comments
+    const COMMENTS: &[SyntaxKind] = &[
         SyntaxKind::SingleLineCommentTrivia,
         SyntaxKind::MultiLineCommentTrivia,
     ];
-    let type_keywords: Vec<SyntaxKind> = vec![
+    // Go: format/rules.go getAllRules typeKeywords
+    const TYPE_KEYWORDS: &[SyntaxKind] = &[
         SyntaxKind::AnyKeyword,
         SyntaxKind::AssertsKeyword,
         SyntaxKind::BigIntKeyword,
@@ -135,15 +168,25 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         SyntaxKind::UniqueKeyword,
         SyntaxKind::UnknownKeyword,
     ];
-    let mut type_names: Vec<SyntaxKind> = vec![SyntaxKind::Identifier];
-    type_names.extend_from_slice(&type_keywords);
+    // Go: format/rules.go getAllRules typeNames := append([]ast.Kind{ast.KindIdentifier}, typeKeywords...)
+    const TYPE_NAMES: &[SyntaxKind] = &{
+        let mut names = [SyntaxKind::Identifier; TYPE_KEYWORDS.len() + 1];
+        let mut i = 0;
+        while i < TYPE_KEYWORDS.len() {
+            names[i + 1] = TYPE_KEYWORDS[i];
+            i += 1;
+        }
+        names
+    };
 
     // Place a space before open brace in a function declaration
     // TypeScript: Function can have return types, which can be made of tons of different token kinds
-    let function_open_brace_left_token_range = any_token_including_multiline_comments.clone();
+    // Go: format/rules.go getAllRules functionOpenBraceLeftTokenRange
+    const FUNCTION_OPEN_BRACE_LEFT_TOKEN_RANGE: RuleTokens = AnyTokenIncludingMultilineComments;
 
     // Place a space before open brace in a TypeScript declaration that has braces as children (class, module, enum, etc)
-    let type_script_open_brace_left_token_range = token_range_from(&[
+    // Go: format/rules.go getAllRules typeScriptOpenBraceLeftTokenRange
+    const TYPE_SCRIPT_OPEN_BRACE_LEFT_TOKEN_RANGE: RuleTokens = Kinds(&[
         SyntaxKind::Identifier,
         SyntaxKind::GreaterThanToken,
         SyntaxKind::MultiLineCommentTrivia,
@@ -153,7 +196,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
     ]);
 
     // Place a space before open brace in a control flow construct
-    let control_open_brace_left_token_range = token_range_from(&[
+    // Go: format/rules.go getAllRules controlOpenBraceLeftTokenRange
+    const CONTROL_OPEN_BRACE_LEFT_TOKEN_RANGE: RuleTokens = Kinds(&[
         SyntaxKind::CloseParenToken,
         SyntaxKind::MultiLineCommentTrivia,
         SyntaxKind::DoKeyword,
@@ -164,28 +208,29 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
     ]);
 
     // These rules are higher in priority than user-configurable
-    let high_priority_common_rules: Vec<RuleSpec> = vec![
+    // Go: format/rules.go getAllRules highPriorityCommonRules
+    static HIGH_PRIORITY_COMMON_RULES: &[RuleDef] = &[
         // Leave comments alone
         rule(
             "IgnoreBeforeComment",
-            any_token.clone(),
-            comments,
-            ANY_CONTEXT.clone(),
+            AnyToken,
+            Kinds(COMMENTS),
+            ANY_CONTEXT,
             RuleAction::STOP_PROCESSING_SPACE_ACTIONS,
             &[],
         ),
         rule(
             "IgnoreAfterLineComment",
-            SyntaxKind::SingleLineCommentTrivia,
-            any_token.clone(),
-            ANY_CONTEXT.clone(),
+            Kind(SyntaxKind::SingleLineCommentTrivia),
+            AnyToken,
+            ANY_CONTEXT,
             RuleAction::STOP_PROCESSING_SPACE_ACTIONS,
             &[],
         ),
         rule(
             "NotSpaceBeforeColon",
-            any_token.clone(),
-            SyntaxKind::ColonToken,
+            AnyToken,
+            Kind(SyntaxKind::ColonToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_binary_op_context,
@@ -196,8 +241,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceAfterColon",
-            SyntaxKind::ColonToken,
-            any_token.clone(),
+            Kind(SyntaxKind::ColonToken),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_binary_op_context,
@@ -208,8 +253,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeQuestionMark",
-            any_token.clone(),
-            SyntaxKind::QuestionToken,
+            AnyToken,
+            Kind(SyntaxKind::QuestionToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_binary_op_context,
@@ -221,8 +266,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // insert space after '?' only when it is used in conditional operator
         rule(
             "SpaceAfterQuestionMarkInConditionalOperator",
-            SyntaxKind::QuestionToken,
-            any_token.clone(),
+            Kind(SyntaxKind::QuestionToken),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_conditional_operator_context
@@ -233,8 +278,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // in other cases there should be no space between '?' and next token
         rule(
             "NoSpaceAfterQuestionMark",
-            SyntaxKind::QuestionToken,
-            any_token.clone(),
+            Kind(SyntaxKind::QuestionToken),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_non_optional_property_context
@@ -244,8 +289,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeDot",
-            any_token.clone(),
-            vec![SyntaxKind::DotToken, SyntaxKind::QuestionDotToken],
+            AnyToken,
+            Kinds(&[SyntaxKind::DotToken, SyntaxKind::QuestionDotToken]),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_property_access_on_integer_literal
@@ -255,16 +300,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterDot",
-            vec![SyntaxKind::DotToken, SyntaxKind::QuestionDotToken],
-            any_token.clone(),
+            Kinds(&[SyntaxKind::DotToken, SyntaxKind::QuestionDotToken]),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBetweenImportParenInImportType",
-            SyntaxKind::ImportKeyword,
-            SyntaxKind::OpenParenToken,
+            Kind(SyntaxKind::ImportKeyword),
+            Kind(SyntaxKind::OpenParenToken),
             preds![is_non_jsx_same_line_token_context, is_import_type_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -274,32 +319,32 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // them and their target unary expression.
         rule(
             "NoSpaceAfterUnaryPrefixOperator",
-            unary_prefix_operators,
-            unary_prefix_expressions,
+            Kinds(UNARY_PREFIX_OPERATORS),
+            Kinds(UNARY_PREFIX_EXPRESSIONS),
             preds![is_non_jsx_same_line_token_context, is_not_binary_op_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterUnaryPreincrementOperator",
-            SyntaxKind::PlusPlusToken,
-            unary_preincrement_expressions,
+            Kind(SyntaxKind::PlusPlusToken),
+            Kinds(UNARY_PREINCREMENT_EXPRESSIONS),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterUnaryPredecrementOperator",
-            SyntaxKind::MinusMinusToken,
-            unary_predecrement_expressions,
+            Kind(SyntaxKind::MinusMinusToken),
+            Kinds(UNARY_PREDECREMENT_EXPRESSIONS),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBeforeUnaryPostincrementOperator",
-            unary_postincrement_expressions,
-            SyntaxKind::PlusPlusToken,
+            Kinds(UNARY_POSTINCREMENT_EXPRESSIONS),
+            Kind(SyntaxKind::PlusPlusToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_statement_condition_context
@@ -309,8 +354,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeUnaryPostdecrementOperator",
-            unary_postdecrement_expressions,
-            SyntaxKind::MinusMinusToken,
+            Kinds(UNARY_POSTDECREMENT_EXPRESSIONS),
+            Kind(SyntaxKind::MinusMinusToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_statement_condition_context
@@ -325,56 +370,56 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         //      a + ++b --X--> a+++b
         rule(
             "SpaceAfterPostincrementWhenFollowedByAdd",
-            SyntaxKind::PlusPlusToken,
-            SyntaxKind::PlusToken,
+            Kind(SyntaxKind::PlusPlusToken),
+            Kind(SyntaxKind::PlusToken),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterAddWhenFollowedByUnaryPlus",
-            SyntaxKind::PlusToken,
-            SyntaxKind::PlusToken,
+            Kind(SyntaxKind::PlusToken),
+            Kind(SyntaxKind::PlusToken),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterAddWhenFollowedByPreincrement",
-            SyntaxKind::PlusToken,
-            SyntaxKind::PlusPlusToken,
+            Kind(SyntaxKind::PlusToken),
+            Kind(SyntaxKind::PlusPlusToken),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterPostdecrementWhenFollowedBySubtract",
-            SyntaxKind::MinusMinusToken,
-            SyntaxKind::MinusToken,
+            Kind(SyntaxKind::MinusMinusToken),
+            Kind(SyntaxKind::MinusToken),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterSubtractWhenFollowedByUnaryMinus",
-            SyntaxKind::MinusToken,
-            SyntaxKind::MinusToken,
+            Kind(SyntaxKind::MinusToken),
+            Kind(SyntaxKind::MinusToken),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterSubtractWhenFollowedByPredecrement",
-            SyntaxKind::MinusToken,
-            SyntaxKind::MinusMinusToken,
+            Kind(SyntaxKind::MinusToken),
+            Kind(SyntaxKind::MinusMinusToken),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterCloseBrace",
-            SyntaxKind::CloseBraceToken,
-            vec![SyntaxKind::CommaToken, SyntaxKind::SemicolonToken],
+            Kind(SyntaxKind::CloseBraceToken),
+            Kinds(&[SyntaxKind::CommaToken, SyntaxKind::SemicolonToken]),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -382,8 +427,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // For functions and control block place } on a new line []ast.Kind{multi-line rule}
         rule(
             "NewLineBeforeCloseBraceInBlockContext",
-            any_token_including_multiline_comments.clone(),
-            SyntaxKind::CloseBraceToken,
+            AnyTokenIncludingMultilineComments,
+            Kind(SyntaxKind::CloseBraceToken),
             preds![is_multiline_block_context],
             RuleAction::INSERT_NEW_LINE,
             &[],
@@ -391,8 +436,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Space/new line after }.
         rule(
             "SpaceAfterCloseBrace",
-            SyntaxKind::CloseBraceToken,
-            any_token_except(&[SyntaxKind::CloseParenToken]),
+            Kind(SyntaxKind::CloseBraceToken),
+            AnyTokenExcept(&[SyntaxKind::CloseParenToken]),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_after_code_block_context
@@ -404,24 +449,24 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Also should not apply to })
         rule(
             "SpaceBetweenCloseBraceAndElse",
-            SyntaxKind::CloseBraceToken,
-            SyntaxKind::ElseKeyword,
+            Kind(SyntaxKind::CloseBraceToken),
+            Kind(SyntaxKind::ElseKeyword),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceBetweenCloseBraceAndWhile",
-            SyntaxKind::CloseBraceToken,
-            SyntaxKind::WhileKeyword,
+            Kind(SyntaxKind::CloseBraceToken),
+            Kind(SyntaxKind::WhileKeyword),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBetweenEmptyBraceBrackets",
-            SyntaxKind::OpenBraceToken,
-            SyntaxKind::CloseBraceToken,
+            Kind(SyntaxKind::OpenBraceToken),
+            Kind(SyntaxKind::CloseBraceToken),
             preds![is_non_jsx_same_line_token_context, is_object_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -429,32 +474,32 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Add a space after control dec context if the next character is an open bracket ex: 'if (false)[]ast.Kind{a, b} = []ast.Kind{1, 2};' -> 'if (false) []ast.Kind{a, b} = []ast.Kind{1, 2};'
         rule(
             "SpaceAfterConditionalClosingParen",
-            SyntaxKind::CloseParenToken,
-            SyntaxKind::OpenBracketToken,
+            Kind(SyntaxKind::CloseParenToken),
+            Kind(SyntaxKind::OpenBracketToken),
             preds![is_control_decl_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBetweenFunctionKeywordAndStar",
-            SyntaxKind::FunctionKeyword,
-            SyntaxKind::AsteriskToken,
+            Kind(SyntaxKind::FunctionKeyword),
+            Kind(SyntaxKind::AsteriskToken),
             preds![is_function_declaration_or_function_expression_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterStarInGeneratorDeclaration",
-            SyntaxKind::AsteriskToken,
-            SyntaxKind::Identifier,
+            Kind(SyntaxKind::AsteriskToken),
+            Kind(SyntaxKind::Identifier),
             preds![is_function_declaration_or_function_expression_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterFunctionInFuncDecl",
-            SyntaxKind::FunctionKeyword,
-            any_token.clone(),
+            Kind(SyntaxKind::FunctionKeyword),
+            AnyToken,
             preds![is_function_decl_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -462,8 +507,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert new line after { and before } in multi-line contexts.
         rule(
             "NewLineAfterOpenBraceInBlockContext",
-            SyntaxKind::OpenBraceToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBraceToken),
+            AnyToken,
             preds![is_multiline_block_context],
             RuleAction::INSERT_NEW_LINE,
             &[],
@@ -474,16 +519,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         //      set x(val) {}
         rule(
             "SpaceAfterGetSetInMember",
-            vec![SyntaxKind::GetKeyword, SyntaxKind::SetKeyword],
-            SyntaxKind::Identifier,
+            Kinds(&[SyntaxKind::GetKeyword, SyntaxKind::SetKeyword]),
+            Kind(SyntaxKind::Identifier),
             preds![is_function_decl_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBetweenYieldKeywordAndStar",
-            SyntaxKind::YieldKeyword,
-            SyntaxKind::AsteriskToken,
+            Kind(SyntaxKind::YieldKeyword),
+            Kind(SyntaxKind::AsteriskToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_yield_or_yield_star_with_operand
@@ -493,8 +538,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBetweenYieldOrYieldStarAndOperand",
-            vec![SyntaxKind::YieldKeyword, SyntaxKind::AsteriskToken],
-            any_token.clone(),
+            Kinds(&[SyntaxKind::YieldKeyword, SyntaxKind::AsteriskToken]),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_yield_or_yield_star_with_operand
@@ -504,15 +549,15 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBetweenReturnAndSemicolon",
-            SyntaxKind::ReturnKeyword,
-            SyntaxKind::SemicolonToken,
+            Kind(SyntaxKind::ReturnKeyword),
+            Kind(SyntaxKind::SemicolonToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterCertainKeywords",
-            vec![
+            Kinds(&[
                 SyntaxKind::VarKeyword,
                 SyntaxKind::ThrowKeyword,
                 SyntaxKind::NewKeyword,
@@ -520,16 +565,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
                 SyntaxKind::ReturnKeyword,
                 SyntaxKind::TypeOfKeyword,
                 SyntaxKind::AwaitKeyword,
-            ],
-            any_token.clone(),
+            ]),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterLetConstInVariableDeclaration",
-            vec![SyntaxKind::LetKeyword, SyntaxKind::ConstKeyword],
-            any_token.clone(),
+            Kinds(&[SyntaxKind::LetKeyword, SyntaxKind::ConstKeyword]),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_start_of_variable_declaration_list
@@ -539,8 +584,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeOpenParenInFuncCall",
-            any_token.clone(),
-            SyntaxKind::OpenParenToken,
+            AnyToken,
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_function_call_or_new_context,
@@ -552,24 +597,24 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Special case for binary operators (that are keywords). For these we have to add a space and shouldn't follow any user options.
         rule(
             "SpaceBeforeBinaryKeywordOperator",
-            any_token.clone(),
-            binary_keyword_operators.clone(),
+            AnyToken,
+            Kinds(BINARY_KEYWORD_OPERATORS),
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterBinaryKeywordOperator",
-            binary_keyword_operators,
-            any_token.clone(),
+            Kinds(BINARY_KEYWORD_OPERATORS),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context, is_binary_op_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterVoidOperator",
-            SyntaxKind::VoidKeyword,
-            any_token.clone(),
+            Kind(SyntaxKind::VoidKeyword),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context, is_void_op_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -577,8 +622,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Async-await
         rule(
             "SpaceBetweenAsyncAndOpenParen",
-            SyntaxKind::AsyncKeyword,
-            SyntaxKind::OpenParenToken,
+            Kind(SyntaxKind::AsyncKeyword),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_arrow_function_context,
                 is_non_jsx_same_line_token_context
@@ -588,8 +633,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBetweenAsyncAndFunctionKeyword",
-            SyntaxKind::AsyncKeyword,
-            vec![SyntaxKind::FunctionKeyword, SyntaxKind::Identifier],
+            Kind(SyntaxKind::AsyncKeyword),
+            Kinds(&[SyntaxKind::FunctionKeyword, SyntaxKind::Identifier]),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -597,11 +642,11 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Template string
         rule(
             "NoSpaceBetweenTagAndTemplateString",
-            vec![SyntaxKind::Identifier, SyntaxKind::CloseParenToken],
-            vec![
+            Kinds(&[SyntaxKind::Identifier, SyntaxKind::CloseParenToken]),
+            Kinds(&[
                 SyntaxKind::NoSubstitutionTemplateLiteral,
                 SyntaxKind::TemplateHead,
-            ],
+            ]),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -609,8 +654,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // JSX opening elements
         rule(
             "SpaceBeforeJsxAttribute",
-            any_token.clone(),
-            SyntaxKind::Identifier,
+            AnyToken,
+            Kind(SyntaxKind::Identifier),
             preds![
                 is_next_token_parent_jsx_attribute,
                 is_non_jsx_same_line_token_context
@@ -620,8 +665,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeSlashInJsxOpeningElement",
-            any_token.clone(),
-            SyntaxKind::SlashToken,
+            AnyToken,
+            Kind(SyntaxKind::SlashToken),
             preds![
                 is_jsx_self_closing_element_context,
                 is_non_jsx_same_line_token_context
@@ -631,8 +676,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeGreaterThanTokenInJsxOpeningElement",
-            SyntaxKind::SlashToken,
-            SyntaxKind::GreaterThanToken,
+            Kind(SyntaxKind::SlashToken),
+            Kind(SyntaxKind::GreaterThanToken),
             preds![
                 is_jsx_self_closing_element_context,
                 is_non_jsx_same_line_token_context
@@ -642,32 +687,32 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeEqualInJsxAttribute",
-            any_token.clone(),
-            SyntaxKind::EqualsToken,
+            AnyToken,
+            Kind(SyntaxKind::EqualsToken),
             preds![is_jsx_attribute_context, is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterEqualInJsxAttribute",
-            SyntaxKind::EqualsToken,
-            any_token.clone(),
+            Kind(SyntaxKind::EqualsToken),
+            AnyToken,
             preds![is_jsx_attribute_context, is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBeforeJsxNamespaceColon",
-            SyntaxKind::Identifier,
-            SyntaxKind::ColonToken,
+            Kind(SyntaxKind::Identifier),
+            Kind(SyntaxKind::ColonToken),
             preds![is_next_token_parent_jsx_namespaced_name],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterJsxNamespaceColon",
-            SyntaxKind::ColonToken,
-            SyntaxKind::Identifier,
+            Kind(SyntaxKind::ColonToken),
+            Kind(SyntaxKind::Identifier),
             preds![is_next_token_parent_jsx_namespaced_name],
             RuleAction::DELETE_SPACE,
             &[],
@@ -676,8 +721,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Use of module as a function call. e.g.: import m2 = module("m2");
         rule(
             "NoSpaceAfterModuleImport",
-            vec![SyntaxKind::ModuleKeyword, SyntaxKind::RequireKeyword],
-            SyntaxKind::OpenParenToken,
+            Kinds(&[SyntaxKind::ModuleKeyword, SyntaxKind::RequireKeyword]),
+            Kind(SyntaxKind::OpenParenToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -685,7 +730,7 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Add a space around certain TypeScript keywords
         rule(
             "SpaceAfterCertainTypeScriptKeywords",
-            vec![
+            Kinds(&[
                 SyntaxKind::AbstractKeyword,
                 SyntaxKind::AccessorKeyword,
                 SyntaxKind::ClassKeyword,
@@ -711,20 +756,20 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
                 SyntaxKind::FromKeyword,
                 SyntaxKind::KeyOfKeyword,
                 SyntaxKind::InferKeyword,
-            ],
-            any_token.clone(),
+            ]),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceBeforeCertainTypeScriptKeywords",
-            any_token.clone(),
-            vec![
+            AnyToken,
+            Kinds(&[
                 SyntaxKind::ExtendsKeyword,
                 SyntaxKind::ImplementsKeyword,
                 SyntaxKind::FromKeyword,
-            ],
+            ]),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -732,8 +777,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Treat string literals in module names as identifiers, and add a space between the literal and the opening Brace braces, e.g.: module "m2" {
         rule(
             "SpaceAfterModuleName",
-            SyntaxKind::StringLiteral,
-            SyntaxKind::OpenBraceToken,
+            Kind(SyntaxKind::StringLiteral),
+            Kind(SyntaxKind::OpenBraceToken),
             preds![is_module_decl_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -741,16 +786,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Lambda expressions
         rule(
             "SpaceBeforeArrow",
-            any_token.clone(),
-            SyntaxKind::EqualsGreaterThanToken,
+            AnyToken,
+            Kind(SyntaxKind::EqualsGreaterThanToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "SpaceAfterArrow",
-            SyntaxKind::EqualsGreaterThanToken,
-            any_token.clone(),
+            Kind(SyntaxKind::EqualsGreaterThanToken),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -758,16 +803,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Optional parameters and let args
         rule(
             "NoSpaceAfterEllipsis",
-            SyntaxKind::DotDotDotToken,
-            SyntaxKind::Identifier,
+            Kind(SyntaxKind::DotDotDotToken),
+            Kind(SyntaxKind::Identifier),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterOptionalParameters",
-            SyntaxKind::QuestionToken,
-            vec![SyntaxKind::CloseParenToken, SyntaxKind::CommaToken],
+            Kind(SyntaxKind::QuestionToken),
+            Kinds(&[SyntaxKind::CloseParenToken, SyntaxKind::CommaToken]),
             preds![is_non_jsx_same_line_token_context, is_not_binary_op_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -775,8 +820,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Remove spaces in empty interface literals. e.g.: x: {}
         rule(
             "NoSpaceBetweenEmptyInterfaceBraceBrackets",
-            SyntaxKind::OpenBraceToken,
-            SyntaxKind::CloseBraceToken,
+            Kind(SyntaxKind::OpenBraceToken),
+            Kind(SyntaxKind::CloseBraceToken),
             preds![is_non_jsx_same_line_token_context, is_object_type_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -784,8 +829,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // generics and type assertions
         rule(
             "NoSpaceBeforeOpenAngularBracket",
-            type_names.clone(),
-            SyntaxKind::LessThanToken,
+            Kinds(TYPE_NAMES),
+            Kind(SyntaxKind::LessThanToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_type_argument_or_parameter_or_assertion_context
@@ -795,8 +840,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBetweenCloseParenAndAngularBracket",
-            SyntaxKind::CloseParenToken,
-            SyntaxKind::LessThanToken,
+            Kind(SyntaxKind::CloseParenToken),
+            Kind(SyntaxKind::LessThanToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_type_argument_or_parameter_or_assertion_context
@@ -806,8 +851,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterOpenAngularBracket",
-            SyntaxKind::LessThanToken,
-            any_token.clone(),
+            Kind(SyntaxKind::LessThanToken),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_type_argument_or_parameter_or_assertion_context
@@ -817,8 +862,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeCloseAngularBracket",
-            any_token.clone(),
-            SyntaxKind::GreaterThanToken,
+            AnyToken,
+            Kind(SyntaxKind::GreaterThanToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_type_argument_or_parameter_or_assertion_context
@@ -828,17 +873,18 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterCloseAngularBracket",
-            SyntaxKind::GreaterThanToken,
-            vec![
+            Kind(SyntaxKind::GreaterThanToken),
+            Kinds(&[
                 SyntaxKind::OpenParenToken,
                 SyntaxKind::OpenBracketToken,
                 SyntaxKind::GreaterThanToken,
                 SyntaxKind::CommaToken,
-            ],
+            ]),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_type_argument_or_parameter_or_assertion_context,
-                is_not_function_decl_context, /*To prevent an interference with the SpaceBeforeOpenParenInFuncDecl rule*/
+                is_not_function_decl_context,
+                /*To prevent an interference with the SpaceBeforeOpenParenInFuncDecl rule*/
                 is_non_type_assertion_context,
             ],
             RuleAction::DELETE_SPACE,
@@ -847,16 +893,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // decorators
         rule(
             "SpaceBeforeAt",
-            vec![SyntaxKind::CloseParenToken, SyntaxKind::Identifier],
-            SyntaxKind::AtToken,
+            Kinds(&[SyntaxKind::CloseParenToken, SyntaxKind::Identifier]),
+            Kind(SyntaxKind::AtToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterAt",
-            SyntaxKind::AtToken,
-            any_token.clone(),
+            Kind(SyntaxKind::AtToken),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -864,8 +910,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after @ in decorator
         rule(
             "SpaceAfterDecorator",
-            any_token.clone(),
-            vec![
+            AnyToken,
+            Kinds(&[
                 SyntaxKind::AbstractKeyword,
                 SyntaxKind::Identifier,
                 SyntaxKind::ExportKeyword,
@@ -879,15 +925,15 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
                 SyntaxKind::SetKeyword,
                 SyntaxKind::OpenBracketToken,
                 SyntaxKind::AsteriskToken,
-            ],
+            ]),
             preds![is_end_of_decorator_context_on_same_line],
             RuleAction::INSERT_SPACE,
             &[],
         ),
         rule(
             "NoSpaceBeforeNonNullAssertionOperator",
-            any_token.clone(),
-            SyntaxKind::ExclamationToken,
+            AnyToken,
+            Kind(SyntaxKind::ExclamationToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_non_null_assertion_context
@@ -897,8 +943,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterNewKeywordOnConstructorSignature",
-            SyntaxKind::NewKeyword,
-            SyntaxKind::OpenParenToken,
+            Kind(SyntaxKind::NewKeyword),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_non_jsx_same_line_token_context,
                 is_constructor_signature_context
@@ -908,8 +954,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceLessThanAndNonJSXTypeAnnotation",
-            SyntaxKind::LessThanToken,
-            SyntaxKind::LessThanToken,
+            Kind(SyntaxKind::LessThanToken),
+            Kind(SyntaxKind::LessThanToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -917,12 +963,13 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
     ];
 
     // These rules are applied after high priority
-    let user_configurable_rules: Vec<RuleSpec> = vec![
+    // Go: format/rules.go getAllRules userConfigurableRules
+    static USER_CONFIGURABLE_RULES: &[RuleDef] = &[
         // Treat constructor as an identifier in a function declaration, and remove spaces between constructor and following left parentheses
         rule(
             "SpaceAfterConstructor",
-            SyntaxKind::ConstructorKeyword,
-            SyntaxKind::OpenParenToken,
+            Kind(SyntaxKind::ConstructorKeyword),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_enabled(insert_space_after_constructor_option),
                 is_non_jsx_same_line_token_context
@@ -932,8 +979,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterConstructor",
-            SyntaxKind::ConstructorKeyword,
-            SyntaxKind::OpenParenToken,
+            Kind(SyntaxKind::ConstructorKeyword),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_disabled_or_undefined(insert_space_after_constructor_option),
                 is_non_jsx_same_line_token_context
@@ -943,8 +990,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceAfterComma",
-            SyntaxKind::CommaToken,
-            any_token.clone(),
+            Kind(SyntaxKind::CommaToken),
+            AnyToken,
             preds![
                 is_option_enabled(insert_space_after_comma_delimiter_option),
                 is_non_jsx_same_line_token_context,
@@ -957,8 +1004,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterComma",
-            SyntaxKind::CommaToken,
-            any_token.clone(),
+            Kind(SyntaxKind::CommaToken),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(insert_space_after_comma_delimiter_option),
                 is_non_jsx_same_line_token_context,
@@ -970,8 +1017,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after function keyword for anonymous functions
         rule(
             "SpaceAfterAnonymousFunctionKeyword",
-            vec![SyntaxKind::FunctionKeyword, SyntaxKind::AsteriskToken],
-            SyntaxKind::OpenParenToken,
+            Kinds(&[SyntaxKind::FunctionKeyword, SyntaxKind::AsteriskToken]),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_enabled(
                     insert_space_after_function_keyword_for_anonymous_functions_option
@@ -983,8 +1030,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterAnonymousFunctionKeyword",
-            vec![SyntaxKind::FunctionKeyword, SyntaxKind::AsteriskToken],
-            SyntaxKind::OpenParenToken,
+            Kinds(&[SyntaxKind::FunctionKeyword, SyntaxKind::AsteriskToken]),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_function_keyword_for_anonymous_functions_option
@@ -997,8 +1044,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after keywords in control flow statements
         rule(
             "SpaceAfterKeywordInControl",
-            keywords.clone(),
-            SyntaxKind::OpenParenToken,
+            Keywords,
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_enabled(insert_space_after_keywords_in_control_flow_statements_option),
                 is_control_decl_context
@@ -1008,8 +1055,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterKeywordInControl",
-            keywords,
-            SyntaxKind::OpenParenToken,
+            Keywords,
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_keywords_in_control_flow_statements_option
@@ -1022,8 +1069,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after opening and before closing nonempty parenthesis
         rule(
             "SpaceAfterOpenParen",
-            SyntaxKind::OpenParenToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenParenToken),
+            AnyToken,
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_nonempty_parenthesis_option
@@ -1035,8 +1082,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeCloseParen",
-            any_token.clone(),
-            SyntaxKind::CloseParenToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseParenToken),
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_nonempty_parenthesis_option
@@ -1048,8 +1095,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBetweenOpenParens",
-            SyntaxKind::OpenParenToken,
-            SyntaxKind::OpenParenToken,
+            Kind(SyntaxKind::OpenParenToken),
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_nonempty_parenthesis_option
@@ -1061,16 +1108,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBetweenParens",
-            SyntaxKind::OpenParenToken,
-            SyntaxKind::CloseParenToken,
+            Kind(SyntaxKind::OpenParenToken),
+            Kind(SyntaxKind::CloseParenToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterOpenParen",
-            SyntaxKind::OpenParenToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenParenToken),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_nonempty_parenthesis_option
@@ -1082,8 +1129,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeCloseParen",
-            any_token.clone(),
-            SyntaxKind::CloseParenToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseParenToken),
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_nonempty_parenthesis_option
@@ -1096,8 +1143,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after opening and before closing nonempty brackets
         rule(
             "SpaceAfterOpenBracket",
-            SyntaxKind::OpenBracketToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBracketToken),
+            AnyToken,
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_nonempty_brackets_option
@@ -1109,8 +1156,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeCloseBracket",
-            any_token.clone(),
-            SyntaxKind::CloseBracketToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseBracketToken),
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_nonempty_brackets_option
@@ -1122,16 +1169,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBetweenBrackets",
-            SyntaxKind::OpenBracketToken,
-            SyntaxKind::CloseBracketToken,
+            Kind(SyntaxKind::OpenBracketToken),
+            Kind(SyntaxKind::CloseBracketToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterOpenBracket",
-            SyntaxKind::OpenBracketToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBracketToken),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_nonempty_brackets_option
@@ -1143,8 +1190,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeCloseBracket",
-            any_token.clone(),
-            SyntaxKind::CloseBracketToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseBracketToken),
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_nonempty_brackets_option
@@ -1157,8 +1204,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert a space after { and before } in single-line contexts, but remove space from empty object literals {}.
         rule(
             "SpaceAfterOpenBrace",
-            SyntaxKind::OpenBraceToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBraceToken),
+            AnyToken,
             preds![
                 is_option_enabled_or_undefined(
                     insert_space_after_opening_and_before_closing_nonempty_braces_option
@@ -1170,8 +1217,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeCloseBrace",
-            any_token.clone(),
-            SyntaxKind::CloseBraceToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseBraceToken),
             preds![
                 is_option_enabled_or_undefined(
                     insert_space_after_opening_and_before_closing_nonempty_braces_option
@@ -1183,16 +1230,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBetweenEmptyBraceBrackets",
-            SyntaxKind::OpenBraceToken,
-            SyntaxKind::CloseBraceToken,
+            Kind(SyntaxKind::OpenBraceToken),
+            Kind(SyntaxKind::CloseBraceToken),
             preds![is_non_jsx_same_line_token_context, is_object_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterOpenBrace",
-            SyntaxKind::OpenBraceToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBraceToken),
+            AnyToken,
             preds![
                 is_option_disabled(
                     insert_space_after_opening_and_before_closing_nonempty_braces_option
@@ -1204,8 +1251,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeCloseBrace",
-            any_token.clone(),
-            SyntaxKind::CloseBraceToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseBraceToken),
             preds![
                 is_option_disabled(
                     insert_space_after_opening_and_before_closing_nonempty_braces_option
@@ -1218,8 +1265,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert a space after opening and before closing empty brace brackets
         rule(
             "SpaceBetweenEmptyBraceBrackets",
-            SyntaxKind::OpenBraceToken,
-            SyntaxKind::CloseBraceToken,
+            Kind(SyntaxKind::OpenBraceToken),
+            Kind(SyntaxKind::CloseBraceToken),
             preds![is_option_enabled(
                 insert_space_after_opening_and_before_closing_empty_braces_option
             )],
@@ -1228,8 +1275,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBetweenEmptyBraceBrackets",
-            SyntaxKind::OpenBraceToken,
-            SyntaxKind::CloseBraceToken,
+            Kind(SyntaxKind::OpenBraceToken),
+            Kind(SyntaxKind::CloseBraceToken),
             preds![
                 is_option_disabled(
                     insert_space_after_opening_and_before_closing_empty_braces_option
@@ -1242,8 +1289,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after opening and before closing template string braces
         rule(
             "SpaceAfterTemplateHeadAndMiddle",
-            vec![SyntaxKind::TemplateHead, SyntaxKind::TemplateMiddle],
-            any_token.clone(),
+            Kinds(&[SyntaxKind::TemplateHead, SyntaxKind::TemplateMiddle]),
+            AnyToken,
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_template_string_braces_option
@@ -1255,8 +1302,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeTemplateMiddleAndTail",
-            any_token.clone(),
-            vec![SyntaxKind::TemplateMiddle, SyntaxKind::TemplateTail],
+            AnyToken,
+            Kinds(&[SyntaxKind::TemplateMiddle, SyntaxKind::TemplateTail]),
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_template_string_braces_option
@@ -1268,8 +1315,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterTemplateHeadAndMiddle",
-            vec![SyntaxKind::TemplateHead, SyntaxKind::TemplateMiddle],
-            any_token.clone(),
+            Kinds(&[SyntaxKind::TemplateHead, SyntaxKind::TemplateMiddle]),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_template_string_braces_option
@@ -1281,8 +1328,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeTemplateMiddleAndTail",
-            any_token.clone(),
-            vec![SyntaxKind::TemplateMiddle, SyntaxKind::TemplateTail],
+            AnyToken,
+            Kinds(&[SyntaxKind::TemplateMiddle, SyntaxKind::TemplateTail]),
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_template_string_braces_option
@@ -1295,8 +1342,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // No space after { and before } in JSX expression
         rule(
             "SpaceAfterOpenBraceInJsxExpression",
-            SyntaxKind::OpenBraceToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBraceToken),
+            AnyToken,
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_jsx_expression_braces_option
@@ -1309,8 +1356,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeCloseBraceInJsxExpression",
-            any_token.clone(),
-            SyntaxKind::CloseBraceToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseBraceToken),
             preds![
                 is_option_enabled(
                     insert_space_after_opening_and_before_closing_jsx_expression_braces_option
@@ -1323,8 +1370,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterOpenBraceInJsxExpression",
-            SyntaxKind::OpenBraceToken,
-            any_token.clone(),
+            Kind(SyntaxKind::OpenBraceToken),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_jsx_expression_braces_option
@@ -1337,8 +1384,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeCloseBraceInJsxExpression",
-            any_token.clone(),
-            SyntaxKind::CloseBraceToken,
+            AnyToken,
+            Kind(SyntaxKind::CloseBraceToken),
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_opening_and_before_closing_jsx_expression_braces_option
@@ -1352,8 +1399,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space after semicolon in for statement
         rule(
             "SpaceAfterSemicolonInFor",
-            SyntaxKind::SemicolonToken,
-            any_token.clone(),
+            Kind(SyntaxKind::SemicolonToken),
+            AnyToken,
             preds![
                 is_option_enabled(insert_space_after_semicolon_in_for_statements_option),
                 is_non_jsx_same_line_token_context,
@@ -1364,8 +1411,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterSemicolonInFor",
-            SyntaxKind::SemicolonToken,
-            any_token.clone(),
+            Kind(SyntaxKind::SemicolonToken),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_after_semicolon_in_for_statements_option
@@ -1379,8 +1426,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Insert space before and after binary operators
         rule(
             "SpaceBeforeBinaryOperator",
-            any_token.clone(),
-            binary_operators.clone(),
+            AnyToken,
+            BinaryOperators,
             preds![
                 is_option_enabled(insert_space_before_and_after_binary_operators_option),
                 is_non_jsx_same_line_token_context,
@@ -1391,8 +1438,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceAfterBinaryOperator",
-            binary_operators.clone(),
-            any_token.clone(),
+            BinaryOperators,
+            AnyToken,
             preds![
                 is_option_enabled(insert_space_before_and_after_binary_operators_option),
                 is_non_jsx_same_line_token_context,
@@ -1403,8 +1450,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeBinaryOperator",
-            any_token.clone(),
-            binary_operators.clone(),
+            AnyToken,
+            BinaryOperators,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_before_and_after_binary_operators_option
@@ -1417,8 +1464,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterBinaryOperator",
-            binary_operators,
-            any_token.clone(),
+            BinaryOperators,
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(
                     insert_space_before_and_after_binary_operators_option
@@ -1431,8 +1478,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeOpenParenInFuncDecl",
-            any_token.clone(),
-            SyntaxKind::OpenParenToken,
+            AnyToken,
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_enabled(insert_space_before_function_parenthesis_option),
                 is_non_jsx_same_line_token_context,
@@ -1443,8 +1490,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeOpenParenInFuncDecl",
-            any_token.clone(),
-            SyntaxKind::OpenParenToken,
+            AnyToken,
+            Kind(SyntaxKind::OpenParenToken),
             preds![
                 is_option_disabled_or_undefined(insert_space_before_function_parenthesis_option),
                 is_non_jsx_same_line_token_context,
@@ -1456,8 +1503,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Open Brace braces after control block
         rule(
             "NewLineBeforeOpenBraceInControl",
-            control_open_brace_left_token_range.clone(),
-            SyntaxKind::OpenBraceToken,
+            CONTROL_OPEN_BRACE_LEFT_TOKEN_RANGE,
+            Kind(SyntaxKind::OpenBraceToken),
             preds![
                 is_option_enabled(place_open_brace_on_new_line_for_control_blocks_option),
                 is_control_decl_context,
@@ -1470,8 +1517,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // TypeScript: Function can have return types, which can be made of tons of different token kinds
         rule(
             "NewLineBeforeOpenBraceInFunction",
-            function_open_brace_left_token_range.clone(),
-            SyntaxKind::OpenBraceToken,
+            FUNCTION_OPEN_BRACE_LEFT_TOKEN_RANGE,
+            Kind(SyntaxKind::OpenBraceToken),
             preds![
                 is_option_enabled(place_open_brace_on_new_line_for_functions_option),
                 is_function_decl_context,
@@ -1483,8 +1530,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Open Brace braces after TypeScript module/class/interface
         rule(
             "NewLineBeforeOpenBraceInTypeScriptDeclWithBlock",
-            type_script_open_brace_left_token_range.clone(),
-            SyntaxKind::OpenBraceToken,
+            TYPE_SCRIPT_OPEN_BRACE_LEFT_TOKEN_RANGE,
+            Kind(SyntaxKind::OpenBraceToken),
             preds![
                 is_option_enabled(place_open_brace_on_new_line_for_functions_option),
                 is_type_script_decl_with_block_context,
@@ -1495,8 +1542,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceAfterTypeAssertion",
-            SyntaxKind::GreaterThanToken,
-            any_token.clone(),
+            Kind(SyntaxKind::GreaterThanToken),
+            AnyToken,
             preds![
                 is_option_enabled(insert_space_after_type_assertion_option),
                 is_non_jsx_same_line_token_context,
@@ -1507,8 +1554,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceAfterTypeAssertion",
-            SyntaxKind::GreaterThanToken,
-            any_token.clone(),
+            Kind(SyntaxKind::GreaterThanToken),
+            AnyToken,
             preds![
                 is_option_disabled_or_undefined(insert_space_after_type_assertion_option),
                 is_non_jsx_same_line_token_context,
@@ -1519,8 +1566,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeTypeAnnotation",
-            any_token.clone(),
-            vec![SyntaxKind::QuestionToken, SyntaxKind::ColonToken],
+            AnyToken,
+            Kinds(&[SyntaxKind::QuestionToken, SyntaxKind::ColonToken]),
             preds![
                 is_option_enabled(insert_space_before_type_annotation_option),
                 is_non_jsx_same_line_token_context,
@@ -1531,8 +1578,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeTypeAnnotation",
-            any_token.clone(),
-            vec![SyntaxKind::QuestionToken, SyntaxKind::ColonToken],
+            AnyToken,
+            Kinds(&[SyntaxKind::QuestionToken, SyntaxKind::ColonToken]),
             preds![
                 is_option_disabled_or_undefined(insert_space_before_type_annotation_option),
                 is_non_jsx_same_line_token_context,
@@ -1543,8 +1590,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoOptionalSemicolon",
-            SyntaxKind::SemicolonToken,
-            any_token_including_eof.clone(),
+            Kind(SyntaxKind::SemicolonToken),
+            AnyTokenIncludingEof,
             preds![
                 option_equals(semicolon_option, lsutil::SemicolonPreference::REMOVE),
                 is_semicolon_deletion_context
@@ -1554,8 +1601,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "OptionalSemicolon",
-            any_token.clone(),
-            any_token_including_eof,
+            AnyToken,
+            AnyTokenIncludingEof,
             preds![
                 option_equals(semicolon_option, lsutil::SemicolonPreference::INSERT),
                 is_semicolon_insertion_context
@@ -1566,20 +1613,21 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
     ];
 
     // These rules are lower in priority than user-configurable. Rules earlier in this list have priority over rules later in the list.
-    let low_priority_common_rules: Vec<RuleSpec> = vec![
+    // Go: format/rules.go getAllRules lowPriorityCommonRules
+    static LOW_PRIORITY_COMMON_RULES: &[RuleDef] = &[
         // Space after keyword but not before ; or : or ?
         rule(
             "NoSpaceBeforeSemicolon",
-            any_token.clone(),
-            SyntaxKind::SemicolonToken,
+            AnyToken,
+            Kind(SyntaxKind::SemicolonToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "SpaceBeforeOpenBraceInControl",
-            control_open_brace_left_token_range,
-            SyntaxKind::OpenBraceToken,
+            CONTROL_OPEN_BRACE_LEFT_TOKEN_RANGE,
+            Kind(SyntaxKind::OpenBraceToken),
             preds![
                 is_option_disabled_or_undefined_or_tokens_on_same_line(
                     place_open_brace_on_new_line_for_control_blocks_option
@@ -1593,8 +1641,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeOpenBraceInFunction",
-            function_open_brace_left_token_range,
-            SyntaxKind::OpenBraceToken,
+            FUNCTION_OPEN_BRACE_LEFT_TOKEN_RANGE,
+            Kind(SyntaxKind::OpenBraceToken),
             preds![
                 is_option_disabled_or_undefined_or_tokens_on_same_line(
                     place_open_brace_on_new_line_for_functions_option
@@ -1609,8 +1657,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceBeforeOpenBraceInTypeScriptDeclWithBlock",
-            type_script_open_brace_left_token_range,
-            SyntaxKind::OpenBraceToken,
+            TYPE_SCRIPT_OPEN_BRACE_LEFT_TOKEN_RANGE,
+            Kind(SyntaxKind::OpenBraceToken),
             preds![
                 is_option_disabled_or_undefined_or_tokens_on_same_line(
                     place_open_brace_on_new_line_for_functions_option
@@ -1624,8 +1672,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "NoSpaceBeforeComma",
-            any_token.clone(),
-            SyntaxKind::CommaToken,
+            AnyToken,
+            Kind(SyntaxKind::CommaToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -1633,16 +1681,16 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // No space before and after indexer `x[]ast.Kind{}`
         rule(
             "NoSpaceBeforeOpenBracket",
-            any_token_except(&[SyntaxKind::AsyncKeyword, SyntaxKind::CaseKeyword]),
-            SyntaxKind::OpenBracketToken,
+            AnyTokenExcept(&[SyntaxKind::AsyncKeyword, SyntaxKind::CaseKeyword]),
+            Kind(SyntaxKind::OpenBracketToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
         ),
         rule(
             "NoSpaceAfterCloseBracket",
-            SyntaxKind::CloseBracketToken,
-            any_token.clone(),
+            Kind(SyntaxKind::CloseBracketToken),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_not_before_block_in_function_declaration_context
@@ -1652,8 +1700,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         ),
         rule(
             "SpaceAfterSemicolon",
-            SyntaxKind::SemicolonToken,
-            any_token.clone(),
+            Kind(SyntaxKind::SemicolonToken),
+            AnyToken,
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -1661,8 +1709,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Remove extra space between for and await
         rule(
             "SpaceBetweenForAndAwaitKeyword",
-            SyntaxKind::ForKeyword,
-            SyntaxKind::AwaitKeyword,
+            Kind(SyntaxKind::ForKeyword),
+            Kind(SyntaxKind::AwaitKeyword),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
@@ -1670,8 +1718,8 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // Remove extra spaces between ... and type name in tuple spread
         rule(
             "SpaceBetweenDotDotDotAndTypeName",
-            SyntaxKind::DotDotDotToken,
-            type_names.clone(),
+            Kind(SyntaxKind::DotDotDotToken),
+            Kinds(TYPE_NAMES),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::DELETE_SPACE,
             &[],
@@ -1680,13 +1728,13 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // So, we have a rule to add a space for []ast.Kind{),Any}, []ast.Kind{do,Any}, []ast.Kind{else,Any}, and []ast.Kind{case,Any}
         rule(
             "SpaceBetweenStatements",
-            vec![
+            Kinds(&[
                 SyntaxKind::CloseParenToken,
                 SyntaxKind::DoKeyword,
                 SyntaxKind::ElseKeyword,
                 SyntaxKind::CaseKeyword,
-            ],
-            any_token,
+            ]),
+            AnyToken,
             preds![
                 is_non_jsx_same_line_token_context,
                 is_non_jsx_element_or_fragment_context,
@@ -1698,27 +1746,28 @@ pub fn get_all_rules() -> Vec<RuleSpec> {
         // This low-pri rule takes care of "try {", "catch {" and "finally {" in case the rule SpaceBeforeOpenBraceInControl didn't execute on FormatOnEnter.
         rule(
             "SpaceAfterTryCatchFinally",
-            vec![
+            Kinds(&[
                 SyntaxKind::TryKeyword,
                 SyntaxKind::CatchKeyword,
                 SyntaxKind::FinallyKeyword,
-            ],
-            SyntaxKind::OpenBraceToken,
+            ]),
+            Kind(SyntaxKind::OpenBraceToken),
             preds![is_non_jsx_same_line_token_context],
             RuleAction::INSERT_SPACE,
             &[],
         ),
     ];
 
-    let mut result: Vec<RuleSpec> = Vec::with_capacity(
-        high_priority_common_rules.len()
-            + user_configurable_rules.len()
-            + low_priority_common_rules.len(),
-    );
-    result.extend(high_priority_common_rules);
-    result.extend(user_configurable_rules);
-    result.extend(low_priority_common_rules);
-    result
+    HIGH_PRIORITY_COMMON_RULES
+        .iter()
+        .chain(USER_CONFIGURABLE_RULES)
+        .chain(LOW_PRIORITY_COMMON_RULES)
+        .map(|def| RuleSpec {
+            left_token_range: token_range(def.left),
+            right_token_range: token_range(def.right),
+            rule: &def.rule,
+        })
+        .collect()
 }
 
 // Go: format/rules.go:428 tokenRangeFrom

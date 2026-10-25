@@ -32,63 +32,72 @@ impl MigrationTag {
 }
 
 /// Go `Migration`: describes how an Effect v3 API maps to v4.
-#[derive(Clone, Debug, PartialEq, Eq)]
+// PORT: the table is static data, so the Go strings are `&'static str`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Migration {
     pub tag: MigrationTag,
     /// for RenamedSameBehaviour and RenamedAndNeedsOptions
-    pub new_name: String,
+    pub new_name: &'static str,
     /// for RenamedAndNeedsOptions
-    pub options_instructions: String,
+    pub options_instructions: &'static str,
     /// for Removed
-    pub alternative_pattern: String,
+    pub alternative_pattern: &'static str,
 }
 
 // Go: unchanged
-pub fn unchanged() -> Migration {
+#[must_use]
+pub const fn unchanged() -> Migration {
     Migration {
         tag: MigrationTag::Unchanged,
-        new_name: String::new(),
-        options_instructions: String::new(),
-        alternative_pattern: String::new(),
+        new_name: "",
+        options_instructions: "",
+        alternative_pattern: "",
     }
 }
 
 // Go: renamedSameBehaviour
-pub fn renamed_same_behaviour(new_name: &str) -> Migration {
+#[must_use]
+pub const fn renamed_same_behaviour(new_name: &'static str) -> Migration {
     Migration {
         tag: MigrationTag::RenamedSameBehaviour,
-        new_name: new_name.to_string(),
-        options_instructions: String::new(),
-        alternative_pattern: String::new(),
+        new_name,
+        options_instructions: "",
+        alternative_pattern: "",
     }
 }
 
 // Go: renamedAndNeedsOptions
-pub fn renamed_and_needs_options(new_name: &str, options_instructions: &str) -> Migration {
+#[must_use]
+pub const fn renamed_and_needs_options(
+    new_name: &'static str,
+    options_instructions: &'static str,
+) -> Migration {
     Migration {
         tag: MigrationTag::RenamedAndNeedsOptions,
-        new_name: new_name.to_string(),
-        options_instructions: options_instructions.to_string(),
-        alternative_pattern: String::new(),
+        new_name,
+        options_instructions,
+        alternative_pattern: "",
     }
 }
 
 // Go: removed
-pub fn removed(alternative_pattern: &str) -> Migration {
+#[must_use]
+pub const fn removed(alternative_pattern: &'static str) -> Migration {
     Migration {
         tag: MigrationTag::Removed,
-        new_name: String::new(),
-        options_instructions: String::new(),
-        alternative_pattern: alternative_pattern.to_string(),
+        new_name: "",
+        options_instructions: "",
+        alternative_pattern,
     }
 }
 
 /// Go `EffectModuleMigrationDb`: maps Effect v3 API names to their
 /// migration status in v4.
-// PORT: Go only looks keys up in this map; it never iterates it.
+// PORT: Go only looks keys up in this map; it never iterates it. The
+// entries are static data in Go's order; the map is made on first use.
 pub static EFFECT_MODULE_MIGRATION_DB: LazyLock<FxHashMap<&'static str, Migration>> = LazyLock::new(
     || {
-        let entries: Vec<(&'static str, Migration)> = vec![
+        static ENTRIES: &[(&str, Migration)] = &[
             // Common APIs (in both v3 and v4, unchanged)
             ("acquireRelease", unchanged()),
             ("acquireUseRelease", unchanged()),
@@ -891,6 +900,6 @@ pub static EFFECT_MODULE_MIGRATION_DB: LazyLock<FxHashMap<&'static str, Migratio
                 removed("Use Effect.andThen instead of Effect.zipRight."),
             ),
         ];
-        entries.into_iter().collect()
+        ENTRIES.iter().copied().collect()
     },
 );
