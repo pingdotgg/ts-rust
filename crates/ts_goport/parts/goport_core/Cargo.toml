@@ -26,6 +26,11 @@ bumpalo = "=3.20.3"
 xxhash-rust = { version = "=0.8.15", features = ["xxh3"] }
 flate2 = "=1.1.10"
 jiff = { version = "=0.2.37", default-features = false, features = ["std"] }
+# `sync::OnceCell`: std's `OnceLock` with an empty state of all zero bytes,
+# so the AST registry entry arrays are `.bss` and not 4.4 MB of `.data`
+# (ast/store.rs `ZeroOnceLock`). The default features: the std cell, whose
+# empty state is a null state pointer and a `None` value.
+once_cell = "=1.21.4"
 
 # Native only: wasm has no processes, signals, terminals or pipes (see
 # crates/ts_wasm).
