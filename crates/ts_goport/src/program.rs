@@ -2805,9 +2805,12 @@ fn take_early_bind() -> Option<EarlyBind> {
 // `--diagnostics` (program.go:2066-2080), so such a program starts no
 // early bind: an early bind could crash a program that Go never binds (a
 // deep file overflows the bind thread stack; R235 reviewer B2). Its late
-// bind is the bind of `bind_all`, as before bindgap1. The check reads the
-// lists of the parse in the loop that finds the unbound files, so it adds
-// no pass over the files. A program that does not reach `bind_all` (the
+// bind is the bind of `bind_all`, as before bindgap1. The check
+// (`has_syntactic_diagnostics`) runs in the loop that finds the unbound
+// files. It reads the lists and marks of the parse, and walks the nodes of
+// an unchecked JS file only when its parse made a decorated parameter. That
+// walk computes the subtree facts of the whole file, on this thread, before
+// the binds start. A program that does not reach `bind_all` (the
 // `program_created` hook of `goport_emit` can stop it) keeps the binds
 // until the process ends. A hit on a bind
 // thread fails its bind, so these threads count no unported hit
@@ -5285,19 +5288,26 @@ pub fn get_syntactic_diagnostics(source_file: Node) -> Vec<Diagnostic> {
 
 /// True when `get_syntactic_diagnostics` of `file`, a published file of the
 /// current program, is not empty. The parse gives every list but the one of
-/// `get_additional_js_syntactic_diagnostics`, which walks only the nodes of
-/// an unchecked JS file that contain a decorator. `start_early_bind` uses
-/// it.
+/// `get_additional_js_syntactic_diagnostics` (a decorated parameter of an
+/// unchecked JS file). That list can only be non-empty when the parse made
+/// a decorated parameter (`ParsedSourceFile::has_decorated_parameter`), so
+/// only such a file is walked. The walk reads the subtree facts of each
+/// top-level statement, which computes the facts of the whole file.
+/// `start_early_bind` uses it.
 // PORT: Go `GetSyntacticDiagnostics` filters the list (`filterAndSortDiagnostics`
 // drops some unnecessary-code suggestions of a mapped file). This does not,
 // so it can be true where Go's list is empty; then a program only binds late.
+// PERF: bindgapcost1. Without the parse mark, every unchecked JS file had
+// its facts computed here (jsheavy, 2,285 files: +38 ms of parse time,
+// bindgap1r2 skeptic on dbook-lan).
 fn has_syntactic_diagnostics(
     file: &crate::frontend::parser::ParsedSourceFile,
     options: &CompilerOptions,
 ) -> bool {
     !file.diagnostics.is_empty()
         || !file.js_diagnostics.is_empty()
-        || matches!(file.script_kind, ScriptKind::JS | ScriptKind::JSX)
+        || file.has_decorated_parameter
+            && matches!(file.script_kind, ScriptKind::JS | ScriptKind::JSX)
             && !is_check_js_enabled_for_file(file.root, options)
             && !get_additional_js_syntactic_diagnostics(file.root, options).is_empty()
 }
@@ -7535,5 +7545,44 @@ mod tests {
             "/proj",
             true
         ));
+    }
+
+    // bindgapcost1: Go `getAdditionalJSSyntacticDiagnostics` reports only
+    // decorated parameters, so `has_syntactic_diagnostics` walks only a file
+    // whose parse made one (`ParsedSourceFile::has_decorated_parameter`).
+    // Class and member decorators do not mark a file. A decorated `this`
+    // parameter marks it, and the walk finds nothing (its facts are only
+    // `SUBTREE_CONTAINS_TYPESCRIPT`, ast.go `ParameterDeclaration`).
+    #[test]
+    fn only_a_parse_with_a_decorated_parameter_has_additional_js_diagnostics() {
+        use crate::frontend::parser::{SourceFileParseOptions, parse_source_file};
+        // (text, the parse mark, the additional diagnostics)
+        const CASES: [(&str, bool, usize); 6] = [
+            ("export class B { m(@d x) {} }\n", true, 1),
+            ("export class B { constructor(@d x, @e y) {} }\n", true, 2),
+            (
+                "export function f(@d x) { return function (@e y) { return x + y; }; }\n",
+                true,
+                2,
+            ),
+            ("export function f(@d this) {}\n", true, 0),
+            (
+                "@d export class B { @d m(x) {} @d accessor y = 1; }\n",
+                false,
+                0,
+            ),
+            ("export function f(x) { return (y) => x + y; }\n", false, 0),
+        ];
+        let options = CompilerOptions::default();
+        for (text, mark, count) in CASES {
+            let opts = SourceFileParseOptions {
+                file_name: "/a.js".to_string(),
+                ..Default::default()
+            };
+            let parsed = parse_source_file(&opts, text, ScriptKind::JS);
+            assert_eq!(parsed.has_decorated_parameter, mark, "{text}");
+            let found = get_additional_js_syntactic_diagnostics(parsed.root, &options);
+            assert_eq!(found.len(), count, "{text}");
+        }
     }
 }
