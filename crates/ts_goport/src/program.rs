@@ -1864,7 +1864,8 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // this joins their files.
 pub fn bind_all() {
     let program = prog();
-    held_tables(program).bound_symbols.get_or_init(|| {
+    let tables = held_tables(program);
+    tables.bound_symbols.get_or_init(|| {
         let unbound: Vec<Node> = program
             .source_files()
             .filter(|file| file.file_bind.get().is_none())
@@ -1892,6 +1893,13 @@ pub fn bind_all() {
             Arc::clone(&lineage.symbols)
         });
         give_private_name_class_ids(&symbols, &unbound, program.single_threaded());
+        // Every program file is bound now, by this program or an earlier
+        // one (a kept parse): mark the program bound, so its include
+        // processor reads the bound CommonJS indicator from here on
+        // (`GoSharedState::mark_program_bound`).
+        if let Some(go) = &tables.go {
+            go.mark_program_bound();
+        }
         symbols
     });
 }
@@ -2797,9 +2805,12 @@ fn take_early_bind() -> Option<EarlyBind> {
 // `--diagnostics` (program.go:2066-2080), so such a program starts no
 // early bind: an early bind could crash a program that Go never binds (a
 // deep file overflows the bind thread stack; R235 reviewer B2). Its late
-// bind is the bind of `bind_all`, as before bindgap1. The check reads the
-// lists of the parse in the loop that finds the unbound files, so it adds
-// no pass over the files. A program that does not reach `bind_all` (the
+// bind is the bind of `bind_all`, as before bindgap1. The check
+// (`has_syntactic_diagnostics`) runs in the loop that finds the unbound
+// files. It reads the lists and marks of the parse, and walks the nodes of
+// an unchecked JS file only when its parse made a decorated parameter. That
+// walk computes the subtree facts of the whole file, on this thread, before
+// the binds start. A program that does not reach `bind_all` (the
 // `program_created` hook of `goport_emit` can stop it) keeps the binds
 // until the process ends. A hit on a bind
 // thread fails its bind, so these threads count no unported hit
@@ -3867,11 +3878,11 @@ fn source_file_may_be_emitted_worker(
 // Go: compiler/emitter.go:518-537 sourceFileMayBeEmitted: the JSON file part
 // PORT: its own function, so the tests below can run it without a loaded
 // program. Like `frontend::compiler::source_file_may_be_emitted`, it uses the
-// Go ports in `frontend::outputpaths` and `frontend::tspath`. Go result to
-// keep: `GetNormalizedAbsolutePath` removes the trailing separator of the
-// common directory (except for a root), so a file under it gets a rooted
-// output path that is never its own path, even when outDir is the common
-// directory.
+// Go ports in `frontend::outputpaths` and `frontend::tspath`. ts#64159
+// (emitter.go:523-535): `GetSourceFileNameInNewDir` takes the path below the
+// common directory with `RelativeFilePathFromDirectory`, so a file that is
+// not under it keeps its name and is not emitted, and a file under it is
+// not emitted when outDir is the common directory.
 fn json_file_may_be_emitted(
     file_name: &str,
     options: &CompilerOptions,
@@ -4229,6 +4240,13 @@ fn checker_count() -> usize {
 // changes no state that the threads copied (`WorkerSeed`).
 fn create_checkers() -> CheckerPool {
     bind_all();
+    // Go builds the include processor diagnostics at their first read, and
+    // a checker reads them only after the bind that its creation runs. The
+    // checker threads read the copy that this thread builds here, after the
+    // bind (`go_frontend::fill_include_diagnostics`).
+    if let Some(np) = go_frontend_program() {
+        go_frontend::fill_include_diagnostics(&np);
+    }
     let count = checker_count();
     let pool = start_checkers(count);
     let program = prog();
@@ -5270,19 +5288,26 @@ pub fn get_syntactic_diagnostics(source_file: Node) -> Vec<Diagnostic> {
 
 /// True when `get_syntactic_diagnostics` of `file`, a published file of the
 /// current program, is not empty. The parse gives every list but the one of
-/// `get_additional_js_syntactic_diagnostics`, which walks only the nodes of
-/// an unchecked JS file that contain a decorator. `start_early_bind` uses
-/// it.
+/// `get_additional_js_syntactic_diagnostics` (a decorated parameter of an
+/// unchecked JS file). That list can only be non-empty when the parse made
+/// a decorated parameter (`ParsedSourceFile::has_decorated_parameter`), so
+/// only such a file is walked. The walk reads the subtree facts of each
+/// top-level statement, which computes the facts of the whole file.
+/// `start_early_bind` uses it.
 // PORT: Go `GetSyntacticDiagnostics` filters the list (`filterAndSortDiagnostics`
 // drops some unnecessary-code suggestions of a mapped file). This does not,
 // so it can be true where Go's list is empty; then a program only binds late.
+// PERF: bindgapcost1. Without the parse mark, every unchecked JS file had
+// its facts computed here (jsheavy, 2,285 files: +38 ms of parse time,
+// bindgap1r2 skeptic on dbook-lan).
 fn has_syntactic_diagnostics(
     file: &crate::frontend::parser::ParsedSourceFile,
     options: &CompilerOptions,
 ) -> bool {
     !file.diagnostics.is_empty()
         || !file.js_diagnostics.is_empty()
-        || matches!(file.script_kind, ScriptKind::JS | ScriptKind::JSX)
+        || file.has_decorated_parameter
+            && matches!(file.script_kind, ScriptKind::JS | ScriptKind::JSX)
             && !is_check_js_enabled_for_file(file.root, options)
             && !get_additional_js_syntactic_diagnostics(file.root, options).is_empty()
 }
@@ -5408,6 +5433,7 @@ pub fn get_program_diagnostics() -> Vec<Diagnostic> {
     };
     // Go builds the include processor diagnostics here.
     go.include_processor.mark_diagnostics_read();
+    go_frontend::fill_include_diagnostics(&go);
     let mut diagnostics = go.program_diagnostics.clone();
     // #4712
     diagnostics.extend(content_mapper_diagnostics());
@@ -6849,7 +6875,9 @@ mod tests {
     // expected values come from Go at pin B (16c25522e123): the same calls in
     // a Go test, and for the cases marked "oracle" also a `noEmit`
     // incremental tsgo run, where a JSON file that Go may emit is in
-    // `affectedFilesPendingEmit`.
+    // `affectedFilesPendingEmit`. ts#64159 changed three of them (marked
+    // "pin 3e9236361fa9"): the same calls in a followups79 Go probe at that
+    // pin (`TestFollowups79ProbeD`).
     #[test]
     fn json_file_may_be_emitted_matches_go() {
         // (file, outDir, rootDir, config file path, may be emitted)
@@ -6862,23 +6890,26 @@ mod tests {
             ("/proj/src/data.json", "/proj/dist", "/proj/src", "", true),
             // oracle: outside rootDir, the output path is the file itself.
             ("/proj/data.json", "/proj/dist", "/proj/src", "", false),
-            // oracle: outDir is rootDir.
-            ("/proj/src/data.json", "/proj/src", "/proj/src", "", true),
-            // oracle: outDir is the config file directory.
+            // pin 3e9236361fa9: outDir is rootDir, so the output path is the
+            // file itself (pin B: true).
+            ("/proj/src/data.json", "/proj/src", "/proj/src", "", false),
+            // pin 3e9236361fa9: outDir is the config file directory (pin B:
+            // true).
             (
                 "/proj/src/data.json",
                 "/proj",
                 "",
                 "/proj/tsconfig.json",
-                true,
+                false,
             ),
-            // oracle: the path starts with rootDir, but not at a separator.
+            // pin 3e9236361fa9: the path starts with rootDir, but not at a
+            // separator, so it is outside rootDir (pin B: true).
             (
                 "/proj/src-data/data.json",
                 "/proj/dist",
                 "/proj/src",
                 "",
-                true,
+                false,
             ),
             // A root keeps its separator.
             ("/data.json", "/", "/", "", false),
@@ -7514,5 +7545,44 @@ mod tests {
             "/proj",
             true
         ));
+    }
+
+    // bindgapcost1: Go `getAdditionalJSSyntacticDiagnostics` reports only
+    // decorated parameters, so `has_syntactic_diagnostics` walks only a file
+    // whose parse made one (`ParsedSourceFile::has_decorated_parameter`).
+    // Class and member decorators do not mark a file. A decorated `this`
+    // parameter marks it, and the walk finds nothing (its facts are only
+    // `SUBTREE_CONTAINS_TYPESCRIPT`, ast.go `ParameterDeclaration`).
+    #[test]
+    fn only_a_parse_with_a_decorated_parameter_has_additional_js_diagnostics() {
+        use crate::frontend::parser::{SourceFileParseOptions, parse_source_file};
+        // (text, the parse mark, the additional diagnostics)
+        const CASES: [(&str, bool, usize); 6] = [
+            ("export class B { m(@d x) {} }\n", true, 1),
+            ("export class B { constructor(@d x, @e y) {} }\n", true, 2),
+            (
+                "export function f(@d x) { return function (@e y) { return x + y; }; }\n",
+                true,
+                2,
+            ),
+            ("export function f(@d this) {}\n", true, 0),
+            (
+                "@d export class B { @d m(x) {} @d accessor y = 1; }\n",
+                false,
+                0,
+            ),
+            ("export function f(x) { return (y) => x + y; }\n", false, 0),
+        ];
+        let options = CompilerOptions::default();
+        for (text, mark, count) in CASES {
+            let opts = SourceFileParseOptions {
+                file_name: "/a.js".to_string(),
+                ..Default::default()
+            };
+            let parsed = parse_source_file(&opts, text, ScriptKind::JS);
+            assert_eq!(parsed.has_decorated_parameter, mark, "{text}");
+            let found = get_additional_js_syntactic_diagnostics(parsed.root, &options);
+            assert_eq!(found.len(), count, "{text}");
+        }
     }
 }

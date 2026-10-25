@@ -1094,7 +1094,7 @@ impl OutputPathsHost for NewProgram {
 
 impl NewProgram {
     // Go: program.go:1854 (*Program).checkSourceFilesBelongToPath
-    // PERF: Go makes the canonical absolute path of every file before the
+    // PERF: Go makes the path key of every file before the
     // `ContainsPath` test, but only the diagnostic of a file outside
     // `rootDirectory` reads it. It is a pure function of the file name, so
     // it is made in that branch only (effect: 11 M cycles of serial loader
@@ -1113,10 +1113,14 @@ impl NewProgram {
         let use_case_sensitive_file_names = self.use_case_sensitive_file_names();
         for file in source_files {
             if !contains_rooted_path(root_directory, file, use_case_sensitive_file_names) {
-                let absolute_source_file_path = get_canonical_file_name(
-                    &get_normalized_absolute_path(file, &self.get_current_directory()),
-                    self.use_case_sensitive_file_names(),
-                );
+                // Go program.go:1861 `CaseSensitivity.PathKey`: the key of an
+                // encoded dynamic name keeps its case.
+                let absolute_source_file_path = to_path(
+                    file,
+                    &self.get_current_directory(),
+                    use_case_sensitive_file_names,
+                )
+                .into_string();
                 self.include_processor.late_processing_diagnostics.borrow_mut().push(Rc::new(ProcessingDiagnostic {
                     kind: ProcessingDiagnosticKind::EXPLAINING_FILE_INCLUDE,
                     data: ProcessingDiagnosticData::IncludeExplaining(IncludeExplainingDiagnostic {

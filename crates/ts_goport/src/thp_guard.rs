@@ -1,5 +1,6 @@
 //! The THP guard: turns transparent huge pages off for this process when
-//! the kernel has little free memory in 2 MiB blocks. Not a Go port.
+//! the kernel has little free memory in 2 MiB blocks, or reports its free
+//! 2 MiB blocks to a hypervisor. Not a Go port.
 //!
 //! jemalloc runs with `thp:always` (see `bin/goport.rs`
 //! `set_malloc_tunables`), so on a kernel in THP `madvise` mode it marks
@@ -16,7 +17,7 @@
 //!
 //! The guard has two parts:
 //! - The start check turns THP off at once when less than the limit is free
-//!   in 2 MiB blocks.
+//!   in 2 MiB blocks, or when free page reporting is on (see below).
 //! - Else a watcher thread reads the free memory again and again and turns
 //!   THP off the first time it drops below the limit. The huge pages that
 //!   the run faulted before stay. The flag changes only the later faults.
@@ -53,18 +54,33 @@
 //! cell, and tsgo -b query chain got about 90 to 130 huge pages, not 56 to
 //! 99, with no compaction stall.
 //!
+//! Free page reporting (a VM with virtio_balloon or hv_balloon; Linux
+//! mm/page_reporting.c): 2 s after free blocks of `page_reporting_order` or
+//! more collect, the kernel reports them to the host, and the host takes
+//! their memory back. On x86-64 the order is 9 or less, so the free 2 MiB
+//! blocks that huge page faults take are reported, and the host must give
+//! each one memory again at its first touch. thpguard3 on Blacksmith
+//! runners (2 to 32 vCPU; valibot and the 4 gate projects, `--noEmit`):
+//! with THP off and the worker, a run after a 10 s gap took 4.6% to 12.3%
+//! less wall and about 25% to 50% less sys, and after 60 s idle 5.6% to
+//! 11.3% less wall (27 of 27 pairs). Back to back, before the freed memory
+//! is reported, it took 1.4% to 4.9% more wall. A CI run comes after a gap,
+//! so there the start check turns THP off and starts no watcher
+//! (`reporting_on`). With no reporting device (bare metal,
+//! GitHub-hosted runners) the order is unset and nothing changes.
+//!
 //! The guard opens `/proc/buddyinfo` once. The watcher reads the open file
 //! again from its start for each read (`read_from_start`): a procfs file
 //! makes its text again on each read from offset 0. An open for each read
 //! made 26 to 354 opens per run (syscut1: TypeORM, VS Code single
 //! threaded).
 //!
-//! `GOPORT_THP_GUARD` selects the mode: `0` does nothing, `force` always
-//! turns THP off, `start` does the start check but starts no watcher, and
-//! any other value (or no value) does both. `GOPORT_THP_GUARD_MIB` changes
-//! the limit of both (a value that does not parse keeps the default).
-//! `GOPORT_THP_GUARD_DEBUG=1` prints each decision and its inputs as one
-//! line on stderr.
+//! `GOPORT_THP_GUARD` selects the mode: `0` does nothing (THP stays on, also
+//! with free page reporting), `force` always turns THP off, `start` does the
+//! start check but starts no watcher, and any other value (or no value)
+//! does both. `GOPORT_THP_GUARD_MIB` changes the limit of both (a value
+//! that does not parse keeps the default). `GOPORT_THP_GUARD_DEBUG=1`
+//! prints each decision and its inputs as one line on stderr.
 
 use std::time::Duration;
 
@@ -112,6 +128,11 @@ const HUGE_ORDER: usize = 9;
 /// Bytes in one page of the buddy allocator.
 const PAGE_BYTES: u64 = 4096;
 
+/// The smallest order of the free blocks that the kernel reports to the
+/// host (`reporting_on`). The file is there when the kernel is built
+/// with `CONFIG_PAGE_REPORTING` (Linux 5.14 and later).
+const PAGE_REPORTING_ORDER: &str = "/sys/module/page_reporting/parameters/page_reporting_order";
+
 /// Call first in `main`, before the first heap allocation: jemalloc maps
 /// and touches its first memory at that allocation. The start check
 /// allocates nothing (stack buffers only). Setting a `GOPORT_THP_GUARD*`
@@ -125,12 +146,16 @@ const PAGE_BYTES: u64 = 4096;
 ///    across `execve`).
 /// 3. `enabled` and `defrag` in `/sys/kernel/mm/transparent_hugepage`
 ///    (`start_step`).
-/// 4. `/proc/buddyinfo`: the free memory in blocks of 2 MiB or more, in
+/// 4. `page_reporting_order` (`reporting_on`): with free page reporting on,
+///    THP goes off when `enabled` is `always` or `madvise`.
+/// 5. `/proc/buddyinfo`: the free memory in blocks of 2 MiB or more, in
 ///    all nodes and zones, against the limit. Below it, THP goes off. Else
 ///    the watcher starts (`watch`), unless the process is `long_running`.
 ///
-/// A file that cannot be read keeps THP on and starts no watcher. The flag
-/// stays set for the whole process and its children.
+/// A THP file or `/proc/buddyinfo` that cannot be read keeps THP on and
+/// starts no watcher. A `page_reporting_order` that cannot be read counts
+/// as no reporting. The flag stays set for the whole process and its
+/// children.
 ///
 /// Returns false when the run will get 4 KiB pages (`huge_pages`): THP is
 /// off (the start check turned it off, or it was off already), THP is
@@ -190,8 +215,16 @@ pub fn thp_guard() -> bool {
             );
             return true;
         };
+        let mut order = [0; 16];
+        let order = read_small(PAGE_REPORTING_ORDER, &mut order);
         let min_free = min_free_mib.saturating_mul(1 << 20);
-        let step = start_step(enabled, defrag, free, min_free);
+        let step = start_step(
+            enabled,
+            defrag,
+            order.is_some_and(reporting_on),
+            free,
+            min_free,
+        );
         let failed = step == Start::Off && set_thp_disable(true).is_err();
         let no_watcher = step == Start::Watch && watcher && long_running();
         let watching = step == Start::Watch
@@ -202,10 +235,11 @@ pub fn thp_guard() -> bool {
         say(
             debug,
             format_args!(
-                "THP {} (enabled {}, defrag {}, {} MiB free in 2 MiB blocks, limit {min_free_mib} MiB{}{}{}{})",
+                "THP {} (enabled {}, defrag {}, page_reporting_order {}, {} MiB free in 2 MiB blocks, limit {min_free_mib} MiB{}{}{}{})",
                 if step == Start::Off { "off" } else { "kept" },
                 selected_mode(enabled).unwrap_or("?"),
                 selected_mode(defrag).unwrap_or("?"),
+                order.map_or("?", str::trim),
                 free >> 20,
                 if failed { ", prctl failed" } else { "" },
                 if watching { ", watcher started" } else { "" },
@@ -349,17 +383,41 @@ enum Start {
 /// first allocations (the argument list, its 32 KiB buffer, the thread) and
 /// a thread that only sleeps, the faults were within 5% of the watcher's.
 /// So `always` mode counts as `madvise`.
-fn start_step(enabled: &str, defrag: &str, free: u64, min_free: u64) -> Start {
-    let can_wait = matches!(selected_mode(enabled), Some("always" | "madvise"))
+///
+/// With free page reporting on (`reporting`, see `reporting_on`), `Off`
+/// whenever `enabled` is `always` or `madvise`, in every `defrag` mode and
+/// with any `free`: the cost there is the host's first touch of reported
+/// memory, not compaction (module comment).
+fn start_step(enabled: &str, defrag: &str, reporting: bool, free: u64, min_free: u64) -> Start {
+    let thp = matches!(selected_mode(enabled), Some("always" | "madvise"));
+    let can_wait = thp
         && matches!(
             selected_mode(defrag),
             Some("always" | "madvise" | "defer+madvise")
         );
-    match (can_wait, free < min_free) {
-        (false, _) => Start::Keep,
-        (true, true) => Start::Off,
-        (true, false) => Start::Watch,
+    if thp && reporting || can_wait && free < min_free {
+        Start::Off
+    } else if can_wait {
+        Start::Watch
+    } else {
+        Start::Keep
     }
+}
+
+/// Whether free page reporting is on for 2 MiB blocks: `order`, the text of
+/// `page_reporting_order`, is an integer from 0 to `HUGE_ORDER`. The kernel
+/// reports the free blocks of that order or more (mm/page_reporting.c).
+/// Without a reporting device the value is -1 (Linux 6.2 and later) or
+/// `MAX_ORDER`, 11 on x86-64 (Linux 5.14 to 6.1, where it reports
+/// nothing), so neither counts. A device sets it when it registers, to the
+/// driver's order or `pageblock_order` (9 on x86-64): 9 on Blacksmith and
+/// Boat (thpguard3). A value from the kernel command line (Boat sets 9
+/// there too) reads the same without a device, and counts.
+fn reporting_on(order: &str) -> bool {
+    order
+        .trim()
+        .parse::<usize>()
+        .is_ok_and(|order| order <= HUGE_ORDER)
 }
 
 /// Whether a run with the start decision `step` ends with its memory on
@@ -533,20 +591,40 @@ Node 0, zone   Normal 616681 607866 455781 337376 229283 129647  50350  16747   
         let enabled = "always [madvise] never\n";
         let defrag = "always defer defer+madvise [madvise] never\n";
         let limit = DEFAULT_MIN_FREE_MIB * MIB;
-        assert_eq!(start_step(enabled, defrag, limit - 1, limit), Start::Off);
-        assert_eq!(start_step(enabled, defrag, 0, limit), Start::Off);
-        assert_eq!(start_step(enabled, defrag, limit, limit), Start::Watch);
+        let step = |free| start_step(enabled, defrag, false, free, limit);
+        assert_eq!(step(limit - 1), Start::Off);
+        assert_eq!(step(0), Start::Off);
+        assert_eq!(step(limit), Start::Watch);
         // perf13 fragd1: query started with 290 to 314 MiB free.
-        assert_eq!(start_step(enabled, defrag, 300 * MIB, limit), Start::Watch);
+        assert_eq!(step(300 * MIB), Start::Watch);
         // A text that does not parse keeps THP on.
-        assert_eq!(start_step("madvise", defrag, 0, limit), Start::Keep);
+        assert_eq!(start_step("madvise", defrag, false, 0, limit), Start::Keep);
+    }
+
+    /// Free page reporting turns THP off at any free memory (Blacksmith:
+    /// madvise, madvise and 108 GB free), but not when `enabled` is `never`
+    /// or does not parse.
+    #[test]
+    fn start_step_turns_thp_off_with_free_page_reporting() {
+        let enabled = "always [madvise] never\n";
+        let defrag = "always defer defer+madvise [madvise] never\n";
+        let limit = DEFAULT_MIN_FREE_MIB * MIB;
+        for free in [0, limit, 108_000 * MIB, u64::MAX] {
+            assert_eq!(start_step(enabled, defrag, true, free, limit), Start::Off);
+        }
+        assert_eq!(
+            start_step("madvise", defrag, true, u64::MAX, limit),
+            Start::Keep
+        );
     }
 
     /// Every `enabled` and `defrag` mode: `Off` below the limit and else
     /// `Watch` with `always` or `madvise` and `always`, `madvise` or
     /// `defer+madvise`. Else no watcher and THP stays on. `always` with
     /// `madvise` (cup2) or `defer+madvise` (zbook) counts as `madvise`
-    /// (thpguard2: no watcher there was slower).
+    /// (thpguard2: no watcher there was slower). With free page reporting,
+    /// `Off` in every `defrag` mode with `always` or `madvise`, and `Keep`
+    /// with `never`.
     #[test]
     fn start_step_watches_where_a_fault_can_wait() {
         let limit = DEFAULT_MIN_FREE_MIB * MIB;
@@ -580,13 +658,30 @@ Node 0, zone   Normal 616681 607866 455781 337376 229283 129647  50350  16747   
                 } else {
                     (Start::Keep, Start::Keep)
                 };
-                assert_eq!(
-                    start_step(enabled, defrag, limit - 1, limit),
-                    low,
-                    "{e} {d}"
-                );
-                assert_eq!(start_step(enabled, defrag, limit, limit), high, "{e} {d}");
+                let step = |reporting, free| start_step(enabled, defrag, reporting, free, limit);
+                assert_eq!(step(false, limit - 1), low, "{e} {d}");
+                assert_eq!(step(false, limit), high, "{e} {d}");
+                let reported = if e == "never" {
+                    Start::Keep
+                } else {
+                    Start::Off
+                };
+                assert_eq!(step(true, limit - 1), reported, "{e} {d}");
+                assert_eq!(step(true, limit), reported, "{e} {d}");
             }
+        }
+    }
+
+    /// Orders 0 to 9 are on. -1 (no device, Linux 6.2 and later), 11 (no
+    /// device, Linux 5.14 to 6.1), 10 (4 MiB blocks only) and a text that
+    /// does not parse are off.
+    #[test]
+    fn reporting_on_reads_orders_up_to_huge_order() {
+        for on in ["9\n", "0\n", "5\n", " 9 \n"] {
+            assert!(reporting_on(on), "{on:?}");
+        }
+        for off in ["-1\n", "11\n", "10\n", "", "\n", "x\n", "9x\n"] {
+            assert!(!reporting_on(off), "{off:?}");
         }
     }
 
