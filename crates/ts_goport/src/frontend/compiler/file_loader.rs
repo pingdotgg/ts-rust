@@ -76,7 +76,6 @@ pub struct FileLoader {
     pub lib_file_count: Cell<i32>,
 
     pub factory: NodeFactory,
-    pub synthetic_owner: Rc<crate::ast::LoadSyntheticOwner>,
 
     pub project_reference_file_mapper: Rc<RefCell<ProjectReferenceFileMapper>>,
     pub dts_directories: FxHashSet<Path>,
@@ -206,9 +205,6 @@ pub struct ProcessedFiles {
     pub source_file_meta_datas: Rc<FxHashMap<Path, SourceFileMetaData>>,
     pub jsx_runtime_import_specifiers: Option<Rc<FxHashMap<Path, Rc<JsxRuntimeImportSpecifier>>>>,
     pub import_helpers_import_specifiers: Option<Rc<FxHashMap<Path, Node>>>,
-    /// Keeps the nodes of jsx_runtime_import_specifiers and import_helpers_import_specifiers alive.
-    /// A clone (update_program, program_new.rs:706; Go program.go:336 shares processedFiles) shares it.
-    pub synthetic_owner: Option<Rc<crate::ast::LoadSyntheticOwner>>,
     pub lib_files: Rc<FxHashMap<Path, Rc<LibFile>>>,
     // List of present unsupported extensions
     pub source_files_found_searching_node_modules: Rc<FxHashSet<Path>>,
@@ -298,7 +294,6 @@ pub fn process_all_program_files(
         lib_file_count: Cell::new(0),
         // PORT: Go uses the zero `ast.NodeFactory`, which makes synthetic nodes.
         factory: NodeFactory::new(),
-        synthetic_owner: Rc::new(crate::ast::LoadSyntheticOwner::new()),
         project_reference_file_mapper: Rc::new(RefCell::new(ProjectReferenceFileMapper::new(
             &opts,
             host.clone(),
@@ -2239,7 +2234,6 @@ impl FileLoader {
 
     // Go: fileloader.go:960 (*fileLoader).createSyntheticImport
     pub fn create_synthetic_import(&self, text: &str, file: &ParsedSourceFile) -> Node {
-        let _owner = self.synthetic_owner.enter();
         let external_helpers_module_reference =
             self.factory.new_string_literal(text, TokenFlags::NONE);
         let import_decl = self.factory.new_import_declaration(

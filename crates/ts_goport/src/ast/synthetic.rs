@@ -570,8 +570,6 @@ enum OwnerKey {
     Base,
     /// A language server program version (`GoProgram::id`).
     Program(u32),
-    /// The synthetic imports of one program load (`LoadSyntheticOwner`), freed when its last holder drops.
-    Load(u32),
     /// The alias slots of the nodes of a freeable file version (its file
     /// id) and the entries made in its file scopes, in chunks of their own.
     File(u32),
@@ -633,7 +631,6 @@ struct SyntheticArena {
     /// The chunks of each program version that is an owner on this thread,
     /// by `GoProgram::id`.
     owners: FxHashMap<u32, OwnerChunks>,
-    loads: FxHashMap<u32, OwnerChunks>,
     /// The chunks of each freeable file version (`OwnerKey::File`), by
     /// file id.
     alias_files: FxHashMap<u32, OwnerChunks>,
@@ -695,7 +692,6 @@ impl SyntheticArena {
             slices: Vec::new(),
             base: OwnerChunks::EMPTY,
             owners: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
-            loads: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
             alias_files: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
             dead_seen: 0,
             last: None,
@@ -725,7 +721,7 @@ impl SyntheticArena {
     /// owner gives every entry to the thread.
     #[inline]
     fn current_owner(&mut self) -> OwnerKey {
-        if self.owners.is_empty() && self.loads.is_empty() {
+        if self.owners.is_empty() {
             return OwnerKey::Base;
         }
         if let Some(owner) = SCOPE_OWNER.with(Cell::get) {
@@ -861,13 +857,12 @@ impl SyntheticArena {
             slots,
             base,
             owners,
-            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         push_slot_into(slots, shared, chunks, owner, slot)
     }
 
@@ -890,13 +885,12 @@ impl SyntheticArena {
             datas,
             base,
             owners,
-            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         let data = push_data_into(datas, shared, chunks, node);
         push_slot_into(slots, shared, chunks, owner, slot(data))
     }
@@ -917,13 +911,12 @@ impl SyntheticArena {
             datas,
             base,
             owners,
-            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         push_data_into(datas, shared, chunks, node)
     }
 
@@ -940,13 +933,12 @@ impl SyntheticArena {
             lists,
             base,
             owners,
-            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         // PERF (followups59): one table read for the open chunk, as in
         // `push_slot_into`.
         if let Some(&c) = chunks.lists.last() {
@@ -1045,7 +1037,6 @@ fn new_chunk_number(
 fn owner_chunks<'a>(
     base: &'a mut OwnerChunks,
     owners: &'a mut FxHashMap<u32, OwnerChunks>,
-    loads: &'a mut FxHashMap<u32, OwnerChunks>,
     alias_files: &'a mut FxHashMap<u32, OwnerChunks>,
     print: &'a mut OwnerChunks,
     owner: OwnerKey,
@@ -1054,7 +1045,6 @@ fn owner_chunks<'a>(
         OwnerKey::Base => base,
         OwnerKey::Print => print,
         OwnerKey::Program(id) => owners.get_mut(&id).expect("synthetic owner is not open"),
-        OwnerKey::Load(id) => loads.get_mut(&id).expect("synthetic owner is not open"),
         OwnerKey::File(file) => alias_files
             .get_mut(&file)
             .expect("synthetic owner is not open"),
@@ -1183,67 +1173,6 @@ pub fn open_synthetic_owner(id: u32) {
         );
         a.last = None;
     });
-}
-
-/// Owner of the synthetic imports of one program load (FileLoader::create_synthetic_import).
-/// Go: fileloader.go:960 makes them with the loader's factory, and only the program's maps
-/// (filesparser.go:535-544) reach them, so the GC frees them with the program. ProcessedFiles
-/// holds it; the last drop frees the entries on this thread. !Send.
-pub struct LoadSyntheticOwner {
-    id: u32,
-    _not_send: std::marker::PhantomData<*const ()>,
-}
-static NEXT_LOAD_OWNER: AtomicU32 = AtomicU32::new(1); // global: ids never repeat, even after an arena is replaced
-impl LoadSyntheticOwner {
-    pub fn new() -> Self {
-        Self {
-            id: NEXT_LOAD_OWNER.fetch_add(1, Ordering::Relaxed),
-            _not_send: std::marker::PhantomData,
-        }
-    }
-    #[must_use]
-    pub fn enter(&self) -> SyntheticOwnerScope {
-        if !owners_enabled() {
-            return enter_base_synthetic_owner();
-        }
-        ARENA.with(|a| {
-            a.borrow_mut().loads.entry(self.id).or_default();
-        });
-        enter_owner_scope(OwnerKey::Load(self.id))
-    }
-}
-impl Drop for LoadSyntheticOwner {
-    fn drop(&mut self) {
-        let freed = ARENA
-            .try_with(|a| {
-                let Ok(mut a) = a.try_borrow_mut() else {
-                    return None;
-                }; // borrowed: keep (leak), never panic
-                let chunks = a.loads.remove(&self.id)?; // replaced or forgotten arena: no-op
-                let slots: Vec<_> = chunks
-                    .slots
-                    .iter()
-                    .map(|&c| a.slots.take(c as usize))
-                    .collect();
-                let datas: Vec<_> = chunks
-                    .datas
-                    .iter()
-                    .map(|&c| a.datas.take(c as usize))
-                    .collect();
-                let lists: Vec<_> = chunks
-                    .lists
-                    .iter()
-                    .map(|&c| a.lists.take(c as usize))
-                    .collect();
-                a.compact();
-                Some((slots, datas, lists))
-            })
-            .ok()
-            .flatten();
-        if let Some(freed) = freed {
-            crate::gostd::local::drop_after_pause(Box::new(freed));
-        }
-    }
 }
 
 /// Frees the synthetic entries of program version `id` on this thread.
@@ -1455,12 +1384,11 @@ impl SyntheticArena {
         let SyntheticArena {
             base,
             owners,
-            loads,
             alias_files,
             print,
             ..
         } = self;
-        let target = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
+        let target = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
         fn put(dst: &mut Vec<u32>, src: Vec<u32>) {
             let at = dst.len().saturating_sub(1);
             dst.splice(at..at, src);
@@ -1700,7 +1628,6 @@ pub fn install_synthetic_seed(seed: SyntheticSeed) {
         slices: seed.slices,
         base: OwnerChunks::default(),
         owners: FxHashMap::default(),
-        loads: FxHashMap::default(),
         alias_files: FxHashMap::default(),
         dead_seen: 0,
         last: None,
@@ -1745,7 +1672,6 @@ pub fn install_twin_synthetic_arena(shared: Arc<SharedChunks>) {
         slices: Vec::new(),
         base: OwnerChunks::default(),
         owners: FxHashMap::default(),
-        loads: FxHashMap::default(),
         alias_files: FxHashMap::default(),
         dead_seen: 0,
         last: None,
@@ -3372,31 +3298,6 @@ mod tests {
             })
             .join()
             .expect("seed thread panicked");
-            free_synthetic_nodes();
-        })
-        .join()
-        .expect("test thread panicked");
-    }
-
-    #[test]
-    fn load_owner_frees_imports_after_its_last_holder_drops() {
-        std::thread::spawn(|| {
-            let f = NodeFactory::new();
-            let base = f.new_identifier("base");
-            let n0 = synthetic_live_slot_count();
-            let owner = Rc::new(LoadSyntheticOwner::new());
-            let other = Rc::clone(&owner);
-            {
-                let _owner = owner.enter();
-                let import = f.new_string_literal("tslib", TokenFlags::NONE);
-                assert_eq!(import.text(), "tslib");
-                assert_eq!(synthetic_live_slot_count(), n0 + 1);
-            }
-            drop(other);
-            assert_eq!(synthetic_live_slot_count(), n0 + 1);
-            drop(owner);
-            assert_eq!(synthetic_live_slot_count(), n0);
-            assert_eq!(base.text(), "base");
             free_synthetic_nodes();
         })
         .join()
