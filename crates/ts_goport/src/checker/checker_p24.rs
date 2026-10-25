@@ -1236,6 +1236,27 @@ impl Checker {
                 return self.get_reduced_type(cached);
             }
         }
+        // PERF (sentdisc1): an intersection whose never test is done and
+        // false is its own reduced type, and its apparent type is its cached
+        // one (an intersection is not instantiable, so getApparentType reads
+        // getApparentTypeOfIntersectionType). Both reads change no state, so
+        // this returns without the calls (property lookups in the
+        // intersection constituents of large unions).
+        if ty.flags.intersects(TypeFlags::INTERSECTION)
+            && (ty.object_flags
+                & (ObjectFlags::IS_NEVER_INTERSECTION_COMPUTED
+                    | ObjectFlags::IS_NEVER_INTERSECTION
+                    | ObjectFlags::MAPPED))
+                == ObjectFlags::IS_NEVER_INTERSECTION_COMPUTED
+        {
+            let cached = ty.as_intersection_type().resolved_apparent_type;
+            if cached == t {
+                return t;
+            }
+            if cached.is_some() {
+                return self.get_reduced_type(cached);
+            }
+        }
         // Since getApparentType may return a non-reduced union or intersection type, we need to perform
         // type reduction both before and after obtaining the apparent type. For example, given a type parameter
         // 'T extends A | B', the type 'T & X' becomes 'A & X | B & X' after obtaining the apparent type, and
