@@ -61,7 +61,7 @@ impl fmt::Display for Category {
 }
 
 /// A catalog entry from TypeScript's diagnosticMessages.json.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Message {
     code: u32,
     /// The `Category` as a byte (`category_byte`): a catalog entry is 40
@@ -392,26 +392,6 @@ fn catalog_key(code: u32) -> &'static str {
     keys[index].get_or_init(|| message_key(CATALOG[index].text(), code).into_boxed_str())
 }
 
-/// Prints a catalog entry with its key, as the derived `Debug` printed the
-/// stored key.
-impl fmt::Debug for Message {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Message")
-            .field("code", &self.code)
-            .field("category", &self.category())
-            .field("key", &self.key())
-            .field("text", &self.text())
-            .field("reports_unnecessary", &self.reports_unnecessary)
-            .field(
-                "elided_in_compatibility_pyramid",
-                &self.elided_in_compatibility_pyramid,
-            )
-            .field("reports_deprecated", &self.reports_deprecated)
-            .finish()
-    }
-}
-
 /// The key of a message with `text` and `code`: Go's
 /// `internal/diagnostics/generate.go` `convertPropertyName`. Each `*`,
 /// `/` and `:` becomes a word, each other character that is not a letter
@@ -419,9 +399,10 @@ impl fmt::Debug for Message {
 /// non-digit and one trailing `_` go; the result is cut to 100 bytes and
 /// gets `_<code>`.
 // PORT: Go runs it in its generator and stores each key. `Message::key`
-// runs it for a catalog entry. The catalog texts are ASCII, where Rust's
-// `is_alphabetic` and `is_numeric` are Go's `unicode.IsLetter` and
-// `unicode.IsDigit` (test `message_key_makes_every_generated_key`).
+// runs it for a catalog entry. Go tests `unicode.IsLetter` and
+// `unicode.IsDigit`; on the ASCII catalog texts (test
+// `message_key_makes_every_generated_key` makes every key) that is
+// `is_ascii_alphanumeric`, which needs no Unicode tables in the binary.
 fn message_key(text: &str, code: u32) -> String {
     let mut name = String::with_capacity(text.len());
     for c in text.chars() {
@@ -429,7 +410,7 @@ fn message_key(text: &str, code: u32) -> String {
             '*' => name.push_str("_Asterisk"),
             '/' => name.push_str("_Slash"),
             ':' => name.push_str("_Colon"),
-            c if c.is_alphabetic() || c.is_numeric() => name.push(c),
+            c if c.is_ascii_alphanumeric() => name.push(c),
             _ => name.push('_'),
         }
     }
