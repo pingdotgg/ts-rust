@@ -257,8 +257,8 @@ mod tests {
     }
 
     /// A name of the full text without its hashes: v0 crate hashes
-    /// (`std[7714dba5b6ef3665]::`), which rustc 1.95 prints. A legacy
-    /// `::h0123...` suffix stays (the short name is then a prefix).
+    /// (`std[7714dba5b6ef3665]::`, nightly builds). A legacy `::h0123...`
+    /// suffix (stable 1.95) stays: the short name is then a prefix.
     fn without_hashes(name: &str) -> String {
         let mut out = String::new();
         let mut rest = name;
