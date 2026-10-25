@@ -732,6 +732,13 @@ impl RuntimeSyntaxTransformer {
                 let (visited, _) = self.visit_slice(&[node.body()]);
                 statements = visited;
                 let module_block = get_innermost_module_declaration_from_dotted_module(node).body();
+                // Go: ast/ast_generated.go:12468 (*Node).AsModuleBlock. The
+                // type eraser can elide an inner part of a dotted name to a
+                // NotEmittedStatement (typeeraser.go:124 calls
+                // IsInstantiatedModule for each part), and Go panics here.
+                if module_block.kind() != SyntaxKind::ModuleBlock {
+                    crate::core::go_panic("Invalid node cast to ModuleBlock".to_string());
+                }
                 statements_location = module_block.statement_list().loc().with_pos(-1);
             }
         }
