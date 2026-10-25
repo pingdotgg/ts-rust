@@ -1396,6 +1396,14 @@ pub trait MarshalerTo {
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError>;
 }
 
+/// Calls the marshaler of `value` through its vtable. The containers (slices,
+/// maps, `Option`) use it, so the marshaler of each element type is one
+/// function that they all share, not a copy inlined into each container.
+#[inline(never)]
+pub fn marshal_dyn(value: &dyn MarshalerTo, enc: &mut String) -> Result<(), JsonError> {
+    value.marshal_json_to(enc)
+}
+
 // Go v2 string arshaler: null gives "", a string sets the value, any other
 // kind is an error after the value is read.
 impl UnmarshalerFrom for String {
@@ -1637,7 +1645,7 @@ impl<T: MarshalerTo> MarshalerTo for [T] {
             if i > 0 {
                 enc.push(',');
             }
-            v.marshal_json_to(enc)?;
+            marshal_dyn(v, enc)?;
         }
         enc.push(']');
         Ok(())
@@ -1660,7 +1668,7 @@ impl<V: MarshalerTo> MarshalerTo for IndexMap<String, V> {
             }
             k.marshal_json_to(enc)?;
             enc.push(':');
-            v.marshal_json_to(enc)?;
+            marshal_dyn(v, enc)?;
         }
         enc.push('}');
         Ok(())

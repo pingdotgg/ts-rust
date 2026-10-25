@@ -1021,7 +1021,7 @@ impl<T: MarshalerTo> MarshalerTo for Option<T> {
                 enc.push_str("null");
                 Ok(())
             }
-            Some(v) => v.marshal_json_to(enc),
+            Some(v) => marshal_dyn(v, enc),
         }
     }
 }
