@@ -116,20 +116,72 @@ macro_rules! locale_data {
 #[cfg(feature = "noembed")]
 #[cold]
 fn load_locale_file(file: &str) -> LocaleMessages {
-    let path = format!("{}/loc/{file}", crate::frontend::bundled::lib_path());
-    read_locale_file(&path).unwrap_or_else(|err| {
-        let locale = file.trim_end_matches(".json.gz");
-        // The output so far comes first, as for a panic (bin/tsgo.rs).
-        crate::execute::tsc::stdio::flush_cli_stdout_at_exit();
-        let text = format!(
-            "error: cannot read the {locale} messages: {err}\n\
-             This tsc reads them from the loc directory next to it. Install it again.\n"
-        );
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes());
-        // Go `ExitStatusDiagnosticsPresent_OutputsSkipped`, as for the other
-        // setup errors (an invalid locale is TS6048).
-        std::process::exit(1)
-    })
+    let path = locale_file_path(file);
+    read_locale_file(&path).unwrap_or_else(|err| locale_file_exit(file, &err))
+}
+
+/// noembed: the path of catalog `file`.
+#[cfg(feature = "noembed")]
+fn locale_file_path(file: &str) -> String {
+    format!("{}/loc/{file}", crate::frontend::bundled::lib_path())
+}
+
+/// noembed: ends the run when catalog `file` cannot be read (`err`).
+#[cfg(feature = "noembed")]
+#[cold]
+fn locale_file_exit(file: &str, err: &str) -> ! {
+    let locale = file.trim_end_matches(".json.gz");
+    // The output so far comes first, as for a panic (bin/tsgo.rs).
+    crate::execute::tsc::stdio::flush_cli_stdout_at_exit();
+    let text = format!(
+        "error: cannot read the {locale} messages: {err}\n\
+         This tsc reads them from the loc directory next to it. Install it again.\n"
+    );
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes());
+    // Go `ExitStatusDiagnosticsPresent_OutputsSkipped`, as for the other
+    // setup errors (an invalid locale is TS6048).
+    std::process::exit(1)
+}
+
+/// The catalog file of each `LOCALE_FUNCS` entry (the `locale_data!` lines
+/// below), for `preload_localized_messages`.
+// PORT: not in Go.
+static LOCALE_FILES: [&str; 14] = [
+    "",
+    "zh-CN.json.gz",
+    "zh-TW.json.gz",
+    "cs-CZ.json.gz",
+    "de-DE.json.gz",
+    "es-ES.json.gz",
+    "fr-FR.json.gz",
+    "it-IT.json.gz",
+    "ja-JP.json.gz",
+    "ko-KR.json.gz",
+    "pl-PL.json.gz",
+    "pt-BR.json.gz",
+    "ru-RU.json.gz",
+    "tr-TR.json.gz",
+];
+
+/// In a noembed build, opens the catalog file of `locale`, so that a
+/// missing file ends the run before any output (`locale_file_exit`), not
+/// after a partial diagnostic line. The tsc command line calls it first.
+/// The read and decode wait for the first message, as in Go (they cost
+/// about 17M instructions). The default build does nothing here.
+// PORT: not in Go.
+pub fn preload_localized_messages(locale: &Locale) {
+    #[cfg(feature = "noembed")]
+    if locale.0 != language::Tag::UND {
+        let (index, confidence) = MATCHER.match_(std::slice::from_ref(&locale.0));
+        if confidence >= language::Confidence::Low
+            && let Some(&file) = LOCALE_FILES.get(index).filter(|file| !file.is_empty())
+        {
+            let path = locale_file_path(file);
+            if let Err(err) = std::fs::File::open(&path) {
+                locale_file_exit(file, &format!("{path}: {err}"));
+            }
+        }
+    }
 }
 
 /// Reads and decodes the catalog file at `path` (the noembed loader).
@@ -379,6 +431,18 @@ mod tests {
     fn every_catalog_loads() {
         for f in LOCALE_FUNCS.iter().flatten() {
             assert!(!f().is_empty());
+        }
+    }
+
+    /// `LOCALE_FILES` names the catalog of each `LOCALE_FUNCS` entry.
+    #[test]
+    fn locale_files_name_the_catalogs() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/loc");
+        for (file, f) in LOCALE_FILES.iter().zip(LOCALE_FUNCS) {
+            match f {
+                None => assert!(file.is_empty()),
+                Some(f) => assert_eq!(&read_locale_file(&format!("{dir}/{file}")).unwrap(), f()),
+            }
         }
     }
 
