@@ -30,14 +30,14 @@
 //! type x constant reference), candidates that are settled and have nothing
 //! to check per walk are joined to their parent (union-find), so a walk
 //! over settled nodes costs about O(1). A file is indexed only once its
-//! walks have taken 24 steps per flow node (sampled: one walk in 4 at
+//! walks have taken 16 steps per flow node (sampled: one walk in 4 at
 //! first, then the gap doubles up to 128), so files with short walks pay
-//! almost nothing: a countdown per walk. From half of that on, a measured
-//! walk also takes a cheap look along its path for the common refusals
-//! (`flow_skip_sample`), and the file needs 8 steps per flow node that pass
-//! it: files whose walks the index would mostly refuse (tests with
-//! assertion calls, walks that end at the reference's own declaration) get
-//! no index (flowskip4).
+//! almost nothing: a countdown per walk. From half of that on, the gap is
+//! at most 32, a measured walk also takes a cheap look along its path for
+//! the common refusals (`flow_skip_sample`), and the file needs 8 steps per
+//! flow node that pass it: files whose walks the index would mostly refuse
+//! (tests with assertion calls, walks that end at the reference's own
+//! declaration) get no index (flowskip4).
 //!
 //! `GOPORT_FLOWSKIP`: unset or `1` on, `0` off, `verify` indexes every file,
 //! tests each walk, then runs Go's walk anyway, and panics when the skip
@@ -128,6 +128,7 @@ fn tuning(name: &'static str, default: u32) -> u32 {
             "GOPORT_FLOWSKIP_MIN_STEPS",
             "GOPORT_FLOWSKIP_SAMPLE_EVERY",
             "GOPORT_FLOWSKIP_CONFIRM_STEPS",
+            "GOPORT_FLOWSKIP_NEAR_GAP",
         ]
         .into_iter()
         .filter_map(|n| Some((n, std::env::var(n).ok()?.parse().ok()?)))
@@ -254,9 +255,11 @@ pub struct FlowSkip {
     /// A file is indexed when the steps of its walks so far reach this many
     /// per flow node of the file (and `confirm_steps` holds). The index
     /// costs about as much as 5 to 8 skipped walk steps per flow node, and
-    /// it pays only for the walks after it: with 16, VS Code and TypeORM
-    /// lost 0.1 to 0.3% instructions to indexes whose later walks were few
-    /// or refused (flowskip4). Files below it pay only the sample.
+    /// it pays only for the walks after it that it skips. Without the look
+    /// of `confirm_steps`, 16 cost VS Code and TypeORM 0.1 to 0.3%
+    /// instructions in indexes whose later walks were refused. 24 and 32
+    /// with the look made T3 server's 4 checkers index their files later
+    /// (flowskip4). Files below it pay only the sample.
     pub build_steps: u32,
     /// A walk with fewer loop turns to its root (and no move to an outer
     /// function there) is not tested: Go's walk is cheaper than the test.
@@ -268,6 +271,11 @@ pub struct FlowSkip {
     /// measured walks that pass the look of `flow_skip_sample` reach this
     /// many per flow node (looked at from half of `build_steps` on).
     pub confirm_steps: u32,
+    /// The largest gap once the count passed half of `build_steps` (0: no
+    /// such limit), so a file near the threshold is decided soon. Without
+    /// it, T3 server's 4 checkers indexed their files later (default
+    /// instructions -0.01% against -0.10% with it; flowskip4).
+    pub near_gap: u32,
     files: FxHashMap<u32, FileState>,
     /// The last counted file and its live count. Its entry in `files` is
     /// stale until another counted file takes its place, so a walk that only
@@ -299,11 +307,12 @@ impl Default for FlowSkip {
             // Verify mode indexes every file at once, so it tests every walk.
             build_steps: tuning(
                 "GOPORT_FLOWSKIP_BUILD_STEPS",
-                if mode == FlowSkipMode::Verify { 0 } else { 24 },
+                if mode == FlowSkipMode::Verify { 0 } else { 16 },
             ),
             min_steps: tuning("GOPORT_FLOWSKIP_MIN_STEPS", 8),
             sample_every: tuning("GOPORT_FLOWSKIP_SAMPLE_EVERY", SAMPLE_EVERY).max(1),
             confirm_steps: tuning("GOPORT_FLOWSKIP_CONFIRM_STEPS", 8),
+            near_gap: tuning("GOPORT_FLOWSKIP_NEAR_GAP", 32),
             files: FxHashMap::default(),
             hot_file: None,
             hot: Count {
@@ -368,8 +377,8 @@ const FIRST_GAP: u32 = 4;
 /// samples: a file is worth an index only when it has many walks. A gap of
 /// 4 cost VS Code +0.13% instructions. With 32, T3 server indexes 57 files
 /// (63 with a fixed gap of 4), but the skipped steps stay the same (38.28 M,
-/// flowskip3). 128 against 32: st instructions VS Code -0.011%, Sentry
-/// -0.005%, Excalidraw -0.04%, T3 server -0.016% (flowskip4).
+/// flowskip3). 128 with `FlowSkip::near_gap` 32 against 32: fewer samples
+/// in the many files that never come near an index (flowskip4).
 const SAMPLE_EVERY: u32 = 128;
 
 /// The name that an assignment flow node assigns when it is a plain
@@ -1652,11 +1661,16 @@ impl Checker {
                 } else {
                     (0, false)
                 };
+                let near_gap = self.flow_skip.near_gap;
                 let hot = &mut self.flow_skip.hot;
                 let steps = u64::from(steps) * u64::from(weight);
                 hot.measured += steps;
                 if passed {
                     hot.probed += steps;
+                }
+                if near_gap > 0 && hot.measured * 2 >= u64::from(build_steps) * n {
+                    hot.gap = hot.gap.min(near_gap);
+                    hot.countdown = hot.countdown.min(hot.gap);
                 }
                 if hot.measured < u64::from(build_steps) * n || hot.probed < confirm_steps * n {
                     return Err(Refusal::Counting);
