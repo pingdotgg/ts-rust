@@ -1079,7 +1079,7 @@ fn get_module_instance_state_worker(
                 let mut state = ModuleInstanceState::NON_INSTANTIATED;
                 let ancestors = walk.push_ancestor(ancestors, node, &mut true);
                 let ancestors = walk.push_ancestor(ancestors, export_clause, &mut true);
-                for specifier in export_clause.elements().to_vec() {
+                for specifier in export_clause.elements() {
                     let specifier_state =
                         get_module_instance_state_for_alias_target(specifier, ancestors, walk);
                     if specifier_state > state {
@@ -1142,7 +1142,9 @@ fn get_module_instance_state_for_alias_target(
         if is_block(p) || is_module_block(p) || is_source_file(p) {
             let mut found = ModuleInstanceState::UNKNOWN;
             let statements_ancestors = walk.push_ancestor(ancestors, p, &mut stack_store);
-            for statement in p.statements().to_vec() {
+            // PERF: the lists are read in place, as Go ranges over them. A heap copy of each block's statements for
+            // each specifier was about half of deep-nested-1500-preserve (followups82).
+            for statement in p.statements() {
                 if node_has_name(statement, name) {
                     let state =
                         get_module_instance_state_cached(statement, statements_ancestors, walk);
@@ -1187,8 +1189,12 @@ pub fn node_has_name(statement: Node, id: Node) -> bool {
         return is_identifier(name) && name.text() == id.text();
     }
     if is_variable_statement(statement) {
-        let declarations = statement.declaration_list().declarations().nodes().to_vec();
-        return declarations.iter().any(|&d| node_has_name(d, id));
+        return statement
+            .declaration_list()
+            .declarations()
+            .nodes()
+            .iter()
+            .any(|d| node_has_name(d, id));
     }
     false
 }
