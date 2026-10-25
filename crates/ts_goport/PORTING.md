@@ -622,8 +622,10 @@ The batch that adds it is not accepted until Theo approves.
   no symbols for the file in `--diagnostics` (`program::symbol_count`),
   as Go's unbound parse. The
   carry of a checker pool made before a forget
-  keeps none of its ids of the forgotten ranges, but counts them
-  (`ast::carry_symbol_ids`). Option A (parse again, as Go) gave the same
+  keeps none of its ids of the forgotten ranges. There the loading
+  thread's ids are those of a later parse, so the carry reads them as
+  none, and the first id that the pool's checkers gave each symbol of
+  the ranges counts once, in any carry order (`ast::carry_symbol_ids`). Option A (parse again, as Go) gave the same
   ids but cost 26 to 39% of the watch cycle wall (after231/watchreset1).
   A task keeps the versions that its errors point at until its next build
   or a reset of its status (`BuildTask::held_file_versions`). A file

@@ -285,7 +285,11 @@ fn shared_ts_builds(
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    let output = read(&out);
+    (root, build_ids(&read(&out)))
+}
+
+/// Each build's `BuildIds` in a `tsc -b --watch --pretty false` output.
+fn build_ids(output: &str) -> Vec<BuildIds> {
     let mut builds: Vec<BuildIds> = Vec::new();
     for line in output.lines() {
         if line.contains("Starting compilation") || line.contains("File change detected") {
@@ -318,7 +322,7 @@ fn shared_ts_builds(
     for build in &mut builds {
         build.ids.sort_unstable();
     }
-    (root, builds)
+    builds
 }
 
 /// The `nbemit` case: p1 emits in spite of its syntax error, so it binds at
@@ -380,6 +384,250 @@ fn build_watch_counts_no_symbols_of_a_shared_ts_file_that_another_program_bound(
         root.display()
     );
     fs::remove_dir_all(&root).unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
+}
+
+/// watchreset1r round 4 (round 3 skeptic B4): projects with no reference
+/// between them that all list `../s1.ts`, `../s2.ts` and a file of their
+/// own. One project has 20,000 more functions, so its check ends last.
+/// Each file has a class with a private name, whose id the errors print.
+/// In default mode a project made later then carried its checker ids
+/// first, and the heavy project lost its ids of the shared files, which Go
+/// never does (`ast::carry_symbol_ids`). The cases are the skeptic's
+/// `i2s2h1` and `i3s2h2` (after231/watchreset1r3/skep/cases), made here.
+struct SharedTsCase {
+    /// The project dirs. Project `pN` has file `x.ts`: `a.ts`, `b.ts`, ...
+    projects: usize,
+    /// The project (0 is `p1`) with 20,000 more functions.
+    heavy: usize,
+    /// Each edit: a file and the number of the error line that it adds.
+    edits: &'static [(&'static str, u32)],
+}
+
+/// The skeptic's `i2s2h1`: `p1` is heavy.
+const I2S2H1: SharedTsCase = SharedTsCase {
+    projects: 2,
+    heavy: 0,
+    edits: &[
+        ("s1.ts", 1),
+        ("p2/b.ts", 6),
+        ("s2.ts", 2),
+        ("p1/a.ts", 4),
+        ("s1.ts", 4),
+        ("s2.ts", 7),
+    ],
+};
+
+/// The skeptic's `i3s2h2`: `p2` is heavy.
+const I3S2H2: SharedTsCase = SharedTsCase {
+    projects: 3,
+    heavy: 1,
+    edits: &[
+        ("s1.ts", 1),
+        ("s2.ts", 2),
+        ("p1/a.ts", 3),
+        ("s1.ts", 4),
+        ("p1/a.ts", 5),
+        ("p2/b.ts", 6),
+        ("s2.ts", 7),
+    ],
+};
+
+/// The text of file `stem.ts`: class `S1` with `#s1` for `s1`, then the
+/// error line `const e<n>: string = <n>;` of an edit, then the 20,000
+/// functions of a heavy project.
+fn shared_ts_source(stem: &str, error: Option<u32>, heavy: bool) -> String {
+    let class = stem.to_uppercase();
+    let mut text = format!(
+        "class {class} {{ static readonly #{stem} = Symbol(); static t() {{ const n: number = {class}.#{stem}; }} }}\n"
+    );
+    if let Some(n) = error {
+        text += &format!("const e{n}: string = {n};\n");
+    }
+    if heavy {
+        for n in 0..20_000 {
+            text += &format!("function f{n}(x: number): string {{ return String(x + {n}); }}\n");
+        }
+    }
+    text
+}
+
+impl SharedTsCase {
+    /// Makes the case, runs `goport_watch` with `tsc -b --watch --pretty
+    /// false` plus `extra` through its edits, and gives each build's
+    /// `BuildIds` with the scratch dir, which the caller removes.
+    fn builds(&self, test: &str, extra: &[&str]) -> (PathBuf, Vec<BuildIds>) {
+        let root = scratch_dir(test);
+        let project = root.join("project");
+        let own = |n: usize| format!("p{}/{}.ts", n + 1, char::from(b'a' + n as u8));
+        let references: Vec<String> = (1..=self.projects)
+            .map(|n| format!(r#"{{ "path": "p{n}" }}"#))
+            .collect();
+        let mut files = vec![
+            (
+                "tsconfig.json".to_string(),
+                format!(
+                    r#"{{ "files": [], "references": [{}] }}"#,
+                    references.join(", ")
+                ) + "\n",
+            ),
+            ("s1.ts".to_string(), shared_ts_source("s1", None, false)),
+            ("s2.ts".to_string(), shared_ts_source("s2", None, false)),
+        ];
+        for n in 0..self.projects {
+            let file = own(n);
+            let (dir, name) = file.split_once('/').expect("project file");
+            files.push((
+                format!("{dir}/tsconfig.json"),
+                format!(
+                    r#"{{ "compilerOptions": {{ "strict": true, "composite": true, "emitDeclarationOnly": true, "rootDir": "..", "outDir": "out", "types": [], "lib": ["es2022"], "target": "es2022" }}, "files": ["../s1.ts", "../s2.ts", "{name}"] }}"#
+                ) + "\n",
+            ));
+            let stem = name.trim_end_matches(".ts");
+            files.push((file.clone(), shared_ts_source(stem, None, n == self.heavy)));
+        }
+        for (path, text) in files {
+            let path = project.join(path);
+            fs::create_dir_all(path.parent().expect("parent")).expect("create case dir");
+            fs::write(&path, text)
+                .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        }
+        let edits = root.join("edits");
+        fs::create_dir(&edits).expect("create edits dir");
+        let mut args = Vec::new();
+        for (at, &(target, error)) in self.edits.iter().enumerate() {
+            let stem = target
+                .rsplit('/')
+                .next()
+                .expect("name")
+                .trim_end_matches(".ts");
+            let heavy = own(self.heavy) == target;
+            let edit = edits.join(format!("{at}.ts"));
+            fs::write(&edit, shared_ts_source(stem, Some(error), heavy)).expect("write edit");
+            args.push(format!("{target}={}", edit.display()));
+        }
+        let out = root.join("watch.txt");
+        let run = Command::new(env!("CARGO_BIN_EXE_goport_watch"))
+            .arg(&out)
+            .arg(self.edits[0].0)
+            .args(&args)
+            .args(["--", "-b", "--watch", "tsconfig.json", "--pretty", "false"])
+            .args(extra)
+            .current_dir(&project)
+            .output()
+            .expect("run goport_watch");
+        assert!(
+            run.status.success(),
+            "goport_watch failed ({}) in {}:\n{}\n{}",
+            run.status,
+            root.display(),
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let builds = build_ids(&read(&out));
+        assert_eq!(
+            builds.len(),
+            self.edits.len() + 1,
+            "builds ({})",
+            root.display()
+        );
+        (root, builds)
+    }
+
+    /// With `--singleThreaded` the ids are exact: each build's ids are
+    /// `expected`.
+    fn check_single_threaded(&self, test: &str, expected: &[&[u64]]) {
+        let (root, builds) = self.builds(test, &["--singleThreaded"]);
+        let ids: Vec<&[u64]> = builds.iter().map(|build| &build.ids[..]).collect();
+        assert_eq!(ids, expected, "ids against tsgo ({})", root.display());
+        fs::remove_dir_all(&root)
+            .unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
+    }
+
+    /// In default mode Go's ids race between its builders and checkers, but
+    /// a race only uses more ids (ast/utilities.go:36-46 `GetSymbolId`).
+    /// So the id counter before each build is at least `go_min`, the least
+    /// counter of Go's runs. The counter is read as the skeptic's
+    /// `firstnew.py` does: the smallest id that the build prints and the
+    /// build before did not, minus 1.
+    fn check_no_lost_id(&self, test: &str, go_min: &[u64]) {
+        let (root, builds) = self.builds(test, &[]);
+        let mut before: &[u64] = &[];
+        let mut counters = Vec::new();
+        for build in &builds {
+            let first_new = build.ids.iter().find(|id| !before.contains(id));
+            counters.push(first_new.map(|id| id - 1));
+            before = &build.ids;
+        }
+        assert!(
+            counters.len() == go_min.len()
+                && counters
+                    .iter()
+                    .zip(go_min)
+                    .all(|(counter, &min)| counter.is_some_and(|counter| counter >= min)),
+            "id counter before each build {counters:?}, Go's least {go_min:?} ({})",
+            root.display()
+        );
+        fs::remove_dir_all(&root)
+            .unwrap_or_else(|error| panic!("remove {}: {error}", root.display()));
+    }
+}
+
+/// `i2s2h1 --singleThreaded`: the ids of `tsgo-oracle-3e9236361fa9` in 2 of
+/// 2 runs (after231/watchreset1r3/skep/logs/k/h2-go.log).
+// PORT: no Go counterpart; the ids are Go's.
+#[test]
+fn build_watch_single_threaded_ids_of_two_projects_that_share_ts_files() {
+    I2S2H1.check_single_threaded(
+        "shared-ts-i2s2h1-st",
+        &[
+            &[1, 2, 3, 40, 41, 42],
+            &[46, 47, 48, 85, 86, 87],
+            &[46, 47, 48, 91, 92, 93],
+            &[130, 131, 132, 169, 170, 171],
+            &[169, 170, 171, 175, 176, 177],
+            &[214, 215, 216, 254, 255, 256],
+            &[260, 261, 262, 300, 301, 302],
+        ],
+    );
+}
+
+/// `i2s2h1` in default mode. Go's least counters in 6 runs of
+/// `tsgo-oracle-3e9236361fa9` (after231/watchreset1r3/skep/logs/k/h2-go.log);
+/// round 3 gave `0 42 84 122 164 202 245`.
+// PORT: no Go counterpart; the bound is Go's.
+#[test]
+fn build_watch_loses_no_id_of_two_projects_that_share_ts_files() {
+    I2S2H1.check_no_lost_id("shared-ts-i2s2h1", &[0, 44, 88, 126, 170, 208, 253]);
+}
+
+/// `i3s2h2 --singleThreaded`: the ids of `tsgo-oracle-3e9236361fa9` in the
+/// run with one build per edit (after231/watchreset1r3/skep/logs/k/h-go.log;
+/// the other run saw one edit twice).
+// PORT: no Go counterpart; the ids are Go's.
+#[test]
+fn build_watch_single_threaded_ids_of_three_projects_that_share_ts_files() {
+    I3S2H2.check_single_threaded(
+        "shared-ts-i3s2h2-st",
+        &[
+            &[1, 2, 3, 40, 41, 42, 46, 47, 48],
+            &[52, 53, 54, 91, 92, 93, 97, 98, 99],
+            &[103, 104, 105, 142, 143, 144, 148, 149, 150],
+            &[142, 143, 144, 148, 149, 150, 154, 155, 156],
+            &[193, 194, 195, 232, 233, 234, 238, 239, 240],
+            &[232, 233, 234, 238, 239, 240, 244, 245, 246],
+            &[238, 239, 240, 244, 245, 246, 283, 284, 285],
+            &[322, 323, 324, 361, 362, 363, 367, 368, 369],
+        ],
+    );
+}
+
+/// `i3s2h2` in default mode. Go's least counters in 8 runs of
+/// `tsgo-oracle-3e9236361fa9` (after231/watchreset1r3/skep/logs/k/h-go.log);
+/// round 3 gave `0 48 96 144 182 230 268 306`.
+// PORT: no Go counterpart; the bound is Go's.
+#[test]
+fn build_watch_loses_no_id_of_three_projects_that_share_ts_files() {
+    I3S2H2.check_no_lost_id("shared-ts-i3s2h2", &[0, 50, 100, 150, 188, 238, 276, 314]);
 }
 
 /// A `tsgo -b --watch` run with the OS watcher, for
