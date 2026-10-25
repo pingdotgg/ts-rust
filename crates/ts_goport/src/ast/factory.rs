@@ -237,6 +237,14 @@ impl NodeFactory {
         self.text_count.get()
     }
 
+    /// Adds `nodes` to `node_count` and `texts` to `text_count`: the counts
+    /// of the nodes that a replayed speculative JSDoc parse made in Go
+    /// (`Parser::speculate_js_doc_tag`).
+    pub(crate) fn add_counts(&self, nodes: usize, texts: usize) {
+        self.node_count.set(self.node_count.get() + nodes);
+        self.text_count.set(self.text_count.get() + texts);
+    }
+
     // ── Source files ───────────────────────────────────────────────────
 
     // Go: ast/ast.go:2451 NewSourceFile

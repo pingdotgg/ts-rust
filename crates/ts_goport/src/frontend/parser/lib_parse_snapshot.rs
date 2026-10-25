@@ -877,7 +877,7 @@ impl<'a> Decoder<'a> {
             script_kind: ScriptKind(self.i32()?),
             is_declaration_file: self.flag()?,
             uses_uri_style_node_core_modules: self.tristate()?,
-            identifier_count: self.i32()?,
+            identifier_count: self.zz()?,
             imports: self.nodes()?,
             module_augmentations: self.nodes()?,
             ambient_module_names: self.strings()?,
@@ -1565,7 +1565,7 @@ impl Encoder {
         self.zz(i64::from(script_kind.0));
         self.u8(u8::from(*is_declaration_file));
         self.u8(*uses_uri_style_node_core_modules as u8);
-        self.zz(i64::from(*identifier_count));
+        self.zz(*identifier_count);
         self.nodes(imports)?;
         self.nodes(module_augmentations)?;
         self.strings(ambient_module_names)?;

@@ -39,7 +39,7 @@ impl ExtendedConfigCache for TscExtendedConfigCache {
         &self,
         file_name: &str,
         path: &Path,
-        resolution_stack: &[Path],
+        resolution_stack: &ResolutionStack,
         host: &dyn ParseConfigHost,
     ) -> Rc<ExtendedConfigCacheEntry> {
         if let Some(entry) = self.m.borrow().get(path) {

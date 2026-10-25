@@ -38,7 +38,8 @@ pub struct ParsedSourceFile {
     pub script_kind: ScriptKind,
     pub is_declaration_file: bool,
     pub uses_uri_style_node_core_modules: Tristate,
-    pub identifier_count: i32,
+    /// Go `int`: `i64`, as the parser's count.
+    pub identifier_count: i64,
     pub imports: Vec<Node>,
     pub module_augmentations: Vec<Node>,
     pub ambient_module_names: Vec<String>,

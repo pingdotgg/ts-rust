@@ -13,7 +13,7 @@ pub struct ExtendedConfigParseArgs {
     pub file_name: String,
     pub content: String,
     pub fs: Rc<dyn FileSource>,
-    pub resolution_stack: Vec<tspath::Path>,
+    pub resolution_stack: tsoptions::ResolutionStack,
     pub host: Rc<dyn tsoptions::ParseConfigHost>,
     pub cache: Option<Rc<dyn tsoptions::ExtendedConfigCache>>,
 }
