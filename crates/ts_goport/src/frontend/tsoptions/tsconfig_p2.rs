@@ -373,7 +373,12 @@ pub fn parse_config(
         options.paths_base_path = base_path.clone();
     }
 
-    if let Some(extended_config_paths) = own_config.extended_config_path.clone() {
+    // Go: `len(ownConfig.extendedConfigPaths) != 0`. The json parse always
+    // gives `Some`, and the source file parse gives `Some` for any
+    // `extends` (`"extends": []` too), so the length is checked.
+    if let Some(extended_config_paths) = own_config.extended_config_path.clone()
+        && !extended_config_paths.is_empty()
+    {
         // copy the resolution stack so it is never reused between branches in potential diamond-problem scenarios.
         let resolution_stack = resolution_stack.push(resolved_path.clone());
         let mut result = ExtendsResult::default();
