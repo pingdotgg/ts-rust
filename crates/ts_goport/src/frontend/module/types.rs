@@ -83,6 +83,8 @@ pub trait Resolver {
 // Go: module/resolver.go:335 DefaultResolver as a module.Resolver
 // PORT: each method is the `DefaultResolver` method of the same Go name.
 impl Resolver for DefaultResolver {
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module name.
+    #[inline(never)]
     fn resolve_module_name(
         &self,
         module_name: &str,

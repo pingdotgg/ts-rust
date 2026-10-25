@@ -1175,6 +1175,9 @@ fn text_range_contained_by(t: TextRange, t2: TextRange) -> bool {
 }
 
 // Go: ast/utilities.go:4646 findCloneInNode
+// SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs only for a JSDoc node
+// with a reparsed clone.
+#[inline(never)]
 fn find_clone_in_node(mut node: Node, original: Node) -> Node {
     loop {
         if node.kind() == original.kind()
