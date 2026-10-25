@@ -64,9 +64,12 @@ impl fmt::Display for Category {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Message {
     code: u32,
-    category: Category,
-    /// "" in a catalog entry of the wasm build (`Message::catalog`).
-    key: &'static str,
+    /// The `Category` as a byte (`category_byte`): a catalog entry is 40
+    /// bytes, not 48.
+    category: u8,
+    /// The key of a message made with `Message::new`. `None` in a catalog
+    /// entry: `key` makes its key from the text.
+    key: Option<&'static str>,
     /// "" in a catalog entry of the wasm build (`Message::catalog`).
     text: &'static str,
     reports_unnecessary: bool,
@@ -76,8 +79,9 @@ pub struct Message {
 
 impl Message {
     /// A message made outside the catalog: `ast::NIL_MESSAGE` and the ad
-    /// hoc messages (code 0, key ""), and the messages that Go removed
-    /// (`diag.rs`). It keeps its key and text on every target.
+    /// hoc messages (code 0, key ""), the messages that Go removed
+    /// (`diag.rs`) and the Effect messages. It keeps its key and text on
+    /// every target.
     #[doc(hidden)]
     #[must_use]
     pub const fn new(
@@ -89,15 +93,15 @@ impl Message {
         elided_in_compatibility_pyramid: bool,
         reports_deprecated: bool,
     ) -> Self {
-        // The wasm build tells catalog entries by their code with no key.
+        // `message_by_key` finds a message by the code that ends its key.
         assert!(
             code == 0 || !key.is_empty(),
             "a message with a code has a key"
         );
         Self {
             code,
-            category,
-            key,
+            category: category_byte(category),
+            key: Some(key),
             text,
             reports_unnecessary,
             elided_in_compatibility_pyramid,
@@ -105,10 +109,10 @@ impl Message {
         }
     }
 
-    /// An entry of the generated `CATALOG`. The wasm build leaves out its
-    /// key (144 KB for all) and text (151 KB): `key` makes the key from the
-    /// text, and `text` reads the texts that `parts/goport_util/build.rs`
-    /// packed.
+    /// An entry of the generated `CATALOG`. It drops `key` (159 KB for
+    /// all), which the generated source keeps as Go has it: `key` makes the
+    /// key from the text. The wasm build also leaves out the text (151 KB):
+    /// `text` reads the texts that `parts/goport_util/build.rs` packed.
     #[doc(hidden)]
     #[must_use]
     pub const fn catalog(
@@ -120,22 +124,26 @@ impl Message {
         elided_in_compatibility_pyramid: bool,
         reports_deprecated: bool,
     ) -> Self {
-        let packed = cfg!(target_family = "wasm");
+        let _ = key;
         Self {
             code,
-            category,
-            key: if packed { "" } else { key },
-            text: if packed { "" } else { text },
+            category: category_byte(category),
+            key: None,
+            text: if cfg!(target_family = "wasm") {
+                ""
+            } else {
+                text
+            },
             reports_unnecessary,
             elided_in_compatibility_pyramid,
             reports_deprecated,
         }
     }
 
-    /// wasm: true for a catalog entry, which has a code and no key.
+    /// wasm: true for a catalog entry, which has no stored key.
     #[cfg(target_family = "wasm")]
     const fn packed(self) -> bool {
-        self.code != 0 && self.key.is_empty()
+        self.key.is_none()
     }
 
     #[must_use]
@@ -145,30 +153,20 @@ impl Message {
 
     #[must_use]
     pub const fn category(self) -> Category {
-        self.category
+        Category(self.category as i32)
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[must_use]
-    pub const fn key(self) -> &'static str {
-        self.key
-    }
-
-    /// wasm: the key. A catalog entry makes it from its text as Go's
-    /// generator does (`message_key`), once.
-    #[cfg(target_family = "wasm")]
+    /// The localization key. A catalog entry makes it from its text as
+    /// Go's generator does (`message_key`), on its first read.
+    // PORT: Go stores the key in each message. Most runs read no catalog
+    // key: `--locale`, build info, key lookups and the compare of two
+    // diagnostics at one place with one code read them.
     #[must_use]
     pub fn key(self) -> &'static str {
-        use std::collections::HashMap;
-        use std::sync::{Mutex, PoisonError};
-        if !self.packed() {
-            return self.key;
+        match self.key {
+            Some(key) => key,
+            None => catalog_key(self.code),
         }
-        static KEYS: Mutex<Option<HashMap<u32, &'static str>>> = Mutex::new(None);
-        let mut keys = KEYS.lock().unwrap_or_else(PoisonError::into_inner);
-        keys.get_or_insert_with(HashMap::new)
-            .entry(self.code)
-            .or_insert_with(|| Box::leak(message_key(self.text(), self.code).into_boxed_str()))
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -358,36 +356,41 @@ pub fn message_by_code(code: u32) -> Option<&'static Message> {
 /// in `EFFECT_CATALOG`, not in the generated TypeScript catalog.
 pub const EFFECT_CODE_START: u32 = 377_000;
 
+// Go: diagnostics/diagnostics.go keyToMessage
 /// Looks up a diagnostic message by its generated localization key.
+// PORT: Go builds a map of every key (`messagesByKey`) on the first lookup;
+// a later entry replaces an earlier one. Every key ends with `_<code>` and
+// the keys are unique (tests `catalog_keys_are_unique` and
+// `lookup_by_key_finds_every_message`), so the message of that code, if its
+// key is `key`, is the one the map gives. A lookup makes only that key.
 #[must_use]
 pub fn message_by_key(key: &str) -> Option<&'static Message> {
-    #[cfg(not(target_family = "wasm"))]
-    return MESSAGES_BY_KEY.get(key).copied();
-    // wasm makes keys on demand, so it finds the message by the code that
-    // ends every key.
-    #[cfg(target_family = "wasm")]
-    key.rsplit_once('_')
-        .and_then(|(_, code)| message_by_code(code.parse().ok()?))
-        .filter(|message| message.key() == key)
+    let (_, code) = key.rsplit_once('_')?;
+    message_by_code(code.parse().ok()?).filter(|message| message.key() == key)
 }
 
-// Go: diagnostics/diagnostics.go messagesByKey
-/// Every catalog message by its key, built on the first key lookup. Most
-/// diagnostics carry a message reference, so only key lookups (Effect
-/// diagnostics, build info) need it.
-// PORT: Go fills the map from `allMessages` and a later entry replaces an
-// earlier one. The keys are unique (test `catalog_keys_are_unique`), so
-// keeping the first entry gives the same map.
-#[cfg(not(target_family = "wasm"))]
-static MESSAGES_BY_KEY: std::sync::LazyLock<rustc_hash::FxHashMap<&'static str, &'static Message>> =
-    std::sync::LazyLock::new(|| {
-        let mut messages = rustc_hash::FxHashMap::default();
-        messages.reserve(CATALOG.len() + EFFECT_CATALOG.len());
-        for message in CATALOG.iter().chain(EFFECT_CATALOG) {
-            messages.entry(message.key()).or_insert(message);
-        }
-        messages
-    });
+/// `category` as the byte that a `Message` keeps. Every message has one of
+/// the four named categories.
+const fn category_byte(category: Category) -> u8 {
+    match category {
+        Category::Warning => 0,
+        Category::Error => 1,
+        Category::Suggestion => 2,
+        Category::Message => 3,
+        _ => panic!("a message has a named category"),
+    }
+}
+
+/// The key of the `CATALOG` message with `code`, made on its first read.
+fn catalog_key(code: u32) -> &'static str {
+    static KEYS: std::sync::OnceLock<Box<[std::sync::OnceLock<Box<str>>]>> =
+        std::sync::OnceLock::new();
+    let index = CATALOG
+        .binary_search_by_key(&code, |message| message.code)
+        .expect("a catalog message");
+    let keys = KEYS.get_or_init(|| CATALOG.iter().map(|_| std::sync::OnceLock::new()).collect());
+    keys[index].get_or_init(|| message_key(CATALOG[index].text(), code).into_boxed_str())
+}
 
 /// The key of a message with `text` and `code`: Go's
 /// `internal/diagnostics/generate.go` `convertPropertyName`. Each `*`,
@@ -395,39 +398,41 @@ static MESSAGES_BY_KEY: std::sync::LazyLock<rustc_hash::FxHashMap<&'static str, 
 /// or digit becomes `_`; runs of `_` become one; leading `_` before a
 /// non-digit and one trailing `_` go; the result is cut to 100 bytes and
 /// gets `_<code>`.
-// PORT: not in Go at run time. The wasm build makes its keys with it.
-#[cfg(any(test, target_family = "wasm"))]
+// PORT: Go runs it in its generator and stores each key. `Message::key`
+// runs it for a catalog entry, in one pass into one string. Go tests
+// `unicode.IsLetter` and `unicode.IsDigit`; on the ASCII catalog texts
+// (test `message_key_makes_every_generated_key` makes every key) that is
+// `is_ascii_alphanumeric`, which needs no Unicode tables in the binary. A
+// byte of a non-ASCII character becomes `_`, and the run joins into one.
 fn message_key(text: &str, code: u32) -> String {
-    let mut name = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '*' => name.push_str("_Asterisk"),
-            '/' => name.push_str("_Slash"),
-            ':' => name.push_str("_Colon"),
-            c if c.is_alphabetic() || c.is_numeric() => name.push(c),
-            _ => name.push('_'),
-        }
+    use std::fmt::Write as _;
+    let mut key = String::with_capacity(text.len() + 16);
+    for &byte in text.as_bytes() {
+        let word = match byte {
+            b'*' => "_Asterisk",
+            b'/' => "_Slash",
+            b':' => "_Colon",
+            byte if byte.is_ascii_alphanumeric() => {
+                key.push(char::from(byte));
+                continue;
+            }
+            _ => "_",
+        };
+        // `_+` -> `_`: each word starts with the `_` that joins a `_` before it.
+        key.push_str(if key.ends_with('_') { &word[1..] } else { word });
     }
-    // `_+` -> `_`
-    let mut collapsed = String::with_capacity(name.len());
-    for c in name.chars() {
-        if !(c == '_' && collapsed.ends_with('_')) {
-            collapsed.push(c);
-        }
+    // `^_+(\D)` -> `$1` (after the join there is at most one `_`)
+    if key.starts_with('_') && key[1..].starts_with(|c: char| !c.is_ascii_digit()) {
+        key.remove(0);
     }
-    // `^_+(\D)` -> `$1` (after the collapse there is at most one `_`)
-    let mut key = match collapsed.strip_prefix('_') {
-        Some(rest) if rest.chars().next().is_some_and(|c| !c.is_ascii_digit()) => rest.to_string(),
-        _ => collapsed,
-    };
     // `_$` -> ``
     if key.ends_with('_') {
         key.pop();
     }
-    if key.len() > 100 {
-        key.truncate(100);
-    }
-    format!("{key}_{code}")
+    // The key is ASCII, so 100 bytes end on a char boundary.
+    key.truncate(100);
+    write!(key, "_{code}").expect("write to a String");
+    key
 }
 
 /// The catalog text reader of the wasm build (`parts/goport_util/build.rs`),
@@ -452,17 +457,28 @@ mod tests {
         assert_eq!(texts, want);
     }
 
-    /// The wasm build makes each key from its text (`message_key`); it
-    /// must give the generated key of every message.
+    /// A catalog entry makes its key from its text (`message_key`); it must
+    /// give the generated key of every message: the key argument of its
+    /// `Message::catalog(` call, which is Go's key.
     #[test]
     fn message_key_makes_every_generated_key() {
-        for message in CATALOG {
-            assert_eq!(
-                message_key(message.text(), message.code()),
-                message.key(),
-                "{}",
-                message.code()
-            );
+        let mut keys = Vec::new();
+        let mut lines = include_str!("catalog.rs").lines();
+        while let Some(line) = lines.next() {
+            if line.trim() == "Message::catalog(" {
+                let key = lines
+                    .nth(2)
+                    .and_then(|line| line.trim().strip_prefix('"')?.strip_suffix("\","))
+                    .expect("a catalog key is a string literal");
+                assert!(!key.contains('\\'), "{key}");
+                keys.push(key);
+            }
+        }
+        assert_eq!(keys.len(), CATALOG.len());
+        for (message, key) in CATALOG.iter().zip(keys) {
+            assert!(message.key.is_none(), "{}", message.code());
+            assert_eq!(message.key(), key, "{}", message.code());
+            assert_eq!(message_key(message.text(), message.code()), key);
         }
     }
 

@@ -663,10 +663,10 @@ proto_json!(marshal DocumentIdentifier {
 impl UnmarshalerFrom for DocumentIdentifier {
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
         let error = |text: String| {
-            Err(wrap_method_error::<Self>(SemanticError::method(
-                ErrorPos::After,
-                text,
-            )))
+            Err(wrap_method_error(
+                SemanticError::method(ErrorPos::After, text),
+                std::any::type_name::<Self>(),
+            ))
         };
         // PORT: Go reports a method error at the start of the value
         // (`/openFiles/0`, not `/openFiles/0/uri`). The port reports it after
@@ -741,13 +741,16 @@ impl UnmarshalerFrom for DocumentIdentifier {
             }
             // Go wraps the error of the method with the type (one token
             // was read).
-            _ => Err(wrap_method_error::<Self>(SemanticError::method(
-                ErrorPos::After,
-                format!(
-                    "DocumentIdentifier: expected string or object, got {}",
-                    kind_string(tok.kind())
+            _ => Err(wrap_method_error(
+                SemanticError::method(
+                    ErrorPos::After,
+                    format!(
+                        "DocumentIdentifier: expected string or object, got {}",
+                        kind_string(tok.kind())
+                    ),
                 ),
-            ))),
+                std::any::type_name::<Self>(),
+            )),
         }
     }
 }
