@@ -485,8 +485,9 @@ struct IdLog {
     /// counter: a worker has one link store (its checker's), so it gives
     /// the ids of a block one after the other, and takes the next block
     /// after the last of them; only the worker moves its block counter, so
-    /// its blocks follow each other, and block k has `k * BLOCK_ID_SIZE`
-    /// block ids before it.
+    /// its blocks follow each other. On a worker that counts its block ids,
+    /// block k has `k * BLOCK_ID_SIZE` block ids before it; else 0, as no
+    /// clock is read (`record_symbol_ids`).
     blocks: Vec<(u64, u64)>,
     /// The block counter of the worker at `record_symbol_ids`.
     first_block: u64,
