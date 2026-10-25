@@ -151,6 +151,11 @@ mod tests {
     use std::sync::Barrier;
     use std::sync::atomic::AtomicUsize;
 
+    /// Rounds of each race test: 500, and 3 under Miri (`cargo miri test
+    /// -p goport_cell`, which checks the unsafe code for data races and
+    /// undefined behavior, but runs about 10,000 times slower).
+    const ROUNDS: usize = if cfg!(miri) { 3 } else { 500 };
+
     /// `f()` once it gives a value; panics after 60 s.
     fn wait_for<T>(mut f: impl FnMut() -> Option<T>) -> T {
         let start = std::time::Instant::now();
@@ -175,7 +180,7 @@ mod tests {
 
     // First-use race: 8 threads set one empty cell at once, each with its
     // own value of 7 equal words, and 8 more read it from before the sets.
-    // One set wins, and every read sees one whole value. 500 rounds.
+    // One set wins, and every read sees one whole value. `ROUNDS` rounds.
     #[test]
     fn first_use_race_gives_one_whole_value() {
         const SETTERS: usize = 8;
@@ -184,7 +189,7 @@ mod tests {
             assert!((1..=SETTERS as u64).contains(&v[0]), "{v:?}");
             assert!(v.iter().all(|&w| w == v[0]), "a whole value: {v:?}");
         };
-        for _ in 0..500 {
+        for _ in 0..ROUNDS {
             let cell = ZeroOnceLock::<[u64; 7]>::new();
             let barrier = Barrier::new(SETTERS + READERS);
             let wins = AtomicUsize::new(0);
@@ -223,11 +228,11 @@ mod tests {
     // 16 threads ask for the same value at once (`get_or_init`, as a
     // `HIGH_BLOCKS` chunk): all get the one kept value, and every value
     // made is dropped once: the lost ones at once, the kept one with the
-    // cell. 500 rounds.
+    // cell. `ROUNDS` rounds.
     #[test]
     fn get_or_init_race_keeps_one_value_and_drops_the_rest() {
         const THREADS: usize = 16;
-        for _ in 0..500 {
+        for _ in 0..ROUNDS {
             let (made, dropped) = (AtomicUsize::new(0), AtomicUsize::new(0));
             let cell = ZeroOnceLock::new();
             let barrier = Barrier::new(THREADS);
