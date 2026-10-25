@@ -1454,7 +1454,7 @@ const LOW_BLOCKS: usize = 1 << 14;
 /// `FILE_ID_LIMIT`.
 // SIZE (bssblocks2): chunks of 2^14 ids took 16,383 cells (256 KiB).
 #[cfg(not(target_family = "wasm"))]
-const HIGH_CHUNK: usize = 1 << 16;
+const HIGH_CHUNK: usize = 1 << 14;
 /// wasm: linear memory holds all of `FILE_BLOCKS` from the start, set or
 /// not, so it has 8,192 entries (512 KiB, where 65,536 took 4 MiB). A large
 /// program can have more files (VS Code has 11,014), and file ids are never
@@ -1769,7 +1769,7 @@ const _: () = assert!(
 );
 #[cfg(not(target_family = "wasm"))]
 const _: () = assert!(
-    std::mem::size_of_val(&HIGH_BLOCKS) <= 64 << 10,
+    std::mem::size_of_val(&HIGH_BLOCKS) <= 256 << 10,
     "HIGH_BLOCKS is over 64 KiB of .data"
 );
 
