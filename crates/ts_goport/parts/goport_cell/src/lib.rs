@@ -5,22 +5,26 @@
 //! bssblocks1: std `Once` starts at INCOMPLETE = 3 (Rust 1.95,
 //! `sys/sync/once/futex.rs`), so the AST registry entry arrays (`ast/store.rs`
 //! `FILE_BLOCKS`, 64-byte entries, and `HIGH_BLOCKS`) as `OnceLock` arrays
-//! were 4,456,384 bytes of `.data`. The value comes first and the state after
-//! it, as in `OnceLock<T>`: the hot entry read of `file_block` is then the
-//! code it was with `OnceLock` (the `once_cell` cell puts its state first, which
-//! made each inlined read 6 bytes longer, +245 KB of `.text` in the release
-//! tsc).
+//! were 4,456,384 bytes of `.data`. The value comes first and a 4-byte state
+//! after it, as in `OnceLock<T>`, and the ready test is a sign test, as short
+//! as the zero test of `OnceLock`: the hot entry read of `file_block` keeps
+//! the code it had with `OnceLock`.
+// PERF: each inlined `file_block` read grew with other cells, in the static
+// musl tsc: the `once_cell` cell (its state word first) by 6 bytes, +245 KB
+// of `.text`; this cell with a byte state compared with 2 (`movzx`, `cmp`) by
+// 2 bytes, +71 KB.
 
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 /// No value. Zero, so that an empty cell is all zero bytes.
-const EMPTY: u8 = 0;
+const EMPTY: i32 = 0;
 /// One `set` owns the value slot and is writing it.
-const WRITING: u8 = 1;
-/// The value is written and never changes again.
-const READY: u8 = 2;
+const WRITING: i32 = 1;
+/// The value is written and never changes again. The only negative state,
+/// so `get` tests the sign.
+const READY: i32 = i32::MIN;
 
 /// A cell that is set at most once and then read by any thread.
 ///
@@ -35,8 +39,8 @@ const READY: u8 = 2;
 pub struct ZeroOnceLock<T> {
     /// Written once, by the `set` that moves the state from `EMPTY`.
     value: UnsafeCell<MaybeUninit<T>>,
-    /// `EMPTY`, `WRITING` or `READY`. It only goes up.
-    state: AtomicU8,
+    /// `EMPTY`, then `WRITING`, then `READY`, and never back.
+    state: AtomicI32,
 }
 
 // SAFETY: as std `OnceLock`: `get` shares `&T` between threads, so `T: Sync`;
@@ -59,14 +63,15 @@ impl<T> ZeroOnceLock<T> {
     pub const fn new() -> Self {
         Self {
             value: UnsafeCell::new(MaybeUninit::uninit()),
-            state: AtomicU8::new(EMPTY),
+            state: AtomicI32::new(EMPTY),
         }
     }
 
     /// The value, or `None` before a `set` has finished.
     #[inline]
     pub fn get(&self) -> Option<&T> {
-        if self.state.load(Ordering::Acquire) == READY {
+        // A sign test: READY is the only negative state.
+        if self.state.load(Ordering::Acquire) < 0 {
             // SAFETY: `set` stores READY (Release) only after it wrote the
             // value, and this Acquire load sees that store, so the value is
             // written and its write is visible here. Nothing writes the value
