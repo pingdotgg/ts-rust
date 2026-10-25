@@ -88,7 +88,9 @@ impl TypeParser<'_> {
                     )
                 })
                 .collect();
-            keyed.sort_by(|(_, i_has), (_, j_has)| j_has.cmp(i_has));
+            crate::gostd::slices::stable_sort_by(&mut keyed, |(_, i_has), (_, j_has)| {
+                j_has.cmp(i_has)
+            });
             let candidates: Vec<SymbolId> = keyed.into_iter().map(|(prop, _)| prop).collect();
 
             // Try each candidate as a variance struct

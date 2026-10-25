@@ -1761,9 +1761,9 @@ mod file_maps_tests {
                 .source_files_found_searching_node_modules
                 .into_iter()
                 .collect();
-            resolved.sort_by(|a, b| a.0.cmp(&b.0));
-            metas.sort_by(|a, b| a.0.0.cmp(&b.0.0));
-            found.sort_by(|a, b| a.0.cmp(&b.0));
+            crate::gostd::slices::stable_sort_by(&mut resolved, |a, b| a.0.cmp(&b.0));
+            crate::gostd::slices::stable_sort_by(&mut metas, |a, b| a.0.0.cmp(&b.0.0));
+            crate::gostd::slices::stable_sort_by(&mut found, |a, b| a.0.cmp(&b.0));
             (resolved, metas, found)
         };
         let serial = sorted(FileMaps::collect(true, walk(false)));
@@ -3242,7 +3242,7 @@ impl PrefetchShared {
             })
             .collect();
         // Stable: files of one size keep the root order.
-        sized.sort_by_key(|(size, _)| *size);
+        crate::gostd::slices::stable_sort_by(&mut sized, |(a, _), (b, _)| a.cmp(b));
         let largest = sized.split_off(sized.len().saturating_sub(count));
         let mut queue = lock(&self.queue);
         let mut pushed = 0;

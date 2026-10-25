@@ -1108,7 +1108,7 @@ struct SortedMapJSON<'a, V>(&'a FxHashMap<String, V>);
 impl<V: MarshalerTo> MarshalerTo for SortedMapJSON<'_, V> {
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         let mut entries: Vec<(&String, &V)> = self.0.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
+        crate::gostd::slices::stable_sort_by(&mut entries, |a, b| a.0.cmp(b.0));
         enc.push('{');
         for (i, (k, v)) in entries.into_iter().enumerate() {
             if i > 0 {

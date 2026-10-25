@@ -46,7 +46,7 @@ pub fn collect_configured_content_mappers<'a>(
             }
         }
     }
-    extensions.sort();
+    crate::gostd::slices::stable_sort_by(&mut extensions, Ord::cmp);
     Rc::new(ConfiguredContentMappers { extensions })
 }
 

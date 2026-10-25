@@ -487,7 +487,7 @@ mod tests {
         let src = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"));
         let mut found = Vec::new();
         visit(src, src, &mut found);
-        found.sort();
+        crate::gostd::slices::stable_sort_by(&mut found, Ord::cmp);
         assert_eq!(
             found,
             [

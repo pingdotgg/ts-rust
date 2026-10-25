@@ -318,7 +318,7 @@ impl SnapshotHost {
                     for dir in node_modules_dirs.values() {
                         patterns.push(get_recursive_glob_pattern(dir));
                     }
-                    patterns.sort();
+                    crate::gostd::slices::stable_sort_by(&mut patterns, Ord::cmp);
                     PatternsAndIgnored {
                         patterns_inside_workspace: patterns,
                         ..Default::default()
