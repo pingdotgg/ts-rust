@@ -3,8 +3,10 @@
 //! `strconv`, `time` timers, `unicode`, `regexp` with its `unicode` tables,
 //! `golang.org/x/text/collate` and `unicode/norm`, the dispatch-thread `go`
 //! queue, the goroutine stack size, `GOMAXPROCS` and the open-file limit),
-//! and the `internal/debug` checks. See PORTING.md "Go runtime".
+//! the `internal/debug` checks and the backtrace text that takes the place
+//! of a goroutine stack (`backtrace`). See PORTING.md "Go runtime".
 
+pub mod backtrace;
 pub mod collate;
 pub mod context;
 pub mod debug;
