@@ -1,8 +1,25 @@
 #!/usr/bin/env bash
-# BOLT of the static musl linux-x64 tsc (release.yml). BOLT puts the hot blocks of each function
-# together, moves the cold blocks out and orders the functions. The program does not change.
-# The profile comes from a counting copy (llvm-bolt -instrument) that runs the training set of
-# scripts/goport/pgo-train.sh: the release runner has no perf branch sampling.
+# BOLT of the static musl linux-x64 tsc (release.yml). BOLT orders the functions, puts the
+# functions with a profile first and the hot blocks of each function together. The program does
+# not change. The profile comes from a counting copy (llvm-bolt -instrument) that runs the
+# training set of scripts/goport/pgo-train.sh: the release runner has no perf branch sampling.
+#
+# Size (size1 bolt, 2026-10-25): the new code goes into the space of the old .text
+# (-use-old-text), so the BOLT tsc is 2.1 MB bigger than the PGO tsc (R236: 50.3 MB against
+# 48.2 MB), not 24 MB (by default llvm-bolt keeps the old .text and adds the new code after it).
+# -use-old-text turns off lite mode: every function is rewritten, the functions with a profile in
+# .text and the others in .text.cold. The 2.1 MB: the jump tables move to a new .rodata (0.7 MB;
+# the PIC jump tables of jemalloc, libunwind and musl make llvm-bolt force -jump-tables=move), the
+# new .gcc_except_table does not fit in the old one (1.0 MB), and the new segment starts after
+# .bss (0.3 MB).
+#   - No -split-functions: with it the code needs about 0.5 MB more than the old .text. Without
+#     it the st cycles:u stay the same (query, hono, zod, VS Code, Sentry: -3.4% against the PGO
+#     tsc, -3.3% with -split-functions); peak RSS of small projects is up to 4% higher.
+#   - -align-functions=16 (the compiler's own; BOLT's default 64 needs more room) and -icf=safe
+#     (folds about 900 functions) leave about 1% of the old .text free. The script prints it.
+#   - -no-huge-pages: no 2 MiB alignment of the code.
+#   When the code does not fit, llvm-bolt prints "--use-old-text failed" and writes a tsc with the
+#   code in a new segment and wrong unwind tables (a caught panic segfaults): the script stops.
 #
 # Usage: bolt-musl.sh <tsc> <train-dir> <out-dir>
 #   tsc        the PGO tsc, linked with --emit-relocs (build-pgo.sh PGO_EMIT_RELOCS=1)
@@ -17,10 +34,10 @@
 #     watcher process every second (-instrumentation-sleep-time=1), each time all of them
 #     (-instrumentation-no-counters-clear). Some watchers spin after their last write and block
 #     every signal but SIGKILL: the script kills them.
-#   - No -split-eh. It moves landing pads to the cold part and gives their LSDA a start address
-#     (LPStart). The musl target unwinds with LLVM libunwind, which logs "lsda at ... does not
-#     start with 0xFF" for such an LSDA. In some cases a caught panic through it then aborts
-#     (relmusl1's test program: "failed to initiate panic"); in others it works.
+#   - No -split-eh (with -split-functions). It moves landing pads to the cold part and gives
+#     their LSDA a start address (LPStart). The musl target unwinds with LLVM libunwind, which logs
+#     "lsda at ... does not start with 0xFF" for such an LSDA. In some cases a caught panic through
+#     it then aborts (relmusl1's test program: "failed to initiate panic"); in others it works.
 #   - The relocation mode needs the static relocations (--emit-relocs).
 # Checks of the BOLT tsc: no BOLT runtime code (no __bolt symbols), one RW PT_GNU_STACK, and
 # check-unwind.py (two caught panics in the tsc with no libunwind line, and every LSDA starts with
@@ -71,9 +88,24 @@ echo "bolt training: $(find "$out/counts" -name 'tsc.*.fdata' | wc -l) count fil
   { tail -5 "$out/merge.log" >&2; exit 1; }
 
 "$llvm/llvm-bolt" "$out/input" -o "$out/bin/tsc" -data="$out/tsc.fdata" \
-  -reorder-blocks=ext-tsp -reorder-functions=cdsort -split-functions -split-all-cold > "$out/bolt.log" 2>&1 ||
+  -reorder-blocks=ext-tsp -reorder-functions=cdsort -use-old-text -no-huge-pages -align-functions=16 \
+  -icf=safe > "$out/bolt.log" 2>&1 ||
   { tail -20 "$out/bolt.log" >&2; exit 1; }
 echo "bolt: $(grep -m1 -o '[0-9]* out of [0-9]* functions in the binary ([0-9.]*%) have non-empty execution profile' "$out/bolt.log" || true)"
+if [[ $(grep -c -e '--use-old-text failed' "$out/bolt.log") != 0 ]]; then
+  echo "error: the new code does not fit in the old .text: $(grep -m1 -o '[0-9]* bytes needed, have [0-9]* bytes available' "$out/bolt.log")" >&2
+  exit 1
+fi
+# sect_end FILE NAME: the end address of section NAME (0 when FILE has none). Ubuntu's awk (mawk)
+# has no strtonum, so bash adds the hex address and size.
+sect_end() {
+  local a s
+  read -r a s < <(readelf -SW "$1" | awk -v n="$2" '{ for (i = 1; i < NF; i++) if ($i == n) print $(i + 2), $(i + 4) }') || true
+  echo $((${a:+16#$a} + ${s:+16#$s} + 0))
+}
+code_end=$(sect_end "$out/bin/tsc" .text.cold)
+((code_end > 0)) || code_end=$(sect_end "$out/bin/tsc" .text)
+echo "bolt: old .text free $(($(sect_end "$out/input" .text) - code_end)) bytes; BOLT tsc $(stat -c %s "$out/bin/tsc") bytes"
 
 if [[ $(nm "$out/bin/tsc" | grep -c '__bolt') != 0 ]]; then
   echo "error: $out/bin/tsc has BOLT runtime symbols (the counting copy?)" >&2
