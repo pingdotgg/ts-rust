@@ -5,13 +5,21 @@
 # training set of scripts/goport/pgo-train.sh: the release runner has no perf branch sampling.
 #
 # Size (size1 bolt, 2026-10-25): the new code goes into the space of the old .text
-# (-use-old-text), so the BOLT tsc is 2.1 MB bigger than the PGO tsc (R236: 50.3 MB against
-# 48.2 MB), not 24 MB (by default llvm-bolt keeps the old .text and adds the new code after it).
+# (-use-old-text), so the BOLT tsc is about 1.1 MB bigger than the PGO tsc without its pad, not
+# 24 MB (by default llvm-bolt keeps the old .text and adds the new code after it).
 # -use-old-text turns off lite mode: every function is rewritten, the functions with a profile in
-# .text and the others in .text.cold. The 2.1 MB: the jump tables move to a new .rodata (0.7 MB;
-# the PIC jump tables of jemalloc, libunwind and musl make llvm-bolt force -jump-tables=move), the
-# new .gcc_except_table does not fit in the old one (1.0 MB), and the new segment starts after
-# .bss (0.3 MB).
+# .text and the others in .text.cold. llvm-bolt writes the new .eh_frame, .eh_frame_hdr and
+# .gcc_except_table in place of the old ones when they fit. The 1.1 MB:
+#   - The jump tables move to a new .rodata (0.7 MB). The PIC jump tables of jemalloc, libunwind
+#     and musl make llvm-bolt force -jump-tables=move, and -skip-funcs does not help: with
+#     -use-old-text llvm-bolt reads every function, the skipped ones too.
+#   - The new segment starts after .bss (0.3 MB of file gap: llvm-bolt puts the new program
+#     header table at file offset = address - first load address). Do not strip the BOLT tsc:
+#     llvm-strip moves the new segment back over the gap, and Linux before 5.18 then gives the
+#     tsc a wrong AT_PHDR (first load address + e_phoff), through which musl finds PT_TLS.
+#   - The pad (64 KiB; `bolt-musl.sh pad`): block reordering splits call-site ranges, so the new
+#     .gcc_except_table is about 2.6% bigger than the old one (R236: 25.8 KB). Without the pad it
+#     does not fit and goes to the new segment (1.0 MB more). The script prints the pad left.
 #   - No -split-functions: with it the code needs about 0.5 MB more than the old .text. Without
 #     it the st cycles:u stay the same (query, hono, zod, VS Code, Sentry: -3.4% against the PGO
 #     tsc, -3.3% with -split-functions); peak RSS of small projects is up to 4% higher.
@@ -21,8 +29,11 @@
 #   When the code does not fit, llvm-bolt prints "--use-old-text failed" and writes a tsc with the
 #   code in a new segment and wrong unwind tables (a caught panic segfaults): the script stops.
 #
+# Usage: bolt-musl.sh pad <out.o>
+#   writes the pad object and prints the rustc flags that link it into the PGO tsc (release.yml
+#   adds them to PGO_RUSTFLAGS). -u keeps the pad from --gc-sections.
 # Usage: bolt-musl.sh <tsc> <train-dir> <out-dir>
-#   tsc        the PGO tsc, linked with --emit-relocs (build-pgo.sh PGO_EMIT_RELOCS=1)
+#   tsc        the PGO tsc, linked with --emit-relocs (build-pgo.sh PGO_EMIT_RELOCS=1) and the pad
 #   train-dir  a pgo-train.sh setup dir
 #   out-dir    new dir; the BOLT tsc is <out-dir>/bin/tsc (with the lib files of a noembed tsc),
 #              the logs and counts stay in <out-dir>
@@ -48,6 +59,13 @@ set -euo pipefail
 case "${1:-}" in
   help | -h | --help)
     sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  pad)
+    (($# == 2)) || { echo "usage: bolt-musl.sh pad <out.o>" >&2; exit 2; }
+    printf '\t.section .gcc_except_table.tsc_lsda_pad,"a",@progbits\n\t.globl tsc_lsda_pad\ntsc_lsda_pad:\n\t.zero 65536\n' |
+      as -o "$2" -
+    echo "-Clink-arg=$2 -Clink-arg=-Wl,-u,tsc_lsda_pad"
     exit 0
     ;;
 esac
@@ -106,6 +124,13 @@ sect_end() {
 code_end=$(sect_end "$out/bin/tsc" .text.cold)
 ((code_end > 0)) || code_end=$(sect_end "$out/bin/tsc" .text)
 echo "bolt: old .text free $(($(sect_end "$out/input" .text) - code_end)) bytes; BOLT tsc $(stat -c %s "$out/bin/tsc") bytes"
+# The new .gcc_except_table in place of the old one: the zeros at its end are the pad left.
+if [[ $(grep -c 'rewriting .gcc_except_table in-place' "$out/bolt.log") != 0 ]]; then
+  "$llvm/llvm-objcopy" -O binary --only-section=.gcc_except_table "$out/bin/tsc" "$out/lsda.bin"
+  echo "bolt: .gcc_except_table in place, pad left $(python3 -c 'import sys; d = open(sys.argv[1], "rb").read(); print(len(d) - len(d.rstrip(b"\0")))' "$out/lsda.bin") bytes"
+else
+  echo "warning: the new .gcc_except_table does not fit in the old one, so it adds about 1 MB: link a bigger pad (bolt-musl.sh pad)" >&2
+fi
 
 if [[ $(nm "$out/bin/tsc" | grep -c '__bolt') != 0 ]]; then
   echo "error: $out/bin/tsc has BOLT runtime symbols (the counting copy?)" >&2

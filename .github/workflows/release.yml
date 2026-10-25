@@ -194,9 +194,11 @@ jobs:
           [[ $target != aarch64-* ]] || echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
           # linux-x64: lust's memfast.c in place of musl's memcpy, memmove, memcmp, bcmp and memchr
           # (memfast.sh), in the PGO build only. The plain tsc keeps musl's, so the PGO check below
-          # also checks memfast against them.
+          # also checks memfast against them. The pad of bolt-musl.sh lets BOLT write its
+          # .gcc_except_table in place of the old one (about 1 MB less).
           if [[ $target == x86_64-unknown-linux-musl ]]; then
             flags=$(crates/ts_goport/scripts/memfast.sh "$RUNNER_TEMP/memfast-wrap.o")
+            flags+=" $(crates/ts_goport/scripts/bolt-musl.sh pad "$RUNNER_TEMP/lsda-pad.o")"
             echo "PGO_RUSTFLAGS=$flags" | tee -a "$GITHUB_ENV"
           fi
       # The plain tsc: the reference of the PGO check below, or the shipped tsc with no-pgo. PGO_LINK is
