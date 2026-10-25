@@ -279,6 +279,7 @@ jobs:
           name: unstripped-tsc-${{ matrix.platform }}
           path: ${{ runner.temp }}/unstripped/tsc
           if-no-files-found: error
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: tsc-${{ matrix.platform }}
