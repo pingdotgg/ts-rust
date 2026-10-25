@@ -2234,7 +2234,7 @@ module.exports.z = "z";
                 .expect("read the corpus directory")
                 .map(|e| e.expect("a corpus entry").path())
                 .collect();
-            entries.sort();
+            crate::gostd::slices::stable_sort_by(&mut entries, Ord::cmp);
             for path in entries {
                 if path.is_dir() {
                     if !path.ends_with("node_modules") {

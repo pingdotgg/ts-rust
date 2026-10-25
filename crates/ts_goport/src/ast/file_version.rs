@@ -376,7 +376,7 @@ pub(crate) fn diagnostic_file_versions<'a>(
     for d in diagnostics {
         note(d, &mut files);
     }
-    files.sort_unstable();
+    crate::gostd::slices::stable_sort_by(&mut files, Ord::cmp);
     files.dedup();
     live_file_versions(files.into_iter())
 }

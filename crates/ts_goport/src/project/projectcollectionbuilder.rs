@@ -1628,7 +1628,7 @@ impl ProjectCollectionBuilder {
             configured_projects.insert(configured_path, entry.clone());
             true
         });
-        configured_project_paths.sort();
+        crate::gostd::slices::stable_sort_by(&mut configured_project_paths, Ord::cmp);
 
         let (project, multiple_candidates) = find_default_configured_project_from_program_inclusion(
             file_name,
@@ -2311,7 +2311,7 @@ impl ProjectCollectionBuilder {
         }
         // Go: slices.Clone, then slices.Sort (the port owns the Vec).
         let mut root_file_names = root_file_names;
-        root_file_names.sort();
+        crate::gostd::slices::stable_sort_by(&mut root_file_names, Ord::cmp);
         self.update_or_create_inferred_project(
             root_file_names,
             compiler_options,
@@ -2608,7 +2608,7 @@ impl ProjectCollectionBuilder {
                             watched_files.extend(dynamic_watched_files);
                         }
                     }
-                    watched_files.sort();
+                    crate::gostd::slices::stable_sort_by(&mut watched_files, Ord::cmp);
                     watched_files.dedup();
                     let mut content_mapper_watched_files: FxHashSet<tspath::Path> =
                         FxHashSet::with_capacity_and_hasher(

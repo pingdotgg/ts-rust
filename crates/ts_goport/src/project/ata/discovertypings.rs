@@ -139,7 +139,7 @@ pub fn discover_typings(
                 module,
             ));
         }
-        modules.sort();
+        crate::gostd::slices::stable_sort_by(&mut modules, Ord::cmp);
         modules.dedup();
     }
     add_inferred_typings(

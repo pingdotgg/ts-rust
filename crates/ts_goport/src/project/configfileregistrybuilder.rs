@@ -418,7 +418,7 @@ impl ConfigFileRegistryBuilder {
             ignored = ignored_external_dirs;
         }
 
-        globs.sort();
+        crate::gostd::slices::stable_sort_by(&mut globs, Ord::cmp);
         let new_root_files_watch = WatchedFiles::clone_(
             root_files_watch.as_deref(),
             PatternsAndIgnored {

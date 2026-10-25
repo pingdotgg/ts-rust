@@ -177,7 +177,7 @@ fn collect_literal_missing_error_tags(
         }
     }
 
-    tags.sort();
+    crate::gostd::slices::stable_sort_by(&mut tags, Ord::cmp);
     Some(tags)
 }
 

@@ -5095,7 +5095,7 @@ impl Server {
             .as_mut()
             .map(|api_sessions| api_sessions.drain().collect())
             .unwrap_or_default();
-        api_sessions.sort_by(|(a, _), (b, _)| a.cmp(b));
+        crate::gostd::slices::stable_sort_by(&mut api_sessions, |(a, _), (b, _)| a.cmp(b));
 
         for (_, state) in api_sessions {
             state.stop();
@@ -5655,7 +5655,7 @@ pub fn parse_content_mapper_contributions(
         }
         result.mappers.push(Rc::new(mapper));
     }
-    result.extensions.sort();
+    crate::gostd::slices::stable_sort_by(&mut result.extensions, Ord::cmp);
     Ok(result)
 }
 

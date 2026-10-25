@@ -166,7 +166,9 @@ pub fn analyze_run_of_exit_to_run_exit(
 
     // PORT: Go `sort.Slice` is not stable; matches with an equal start come
     // from distinct ranges, and the port keeps them in walk order.
-    matches.sort_by(|a, b| a.location.pos().cmp(&b.location.pos()));
+    crate::gostd::slices::stable_sort_by(&mut matches, |a, b| {
+        a.location.pos().cmp(&b.location.pos())
+    });
     matches
 }
 
