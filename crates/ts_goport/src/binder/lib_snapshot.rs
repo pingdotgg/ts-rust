@@ -1147,13 +1147,21 @@ pub(crate) fn write_blob(magic: &[u8; 8], sections: &[(&str, Vec<u8>)]) -> Vec<u
     out
 }
 
+/// Libs with at least `MIN_TEXT_LEN` text bytes that get no section. No
+/// perf9 project uses lib.webworker (the default libs take lib.dom), so its
+/// sections would only add binary size (about 0.42 MB). A project with
+/// `"lib": ["webworker"]` parses and binds it live, with the same output.
+#[cfg(test)]
+const SKIPPED_LIBS: &[&str] = &["lib.webworker.d.ts"];
+
 /// The bundled libs that get a snapshot, largest first: every lib with at
-/// least `MIN_TEXT_LEN` text bytes. The lib parse snapshot uses the same
-/// list.
+/// least `MIN_TEXT_LEN` text bytes, less `SKIPPED_LIBS`. The lib parse
+/// snapshot uses the same list.
 #[cfg(test)]
 pub(crate) fn snapshot_libs() -> Vec<&'static str> {
     let mut libs: Vec<(&'static str, usize)> = bundled::LIB_NAMES
         .iter()
+        .filter(|name| !SKIPPED_LIBS.contains(name))
         .filter_map(|&name| {
             let text = lib_text(name)?;
             (text.len() >= MIN_TEXT_LEN).then_some((name, text.len()))

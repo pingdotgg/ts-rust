@@ -1,15 +1,13 @@
 use crate::format::prelude::*;
 
-use std::sync::Arc;
-
 //
 // Contexts
 //
 
 // Go: format/rulecontext.go:18 optionSelector
 // PORT: Go selectors take `lsutil.FormatCodeSettings` by value; these read it
-// by reference. They are plain fn pointers, so the static rules map stays
-// `Send + Sync`.
+// by reference. They are plain fn pointers, so the static rules can hold
+// them.
 pub type OptionSelector = fn(&lsutil::FormatCodeSettings) -> Tristate;
 // Go: format/rulecontext.go:19 anyOptionSelector
 pub type AnyOptionSelector<T> = fn(&lsutil::FormatCodeSettings) -> T;
@@ -145,44 +143,79 @@ pub fn indent_switch_case_option(options: &lsutil::FormatCodeSettings) -> Trista
 }
 
 // Go: format/rulecontext.go:102 optionEquals
-pub fn option_equals<T: PartialEq + Send + Sync + 'static>(
-    option_name: AnyOptionSelector<T>,
-    option_value: T,
+// PORT: Go is generic over the option type; the one use is the semicolons
+// option, so this takes that type.
+#[must_use]
+pub const fn option_equals(
+    option_name: AnyOptionSelector<lsutil::SemicolonPreference>,
+    option_value: lsutil::SemicolonPreference,
 ) -> ContextPredicate {
-    Arc::new(move |context: &mut FormattingContext| option_name(&context.options) == option_value)
+    ContextPredicate::OptionEquals(option_name, option_value)
 }
 
 // Go: format/rulecontext.go:108 isOptionEnabled
-pub fn is_option_enabled(option_name: OptionSelector) -> ContextPredicate {
-    Arc::new(move |context: &mut FormattingContext| option_name(&context.options).is_true())
+#[must_use]
+pub const fn is_option_enabled(option_name: OptionSelector) -> ContextPredicate {
+    ContextPredicate::OptionEnabled(option_name)
 }
 
 // Go: format/rulecontext.go:114 isOptionDisabled
-pub fn is_option_disabled(option_name: OptionSelector) -> ContextPredicate {
-    Arc::new(move |context: &mut FormattingContext| option_name(&context.options).is_false())
+#[must_use]
+pub const fn is_option_disabled(option_name: OptionSelector) -> ContextPredicate {
+    ContextPredicate::OptionDisabled(option_name)
 }
 
 // Go: format/rulecontext.go:120 isOptionDisabledOrUndefined
-pub fn is_option_disabled_or_undefined(option_name: OptionSelector) -> ContextPredicate {
-    Arc::new(move |context: &mut FormattingContext| {
-        option_name(&context.options).is_false_or_unknown()
-    })
+#[must_use]
+pub const fn is_option_disabled_or_undefined(option_name: OptionSelector) -> ContextPredicate {
+    ContextPredicate::OptionDisabledOrUndefined(option_name)
 }
 
 // Go: format/rulecontext.go:126 isOptionDisabledOrUndefinedOrTokensOnSameLine
-pub fn is_option_disabled_or_undefined_or_tokens_on_same_line(
+#[must_use]
+pub const fn is_option_disabled_or_undefined_or_tokens_on_same_line(
     option_name: OptionSelector,
 ) -> ContextPredicate {
-    Arc::new(move |context: &mut FormattingContext| {
-        option_name(&context.options).is_false_or_unknown() || context.tokens_are_on_same_line()
-    })
+    ContextPredicate::OptionDisabledOrUndefinedOrTokensOnSameLine(option_name)
 }
 
 // Go: format/rulecontext.go:132 isOptionEnabledOrUndefined
-pub fn is_option_enabled_or_undefined(option_name: OptionSelector) -> ContextPredicate {
-    Arc::new(move |context: &mut FormattingContext| {
-        option_name(&context.options).is_true_or_unknown()
-    })
+#[must_use]
+pub const fn is_option_enabled_or_undefined(option_name: OptionSelector) -> ContextPredicate {
+    ContextPredicate::OptionEnabledOrUndefined(option_name)
+}
+
+impl ContextPredicate {
+    /// Runs the predicate: Go `p(context)`. The option arms are the bodies of
+    /// the closures that the helpers above return in Go.
+    pub fn call(self, context: &mut FormattingContext) -> bool {
+        match self {
+            ContextPredicate::Fn(f) => f(context),
+            // Go: format/rulecontext.go:102 optionEquals
+            ContextPredicate::OptionEquals(option_name, option_value) => {
+                option_name(&context.options) == option_value
+            }
+            // Go: format/rulecontext.go:108 isOptionEnabled
+            ContextPredicate::OptionEnabled(option_name) => option_name(&context.options).is_true(),
+            // Go: format/rulecontext.go:114 isOptionDisabled
+            ContextPredicate::OptionDisabled(option_name) => {
+                option_name(&context.options).is_false()
+            }
+            // Go: format/rulecontext.go:120 isOptionDisabledOrUndefined
+            ContextPredicate::OptionDisabledOrUndefined(option_name) => {
+                option_name(&context.options).is_false_or_unknown()
+            }
+            // Go: format/rulecontext.go:126 isOptionDisabledOrUndefinedOrTokensOnSameLine
+            ContextPredicate::OptionDisabledOrUndefinedOrTokensOnSameLine(option_name) => {
+                option_name(&context.options).is_false_or_unknown()
+                    || context.tokens_are_on_same_line()
+            }
+            // Go: format/rulecontext.go:132 isOptionEnabledOrUndefined
+            ContextPredicate::OptionEnabledOrUndefined(option_name) => {
+                option_name(&context.options).is_true_or_unknown()
+            }
+        }
+    }
 }
 
 // Go: format/rulecontext.go:138 isForContext

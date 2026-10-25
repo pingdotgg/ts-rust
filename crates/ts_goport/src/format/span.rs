@@ -4,7 +4,6 @@ use crate::flags_macros::go_enum;
 use crate::frontend::core_textchange::TextChange;
 use crate::frontend::scanner::scanner_p1::{rune_to_char, utf8_decode_rune_in_string};
 use std::cell::Cell;
-use std::sync::Arc;
 
 // Go: format/span.go:20 findEnclosingNode
 /** find node that fully contains given text range */
@@ -204,7 +203,7 @@ pub struct FormatSpanWorker<'t> {
     pub visiting_node_start_line: i32,
     pub visiting_undecorated_node_start_line: i32,
 
-    pub current_rules: Vec<Arc<RuleImpl>>,
+    pub current_rules: Vec<&'static RuleImpl>,
 }
 
 // Go: format/span.go:188 newFormatSpanWorker
@@ -1045,9 +1044,9 @@ impl<'t> FormatSpanWorker<'t> {
             // Apply rules in reverse order so that higher priority rules (which are first in the array)
             // win in a conflict with lower priority rules.
             for i in (0..self.current_rules.len()).rev() {
-                let rule = self.current_rules[i].clone();
+                let rule = self.current_rules[i];
                 line_action = self.apply_rule_edits(
-                    &rule,
+                    rule,
                     previous_item,
                     previous_start_line,
                     current_item,
