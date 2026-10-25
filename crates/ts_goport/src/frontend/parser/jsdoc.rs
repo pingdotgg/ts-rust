@@ -1799,8 +1799,8 @@ impl<'a> Parser<'a> {
                 key,
                 JsDocDiscard {
                     result,
-                    node_count: self.factory.node_count() - node_count,
-                    text_count: self.factory.text_count() - text_count,
+                    node_count: self.factory.node_count().wrapping_sub(node_count),
+                    text_count: self.factory.text_count().wrapping_sub(text_count),
                     identifier_count: self.identifier_count.wrapping_sub(identifier_count),
                     sets_deprecated_tag,
                 },
