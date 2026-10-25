@@ -510,9 +510,9 @@ impl Checker {
     // `&Name` or a `&str` in registers. Rust passes a `TableKey` (16 bytes)
     // by pointer: the caller wrote it with two 8-byte stores just before
     // the call, and the body read it back at once with one 16-byte load,
-    // which the CPU cannot forward from two stores. That stall was about
-    // 1.2% of the Sentry st cycles (the lookups of
-    // discriminate_type_by_discriminable_items).
+    // which the CPU cannot forward from two stores (Sentry st: 31 M such
+    // stalls, most in discriminate_type_by_discriminable_items; with the
+    // get_reduced_apparent_type intersection fast path, -0.5% cycles).
     #[inline(always)]
     pub fn get_property_of_type_ex<'a>(
         &mut self,
