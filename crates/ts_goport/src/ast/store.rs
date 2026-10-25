@@ -1444,9 +1444,11 @@ pub(crate) const FILE_ID_LIMIT: usize = 1 << 28;
 /// `FILE_BLOCKS`; a higher one in a chunk of `HIGH_BLOCKS`.
 // SIZE (bssblocks2): 16,384 entries, 1 MiB of `.data` (65,536 took 4 MiB).
 // It is the smallest power of two above the ids of the largest timing
-// project (Sentry, 12,957 files), so a single program reads no id on the
-// cold path. A language server takes one id per edit and gets there after
-// about 16,000 edits.
+// project (Sentry, 12,958 ids), so a single program reads no id on the
+// cold path. The cold path costs: with 8,192, Sentry and VS Code (11,036
+// ids) took +1.5% and +2.0% single-thread instructions:u. A language server
+// takes one id per edit and gets there after about 16,000 edits; on
+// query-core each later edit took about 7.6% longer than with 65,536.
 #[cfg(not(target_family = "wasm"))]
 const LOW_BLOCKS: usize = 1 << 14;
 /// Entries per `HIGH_BLOCKS` chunk: 4 MiB of entries per chunk, made at the
