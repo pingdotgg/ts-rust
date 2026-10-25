@@ -2367,7 +2367,7 @@ impl<'a> FileNodeReader<'a> {
 // file checks of a program read the config file before the publish: a
 // `paths` diagnostic reads every `paths` key before its own, as Go
 // (`for_each_property_assignment`).
-pub struct BuildStoreReads<'a> {
+pub(crate) struct BuildStoreReads<'a> {
     file: usize,
     store: &'a FileStore,
     /// The store has no alias slot, so an id needs no record read
@@ -2448,8 +2448,10 @@ impl BuildStoreReads<'_> {
 /// `read` on the reads of unpublished store `file` of this thread (built
 /// or detached). `None` when `file` is not such a store (published, of
 /// another thread or synthetic) and when the store is borrowed for a
-/// write. `read` must not make or change nodes of the store.
-pub fn with_build_store_reads<R>(
+/// write. `read` must not make or change nodes of the store: a write in
+/// `read` panics on the store's `RefCell`. Crate-private for that reason:
+/// its one caller is `find_property_assignment` (tsoptions).
+pub(crate) fn with_build_store_reads<R>(
     file: usize,
     read: impl FnOnce(&BuildStoreReads<'_>) -> R,
 ) -> Option<R> {
