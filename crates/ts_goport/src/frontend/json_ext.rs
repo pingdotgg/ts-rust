@@ -697,7 +697,9 @@ pub fn go_type_name<T: ?Sized>() -> String {
     go_type_string(std::any::type_name::<T>())
 }
 
-fn go_type_string(rust: &str) -> String {
+/// `go_type_name` of the Rust type that `rust` (`std::any::type_name`) names.
+/// Cold error paths take the name as a string so that they are not generic.
+pub(crate) fn go_type_string(rust: &str) -> String {
     let (path, args) = match rust.find('<') {
         Some(i) if rust.ends_with('>') => {
             (&rust[..i], split_type_args(&rust[i + 1..rust.len() - 1]))
