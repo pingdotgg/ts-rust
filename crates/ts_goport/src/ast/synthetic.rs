@@ -2013,11 +2013,42 @@ pub fn read_ast_node_miss<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R
     read_ast_node_cold(n, read)
 }
 
-/// `read_ast_node_miss` for a node that is not of the hot file version,
-/// with the miss code once (`read_ast_node_cold_dyn`): `read` runs through
-/// `&mut dyn FnMut`.
-// PERF: astcold1 (size plan C2). One copy per reader type was 258 KB of the
-// PGO tsc (103 copies) and 119 KB of the wasm module (101 copies).
+/// `read_ast_node_miss` for a node that is not of the hot file version. A
+/// synthetic node is read here. A store node goes through
+/// `read_store_node_cold_dyn` with `read` as `&mut dyn FnMut`, so the store
+/// miss code is there once.
+// PERF: astcold1 (size plan C2). With the store miss code in each copy,
+// the 103 copies were 258 KB of the PGO tsc. The synthetic read keeps its
+// direct call: through `dyn` it cost up to +0.14% instructions with emit
+// (hono, effect), where the transforms read many synthetic nodes.
+#[cfg(not(target_family = "wasm"))]
+#[cold]
+#[inline(never)]
+fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
+    if n.file_index() == SYNTHETIC_NODE_FILE {
+        return read(synthetic_ast_node(n).data.view());
+    }
+    let mut read = Some(read);
+    let mut result = None;
+    read_store_node_cold_dyn(n, &mut |node| {
+        result = Some((read.take().expect("the node is read once"))(node));
+    });
+    result.expect("the node is read once")
+}
+
+/// `read_ast_node_cold` of a store node, with one copy for all readers.
+#[cfg(not(target_family = "wasm"))]
+#[cold]
+#[inline(never)]
+fn read_store_node_cold_dyn(n: Node, read: &mut dyn FnMut(NodeData<'_>)) {
+    crate::ast::store::read_store_node_miss(n, read)
+}
+
+/// wasm: `read_ast_node_miss` for a node that is not of the hot file
+/// version, with the miss code once (`read_ast_node_cold_dyn`): `read` runs
+/// through `&mut dyn FnMut`. One copy per reader type was 119 KB of the
+/// module (101 copies).
+#[cfg(target_family = "wasm")]
 #[cold]
 #[inline(never)]
 fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
@@ -2029,7 +2060,8 @@ fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
     result.expect("the node is read once")
 }
 
-/// `read_ast_node_cold` with one copy for all readers.
+/// wasm: `read_ast_node_cold` with one copy for all readers.
+#[cfg(target_family = "wasm")]
 #[cold]
 #[inline(never)]
 fn read_ast_node_cold_dyn(n: Node, read: &mut dyn FnMut(NodeData<'_>)) {
