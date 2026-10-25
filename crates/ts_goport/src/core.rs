@@ -165,18 +165,6 @@ impl Node {
         if file == crate::ast::SYNTHETIC_NODE_FILE {
             return crate::ast::resolve_synthetic_id(node);
         }
-        Self::new_store_slow(file, node)
-    }
-
-    /// `new_slow` for a file that is not the synthetic file.
-    // PERF: synthread1. Out of line, so the synthetic read in `new_slow`
-    // has a small frame (2 saved registers in the goport tsgo, 5 on R237)
-    // and reads the slot with no call: the emit transforms resolve a child
-    // id of factory data there for most child reads (uprobes on R237, VS
-    // Code `--singleThreaded`: 16M more `new_slow` calls with emit than
-    // with `--noEmit`).
-    #[inline(never)]
-    fn new_store_slow(file: usize, node: crate::astdata::NodeId) -> Self {
         // Child ids inside nodes of a ported-parser file are store slots.
         if let Some(n) = crate::ast::try_resolve_store_id(file, node) {
             return n;
