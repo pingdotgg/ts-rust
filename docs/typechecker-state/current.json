@@ -1187,12 +1187,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "a51e16e626f32e9ae",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "a5b3d5d687a7f8d39",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R240 pipeline (candidate.sh side)."
