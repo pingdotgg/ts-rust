@@ -30,11 +30,11 @@ const READY: i32 = i32::MIN;
 ///
 /// Publication as `OnceLock`: `set` writes the value, then stores `READY`
 /// with Release; `get` gives the value only after an Acquire load of
-/// `READY`, so a reader that gets a value sees all of it. Two differences,
-/// which no caller needs: a `set` while another `set` writes returns `Err`
-/// at once (`OnceLock::set` waits for the other one, then returns `Err`),
-/// and `get_or_init` can run `init` on more than one thread at once (one
-/// value is kept, the others are dropped).
+/// `READY`, so a reader that gets a value sees all of it. A `set` that
+/// loses to another `set` waits for it, so after any `set` returns, `get`
+/// gives the value. One difference, which no caller needs: `get_or_init`
+/// can run `init` on more than one thread at once (one value is kept, the
+/// others are dropped).
 #[repr(C)]
 pub struct ZeroOnceLock<T> {
     /// Written once, by the `set` that moves the state from `EMPTY`.
@@ -84,8 +84,8 @@ impl<T> ZeroOnceLock<T> {
         }
     }
 
-    /// Sets the value. `Err(value)` when the cell has a value, or when
-    /// another thread is setting one.
+    /// Sets the value, or gives it back when the cell has one. When another
+    /// thread is setting a value, waits for it first (as `OnceLock::set`).
     ///
     /// # Errors
     ///
@@ -99,6 +99,7 @@ impl<T> ZeroOnceLock<T> {
             .compare_exchange(EMPTY, WRITING, Ordering::Relaxed, Ordering::Relaxed)
             .is_err()
         {
+            self.wait();
             return Err(value);
         }
         // SAFETY: only one compare_exchange moves the state from EMPTY, and
@@ -122,12 +123,18 @@ impl<T> ZeroOnceLock<T> {
         }
         // A lost `set` drops its value here.
         let _ = self.set(init());
+        self.wait()
+    }
+
+    /// The value, once the `set` that claimed the cell has stored READY.
+    /// Only for a cell that is not empty: its setter is between its claim
+    /// and READY, a move of a value that is already made, so the wait is
+    /// short and cannot hang.
+    fn wait(&self) -> &T {
         loop {
             if let Some(value) = self.get() {
                 return value;
             }
-            // Another thread is between its claim and READY: a move of a
-            // value that is already made.
             std::thread::yield_now();
         }
     }
@@ -185,7 +192,8 @@ mod tests {
 
     // First-use race: 8 threads set one empty cell at once, each with its
     // own value of 7 equal words, and 8 more read it from before the sets.
-    // One set wins, and every read sees one whole value. `ROUNDS` rounds.
+    // One set wins, each set returns only once the value is there, and
+    // every read sees one whole value. `ROUNDS` rounds.
     #[test]
     fn first_use_race_gives_one_whole_value() {
         const SETTERS: usize = 8;
@@ -206,7 +214,9 @@ mod tests {
                         if cell.set([t; 7]).is_ok() {
                             wins.fetch_add(1, Ordering::Relaxed);
                         }
-                        check(wait_for(|| cell.get()));
+                        // `set` waits for a set that runs, so the value is
+                        // there now.
+                        check(cell.get().expect("set by this thread or another"));
                     });
                 }
                 for _ in 0..READERS {
