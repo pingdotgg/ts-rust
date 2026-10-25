@@ -399,41 +399,40 @@ fn catalog_key(code: u32) -> &'static str {
 /// non-digit and one trailing `_` go; the result is cut to 100 bytes and
 /// gets `_<code>`.
 // PORT: Go runs it in its generator and stores each key. `Message::key`
-// runs it for a catalog entry. Go tests `unicode.IsLetter` and
-// `unicode.IsDigit`; on the ASCII catalog texts (test
-// `message_key_makes_every_generated_key` makes every key) that is
-// `is_ascii_alphanumeric`, which needs no Unicode tables in the binary.
+// runs it for a catalog entry, in one pass into one string. Go tests
+// `unicode.IsLetter` and `unicode.IsDigit`; on the ASCII catalog texts
+// (test `message_key_makes_every_generated_key` makes every key) that is
+// `is_ascii_alphanumeric`, which needs no Unicode tables in the binary. A
+// byte of a non-ASCII character becomes `_`, and the run joins into one.
 fn message_key(text: &str, code: u32) -> String {
-    let mut name = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '*' => name.push_str("_Asterisk"),
-            '/' => name.push_str("_Slash"),
-            ':' => name.push_str("_Colon"),
-            c if c.is_ascii_alphanumeric() => name.push(c),
-            _ => name.push('_'),
-        }
+    use std::fmt::Write as _;
+    let mut key = String::with_capacity(text.len() + 16);
+    for &byte in text.as_bytes() {
+        let word = match byte {
+            b'*' => "_Asterisk",
+            b'/' => "_Slash",
+            b':' => "_Colon",
+            byte if byte.is_ascii_alphanumeric() => {
+                key.push(char::from(byte));
+                continue;
+            }
+            _ => "_",
+        };
+        // `_+` -> `_`: each word starts with the `_` that joins a `_` before it.
+        key.push_str(if key.ends_with('_') { &word[1..] } else { word });
     }
-    // `_+` -> `_`
-    let mut collapsed = String::with_capacity(name.len());
-    for c in name.chars() {
-        if !(c == '_' && collapsed.ends_with('_')) {
-            collapsed.push(c);
-        }
+    // `^_+(\D)` -> `$1` (after the join there is at most one `_`)
+    if key.starts_with('_') && key[1..].starts_with(|c: char| !c.is_ascii_digit()) {
+        key.remove(0);
     }
-    // `^_+(\D)` -> `$1` (after the collapse there is at most one `_`)
-    let mut key = match collapsed.strip_prefix('_') {
-        Some(rest) if rest.chars().next().is_some_and(|c| !c.is_ascii_digit()) => rest.to_string(),
-        _ => collapsed,
-    };
     // `_$` -> ``
     if key.ends_with('_') {
         key.pop();
     }
-    if key.len() > 100 {
-        key.truncate(100);
-    }
-    format!("{key}_{code}")
+    // The key is ASCII, so 100 bytes end on a char boundary.
+    key.truncate(100);
+    write!(key, "_{code}").expect("write to a String");
+    key
 }
 
 /// The catalog text reader of the wasm build (`parts/goport_util/build.rs`),
