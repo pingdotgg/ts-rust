@@ -506,39 +506,7 @@ impl Checker {
     /// name: a name of property to look up in a given type
     // PORT: `name` is a `&str` or a `&Name` (`TableKey`). With a `Name`, the
     // members lookup compares ids instead of hashing and comparing text.
-    // PERF (sentdisc1): the key goes to the body by its variant, as a
-    // `&Name` or a `&str` in registers. Rust passes a `TableKey` (16 bytes)
-    // by pointer: the caller wrote it with two 8-byte stores just before
-    // the call, and the body read it back at once with one 16-byte load,
-    // which the CPU cannot forward from two stores (Sentry st: 31 M such
-    // stalls, most in discriminate_type_by_discriminable_items; with the
-    // get_reduced_apparent_type intersection fast path, -0.5% cycles).
-    #[inline(always)]
     pub fn get_property_of_type_ex<'a>(
-        &mut self,
-        t: TypeId,
-        name: impl Into<TableKey<'a>>,
-        skip_object_function_property_augment: bool,
-        include_type_only_members: bool,
-    ) -> SymbolId {
-        match name.into() {
-            TableKey::Name(name) => self.get_property_of_type_ex_body(
-                t,
-                name,
-                skip_object_function_property_augment,
-                include_type_only_members,
-            ),
-            TableKey::Text(text) => self.get_property_of_type_ex_body(
-                t,
-                text,
-                skip_object_function_property_augment,
-                include_type_only_members,
-            ),
-        }
-    }
-
-    /// The body of `get_property_of_type_ex`, for a `&Name` or a `&str`.
-    fn get_property_of_type_ex_body<'a>(
         &mut self,
         t: TypeId,
         name: impl Into<TableKey<'a>>,
