@@ -3867,11 +3867,11 @@ fn source_file_may_be_emitted_worker(
 // Go: compiler/emitter.go:518-537 sourceFileMayBeEmitted: the JSON file part
 // PORT: its own function, so the tests below can run it without a loaded
 // program. Like `frontend::compiler::source_file_may_be_emitted`, it uses the
-// Go ports in `frontend::outputpaths` and `frontend::tspath`. Go result to
-// keep: `GetNormalizedAbsolutePath` removes the trailing separator of the
-// common directory (except for a root), so a file under it gets a rooted
-// output path that is never its own path, even when outDir is the common
-// directory.
+// Go ports in `frontend::outputpaths` and `frontend::tspath`. ts#64159
+// (emitter.go:523-535): `GetSourceFileNameInNewDir` takes the path below the
+// common directory with `RelativeFilePathFromDirectory`, so a file that is
+// not under it keeps its name and is not emitted, and a file under it is
+// not emitted when outDir is the common directory.
 fn json_file_may_be_emitted(
     file_name: &str,
     options: &CompilerOptions,
@@ -6849,7 +6849,9 @@ mod tests {
     // expected values come from Go at pin B (16c25522e123): the same calls in
     // a Go test, and for the cases marked "oracle" also a `noEmit`
     // incremental tsgo run, where a JSON file that Go may emit is in
-    // `affectedFilesPendingEmit`.
+    // `affectedFilesPendingEmit`. ts#64159 changed three of them (marked
+    // "pin 3e9236361fa9"): the same calls in a followups79 Go probe at that
+    // pin (`TestFollowups79ProbeD`).
     #[test]
     fn json_file_may_be_emitted_matches_go() {
         // (file, outDir, rootDir, config file path, may be emitted)
@@ -6862,23 +6864,26 @@ mod tests {
             ("/proj/src/data.json", "/proj/dist", "/proj/src", "", true),
             // oracle: outside rootDir, the output path is the file itself.
             ("/proj/data.json", "/proj/dist", "/proj/src", "", false),
-            // oracle: outDir is rootDir.
-            ("/proj/src/data.json", "/proj/src", "/proj/src", "", true),
-            // oracle: outDir is the config file directory.
+            // pin 3e9236361fa9: outDir is rootDir, so the output path is the
+            // file itself (pin B: true).
+            ("/proj/src/data.json", "/proj/src", "/proj/src", "", false),
+            // pin 3e9236361fa9: outDir is the config file directory (pin B:
+            // true).
             (
                 "/proj/src/data.json",
                 "/proj",
                 "",
                 "/proj/tsconfig.json",
-                true,
+                false,
             ),
-            // oracle: the path starts with rootDir, but not at a separator.
+            // pin 3e9236361fa9: the path starts with rootDir, but not at a
+            // separator, so it is outside rootDir (pin B: true).
             (
                 "/proj/src-data/data.json",
                 "/proj/dist",
                 "/proj/src",
                 "",
-                true,
+                false,
             ),
             // A root keeps its separator.
             ("/data.json", "/", "/", "", false),

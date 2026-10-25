@@ -1413,3 +1413,70 @@ fn test_content_mapper_project_error_diagnostics() {
     }
     t.finish();
 }
+
+/// TS6059 for a dynamic file outside `rootDir` explains why the file is in
+/// the program. Go (program.go:1861) keys the include reason with
+/// `CaseSensitivity.PathKey`, which keeps the case of an encoded dynamic
+/// name. The answers are those of a followups79 probe of Go
+/// `GetProgramDiagnostics` at 3e9236361fa9, the same on both file systems.
+/// Each file system runs in a child process of its own: the map file system
+/// is installed once per process.
+// PORT: no Go counterpart.
+fn root_dir_diagnostic_of_dynamic_file(case_sensitive: bool) -> Vec<String> {
+    fn codes(diagnostic: &Diagnostic) -> String {
+        let chain: Vec<String> = diagnostic.message_chain.iter().map(codes).collect();
+        format!("{}[{}]", diagnostic.code, chain.join(","))
+    }
+    let map_fs = MapFs::from_map(Vec::<(String, MapFile)>::new(), case_sensitive);
+    install_map_fs(&map_fs, "/");
+    let _ = map_fs.fs().write_file("/src/a.ts", "export const y = 2;");
+    let _ = map_fs
+        .fs()
+        .write_file(ROOT_DIR_DYNAMIC_FILE, "export const z = 1;");
+    let program = new_program(
+        map_fs.fs(),
+        "/",
+        &["/src/a.ts", ROOT_DIR_DYNAMIC_FILE],
+        CompilerOptions {
+            skip_default_lib_check: Tristate::True,
+            root_dir: "/src".to_string(),
+            out_dir: "/out".to_string(),
+            ..Default::default()
+        },
+    );
+    ls_program::get_program_diagnostics(&program)
+        .iter()
+        .filter(|diagnostic| diagnostic.code == 6059)
+        .map(|diagnostic| format!("{} {}", codes(diagnostic), diagnostic.message_args[0]))
+        .collect()
+}
+
+const ROOT_DIR_DYNAMIC_FILE: &str = "^/~ts-uri~/custom/Authority/Src/A.ts";
+
+#[test]
+fn test_root_dir_diagnostic_of_dynamic_file_explains_include_case_insensitive() {
+    in_child(
+        module_path!(),
+        "test_root_dir_diagnostic_of_dynamic_file_explains_include_case_insensitive",
+        || {
+            assert_eq!(
+                root_dir_diagnostic_of_dynamic_file(false),
+                [format!("6059[1430[1427[]]] {ROOT_DIR_DYNAMIC_FILE}")]
+            );
+        },
+    );
+}
+
+#[test]
+fn test_root_dir_diagnostic_of_dynamic_file_explains_include_case_sensitive() {
+    in_child(
+        module_path!(),
+        "test_root_dir_diagnostic_of_dynamic_file_explains_include_case_sensitive",
+        || {
+            assert_eq!(
+                root_dir_diagnostic_of_dynamic_file(true),
+                [format!("6059[1430[1427[]]] {ROOT_DIR_DYNAMIC_FILE}")]
+            );
+        },
+    );
+}

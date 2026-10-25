@@ -339,17 +339,20 @@ impl ResolutionState<'_> {
                     crate::frontend::vfs::vfsmatch::UNLIMITED_DEPTH,
                 );
                 for file in &files {
-                    let mut logical_file = get_relative_path_from_directory(
+                    // Go resolver.go:2526 RelativeFilePathFromDirectory: a
+                    // file outside the package directory is skipped.
+                    let Some(relative_file) = relative_path_within_directory(
                         &package_json.package_directory,
                         file,
-                        &ComparePathsOptions {
-                            use_case_sensitive_file_names: case_sensitive,
-                            ..Default::default()
-                        },
-                    );
-                    if dynamic_package {
-                        logical_file = decode_dynamic_uri_path(&logical_file);
-                    }
+                        self.resolver.host.fs().use_case_sensitive_file_names(),
+                    ) else {
+                        continue;
+                    };
+                    let logical_file = if dynamic_package {
+                        decode_dynamic_uri_path(&relative_file)
+                    } else {
+                        relative_file.into_owned()
+                    };
                     let (mut matched_star, ok) = self.get_matched_star_for_pattern_entrypoint(
                         &logical_file,
                         &leading_slice,
@@ -367,8 +370,9 @@ impl ResolutionState<'_> {
                     if resolved_subpath.is_empty() {
                         continue;
                     }
-                    let module_specifier =
-                        crate::frontend::tspath::resolve_path(package_name, &[resolved_subpath]);
+                    // Go resolver.go:2550: the package name and the subpath
+                    // joined with "/", not resolved.
+                    let module_specifier = format!("{package_name}/{resolved_subpath}");
                     entrypoints.push(self.resolver.create_resolved_entrypoint_handling_symlink(
                         file,
                         &module_specifier,
