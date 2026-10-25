@@ -1864,7 +1864,8 @@ pub fn catch_up_alias_resolver_checker(symbols: &mut SymbolArena) {
 // this joins their files.
 pub fn bind_all() {
     let program = prog();
-    held_tables(program).bound_symbols.get_or_init(|| {
+    let tables = held_tables(program);
+    tables.bound_symbols.get_or_init(|| {
         let unbound: Vec<Node> = program
             .source_files()
             .filter(|file| file.file_bind.get().is_none())
@@ -1892,6 +1893,13 @@ pub fn bind_all() {
             Arc::clone(&lineage.symbols)
         });
         give_private_name_class_ids(&symbols, &unbound, program.single_threaded());
+        // Every program file is bound now, by this program or an earlier
+        // one (a kept parse): mark the program bound, so its include
+        // processor reads the bound CommonJS indicator from here on
+        // (`GoSharedState::mark_program_bound`).
+        if let Some(go) = &tables.go {
+            go.mark_program_bound();
+        }
         symbols
     });
 }
@@ -4229,6 +4237,13 @@ fn checker_count() -> usize {
 // changes no state that the threads copied (`WorkerSeed`).
 fn create_checkers() -> CheckerPool {
     bind_all();
+    // Go builds the include processor diagnostics at their first read, and
+    // a checker reads them only after the bind that its creation runs. The
+    // checker threads read the copy that this thread builds here, after the
+    // bind (`go_frontend::fill_include_diagnostics`).
+    if let Some(np) = go_frontend_program() {
+        go_frontend::fill_include_diagnostics(&np);
+    }
     let count = checker_count();
     let pool = start_checkers(count);
     let program = prog();
@@ -5408,6 +5423,7 @@ pub fn get_program_diagnostics() -> Vec<Diagnostic> {
     };
     // Go builds the include processor diagnostics here.
     go.include_processor.mark_diagnostics_read();
+    go_frontend::fill_include_diagnostics(&go);
     let mut diagnostics = go.program_diagnostics.clone();
     // #4712
     diagnostics.extend(content_mapper_diagnostics());

@@ -1297,7 +1297,7 @@ impl FilesParser {
                     if let Some(tasks_seen_by_name_ignore_case) =
                         self.tasks_seen_by_name_ignore_case.as_mut()
                     {
-                        let path_lower_case = to_file_name_lower_case(&t.path);
+                        let path_lower_case = t.path.case_insensitive_key();
                         // PERF (collect1): one lookup (Go: a get, then a set).
                         let first = match tasks_seen_by_name_ignore_case.entry(path_lower_case) {
                             std::collections::hash_map::Entry::Occupied(entry) => {
