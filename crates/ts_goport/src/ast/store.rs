@@ -1732,21 +1732,18 @@ static KIND_OF_WORD: [SyntaxKind; 512] = {
 };
 
 /// std `OnceLock` whose empty state is all zero bytes, for the registry
-/// entries (`FILE_BLOCKS`, `HIGH_BLOCKS`): once_cell's `sync::OnceCell`,
-/// the type that std's `OnceLock` was made from. It has the same `get`,
-/// `set` and `get_or_init`, and the same publication: `set` stores its
-/// "complete" state with Release after it writes the value, and `get`
-/// gives the value only after an Acquire load of that state, so a reader
-/// never sees part of a value. A `set` or `get_or_init` while another one
-/// runs waits for it.
+/// entries (`FILE_BLOCKS`, `HIGH_BLOCKS`): the same `get`, `set` and
+/// `get_or_init`, and the same publication (`set` stores its ready state
+/// with Release after it writes the value, `get` gives the value only after
+/// an Acquire load of that state). The crate goport_cell holds its unsafe
+/// code, so this crate keeps `unsafe_code = "forbid"`.
 // bssblocks1: std `Once` starts at INCOMPLETE = 3 (Rust 1.95,
 // `sys/sync/once/futex.rs`), so the two arrays of `OnceLock`s were
-// 4,456,384 bytes of `.data` in the file. once_cell starts at a null state
-// pointer and a `None` value, so they are `.bss`, which takes no file
-// bytes. The crate forbids unsafe code, so the cell comes from once_cell
-// and is not our own. A once_cell version whose empty state is not zero
-// puts the arrays back in `.data`: check `readelf -S` after a bump.
-type ZeroOnceLock<T> = once_cell::sync::OnceCell<T>;
+// 4,456,384 bytes of `.data` in the file. Empty `ZeroOnceLock`s are zero
+// bytes, so the arrays are `.bss`. Its value comes first and its state
+// after it, as in `OnceLock<FileBlock>`, so the hot read of `file_block`
+// keeps its code size.
+use goport_cell::ZeroOnceLock;
 
 /// One `FileBlock` and its once state in one cache line.
 #[repr(align(64))]
