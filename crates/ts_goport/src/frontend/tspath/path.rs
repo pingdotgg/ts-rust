@@ -1164,6 +1164,20 @@ pub fn to_file_name_lower_case(file_name: &str) -> String {
     })
 }
 
+impl Path {
+    // Go: tspath/pathkey.go:84 PathKey.CaseInsensitiveKey: an encoded
+    // dynamic name keeps its case, as its path key does.
+    // PORT: the key is a `String`, the key type of the walk's
+    // `tasksSeenByNameIgnoreCase`.
+    #[must_use]
+    pub fn case_insensitive_key(&self) -> String {
+        if is_encoded_dynamic_file_name(&self.0) {
+            return self.0.clone();
+        }
+        to_file_name_lower_case(&self.0)
+    }
+}
+
 // Go: tspath/path.go:723 ToPath (at 673a5f17d713;
 // ts#64159 makes it CaseSensitivity.PathKey, tspath/pathkey.go:43)
 // ts#64544: an encoded dynamic file name keeps its case (see
@@ -1943,23 +1957,13 @@ pub fn contains_path_key(parent: &str, child: &str) -> bool {
 }
 
 impl Path {
-    // Go: tspath/path.go:1111 Path.ContainsPath (at 673a5f17d713; ts#64159
-    // makes it PathKey.ContainsPath, pathkey.go:155: `contains_path_key`)
+    // Go: tspath/pathkey.go:155 PathKey.ContainsPath (ts#64159)
     // ContainsPath checks whether child is contained within or equal to p.
-    // Since Path values are already rooted, reduced, and case-canonicalized,
-    // this is a simple string prefix check.
-    // PORT: the roots compare exactly here; Go N' compares them without case
-    // ("C:/x" holds "c:/x/a" on a case-sensitive file system).
+    // PORT: `Path` is Go's `PathKey` (the pin has no `Path` type), so this is
+    // `contains_path_key`: the roots compare without case ("C:/x" holds
+    // "c:/x/a" on a case-sensitive file system).
     pub fn contains_path(&self, child: &Path) -> bool {
-        let p = self.0.as_bytes();
-        let c = child.0.as_bytes();
-        if p.is_empty() {
-            return false;
-        }
-        self == child
-            || c.len() > p.len()
-                && c.starts_with(p)
-                && (p[p.len() - 1] == b'/' || c[p.len()] == b'/')
+        contains_path_key(&self.0, &child.0)
     }
 }
 

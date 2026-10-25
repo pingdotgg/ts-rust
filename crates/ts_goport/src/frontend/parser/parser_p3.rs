@@ -743,6 +743,12 @@ impl<'a> Parser<'a> {
             false, /*stopOnStartOfClassStaticBlock*/
         );
         self.context_flags = save_context_flags;
+        // PORT: not in Go (bindgapcost1). Each decorated parameter of a file
+        // is made here or is a reparse clone of one made here, so a file
+        // without this mark has none (`ParsedSourceFile::has_decorated_parameter`).
+        if modifiers.is_some() && modifiers.nodes().iter().any(is_decorator) {
+            self.has_decorated_parameter = true;
+        }
         if self.token == SyntaxKind::ThisKeyword {
             let name = self.create_identifier(true /*isIdentifier*/);
             let type_node = self.parse_type_annotation();

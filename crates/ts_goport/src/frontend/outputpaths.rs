@@ -414,8 +414,8 @@ fn get_output_path_without_changing_extension(
 
 // Go: outputpaths/outputpaths.go:175 GetSourceFilePathInNewDirWorker (at 673a5f17d713;
 // ts#64159 merges it into GetSourceFileNameInNewDir, outputpaths/outputpaths.go:221)
-// tsgo#4900: `TrimFilePathPrefix` cuts the common source directory by runes,
-// not by its byte length.
+// tsgo#4900: `TrimFilePathPrefix` (in `relative_path_within_directory`) cuts
+// the common source directory by runes, not by its byte length.
 pub fn get_source_file_path_in_new_dir_worker(
     file_name: &str,
     new_dir_path: &str,
@@ -429,13 +429,16 @@ pub fn get_source_file_path_in_new_dir_worker(
     if source_file_path == common_source_directory {
         return source_file_path;
     }
-    match trim_file_path_prefix(
-        &source_file_path,
+    // ts#64159 (outputpaths.go:225): `RelativeFilePathFromDirectory`. A file
+    // that is not under the common source directory keeps its name. The
+    // directory can end in a separator or not.
+    match relative_path_within_directory(
         common_source_directory,
+        &source_file_path,
         use_case_sensitive_file_names,
     ) {
-        Some(trimmed) => combine_paths(new_dir_path, &[&trimmed]),
-        None => combine_paths(new_dir_path, &[&source_file_path]),
+        Some(relative) => combine_paths(new_dir_path, &[&relative]),
+        None => source_file_path,
     }
 }
 

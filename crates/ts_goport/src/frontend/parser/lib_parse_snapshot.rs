@@ -894,6 +894,7 @@ impl<'a> Decoder<'a> {
             text_count: self.usize()?,
             common_js_module_indicator: self.node()?,
             external_module_indicator: self.node()?,
+            has_decorated_parameter: self.flag()?,
             // A lib file is never freed.
             version: std::cell::OnceCell::new(),
         })
@@ -1551,6 +1552,7 @@ impl Encoder {
             text_count,
             common_js_module_indicator,
             external_module_indicator,
+            has_decorated_parameter,
             version: _,
         } = file;
         if *store != self.store {
@@ -1623,6 +1625,7 @@ impl Encoder {
         self.count(*text_count);
         self.node(*common_js_module_indicator)?;
         self.node(*external_module_indicator)?;
+        self.u8(u8::from(*has_decorated_parameter));
         Ok(())
     }
 }
