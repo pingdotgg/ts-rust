@@ -963,6 +963,18 @@ impl SyntheticArena {
     // t5, t6); out of line it is +0.15% there, with the same emit gain.
     #[inline(never)]
     fn node(&self, n: Node) -> &SyntheticNode {
+        self.node_inline(n)
+    }
+
+    /// `node`, inlined: for the few readers that the emit transforms call
+    /// for each node they visit (`synthetic_kind`, `with_node`,
+    /// `synthetic_ast_node`, `synthetic_list_of`). Each has one copy, so
+    /// this adds no code at the field read sites.
+    // PERF: synthread1. uprobes on R237, VS Code `--singleThreaded` with
+    // emit: 124M `node` calls more than with `--noEmit` (40M for `kind`,
+    // 32M for node data, 17M for `loc`).
+    #[inline(always)]
+    fn node_inline(&self, n: Node) -> &SyntheticNode {
         match self.slot(slot_index(n)) {
             Slot::Node(s) => s,
             other => not_a_node_slot(other),
@@ -970,6 +982,10 @@ impl SyntheticArena {
     }
 
     /// The Go node that synthetic-space id `index` stands for.
+    // PERF: synthread1. Inlined into its few callers (`resolve_synthetic_id`,
+    // which `Node::new_slow` calls for each child id of factory data, and
+    // the list reads): out of line it was one more call per child id.
+    #[inline(always)]
     fn resolve(&self, index: usize) -> Node {
         // The nil id, also in an arena with no slot yet.
         if index == NIL_SLOT as usize {
@@ -1728,6 +1744,12 @@ pub fn is_synthetic_node(n: Node) -> bool {
 
 /// Hook for `Node::new(SYNTHETIC_NODE_FILE, id)`: the Go node that a child id
 /// inside synthetic `NodeData` stands for.
+// PERF: synthread1. Inlined into `Node::new_slow`, whose store path is out
+// of line, so this read has a small frame there (uprobes on R237, VS Code
+// `--singleThreaded`: 16M more `new_slow` calls with emit than with
+// `--noEmit`; bpftrace, TypeORM: 73% of them are factory nodes, 27% parsed
+// nodes, through their alias slots).
+#[inline]
 #[must_use]
 pub fn resolve_synthetic_id(id: crate::astdata::NodeId) -> Node {
     ARENA.with(|a| a.borrow().resolve(id.index()))
@@ -1735,7 +1757,7 @@ pub fn resolve_synthetic_id(id: crate::astdata::NodeId) -> Node {
 
 /// Reads the node slot of a synthetic handle.
 fn with_node<R>(n: Node, f: impl FnOnce(&SyntheticNode) -> R) -> R {
-    ARENA.with(|a| f(a.borrow().node(n)))
+    ARENA.with(|a| f(a.borrow().node_inline(n)))
 }
 
 /// Writes the node slot of a synthetic handle. Panics on a parsed node.
@@ -1780,7 +1802,7 @@ impl std::ops::Deref for HeldNode {
 fn synthetic_ast_node(n: Node) -> HeldNode {
     ARENA.with(|a| {
         let a = a.borrow();
-        let i = a.node(n).data as usize;
+        let i = a.node_inline(n).data as usize;
         HeldNode {
             chunk: Rc::clone(a.datas.at(i / DATA_CHUNK)),
             cell: i % DATA_CHUNK,
@@ -2323,7 +2345,7 @@ pub fn synthetic_loc(n: Node) -> TextRange {
 pub fn synthetic_kind(n: Node) -> SyntaxKind {
     ARENA.with(|a| {
         let a = a.borrow();
-        let s = a.node(n);
+        let s = a.node_inline(n);
         debug_assert_eq!(s.kind, a.data(s.data).kind, "synthetic slot kind");
         s.kind
     })
@@ -2381,7 +2403,7 @@ pub enum SyntheticList {
 pub fn synthetic_list_of(n: Node, sel: ListSel) -> Option<Option<SyntheticList>> {
     ARENA.with(|a| {
         let a = a.borrow();
-        let data = a.node(n).data;
+        let data = a.node_inline(n).data;
         sel(a.data(data).data.view()).map(|l| {
             l.map(|l| SyntheticList::Own {
                 index: l.index() as u32,
