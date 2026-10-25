@@ -368,9 +368,12 @@ macro_rules! bundled_lib {
     };
 }
 
-/// `const_hash` of `text` for a snapshot lib (`SNAPSHOT_TEXT_MIN`), else 0.
-/// Only the three snapshot libs are hashed, so the compile-time evaluation
-/// stays short (about 3 s for 3.4 MB).
+/// `const_hash` of `text` for a lib of at least `SNAPSHOT_TEXT_MIN` bytes,
+/// else 0. Only these three libs are hashed, so the compile-time evaluation
+/// stays short (about 3 s for 3.4 MB). Two of them (lib.dom, lib.es5) get
+/// snapshot sections. lib.webworker gets none
+/// (`binder::lib_snapshot::SKIPPED_LIBS`), so no key check reads its hash
+/// at run time.
 #[cfg(not(target_family = "wasm"))]
 const fn snapshot_text_hash(text: &str) -> u64 {
     if text.len() >= SNAPSHOT_TEXT_MIN {

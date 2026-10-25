@@ -203,9 +203,136 @@ impl CommandLineOption {
     }
 }
 
-/// Leaks a declaration so it has the Go pointer lifetime.
-fn opt(o: CommandLineOption) -> &'static CommandLineOption {
-    Box::leak(Box::new(o))
+/// One declaration of a static option list (here and in decls.rs) as const
+/// data: the CommandLineOption fields that the lists set, with a Copy default
+/// value. `leak` makes the CommandLineOption.
+// PORT: Go declares the lists as `*CommandLineOption` literals. Built in
+// code, each literal was a few hundred bytes of machine code; as static data
+// each list is one table, and its LazyLock leaks one CommandLineOption per
+// entry, so an option has one address in every list (Go pointer identity).
+// A message is the address of its `diag` static (`&diag::X`), and `leak`
+// reads the static: Go compares `*diagnostics.Message` pointers (help and
+// showConfig use `std::ptr::eq`), and a `&Message` copied at compile time
+// into this table is not the pointer that the static holds.
+#[derive(Clone, Copy)]
+pub(crate) struct OptionDecl {
+    pub name: &'static str,
+    pub short_name: &'static str,
+    pub kind: CommandLineOptionKind,
+    pub is_file_path: bool,
+    pub is_ts_config_only: bool,
+    pub is_command_line_only: bool,
+    pub description: Option<&'static &'static Message>,
+    pub default_value_description: DefaultValue,
+    pub show_in_simplified_help_view: bool,
+    pub category: Option<&'static &'static Message>,
+    pub extra_validation: ExtraValidation,
+    pub min_value: i32,
+    pub allow_config_dir_template_substitution: bool,
+    pub affects_declaration_path: bool,
+    pub affects_program_structure: bool,
+    pub affects_semantic_diagnostics: bool,
+    pub affects_build_info: bool,
+    pub affects_bind_diagnostics: bool,
+    pub affects_source_file: bool,
+    pub affects_module_resolution: bool,
+    pub affects_emit: bool,
+    pub allow_js_flag: bool,
+    pub strict_flag: bool,
+    pub transpile_option_value: Tristate,
+    pub list_preserve_falsy_values: bool,
+}
+
+/// The `DefaultValueDescription` values of the static declarations, as
+/// CompilerOptionsValue variants that are Copy (`String` is a static text,
+/// `Message` the address of a `diag` static, as in OptionDecl).
+#[derive(Clone, Copy)]
+pub(crate) enum DefaultValue {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    String(&'static str),
+    Message(&'static &'static Message),
+    Tristate(Tristate),
+    ScriptTarget(ScriptTarget),
+}
+
+impl DefaultValue {
+    fn value(self) -> CompilerOptionsValue {
+        match self {
+            DefaultValue::Nil => CompilerOptionsValue::Nil,
+            DefaultValue::Bool(b) => CompilerOptionsValue::Bool(b),
+            DefaultValue::Int(i) => CompilerOptionsValue::Int(i),
+            DefaultValue::String(s) => CompilerOptionsValue::String(s.to_string()),
+            DefaultValue::Message(m) => CompilerOptionsValue::Message(*m),
+            DefaultValue::Tristate(t) => CompilerOptionsValue::Tristate(t),
+            DefaultValue::ScriptTarget(t) => CompilerOptionsValue::ScriptTarget(t),
+        }
+    }
+}
+
+impl OptionDecl {
+    /// The zero value of every field, as `CommandLineOption::default()`.
+    pub const DEFAULT: OptionDecl = OptionDecl {
+        name: "",
+        short_name: "",
+        kind: CommandLineOptionKind(""),
+        is_file_path: false,
+        is_ts_config_only: false,
+        is_command_line_only: false,
+        description: None,
+        default_value_description: DefaultValue::Nil,
+        show_in_simplified_help_view: false,
+        category: None,
+        extra_validation: ExtraValidation::NONE,
+        min_value: 0,
+        allow_config_dir_template_substitution: false,
+        affects_declaration_path: false,
+        affects_program_structure: false,
+        affects_semantic_diagnostics: false,
+        affects_build_info: false,
+        affects_bind_diagnostics: false,
+        affects_source_file: false,
+        affects_module_resolution: false,
+        affects_emit: false,
+        allow_js_flag: false,
+        strict_flag: false,
+        transpile_option_value: Tristate::Unknown,
+        list_preserve_falsy_values: false,
+    };
+
+    /// Makes the declaration's CommandLineOption and leaks it so it has the
+    /// Go pointer lifetime.
+    pub(crate) fn leak(&self) -> &'static CommandLineOption {
+        Box::leak(Box::new(CommandLineOption {
+            name: self.name,
+            short_name: self.short_name,
+            kind: self.kind,
+            is_file_path: self.is_file_path,
+            is_ts_config_only: self.is_ts_config_only,
+            is_command_line_only: self.is_command_line_only,
+            description: self.description.copied(),
+            default_value_description: self.default_value_description.value(),
+            show_in_simplified_help_view: self.show_in_simplified_help_view,
+            category: self.category.copied(),
+            extra_validation: self.extra_validation,
+            min_value: self.min_value,
+            allow_config_dir_template_substitution: self.allow_config_dir_template_substitution,
+            affects_declaration_path: self.affects_declaration_path,
+            affects_program_structure: self.affects_program_structure,
+            affects_semantic_diagnostics: self.affects_semantic_diagnostics,
+            affects_build_info: self.affects_build_info,
+            affects_bind_diagnostics: self.affects_bind_diagnostics,
+            affects_source_file: self.affects_source_file,
+            affects_module_resolution: self.affects_module_resolution,
+            affects_emit: self.affects_emit,
+            allow_js_flag: self.allow_js_flag,
+            strict_flag: self.strict_flag,
+            transpile_option_value: self.transpile_option_value,
+            list_preserve_falsy_values: self.list_preserve_falsy_values,
+            element_options: CommandLineOptionNameMap::default(),
+        }))
+    }
 }
 
 // CommandLineOption.Elements()
@@ -214,128 +341,130 @@ fn opt(o: CommandLineOption) -> &'static CommandLineOption {
 pub static COMMAND_LINE_OPTION_ELEMENTS: LazyLock<
     FxHashMap<&'static str, &'static CommandLineOption>,
 > = LazyLock::new(|| {
-    [
+    static DECLS: &[(&str, OptionDecl)] = &[
         (
             "lib",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "lib",
                 kind: CommandLineOptionKind::ENUM, // libMap,
-                default_value_description: CompilerOptionsValue::Tristate(Tristate::Unknown),
-                ..Default::default()
-            }),
+                default_value_description: DefaultValue::Tristate(Tristate::Unknown),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "rootDirs",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "rootDirs",
                 kind: CommandLineOptionKind::STRING,
                 is_file_path: true,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "typeRoots",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "typeRoots",
                 kind: CommandLineOptionKind::STRING,
                 is_file_path: true,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "types",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "types",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "moduleSuffixes",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "moduleSuffixes",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "customConditions",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "condition",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "plugins",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "plugin",
                 kind: CommandLineOptionKind::OBJECT,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         // For tsconfig root options
         (
             "references",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "references",
                 kind: CommandLineOptionKind::OBJECT,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         // tsgo#4712
         (
             "contentMappers",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "contentMappers",
                 kind: CommandLineOptionKind::OBJECT,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "files",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "files",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "include",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "include",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "exclude",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "exclude",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         (
             "extends",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "extends",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
         // Test infra options
         (
             "libFiles",
-            opt(CommandLineOption {
+            OptionDecl {
                 name: "libFiles",
                 kind: CommandLineOptionKind::STRING,
-                ..Default::default()
-            }),
+                ..OptionDecl::DEFAULT
+            },
         ),
-    ]
-    .into_iter()
-    .collect()
+    ];
+    DECLS
+        .iter()
+        .map(|(name, decl)| (*name, decl.leak()))
+        .collect()
 });
 
 // CommandLineOption.EnumMap()

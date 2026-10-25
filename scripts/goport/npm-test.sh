@@ -16,6 +16,7 @@
 #     (Rust), else Go's JS launcher. bin/tsc and node_modules/.bin/tsc run the platform tsc without
 #     Node (NODE_OPTIONS that make Node fail to start do not stop them).
 #   - --version, and --listFilesOnly lists the lib files of the platform package's lib dir.
+#   - --locale de gives German messages: the platform package's lib/loc holds the catalogs.
 #   - @tsc-rs/typescript: require("@tsc-rs/typescript").version is the version the tsc reports.
 #   - query and hono, tsc -p <cfg> --outDir <out>: stdout, exit code and the emitted files are the
 #     same for the direct run (platform lib/tsc), node_modules/.bin/tsc, node bin/tsc (a tool that
@@ -128,6 +129,11 @@ for w in direct js; do
   grep -q "^$lib_dir/lib.es5.d.ts$" <<< "$listed"
   check "$w lists $lib_dir/lib.es5.d.ts" $? "$(head -1 <<< "$listed")"
 done
+# The locale catalogs: the native tsc reads them from the platform package's lib/loc.
+echo 'const x: number = "a";' > "$out/de.ts"
+v=$(cd "$out" && "$direct" --noEmit --locale de de.ts 2>&1)
+grep -q 'error TS2322: Der Typ "string"' <<< "$v"
+check "direct --locale de reads lib/loc/de-DE.json.gz" $? "$(head -1 <<< "$v")"
 
 P=${NPM_TEST_INPUTS:-$repo/target/project-inputs}
 declare -A cfgs=([query]=$P/query/source/packages/query-core/tsconfig.prod.json [hono]=$P/hono/source/tsconfig.build.json)
