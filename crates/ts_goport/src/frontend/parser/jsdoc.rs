@@ -1771,7 +1771,8 @@ impl<'a> Parser<'a> {
             && js_doc_tag_is_discarded(site, d.result, name)
         {
             self.factory.add_counts(d.node_count, d.text_count);
-            self.identifier_count += d.identifier_count;
+            // Go `int` wraps (see `program::identifier_count`).
+            self.identifier_count = self.identifier_count.wrapping_add(d.identifier_count);
             self.has_deprecated_tag |= d.sets_deprecated_tag;
             return d.result;
         }
@@ -1800,7 +1801,7 @@ impl<'a> Parser<'a> {
                     result,
                     node_count: self.factory.node_count() - node_count,
                     text_count: self.factory.text_count() - text_count,
-                    identifier_count: self.identifier_count - identifier_count,
+                    identifier_count: self.identifier_count.wrapping_sub(identifier_count),
                     sets_deprecated_tag,
                 },
             );

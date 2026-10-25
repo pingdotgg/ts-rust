@@ -6199,12 +6199,14 @@ pub fn line_count() -> i32 {
 }
 
 // Go: compiler/program.go:1735 IdentifierCount
-// PORT: Go `int`, so `i64`: the sum can pass 2^31 (idcount64).
+// PORT: Go `int`, so `i64`: the sum can pass 2^31 (idcount64). Go's `int`
+// wraps past 2^63, so the adds wrap too: a debug build gives the release
+// result and does not panic.
 pub fn identifier_count() -> i64 {
     let go = go_frontend().expect("identifier count of an alias resolver program");
-    let mut count = 0;
+    let mut count: i64 = 0;
     for file in go.source_files() {
-        count += file.identifier_count;
+        count = count.wrapping_add(file.identifier_count);
     }
     count
 }

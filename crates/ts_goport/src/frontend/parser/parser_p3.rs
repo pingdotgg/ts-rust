@@ -256,9 +256,10 @@ impl<'a> Parser<'a> {
         id
     }
 
-    // Go: parser/parser.go:3020 newIdentifier
+    // Go: parser/parser.go:3041 newIdentifier
     pub fn new_identifier(&mut self, text: &str) -> Node {
-        self.identifier_count += 1;
+        // Go `int` wraps (see `program::identifier_count`).
+        self.identifier_count = self.identifier_count.wrapping_add(1);
         let id = self.factory.new_identifier(text);
         if text == "await" {
             self.statement_has_await_identifier = true;
