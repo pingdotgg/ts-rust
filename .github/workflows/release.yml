@@ -198,8 +198,8 @@ jobs:
       # The same build with -Cprofile-generate, the training set, then -Cprofile-use. PGO_LINK (from
       # the Build step) gives the RUSTFLAGS of the plain build. Separate target dirs (not cached).
       # Linux: both builds link with rustup's rust-lld (gcc-ld/ld.lld; GNU ld has no --icf) and fold
-      # identical functions: about 0.27 MB less, the same instructions run. The plain tsc keeps GNU
-      # ld, so the check below compares the folded tsc with an unfolded one.
+      # identical functions: about 0.27 MB less, almost all of it cold code, and the same code runs.
+      # The plain tsc keeps GNU ld, so the check below compares the folded tsc with an unfolded one.
       - name: PGO build
         if: ${{ !matrix.no-pgo }}
         env:
