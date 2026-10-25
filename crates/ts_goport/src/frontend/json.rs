@@ -1087,19 +1087,21 @@ impl JsonDecoder<'_> {
         JsonError::new(syntactic_error_text(&err, pointer, pos))
     }
 
-    /// Go `errNonSingularValue` of an `UnmarshalJSONFrom` method of the Go
-    /// type of `T` that did not read exactly one value, wrapped by
-    /// `newSemanticErrorWithPosition`: the pointer points to the next value
-    /// when the method read nothing (`read_nothing`), else to the parent
-    /// (Go `where` 0).
+    /// Go `errNonSingularValue` of an `UnmarshalJSONFrom` method that did not
+    /// read exactly one value, wrapped by `newSemanticErrorWithPosition`: the
+    /// pointer points to the next value when the method read nothing
+    /// (`read_nothing`), else to the parent (Go `where` 0). `rust_type` is the
+    /// `std::any::type_name` of the method's type; the text shows its Go type.
+    ///
+    /// PORT: not generic, so the binary holds one copy of this cold path.
     #[cold]
-    fn non_singular_value_error<T: ?Sized>(&self, read_nothing: bool) -> JsonError {
+    fn non_singular_value_error(&self, rust_type: &str, read_nothing: bool) -> JsonError {
         let at = if read_nothing { 1 } else { 0 };
         crate::frontend::json_ext::SemanticError {
             wrapped: true,
             json_kind: 0,
             json_value: String::new(),
-            go_type: crate::frontend::json_ext::go_type_name::<T>(),
+            go_type: crate::frontend::json_ext::go_type_string(rust_type),
             pointer: Some(self.stack_pointer(at)),
             byte_offset: self.skip_ws(self.pos),
             pos: crate::frontend::json_ext::ErrorPos::Before,
@@ -2220,13 +2222,15 @@ pub fn json_unmarshal_decode<T: UnmarshalerFrom + ?Sized>(
     out: &mut T,
 ) -> Result<(), JsonError> {
     let (prev_depth, prev_len) = dec.depth_length();
-    out.unmarshal_json_from(dec)
-        .map_err(crate::frontend::json_ext::wrap_method_error::<T>)?;
+    out.unmarshal_json_from(dec).map_err(|err| {
+        crate::frontend::json_ext::wrap_method_error(err, std::any::type_name::<T>())
+    })?;
     let (curr_depth, curr_len) = dec.depth_length();
     if prev_depth != curr_depth || prev_len + 1 != curr_len {
-        return Err(
-            dec.non_singular_value_error::<T>(prev_depth == curr_depth && prev_len == curr_len)
-        );
+        return Err(dec.non_singular_value_error(
+            std::any::type_name::<T>(),
+            prev_depth == curr_depth && prev_len == curr_len,
+        ));
     }
     Ok(())
 }
