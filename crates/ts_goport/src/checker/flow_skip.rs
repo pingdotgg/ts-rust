@@ -30,19 +30,26 @@
 //! type x constant reference), candidates that are settled and have nothing
 //! to check per walk are joined to their parent (union-find), so a walk
 //! over settled nodes costs about O(1). A file is indexed only once its
-//! walks have taken 16 steps per flow node (sampled: one walk in 4 at
-//! first, then the gap doubles up to 32), so files with short walks pay
-//! almost nothing: a countdown per walk.
+//! walks have taken 24 steps per flow node (sampled: one walk in 4 at
+//! first, then the gap doubles up to 128), so files with short walks pay
+//! almost nothing: a countdown per walk. From half of that on, a measured
+//! walk also takes a cheap look along its path for the common refusals
+//! (`flow_skip_sample`), and the file needs 8 steps per flow node that pass
+//! it: files whose walks the index would mostly refuse (tests with
+//! assertion calls, walks that end at the reference's own declaration) get
+//! no index (flowskip4).
 //!
 //! `GOPORT_FLOWSKIP`: unset or `1` on, `0` off, `verify` indexes every file,
 //! tests each walk, then runs Go's walk anyway, and panics when the skip
 //! would differ (result, counters of made things and effects, visited nodes,
 //! depth). `GOPORT_FLOWSKIP_STATS=<file>` writes the process totals of the
 //! tests to `<file>` (updated after at least 256 tests per checker: the
-//! inline countdown does not flush). Its writes cost
+//! inline countdown does not flush, and its walks are not in the counts).
+//! Its writes cost
 //! instructions (VS Code +0.17%): leave it unset when you count them.
-//! `GOPORT_FLOWSKIP_BUILD_STEPS`, `GOPORT_FLOWSKIP_MIN_STEPS` and
-//! `GOPORT_FLOWSKIP_SAMPLE_EVERY` set the tuning values for A/B runs.
+//! `GOPORT_FLOWSKIP_BUILD_STEPS`, `GOPORT_FLOWSKIP_MIN_STEPS`,
+//! `GOPORT_FLOWSKIP_SAMPLE_EVERY` and `GOPORT_FLOWSKIP_CONFIRM_STEPS` (`0`
+//! turns the look off) set the tuning values for A/B runs.
 
 use crate::prelude::*;
 use smallvec::SmallVec;
@@ -120,6 +127,7 @@ fn tuning(name: &'static str, default: u32) -> u32 {
             "GOPORT_FLOWSKIP_BUILD_STEPS",
             "GOPORT_FLOWSKIP_MIN_STEPS",
             "GOPORT_FLOWSKIP_SAMPLE_EVERY",
+            "GOPORT_FLOWSKIP_CONFIRM_STEPS",
         ]
         .into_iter()
         .filter_map(|n| Some((n, std::env::var(n).ok()?.parse().ok()?)))
@@ -244,9 +252,11 @@ pub struct FlowSkipRecording {
 pub struct FlowSkip {
     pub mode: FlowSkipMode,
     /// A file is indexed when the steps of its walks so far reach this many
-    /// per flow node of the file (the index costs about as much as 10 walk
-    /// steps per flow node, so a file with few or short walks would lose).
-    /// Such files pay only the sample.
+    /// per flow node of the file (and `confirm_steps` holds). The index
+    /// costs about as much as 5 to 8 skipped walk steps per flow node, and
+    /// it pays only for the walks after it: with 16, VS Code and TypeORM
+    /// lost 0.1 to 0.3% instructions to indexes whose later walks were few
+    /// or refused (flowskip4). Files below it pay only the sample.
     pub build_steps: u32,
     /// A walk with fewer loop turns to its root (and no move to an outer
     /// function there) is not tested: Go's walk is cheaper than the test.
@@ -254,6 +264,10 @@ pub struct FlowSkip {
     /// While a file is counted, the gap between measured walks grows from
     /// `FIRST_GAP` up to this many walks.
     pub sample_every: u32,
+    /// When not 0, a file is indexed only when also the steps of its
+    /// measured walks that pass the look of `flow_skip_sample` reach this
+    /// many per flow node (looked at from half of `build_steps` on).
+    pub confirm_steps: u32,
     files: FxHashMap<u32, FileState>,
     /// The last counted file and its live count. Its entry in `files` is
     /// stale until another counted file takes its place, so a walk that only
@@ -285,16 +299,18 @@ impl Default for FlowSkip {
             // Verify mode indexes every file at once, so it tests every walk.
             build_steps: tuning(
                 "GOPORT_FLOWSKIP_BUILD_STEPS",
-                if mode == FlowSkipMode::Verify { 0 } else { 16 },
+                if mode == FlowSkipMode::Verify { 0 } else { 24 },
             ),
             min_steps: tuning("GOPORT_FLOWSKIP_MIN_STEPS", 8),
             sample_every: tuning("GOPORT_FLOWSKIP_SAMPLE_EVERY", SAMPLE_EVERY).max(1),
+            confirm_steps: tuning("GOPORT_FLOWSKIP_CONFIRM_STEPS", 8),
             files: FxHashMap::default(),
             hot_file: None,
             hot: Count {
                 countdown: 0,
                 gap: 0,
                 measured: 0,
+                probed: 0,
             },
             effects: 0,
             recording: None,
@@ -316,7 +332,7 @@ impl std::fmt::Debug for FlowSkip {
 }
 
 /// The count of a file before it is indexed. The last walk of each gap is
-/// measured (at most `DRY_CAP` steps, weighted by the gap), and the gap
+/// measured (`flow_skip_sample`, weighted by the gap), and the gap
 /// doubles from `FIRST_GAP` up to `sample_every`: a new file is judged on
 /// small gaps, so one long walk of a file with few walks does not index it
 /// (query-core lost 0.15% that way with a fixed gap of 32). `countdown` is
@@ -330,6 +346,9 @@ struct Count {
     countdown: u32,
     gap: u32,
     measured: u64,
+    /// The part of `measured` that passed the look of `flow_skip_sample`
+    /// (looked at from half of `build_steps` on).
+    probed: u64,
 }
 
 enum FileState {
@@ -349,22 +368,26 @@ const FIRST_GAP: u32 = 4;
 /// samples: a file is worth an index only when it has many walks. A gap of
 /// 4 cost VS Code +0.13% instructions. With 32, T3 server indexes 57 files
 /// (63 with a fixed gap of 4), but the skipped steps stay the same (38.28 M,
-/// flowskip3).
-const SAMPLE_EVERY: u32 = 32;
+/// flowskip3). 128 against 32: st instructions VS Code -0.011%, Sentry
+/// -0.005%, Excalidraw -0.04%, T3 server -0.016% (flowskip4).
+const SAMPLE_EVERY: u32 = 128;
 
-/// Steps of pi(u) to its root (no move to an outer function), at most
-/// `DRY_CAP`: the length of Go's walk when nothing narrows.
-fn dry_steps(flows: &[FlowNode], file: usize, u: usize) -> u32 {
-    let mut x = u;
-    let mut steps = 1;
-    while steps < DRY_CAP {
-        match next_of(flows, file, &flows[x]) {
-            Ok((p, _)) => x = p as usize,
-            Err(_) => break,
+/// The name that an assignment flow node assigns when it is a plain
+/// identifier or an identifier declaration, else "".
+fn assigned_name(node: Node) -> &'static str {
+    let target = unwrap_target(node);
+    match target.kind() {
+        SyntaxKind::Identifier => target.text(),
+        SyntaxKind::VariableDeclaration | SyntaxKind::BindingElement => {
+            let name = target.name();
+            if name.is_some() && is_identifier(name) {
+                name.text()
+            } else {
+                ""
+            }
         }
-        steps += 1;
+        _ => "",
     }
-    steps
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -1509,16 +1532,15 @@ impl Checker {
         flow: FlowNodeId,
     ) -> Option<u32> {
         // The common case where no file is indexed (VS Code): a walk of the
-        // hot counted file that is not measured pays only the countdown.
+        // hot counted file that is not measured pays only the countdown. It
+        // counts inline walks too, and the stats leave it out: each
+        // instruction here is paid by every walk.
         let fs = &mut self.flow_skip;
         if fs.hot_file == Some(flow.file_index() as u32)
             && fs.hot.countdown > 1
-            && self.inline_level == 0
             && fs.trace.is_none()
         {
             fs.hot.countdown -= 1;
-            fs.stats.tested += 1;
-            fs.stats.refused[Refusal::Counting as usize] += 1;
             return None;
         }
         self.flow_skip_test_full(reference, declared_type, flow_container, flow)
@@ -1588,6 +1610,7 @@ impl Checker {
                         countdown: gap,
                         gap,
                         measured: 0,
+                        probed: 0,
                     };
                     entry.insert(FileState::Counting(count));
                     Some(count)
@@ -1621,13 +1644,21 @@ impl Checker {
                     .and_then(|g| g.flow_nodes.get())
                     .expect("a counted file is static");
                 let u = flow.local_index();
-                let steps = if u < flows.len() {
-                    u64::from(dry_steps(flows, file, u)) * u64::from(weight)
+                let n = flows.len() as u64;
+                let confirm_steps = u64::from(self.flow_skip.confirm_steps);
+                let check = confirm_steps > 0 && hot.measured * 2 >= u64::from(build_steps) * n;
+                let (steps, passed) = if u < flows.len() {
+                    self.flow_skip_sample(reference, declared_type, flows, file, u, check)
                 } else {
-                    0
+                    (0, false)
                 };
+                let hot = &mut self.flow_skip.hot;
+                let steps = u64::from(steps) * u64::from(weight);
                 hot.measured += steps;
-                if hot.measured < u64::from(build_steps) * flows.len() as u64 {
+                if passed {
+                    hot.probed += steps;
+                }
+                if hot.measured < u64::from(build_steps) * n || hot.probed < confirm_steps * n {
                     return Err(Refusal::Counting);
                 }
             }
@@ -1655,6 +1686,74 @@ impl Checker {
         }
         self.flow_skip.files = files;
         result
+    }
+
+    /// The steps of pi(u) to its root (no move to an outer function, at
+    /// most `DRY_CAP`): the length of Go's walk when nothing narrows. With
+    /// `check`, also whether the index can skip the walk as far as a cheap
+    /// look sees (flowskip4): it is at least `min_steps` long, its reference
+    /// has an indexed kind, no assignment on the path assigns the
+    /// reference's root name (Go's walk stops there; the index refuses a
+    /// mention), and no call on the path has a real effects signature
+    /// (blocked; calls that Go has not resolved yet pass). The files that
+    /// fail it are tests with assertion calls and code whose walks end at
+    /// their own declarations: VS Code test files and TypeORM query
+    /// runners were indexed, and 0 to 30% of their counted steps were
+    /// skipped. The look costs about 500 instructions, so it runs only
+    /// for files past half of `build_steps`.
+    fn flow_skip_sample(
+        &self,
+        reference: Node,
+        declared_type: TypeId,
+        flows: &[FlowNode],
+        file: usize,
+        u: usize,
+        check: bool,
+    ) -> (u32, bool) {
+        let mut root = reference;
+        if check {
+            while matches!(
+                root.kind(),
+                SyntaxKind::PropertyAccessExpression | SyntaxKind::ElementAccessExpression
+            ) {
+                root = root.expression();
+            }
+        }
+        let root = if check && root.kind() == SyntaxKind::Identifier {
+            root.text()
+        } else {
+            ""
+        };
+        let mut passed = check;
+        let mut x = u;
+        let mut steps = 1;
+        while steps < DRY_CAP {
+            let flow = &flows[x];
+            if passed {
+                if flow.flags.intersects(FlowFlags::ASSIGNMENT) {
+                    passed = root.is_empty() || assigned_name(flow.node) != root;
+                } else if flow.flags.intersects(FlowFlags::CALL)
+                    && let Some(links) = self.signature_links.try_get(flow.node)
+                {
+                    let signature = links.effects_signature;
+                    passed = signature.is_nil() || signature == self.unknown_signature;
+                }
+            }
+            match next_of(flows, file, flow) {
+                Ok((p, _)) => x = p as usize,
+                Err(_) => break,
+            }
+            steps += 1;
+        }
+        let passed = passed
+            && steps >= self.flow_skip.min_steps
+            && self
+                .flow_skip_ref_keys(
+                    reference,
+                    self.ty(declared_type).flags.intersects(TypeFlags::UNION),
+                )
+                .is_some();
+        (steps, passed)
     }
 
     /// Follows pi(u) through the index: first the static tests of every
