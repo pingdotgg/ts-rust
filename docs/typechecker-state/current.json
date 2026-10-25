@@ -1182,12 +1182,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "a309fa8146ece99b9",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "a82b99f846cb7e9f1",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R239 pipeline (candidate.sh side)."
