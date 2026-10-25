@@ -11,8 +11,8 @@
 //!
 //! `sort_func`, `sort_stable_func`, `sort_slice` and `stable_sort_by` have
 //! one copy of each algorithm for all element types (`by_index`). Hot sites
-//! call `sort_func_hot` and `sort_stable_func_hot`, which have one copy per
-//! element and comparator type.
+//! call `sort_func_hot`, `sort_stable_func_hot` and `stable_sort_by_hot`,
+//! which have one copy per element and comparator type.
 //!
 //! Also the capacity that Go `append` gives a full slice
 //! (`go_byte_slice_grow`, `go_ptr_slice_grow`) for ports whose result depends
@@ -22,7 +22,17 @@ use crate::prelude::*;
 
 pub use by_index::{sort_func, sort_slice, sort_stable_func, stable_sort_by};
 #[cfg(target_family = "wasm")]
-pub use by_index::{sort_func as sort_func_hot, sort_stable_func as sort_stable_func_hot};
+pub use by_index::{
+    sort_func as sort_func_hot, sort_stable_func as sort_stable_func_hot,
+    stable_sort_by as stable_sort_by_hot,
+};
+
+/// `stable_sort_by` for hot sites: Rust's stable `x.sort_by(cmp)`, with a
+/// copy per element and comparator type. On wasm it is `stable_sort_by`.
+#[cfg(not(target_family = "wasm"))]
+pub fn stable_sort_by_hot<T, F: FnMut(&T, &T) -> std::cmp::Ordering>(x: &mut [T], cmp: F) {
+    x.sort_by(cmp);
+}
 
 /// `sort_func`, `sort_stable_func`, `sort_slice` and `stable_sort_by` with
 /// one copy of each algorithm for all element types. Each sorts the indexes
