@@ -763,8 +763,8 @@ impl Checker {
         let property_name =
             self.get_property_name_node_for_symbol(b, property_symbol, save_enclosing_declaration);
         nb_ctx_mut(b, |c| c.enclosing_declaration = save_enclosing_declaration);
-        // Go: nodebuilderimpl.go:2630 len(ast.SymbolName(propertySymbol)).
-        // PORT: the name of every private identifier symbol of a class holds
+        // Go: len(ast.SymbolName(propertySymbol)).
+        // PORT: a private name that is not a class element (TS18016) holds
         // the key of its class, where Go's holds the class's symbol id
         // (`go_private_name`), so its Go length comes from the Go name.
         let name = symbol_name_str(&self.symbols, property_symbol);

@@ -29,13 +29,10 @@ impl Checker {
 
     // Go: checker/checker.go:26657 getIntersectionTypeEx
     // PORT: Go `orderedSet[*Type]` is a stack `TypeSet` here. It keeps
-    // insertion order, and `contains` and `push` are Go `contains` and `add`
-    // (checker/utilities.go:963, :971). Go `add` appends with no duplicate
-    // test: each caller tests `contains` or a flag first
-    // (addTypeToIntersection, checker.go:26882 and :26865). Intersections
-    // are small, so a linear `contains` is cheaper than a hash set. The
-    // reductions below change the set in place, and `new_intersection_type`
-    // copies it only when it creates the type.
+    // insertion order and `contains`/`add` match Go (Go only adds values it
+    // has not seen). Intersections are small, so a linear `contains` is
+    // cheaper than a hash set. The reductions below change the set in place,
+    // and `new_intersection_type` copies it only when it creates the type.
     pub fn get_intersection_type_ex(
         &mut self,
         types: &[TypeId],

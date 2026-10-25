@@ -323,7 +323,7 @@ impl Orchestrator {
     }
 
     // Go: build/orchestrator.go:174 (*Orchestrator).createBuildTasks
-    // PORT: Go queues the parse of each config on a work group (:176), and
+    // PORT: Go queues the parse of each config on a work group (:263), and
     // each parse queues the parses of its references. The "already a task"
     // check (`LoadOrStore`, :198) runs when a parse runs. With
     // `--singleThreaded` the work group is a stack (core/workgroup.go:78

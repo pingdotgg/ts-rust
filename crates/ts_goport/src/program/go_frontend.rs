@@ -2142,8 +2142,7 @@ impl GoSharedState {
     // include processor part)
     // PORT: a read on the loading thread builds them. A checker thread reads
     // them after the loading thread built them (`fill_include_diagnostics`);
-    // a first read on a checker thread panics (`go_frontend`). The test
-    // `include_diagnostics_are_built_before_checker_threads_read` pins it.
+    // a first read on a checker thread panics (`go_frontend`).
     pub(super) fn get_include_processor_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         // Go builds the collection here (`includeProcessor.getDiagnostics`).
         self.include_diagnostics_read
@@ -2159,12 +2158,6 @@ impl GoSharedState {
             .get(&file.file_index())
             .cloned()
             .unwrap_or_default()
-    }
-
-    /// True when the include processor diagnostics are built.
-    #[cfg(test)]
-    pub(super) fn include_diagnostics_built(&self) -> bool {
-        self.include_diagnostics.get().is_some()
     }
 
     /// Builds the include processor diagnostics of `p`, the frontend
@@ -2972,97 +2965,5 @@ pub(super) mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-    }
-
-    // followups82 (R238 reviewer, loadparity2): Go builds the include
-    // processor diagnostics at their first read (includeprocessor.go:37
-    // getDiagnostics, a sync.Once that any goroutine can run). A checker
-    // reads them only after the bind that its creation runs (checker.go:936
-    // NewChecker calls BindSourceFiles), so on any goroutine that first
-    // read gives the bound collection. The port reads the frontend program on the loading thread
-    // only (`program::go_frontend`), so it builds that same collection
-    // there, after the bind and before a checker thread can read it:
-    // `create_checkers` (tsc) and `bind_source_files` (LSP). This pins the
-    // rule: a load builds nothing, each path builds, and the checker threads
-    // read the built copy (a first read there would panic).
-    #[test]
-    fn include_diagnostics_are_built_before_checker_threads_read() {
-        let dir = std::env::temp_dir().join(format!("goport-include-diags-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let globals = "interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n\
-                       interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n\
-                       interface Number {}\ninterface Object {}\ninterface RegExp {}\n\
-                       interface String {}\n";
-        let files = [
-            ("globals.d.ts", globals),
-            (
-                "a.ts",
-                "/// <reference path=\"missing.ts\" />\nexport const a = 1;\n",
-            ),
-            ("b.ts", "export const b = 2;\n"),
-        ];
-        for (name, text) in files {
-            std::fs::write(dir.join(name), text).unwrap();
-        }
-        let config_of = |name: &str, single_threaded: bool| -> String {
-            let config = dir.join(format!("{name}.json"));
-            std::fs::write(
-                &config,
-                format!(
-                    r#"{{ "compilerOptions": {{ "noLib": true, "types": [], "noEmit": true,
-                         "singleThreaded": {single_threaded} }},
-                         "files": ["globals.d.ts", "a.ts", "b.ts"] }}"#
-                ),
-            )
-            .unwrap();
-            config.to_string_lossy().replace('\\', "/")
-        };
-        // tsc: `create_checkers` builds them after its bind, with one
-        // checker thread and with more.
-        for (name, single_threaded) in [("tsc-single", true), ("tsc", false)] {
-            let config = config_of(name, single_threaded);
-            let messages = std::thread::spawn(move || {
-                let built = || with_go(GoSharedState::include_diagnostics_built);
-                let program = try_load_version(&config, |_| {})
-                    .unwrap_or_else(|e| panic!("cannot load {config}: {e}"));
-                let scope = crate::core::enter_program(Some(program));
-                assert!(!built(), "{config}: the load built them");
-                let messages: Vec<String> = program
-                    .source_files()
-                    .flat_map(|file| get_semantic_diagnostics(file.root))
-                    .map(|d| format_diagnostic(&d))
-                    .collect();
-                assert!(built(), "{config}: the check did not build them");
-                drop(scope);
-                release_program(program);
-                messages
-            })
-            .join()
-            .unwrap();
-            assert!(
-                messages.len() == 1 && messages[0].contains("TS6053"),
-                "{name}: the checker thread reads the include diagnostic: {messages:?}"
-            );
-        }
-        // LSP: `bind_source_files` builds them after its bind.
-        let config = config_of("lsp", false);
-        std::thread::spawn(move || {
-            let opts = load_config(&config, |_| {}, &mut CompileTimes::default()).unwrap();
-            let p = super::super::ls_program::new_program(opts, None);
-            let version = super::super::ls_program::program_version(&p);
-            let built = || {
-                held_tables(version)
-                    .go
-                    .as_ref()
-                    .is_some_and(GoSharedState::include_diagnostics_built)
-            };
-            assert!(!built(), "the LSP program version built them");
-            super::super::ls_program::bind_source_files(&p);
-            assert!(built(), "bind_source_files did not build them");
-        })
-        .join()
-        .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

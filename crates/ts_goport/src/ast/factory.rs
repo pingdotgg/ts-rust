@@ -161,8 +161,7 @@ impl NodeFactory {
     // parse moves it into the AST arena (no box), as Go's typed arenas.
     // Synthetic nodes box it.
     pub(crate) fn new_node<T: AstData>(&self, kind: SyntaxKind, data: T) -> Node {
-        // Go `int` wraps (see `add_counts`).
-        self.node_count.set(self.node_count.get().wrapping_add(1));
+        self.node_count.set(self.node_count.get() + 1);
         let node = match self.target {
             NodeFactoryTarget::Synthetic if self.print_owned.get() => {
                 crate::ast::synthetic::alloc_synthetic_print_node(kind, data.into_boxed())
@@ -179,7 +178,7 @@ impl NodeFactory {
 
     /// `newNode` plus Go `f.textCount++`, for nodes that carry text.
     pub(crate) fn new_text_node<T: AstData>(&self, kind: SyntaxKind, data: T) -> Node {
-        self.text_count.set(self.text_count.get().wrapping_add(1));
+        self.text_count.set(self.text_count.get() + 1);
         self.new_node(kind, data)
     }
 
@@ -202,8 +201,8 @@ impl NodeFactory {
         let NodeFactoryTarget::File(store) = self.target else {
             return self.new_text_node(kind, data(text.into()));
         };
-        self.text_count.set(self.text_count.get().wrapping_add(1));
-        self.node_count.set(self.node_count.get().wrapping_add(1));
+        self.text_count.set(self.text_count.get() + 1);
+        self.node_count.set(self.node_count.get() + 1);
         #[cfg(debug_assertions)]
         debug_assert_shared_name_data(kind, data(String::new()).view());
         let node = alloc_store_shared_name_node(store, kind, text.as_ref());
@@ -241,17 +240,9 @@ impl NodeFactory {
     /// Adds `nodes` to `node_count` and `texts` to `text_count`: the counts
     /// of the nodes that a replayed speculative JSDoc parse made in Go
     /// (`Parser::speculate_js_doc_tag`).
-    // PORT: Go `nodeCount` and `textCount` are `int`, and Go's `int` adds
-    // wrap. A replay adds a count without making the nodes, so the port can
-    // pass the top of the range where Go would take years. The adds wrap,
-    // so a debug build gives the release result and does not panic. The
-    // port's `usize` wraps at 2^64, Go's `int` at 2^63; these counts are
-    // only capacity hints (Go api/encoder/encoder.go:372, :476).
     pub(crate) fn add_counts(&self, nodes: usize, texts: usize) {
-        self.node_count
-            .set(self.node_count.get().wrapping_add(nodes));
-        self.text_count
-            .set(self.text_count.get().wrapping_add(texts));
+        self.node_count.set(self.node_count.get() + nodes);
+        self.text_count.set(self.text_count.get() + texts);
     }
 
     // ── Source files ───────────────────────────────────────────────────
