@@ -25,9 +25,12 @@ pub(crate) trait TxVisitors: Sized {
 
     /// Runs `f` with a visitor whose callback is `visit` (Go
     /// `tx.EmitContext().NewNodeVisitor(visit)`).
+    // PERF (txvisit1): `visit` is generic, so a method item such as
+    // `Self::root_visit` is zero-sized and the visitor holds its callback
+    // with no allocation (`VisitFn::Ref`). A `fn` pointer still works.
     fn with_visitor<R>(
         &mut self,
-        visit: fn(&mut Self, Node) -> Node,
+        visit: impl Fn(&mut Self, Node) -> Node,
         f: impl FnOnce(&mut NodeVisitor<'_, &mut Self>) -> R,
     ) -> R {
         let ec = self.ec();

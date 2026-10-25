@@ -10,9 +10,9 @@
 //! - The `visit` callback and every hook get `(node, &mut NodeVisitor)`. Go
 //!   `Visit(node)` gets only the node; the visitor argument replaces the Go
 //!   closure capture of the visitor.
-//! - Callbacks are `Rc<dyn Fn>`, so a callback can call back into the visitor
-//!   (Go recursion through `v.VisitEachChild`). Keep callback state in
-//!   `Cell`/`RefCell` or in `ctx`.
+//! - Callbacks are `Rc<dyn Fn>` (the `visit` callback: a [`VisitFn`]), so a
+//!   callback can call back into the visitor (Go recursion through
+//!   `v.VisitEachChild`). Keep callback state in `Cell`/`RefCell` or in `ctx`.
 //! - Go has exported and unexported methods with the same name (`VisitNode`
 //!   and `visitNode`). The exported ones keep the plain snake names
 //!   (`visit_node`, `visit_nodes`, `visit_modifiers`,
@@ -22,8 +22,51 @@
 use crate::astdata::NodeData;
 use crate::prelude::*;
 
-/// Go `NodeVisitor.Visit`.
-pub type VisitFn<'a, C> = Rc<dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>;
+/// Go `NodeVisitor.Visit`. Call it as a function (it derefs to the `dyn Fn`).
+// PERF (txvisit1): the transformers build a new visitor for each Go
+// `tx.Visitor()` call (`TransformerVisit::with_visitor`): 22 M visitors and
+// 41 M visit calls in a VS Code emit. Their callbacks capture nothing, so
+// `Ref` holds them with no allocation, and `call_visit` copies the reference
+// where it cloned an `Rc` for each node.
+pub enum VisitFn<'a, C> {
+    /// A zero-sized callback (one that captures nothing).
+    Ref(&'a (dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a)),
+    /// Any other callback.
+    Rc(Rc<dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>),
+}
+
+impl<'a, C> VisitFn<'a, C> {
+    pub fn new<F: Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>(visit: F) -> Self {
+        if size_of::<F>() == 0 && !std::mem::needs_drop::<F>() {
+            // A box of a zero-sized value allocates nothing, so the leak
+            // keeps nothing.
+            Self::Ref(Box::leak(Box::new(visit)))
+        } else {
+            Self::Rc(Rc::new(visit))
+        }
+    }
+}
+
+impl<C> Clone for VisitFn<'_, C> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Ref(visit) => Self::Ref(*visit),
+            Self::Rc(visit) => Self::Rc(visit.clone()),
+        }
+    }
+}
+
+impl<'a, C> std::ops::Deref for VisitFn<'a, C> {
+    type Target = dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Ref(visit) => *visit,
+            Self::Rc(visit) => &**visit,
+        }
+    }
+}
+
 /// A Go hook over one node.
 pub type VisitNodeHook<'a, C> = Rc<dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>;
 /// A Go hook over a `NodeList`.
@@ -121,7 +164,7 @@ pub fn new_node_visitor<'a, C>(
     ctx: C,
 ) -> NodeVisitor<'a, C> {
     NodeVisitor {
-        visit: Some(Rc::new(visit)),
+        visit: Some(VisitFn::new(visit)),
         factory,
         default_factory: NodeFactory::default(),
         hooks,
@@ -152,8 +195,17 @@ impl<'a, C> NodeVisitor<'a, C> {
 
     /// Calls `v.Visit(node)`. The caller checks that `visit` is set.
     fn call_visit(&mut self, node: Node) -> Node {
-        let visit = self.visit.clone().expect("NodeVisitor.Visit is nil");
-        visit(node, self)
+        match &self.visit {
+            Some(VisitFn::Ref(visit)) => {
+                let visit = *visit;
+                visit(node, self)
+            }
+            Some(VisitFn::Rc(visit)) => {
+                let visit = visit.clone();
+                visit(node, self)
+            }
+            None => panic!("NodeVisitor.Visit is nil"),
+        }
     }
 
     // Go: ast/visitor.go:35 VisitSourceFile
