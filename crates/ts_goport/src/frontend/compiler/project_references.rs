@@ -457,9 +457,6 @@ impl ProjectReferenceFileMapper {
     }
 
     // Go: projectreferencefilemapper.go:100 (*projectReferenceFileMapper).getRedirectForResolution
-    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module
-    // resolution.
-    #[inline(never)]
     #[must_use]
     pub fn get_redirect_for_resolution(
         &self,
@@ -594,9 +591,6 @@ impl ProjectReferenceFileMapper {
     // PORT: `loader` is set only while a program with project references
     // loads, which is Go's `len(ResolvedProjectReferencePaths()) != 0` on the
     // builder; after the load this only reads the map, as in Go.
-    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module
-    // resolution.
-    #[inline(never)]
     #[must_use]
     pub fn get_source_to_dts_if_symlink(
         &self,

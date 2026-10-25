@@ -478,28 +478,10 @@ impl PayloadDecoder<'_, '_, '_, '_> {
 }
 
 impl<'a> Decoder<'a> {
-    // SIZE (inlineout1): one and two byte values inline, longer ones out of
-    // line (`var_rest`). The whole loop was inline in each of about 350
-    // field reads of `decode_payload` (about 480 bytes each).
     #[inline]
     fn var(&mut self) -> Option<u64> {
-        let byte = self.r.u8()?;
-        if byte < 0x80 {
-            return Some(u64::from(byte));
-        }
-        let second = self.r.u8()?;
-        let value = u64::from(byte & 0x7f) | (u64::from(second & 0x7f) << 7);
-        if second < 0x80 {
-            return Some(value);
-        }
-        self.var_rest(value)
-    }
-
-    /// `var` after two bytes with the high bit set, whose low 7 bits each
-    /// gave `value`.
-    #[inline(never)]
-    fn var_rest(&mut self, mut value: u64) -> Option<u64> {
-        let mut shift = 14;
+        let mut value = 0u64;
+        let mut shift = 0;
         loop {
             let byte = self.r.u8()?;
             value |= u64::from(byte & 0x7f) << shift;

@@ -709,8 +709,6 @@ impl DefaultResolver {
     // Go: module/resolver.go:477 resolveModuleName
     // PORT: named `resolve_module_name_worker`; the Go names
     // `ResolveModuleName` and `resolveModuleName` share a snake name.
-    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module name.
-    #[inline(never)]
     fn resolve_module_name_worker(
         &self,
         module_name: &str,

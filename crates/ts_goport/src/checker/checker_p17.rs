@@ -1325,9 +1325,6 @@ impl Checker {
     //
     // Resolves the given external module symbol, possibly removing call and construct signatures or creating a
     // wrapper module with a synthetic default.
-    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module
-    // reference.
-    #[inline(never)]
     pub fn resolve_es_module_symbol(
         &mut self,
         module_symbol: SymbolId,
