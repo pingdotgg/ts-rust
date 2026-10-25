@@ -169,6 +169,13 @@ pub enum JsDocSpeculation {
 /// and a position of it is in one comment, so two parses with the same key
 /// read the same text in the same state: they make the same nodes and
 /// counts.
+///
+/// A tag can parse an arrow function (a `[x = (a) => b]` default, a computed
+/// key in a type literal), and that parse reads `notParenthesizedArrow` (Go
+/// parser.go:4570 `parsePossibleParenthesizedArrowFunctionExpression`).
+/// That set only grows during a parse (its only write is the `Add` at
+/// parser.go:4577), so its size is a version of it: an equal size is an
+/// equal set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct JsDocDiscardKey {
     site: JsDocSpeculation,
@@ -181,6 +188,7 @@ pub struct JsDocDiscardKey {
     skip_js_doc_leading_asterisks: i32,
     context_flags: NodeFlags,
     parsing_contexts: ParsingContexts,
+    not_parenthesized_arrows: usize,
 }
 
 /// Not in Go (jsdocmem1): a speculative JSDoc tag parse whose result its
@@ -1734,7 +1742,9 @@ impl<'a> Parser<'a> {
     // `hasDeprecatedTag`; the replay adds them. A parse that changes a
     // parser cache (`notParenthesizedArrow`, `possibleAwaitSpans`) is not
     // kept: a later Go parse at that state reads the cache and can make
-    // fewer nodes. Out of line, so the rest of the JSDoc parser compiles as
+    // fewer nodes. The key holds the size of `notParenthesizedArrow`, so a
+    // record is not replayed after another parse (other context flags) adds
+    // to it. Out of line, so the rest of the JSDoc parser compiles as
     // before.
     #[inline(never)]
     fn speculate_js_doc_tag(&mut self, site: JsDocSpeculation, indent: i32, name: Node) -> Node {
@@ -1750,6 +1760,7 @@ impl<'a> Parser<'a> {
             skip_js_doc_leading_asterisks: scanner.skip_js_doc_leading_asterisks,
             context_flags: self.context_flags,
             parsing_contexts: self.parsing_contexts,
+            not_parenthesized_arrows: self.not_parenthesized_arrow.len(),
         };
         #[cfg(test)]
         let replay = !tests::NO_REPLAY.get();
@@ -1760,14 +1771,15 @@ impl<'a> Parser<'a> {
             && js_doc_tag_is_discarded(site, d.result, name)
         {
             self.factory.add_counts(d.node_count, d.text_count);
-            self.identifier_count += d.identifier_count;
+            // Go `int` wraps (see `program::identifier_count`).
+            self.identifier_count = self.identifier_count.wrapping_add(d.identifier_count);
             self.has_deprecated_tag |= d.sets_deprecated_tag;
             return d.result;
         }
         let node_count = self.factory.node_count();
         let text_count = self.factory.text_count();
         let identifier_count = self.identifier_count;
-        let arrows = self.not_parenthesized_arrow.len();
+        let arrows = key.not_parenthesized_arrows;
         let await_spans = self.possible_await_spans.len();
         // Only a `@deprecated` tag sets it, and only `with_js_doc` reads
         // it: cleared here, it tells whether this parse sets it.
@@ -1789,7 +1801,7 @@ impl<'a> Parser<'a> {
                     result,
                     node_count: self.factory.node_count() - node_count,
                     text_count: self.factory.text_count() - text_count,
-                    identifier_count: self.identifier_count - identifier_count,
+                    identifier_count: self.identifier_count.wrapping_sub(identifier_count),
                     sets_deprecated_tag,
                 },
             );
@@ -2283,6 +2295,28 @@ mod tests {
         for text in &cases {
             assert_eq!(parse(text, true), parse(text, false), "{text}");
         }
+    }
+
+    /// jsdocmem1: one comment parsed 3 times: `in` allowed, then not
+    /// allowed, then allowed again. The second parse fails the arrow
+    /// function of the `[z = ...]` default and adds it to
+    /// `notParenthesizedArrow`. So the third parse must not replay the
+    /// first: Go skips that arrow then. Without the set size in the key,
+    /// the replay gave 1 more identifier than Go (R237 `tsgo
+    /// --extendedDiagnostics`: 71, Go 70).
+    #[test]
+    fn replay_reads_the_not_parenthesized_arrow_set() {
+        // Parse 1: the true side of `c ? ... : ...` allows `in`. The arrow
+        // `(y): U => ...` parses its body, then fails at the `;`. Parse 2:
+        // the false side keeps the DisallowIn of the `for` initializer, and
+        // the arrow `(r = ..., w = s in 1) => 0` fails at `in 1`. Parse 3:
+        // that text as a parenthesized expression allows `in`. The
+        // parameters of `h` give the 3 parses the same parsing contexts.
+        let text = "function h(k = () => { for (c ? (y): U => (r = T => {\n\
+            /** @overload @overload @param {number} [z = (a = b in 1) => g] */\n\
+            function f() {}\n\
+            }, w = s in 1) => 0 ;;); }) {}\n";
+        assert_eq!(parse(text, true), parse(text, false));
     }
 
     /// The cut of a closed comment keeps no bytes and allocates nothing
