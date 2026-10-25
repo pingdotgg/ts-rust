@@ -3191,43 +3191,79 @@ function generateCode(): Map<string, string> {
             return p.optional || resolved.needsPointer || resolved.name.startsWith("[]") || resolved.name.startsWith("map[");
         }) || false;
         if ((requiredProps.length > 0 || hasNullRejectableFields) && !hasCustomStructureCodec(structure.name)) {
-            // PORT: Go generates the decode loop for each structure. Here each structure
-            // gets a member table and a member function, and the loop is the shared
-            // unmarshal_structure (lsp.rs).
-            const members = structure.properties;
-            if (members.length > 64) {
-                throw new Error(`${structure.name}: unmarshal_structure takes at most 64 members, got ${members.length}`);
-            }
             writeLine(`impl UnmarshalerFrom for ${structure.name} {`);
             writeLine(`    // Go: (s *${structure.name}) UnmarshalJSONFrom`);
             writeLine(`    fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {`);
-            writeLine(`        const MEMBERS: &[StructureMember] = &[`);
-            for (const prop of members) {
-                const required = !prop.optional && !prop.omitzeroValue;
+            if (requiredProps.length > 0) {
+                for (let i = 0; i < requiredProps.length; i++) {
+                    const prop = requiredProps[i];
+                    writeLine(`        const MISSING_${rustConstName(goFieldName(prop))}: u64 = 1 << ${i};`);
+                }
+                writeLine(`        const _MISSING_LAST: u64 = 1 << ${requiredProps.length};`);
+                writeLine(`        let mut missing = _MISSING_LAST - 1;`);
+                writeLine("");
+            }
+
+            writeLine(`        let k = dec.peek_kind();`);
+            writeLine(`        if k != b'{' {`);
+            writeLine(`            return Err(err_not_object(k));`);
+            writeLine(`        }`);
+            writeLine(`        dec.read_token()?;`);
+            writeLine("");
+
+            writeLine(`        while dec.peek_kind() != b'}' {`);
+            writeLine(`            let name = dec.read_value()?;`);
+            writeLine(`            match name {`);
+
+            for (const prop of structure.properties) {
+                writeLine(`                ${rustByteStr(`"${prop.name}"`)} => {`);
+                if (!prop.optional && !prop.omitzeroValue) {
+                    writeLine(`                    missing &= !MISSING_${rustConstName(goFieldName(prop))};`);
+                }
                 // Reject null for fields whose types cannot represent null but whose Go types
                 // silently accept it (pointers, slices, maps).
                 const resolvedType = resolveType(prop.type);
                 const goTypeAcceptsNull = (prop.optional || resolvedType.needsPointer || resolvedType.name.startsWith("[]") || resolvedType.name.startsWith("map[")) && !prop.omitzeroValue;
-                const rejectNull = goTypeAcceptsNull && !typeCanBeNull(prop.type);
-                writeLine(`            StructureMember { quoted: ${rustStr(`"${prop.name}"`)}, required: ${required}, reject_null: ${rejectNull} },`);
-            }
-            writeLine(`        ];`);
-            writeLine(`        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {`);
-            members.forEach((prop, i) => {
-                // The last member is the `_` arm: `i` is always a member index.
-                const arm = i === members.length - 1 ? "_" : `${i}`;
-                const resolvedType = resolveType(prop.type);
-                const field = `&mut self.${rustFieldName(goFieldName(prop))}`;
+                if (goTypeAcceptsNull && !typeCanBeNull(prop.type)) {
+                    writeLine(`                    if dec.peek_kind() == b'n' {`);
+                    writeLine(`                        return Err(err_null(${rustStr(prop.name)}));`);
+                    writeLine(`                    }`);
+                }
                 if (resolvedType.name.startsWith("map[string]")) {
                     // PORT: `IndexMap<String, V>` decodes as Go `collections.OrderedMap`; a Go
                     // map field gets the v2 map arshaler's kind error (`unmarshal_go_map`).
-                    writeLine(`            ${arm} => unmarshal_go_map(dec, ${field}, ${rustStr(goReflectTypeName(resolvedType.name))}),`);
+                    writeLine(`                    unmarshal_go_map(dec, &mut self.${rustFieldName(goFieldName(prop))}, ${rustStr(goReflectTypeName(resolvedType.name))})?;`);
                 }
                 else {
-                    writeLine(`            ${arm} => json_unmarshal_decode(dec, ${field}),`);
+                    writeLine(`                    json_unmarshal_decode(dec, &mut self.${rustFieldName(goFieldName(prop))})?;`);
                 }
-            });
-            writeLine(`        })`);
+                writeLine(`                }`);
+            }
+
+            writeLine(`                _ => {`);
+            writeLine(`                    dec.skip_value()?;`);
+            writeLine(`                }`);
+            writeLine(`            }`);
+            writeLine(`        }`);
+            writeLine("");
+
+            writeLine(`        dec.read_token()?;`);
+            writeLine("");
+
+            if (requiredProps.length > 0) {
+                writeLine(`        if missing != 0 {`);
+                writeLine(`            let mut missing_props: Vec<String> = Vec::new();`);
+                for (const prop of requiredProps) {
+                    writeLine(`            if missing & MISSING_${rustConstName(goFieldName(prop))} != 0 {`);
+                    writeLine(`                missing_props.push(${rustStr(prop.name)}.to_string());`);
+                    writeLine(`            }`);
+                }
+                writeLine(`            return Err(err_missing(&missing_props));`);
+                writeLine(`        }`);
+                writeLine("");
+            }
+
+            writeLine(`        Ok(())`);
             writeLine(`    }`);
             writeLine(`}`);
             writeLine("");
@@ -3282,7 +3318,7 @@ function generateCode(): Map<string, string> {
             writeLine(`        }`);
             writeLine(`        // PORT: Go writes the method as a raw JSON string value; the method`);
             writeLine(`        // names need no escaping, so the string marshaler writes the same bytes.`);
-            writeLine(`        marshal_field(enc, &mut first, "method", &method)?;`);
+            writeLine(`        marshal_field(enc, &mut first, "method", method)?;`);
             writeLine(`        marshal_field(enc, &mut first, "registerOptions", &opts)?;`);
             writeLine(`        write_object_end(enc);`);
             writeLine(`        Ok(())`);

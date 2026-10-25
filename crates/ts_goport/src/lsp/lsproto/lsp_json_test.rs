@@ -143,7 +143,7 @@ fn test_unmarshal_rejects_null_for_optional_non_nullable_fields() {
     ];
 
     for mut tt in tests {
-        let err = json_unmarshal(tt.input.as_bytes(), &mut tt.target, &[]);
+        let err = json_unmarshal(tt.input.as_bytes(), &mut *tt.target, &[]);
         assert_error_contains(tt.name, &err, tt.err_text);
     }
 }
@@ -186,7 +186,7 @@ fn test_unmarshal_accepts_null_for_nullable_fields() {
     ];
 
     for mut tt in tests {
-        let err = json_unmarshal(tt.input.as_bytes(), &mut tt.target, &[]);
+        let err = json_unmarshal(tt.input.as_bytes(), &mut *tt.target, &[]);
         assert_nil_error(tt.name, &err);
     }
 }
@@ -239,7 +239,7 @@ fn test_unmarshal_accepts_omitted_optional_fields() {
     ];
 
     for mut tt in tests {
-        let err = json_unmarshal(tt.input.as_bytes(), &mut tt.target, &[]);
+        let err = json_unmarshal(tt.input.as_bytes(), &mut *tt.target, &[]);
         assert_nil_error(tt.name, &err);
         (tt.check)(tt.name, (*tt.target).as_any());
     }
@@ -283,7 +283,7 @@ fn test_unmarshal_rejects_incomplete_objects() {
     ];
 
     for mut tt in tests {
-        let err = json_unmarshal(tt.input.as_bytes(), &mut tt.target, &[]);
+        let err = json_unmarshal(tt.input.as_bytes(), &mut *tt.target, &[]);
         assert_error_contains(tt.name, &err, tt.err_text);
     }
 }
@@ -605,7 +605,7 @@ fn test_unmarshal_rejects_wrong_types() {
     ];
 
     for mut tt in tests {
-        let err = json_unmarshal(tt.input.as_bytes(), &mut tt.target, &[]);
+        let err = json_unmarshal(tt.input.as_bytes(), &mut *tt.target, &[]);
         assert!(
             err.is_err(),
             "{}: expected error for input {}",

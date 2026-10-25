@@ -386,12 +386,12 @@ pub fn formatting_options(
 
 // Go: json/json.go:14 Marshal. Go ignores the error in the tests
 // (`o, _ := json.Marshal(...)`), which leaves `o` nil.
-pub fn marshal_or_empty<T: MarshalerTo>(input: &T) -> String {
+pub fn marshal_or_empty<T: MarshalerTo + ?Sized>(input: &T) -> String {
     json_marshal(input, &[]).unwrap_or_default()
 }
 
 // Go: json/json.go:49 MarshalIndentWrite
-pub fn marshal_indent_write<T: MarshalerTo>(
+pub fn marshal_indent_write<T: MarshalerTo + ?Sized>(
     output: &mut String,
     input: &T,
     prefix: &str,

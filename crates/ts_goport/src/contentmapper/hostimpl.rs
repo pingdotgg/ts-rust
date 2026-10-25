@@ -1098,7 +1098,7 @@ struct LoggingProtocol {
 impl LoggingProtocol {
     // Go: contentmapper/hostimpl.go:378 loggingProtocol.log
     fn log(&self, direction: &str, message: &dyn MarshalerTo) {
-        match crate::frontend::json::json_marshal_dyn(message, &[]) {
+        match json_marshal(message, &[]) {
             Err(err) => (self.logger)(&format!(
                 "[content mapper: {}] {}: <failed to serialize: {}>",
                 self.mapper_name, direction, err

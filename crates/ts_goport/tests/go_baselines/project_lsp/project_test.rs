@@ -654,7 +654,7 @@ export const value = wrap({ items: [] as Json[] });";
         output.push_str(&format!("// {caption}\n{data}\n\n"));
     };
     let marshal = |value: &dyn ts_goport::frontend::json::MarshalerTo| -> String {
-        ts_goport::frontend::json::json_marshal_indent_dyn(value, "", "  ")
+        ts_goport::frontend::json::json_marshal_indent(value, "", "  ")
             .unwrap_or_else(|err| panic!("{err:?}"))
     };
     let check = |record: &mut dyn FnMut(&str, String)| {

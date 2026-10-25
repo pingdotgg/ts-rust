@@ -1508,7 +1508,7 @@ fn baseline_parse_config_with(
 }
 
 // Go: tsconfigparsing_test.go:1729 writeJsonReadableText
-fn write_json_readable_text<T: MarshalerTo>(
+fn write_json_readable_text<T: MarshalerTo + ?Sized>(
     output: &mut String,
     input: &T,
 ) -> Result<(), JsonError> {
