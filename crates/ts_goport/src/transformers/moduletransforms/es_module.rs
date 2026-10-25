@@ -77,8 +77,7 @@ impl ESModuleTransformer {
         f: impl FnOnce(&mut NodeVisitor<'_, &mut ESModuleTransformer>) -> R,
     ) -> R {
         let emit_context = self.emit_context.clone();
-        let visit = visit_in;
-        let mut visitor = emit_context.new_node_visitor_ref(&visit, self);
+        let mut visitor = emit_context.new_node_visitor(visit_in, self);
         f(&mut visitor)
     }
 

@@ -10,9 +10,8 @@
 //! - The `visit` callback and every hook get `(node, &mut NodeVisitor)`. Go
 //!   `Visit(node)` gets only the node; the visitor argument replaces the Go
 //!   closure capture of the visitor.
-//! - `visit` is an `Rc<dyn Fn>` or a borrowed `&dyn Fn` ([`VisitFn::Ref`]);
-//!   hooks are `Rc<dyn Fn>`. A callback can call back into the visitor (Go
-//!   recursion through `v.VisitEachChild`). Keep callback state in
+//! - Callbacks are `Rc<dyn Fn>`, so a callback can call back into the visitor
+//!   (Go recursion through `v.VisitEachChild`). Keep callback state in
 //!   `Cell`/`RefCell` or in `ctx`.
 //! - Go has exported and unexported methods with the same name (`VisitNode`
 //!   and `visitNode`). The exported ones keep the plain snake names
@@ -24,14 +23,7 @@ use crate::astdata::NodeData;
 use crate::prelude::*;
 
 /// Go `NodeVisitor.Visit`.
-// PORT: Go stores a func value. `Ref` borrows a callback from the caller's
-// frame, so a per-call transformer visitor does not allocate
-// (`TransformerVisit::with_visitor`). `Rc` is for a visitor that owns its callback.
-pub enum VisitFn<'a, C> {
-    Rc(Rc<dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>),
-    Ref(&'a (dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a)),
-}
-
+pub type VisitFn<'a, C> = Rc<dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>;
 /// A Go hook over one node.
 pub type VisitNodeHook<'a, C> = Rc<dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a>;
 /// A Go hook over a `NodeList`.
@@ -129,24 +121,7 @@ pub fn new_node_visitor<'a, C>(
     ctx: C,
 ) -> NodeVisitor<'a, C> {
     NodeVisitor {
-        visit: Some(VisitFn::Rc(Rc::new(visit))),
-        factory,
-        default_factory: NodeFactory::default(),
-        hooks,
-        emit_context: None,
-        ctx,
-    }
-}
-
-/// As `new_node_visitor`, with a borrowed callback (no allocation).
-pub fn new_node_visitor_ref<'a, C>(
-    visit: &'a (dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a),
-    factory: Option<&'a NodeFactory>,
-    hooks: NodeVisitorHooks<'a, C>,
-    ctx: C,
-) -> NodeVisitor<'a, C> {
-    NodeVisitor {
-        visit: Some(VisitFn::Ref(visit)),
+        visit: Some(Rc::new(visit)),
         factory,
         default_factory: NodeFactory::default(),
         hooks,
@@ -176,14 +151,8 @@ impl<'a, C> NodeVisitor<'a, C> {
     }
 
     /// Calls `v.Visit(node)`. The caller checks that `visit` is set.
-    pub fn call_visit(&mut self, node: Node) -> Node {
-        if let Some(VisitFn::Ref(visit)) = self.visit {
-            return visit(node, self);
-        }
-        let Some(VisitFn::Rc(visit)) = &self.visit else {
-            panic!("NodeVisitor.Visit is nil");
-        };
-        let visit = visit.clone();
+    fn call_visit(&mut self, node: Node) -> Node {
+        let visit = self.visit.clone().expect("NodeVisitor.Visit is nil");
         visit(node, self)
     }
 

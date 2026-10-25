@@ -1,11 +1,11 @@
 //! Port of Go `transformers/transformer.go` plus the shared transformer
 //! contract (`TransformOptions`, `TransformerFactory`) from `chain.go`.
 //!
-//! PORT: Go builds `tx.visitor` once (`transformers/transformer.go:23`) and
-//! returns it from `Visitor()` (`transformer.go:31`). Here each transformer
-//! implements the `Transformer` trait. `TransformerVisit::with_visitor` builds
-//! a `NodeVisitor` for each call with a borrowed callback, so the call does not
-//! allocate. The callback reaches the transformer state through `v.ctx`.
+//! PORT: Go `Transformer` is a struct that each transformer embeds, with a
+//! root visitor built by `NewTransformer(tx.visit, emitContext)`. Here each
+//! transformer is its own struct that implements the `Transformer` trait. The
+//! root visitor is built on demand (see `TransformerVisit::with_visitor`), so
+//! the visit callback can reach the transformer state through `v.ctx`.
 
 use crate::prelude::*;
 
@@ -96,11 +96,9 @@ pub type TransformerFactory = dyn Fn(&TransformOptions) -> Option<TransformerBox
 
 /// The Go `Transformer` root visitor for a transformer struct.
 ///
-/// Go builds `tx.visitor` once (`transformers/transformer.go:23`) and returns
-/// it from `Visitor()` (`transformer.go:31`). The port builds a `NodeVisitor`
-/// for each `with_visitor` call with a borrowed callback, so the call does not
-/// allocate. The transformer is the visitor context (`v.ctx`).
-/// Go `tx.Visitor().VisitNode(n)`
+/// Go `tx.Visitor()` is `EmitContext.NewNodeVisitor(tx.visit)`. A struct
+/// that implements `visit` gets that visitor from `with_visitor`, with the
+/// struct as the visitor context (`v.ctx`). Go `tx.Visitor().VisitNode(n)`
 /// is `self.with_visitor(|v| v.visit_node(n))`, and Go
 /// `tx.Visitor().VisitEachChild(n)` is `self.with_visitor(|v| v.visit_each_child(n))`.
 // PORT: not in Go. It replaces the `visitor` field of Go `Transformer`.
@@ -114,8 +112,10 @@ pub trait TransformerVisit: Sized {
     /// Runs `f` with Go `tx.Visitor()`.
     fn with_visitor<R>(&mut self, f: impl FnOnce(&mut NodeVisitor<'_, &mut Self>) -> R) -> R {
         let emit_context = self.emit_context_rc();
-        let visit = |node: Node, v: &mut NodeVisitor<'_, &mut Self>| v.ctx.visit(node);
-        let mut visitor = emit_context.new_node_visitor_ref(&visit, self);
+        let mut visitor = emit_context.new_node_visitor(
+            |node, v: &mut NodeVisitor<'_, &mut Self>| v.ctx.visit(node),
+            self,
+        );
         f(&mut visitor)
     }
 

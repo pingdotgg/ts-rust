@@ -673,7 +673,8 @@ pub fn build_node_index_table(source_file: Node) -> Rc<NodeIndexTable> {
             visitor.visit_each_child(node);
             let source_file = visitor.ctx.source_file;
             for jsdoc in node.js_doc(source_file) {
-                visitor.call_visit(jsdoc);
+                let visit = visitor.visit.clone().expect("NodeVisitor.Visit is nil");
+                visit(jsdoc, visitor);
             }
             node
         },
@@ -693,7 +694,8 @@ pub fn build_node_index_table(source_file: Node) -> Rc<NodeIndexTable> {
 
     visitor.visit_each_child(root_node);
     for jsdoc in root_node.js_doc(source_file) {
-        visitor.call_visit(jsdoc);
+        let visit = visitor.visit.clone().expect("NodeVisitor.Visit is nil");
+        visit(jsdoc, &mut visitor);
     }
 
     Rc::new(NodeIndexTable {
@@ -957,7 +959,8 @@ fn encode_tree(
     encode_each_child(root_node, &mut visitor, fast);
     if source_file.is_some() {
         for jsdoc in root_node.js_doc(source_file) {
-            visitor.call_visit(jsdoc);
+            let visit = visitor.visit.clone().expect("NodeVisitor.Visit is nil");
+            visit(jsdoc, &mut visitor);
         }
     }
 

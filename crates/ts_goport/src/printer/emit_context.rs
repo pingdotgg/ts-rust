@@ -309,22 +309,6 @@ impl EmitContext {
         visitor
     }
 
-    /// As `new_node_visitor`, with a borrowed callback (no allocation).
-    pub fn new_node_visitor_ref<'a, C>(
-        &'a self,
-        visit: &'a (dyn Fn(Node, &mut NodeVisitor<'a, C>) -> Node + 'a),
-        ctx: C,
-    ) -> NodeVisitor<'a, C> {
-        let mut visitor = crate::ast::visitor::new_node_visitor_ref(
-            visit,
-            Some(&self.factory().ast),
-            NodeVisitorHooks::default(),
-            ctx,
-        );
-        visitor.emit_context = Some(self);
-        visitor
-    }
-
     //
     // Environment tracking
     //
