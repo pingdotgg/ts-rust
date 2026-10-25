@@ -1442,12 +1442,19 @@ pub const DETACHED_STORE_LIMIT: usize = 0x4000_0000;
 pub(crate) const FILE_ID_LIMIT: usize = 1 << 28;
 /// AST node records, step 3: a file id below this has its entry in
 /// `FILE_BLOCKS`; a higher one in a chunk of `HIGH_BLOCKS`.
+// SIZE (bssblocks2): 16,384 entries, 1 MiB of `.data` (65,536 took 4 MiB).
+// It is the smallest power of two above the ids of the largest timing
+// project (Sentry, 12,957 files), so a single program reads no id on the
+// cold path. A language server takes one id per edit and gets there after
+// about 16,000 edits.
 #[cfg(not(target_family = "wasm"))]
-const LOW_BLOCKS: usize = 1 << 16;
-/// Entries per `HIGH_BLOCKS` chunk: 1 MiB of entries per chunk, and 16,380
-/// chunk cells (256 KiB of `.data`) up to `FILE_ID_LIMIT`.
+const LOW_BLOCKS: usize = 1 << 14;
+/// Entries per `HIGH_BLOCKS` chunk: 4 MiB of entries per chunk, made at the
+/// first id in it, and 4,096 chunk cells (64 KiB of `.data`) up to
+/// `FILE_ID_LIMIT`.
+// SIZE (bssblocks2): chunks of 2^14 ids took 16,383 cells (256 KiB).
 #[cfg(not(target_family = "wasm"))]
-const HIGH_CHUNK: usize = 1 << 14;
+const HIGH_CHUNK: usize = 1 << 16;
 /// wasm: linear memory holds all of `FILE_BLOCKS` from the start, set or
 /// not, so it has 8,192 entries (512 KiB, where 65,536 took 4 MiB). A large
 /// program can have more files (VS Code has 11,014), and file ids are never
@@ -1461,9 +1468,12 @@ const LOW_BLOCKS: usize = 1 << 13;
 #[cfg(target_family = "wasm")]
 const HIGH_CHUNK: usize = 1 << 13;
 
-// A real file id is never `LOCAL_STORE`, and the chunks end at the limit.
+/// The number of `HIGH_BLOCKS` chunks. The last one can go past
+/// `FILE_ID_LIMIT`; no id there is ever set or read.
+const HIGH_CHUNKS: usize = (FILE_ID_LIMIT - LOW_BLOCKS).div_ceil(HIGH_CHUNK);
+
+// A real file id is never `LOCAL_STORE`.
 const _: () = assert!(FILE_ID_LIMIT <= LOCAL_STORE);
-const _: () = assert!((FILE_ID_LIMIT - LOW_BLOCKS) % HIGH_CHUNK == 0);
 
 /// The end of the new file ids (`BuildStores::next_id`,
 /// `publish_file_stores`).
@@ -1739,17 +1749,29 @@ const _: () = assert!(std::mem::size_of::<BlockEntry>() == 64);
 
 /// AST node records, step 3: the entries of the file ids below
 /// `LOW_BLOCKS`. A `OnceLock` is not all zero bytes, so this is `.data` in
-/// the binary. Native: 4 MiB, and a page of it costs memory only when an
+/// the binary. Native: 1 MiB, and a page of it costs memory only when an
 /// entry in it is set. wasm: 512 KiB, all of it in linear memory from the
 /// start.
 static FILE_BLOCKS: [BlockEntry; LOW_BLOCKS] = [const { BlockEntry(OnceLock::new()) }; LOW_BLOCKS];
 
 /// The entries of the file ids from `LOW_BLOCKS` on, in chunks of
 /// `HIGH_CHUNK` ids, each made by the first publish of an id in it. A
-/// process with many programs (a test binary, a long watch) gets there.
-static HIGH_BLOCKS: [OnceLock<Box<[BlockEntry; HIGH_CHUNK]>>;
-    (FILE_ID_LIMIT - LOW_BLOCKS) / HIGH_CHUNK] =
-    [const { OnceLock::new() }; (FILE_ID_LIMIT - LOW_BLOCKS) / HIGH_CHUNK];
+/// process with many programs (a test binary, a long watch, a long
+/// language server session) gets there. Native: 64 KiB of `.data`.
+static HIGH_BLOCKS: [OnceLock<Box<[BlockEntry; HIGH_CHUNK]>>; HIGH_CHUNKS] =
+    [const { OnceLock::new() }; HIGH_CHUNKS];
+
+// SIZE (bssblocks2): both tables are `.data` bytes of every binary. These
+// fail the build when one grows back.
+const _: () = assert!(
+    std::mem::size_of_val(&FILE_BLOCKS) <= 1 << 20,
+    "FILE_BLOCKS is over 1 MiB of .data"
+);
+#[cfg(not(target_family = "wasm"))]
+const _: () = assert!(
+    std::mem::size_of_val(&HIGH_BLOCKS) <= 64 << 10,
+    "HIGH_BLOCKS is over 64 KiB of .data"
+);
 
 /// The next unused file id. Only `publish_file_stores` changes it.
 static PUBLISHED: AtomicUsize = AtomicUsize::new(0);
@@ -1857,8 +1879,8 @@ fn set_file_block(file: usize, block: FileBlock) {
 }
 
 /// A new `HIGH_BLOCKS` chunk, made on the heap: `Box::new` of the array
-/// can make it on the stack first (1 MiB), which a test thread or wasm
-/// does not have.
+/// can make it on the stack first (4 MiB native), which a test thread or
+/// wasm does not have.
 fn new_high_chunk() -> Box<[BlockEntry; HIGH_CHUNK]> {
     let chunk: Box<[BlockEntry]> = (0..HIGH_CHUNK)
         .map(|_| BlockEntry(OnceLock::new()))
@@ -9486,9 +9508,8 @@ mod tests {
 
     // AST node records, step 3: a file id from `LOW_BLOCKS` on has its
     // block in a chunk of `HIGH_BLOCKS` (a process with many programs).
-    // This test process never gets that many file ids, so the test sets
-    // the block of the last file id, which no publish reaches, and reads
-    // its node through the node reads.
+    // The test sets the block of the last file id, which no publish
+    // reaches, and reads its node through the node reads.
     #[test]
     fn high_file_ids_read_their_block_from_a_chunk() {
         set_and_read_high_file_block(FILE_ID_LIMIT - 1);
@@ -9616,7 +9637,13 @@ mod tests {
         );
         assert!(file_block(file - 1).is_none(), "the id before");
         assert!(file_block(file - HIGH_CHUNK).is_none(), "another chunk");
-        assert!(file_block(LOW_BLOCKS).is_none(), "the first chunk");
+        // bssblocks2: this test process can publish more than `LOW_BLOCKS`
+        // ids (16,384); then the first chunk has a block. The publish
+        // counts its ids before it sets a block.
+        assert!(
+            file_block(LOW_BLOCKS).is_none() || PUBLISHED.load(Ordering::Acquire) > LOW_BLOCKS,
+            "the first chunk"
+        );
         assert!(file_block(FILE_ID_LIMIT).is_none(), "no file id");
     }
 

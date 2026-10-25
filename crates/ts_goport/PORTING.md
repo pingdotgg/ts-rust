@@ -333,7 +333,7 @@ methods reach the AST through it.
   records, kids and a `BlockFile` with the node column, facts, root,
   foreign parents, links, and the store and `GoFile` of a static
   publish), in a
-  static array for ids below 2^16 (`FILE_BLOCKS`, one cache line per
+  static array for ids below 2^14 (`FILE_BLOCKS`, one cache line per
   entry) and in chunks made on demand above (`HIGH_BLOCKS`, read in a cold
   block that calls the empty `high_block_path`). So the first program, a
   later program (`tsc -b`, watch, an edited file) and the node shell of a
