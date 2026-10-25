@@ -76,7 +76,7 @@ pub fn add_file_changes(
             }
         };
     let mut file_names: Vec<&String> = request.files.keys().collect();
-    crate::gostd::slices::stable_sort_by(&mut file_names, Ord::cmp);
+    file_names.sort();
     let mut overlay_files: FxHashSet<tspath::Path> =
         FxHashSet::with_capacity_and_hasher(request.files.len(), Default::default());
     for file_name in file_names {
@@ -112,12 +112,12 @@ pub fn add_file_changes(
         }
     };
     let mut directory_names: Vec<&String> = request.directories.keys().collect();
-    crate::gostd::slices::stable_sort_by(&mut directory_names, Ord::cmp);
+    directory_names.sort();
     for directory_name in directory_names {
         add_replacement(summary, directory_name);
     }
     let mut link_names: Vec<&String> = request.symlinks.keys().collect();
-    crate::gostd::slices::stable_sort_by(&mut link_names, Ord::cmp);
+    link_names.sort();
     for link_name in link_names {
         add_replacement(summary, link_name);
     }

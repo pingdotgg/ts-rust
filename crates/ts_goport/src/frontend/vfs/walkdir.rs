@@ -112,7 +112,7 @@ impl Walker<'_, '_> {
         let directories: FxHashSet<&str> = entries.directories.iter().map(String::as_str).collect();
         let mut names: Vec<&str> = entries.directories.iter().map(String::as_str).collect();
         names.extend(entries.files.iter().map(String::as_str));
-        crate::gostd::slices::stable_sort_by(&mut names, Ord::cmp);
+        names.sort_unstable();
         for name in names {
             let child_path = combine_paths(path, &[name]);
             if !self.same_root(&child_path) {

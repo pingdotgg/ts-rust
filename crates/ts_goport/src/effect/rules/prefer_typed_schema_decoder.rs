@@ -130,9 +130,7 @@ pub fn analyze_prefer_typed_schema_decoder(
     }
     // PORT: Go `sort.Slice` is not stable; the port sorts stably. Matches
     // with the same start come from one decoder name node.
-    crate::gostd::slices::stable_sort_by(&mut matches, |a, b| {
-        a.location.pos().cmp(&b.location.pos())
-    });
+    matches.sort_by(|a, b| a.location.pos().cmp(&b.location.pos()));
 
     matches
 }

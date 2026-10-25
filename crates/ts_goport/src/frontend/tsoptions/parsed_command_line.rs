@@ -972,10 +972,8 @@ impl ParsedCommandLine {
         }
         // Identity entries prevent shorter mappings from claiming a longer registered extension.
         // The runtime helper uses the first match, so emit the longest extensions first.
-        // PORT: `stable_sort_by` is stable, as Go `slices.SortStableFunc`.
-        crate::gostd::slices::stable_sort_by(&mut result, |a, b| {
-            b.source.len().cmp(&a.source.len())
-        });
+        // PORT: `sort_by` is stable, as Go `slices.SortStableFunc`.
+        result.sort_by(|a, b| b.source.len().cmp(&a.source.len()));
         result
     }
 

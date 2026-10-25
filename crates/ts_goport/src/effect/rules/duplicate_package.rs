@@ -94,7 +94,7 @@ fn compute_duplicate_package_diags(
 
     // Sort names for deterministic ordering.
     let mut names: Vec<String> = by_name.keys().cloned().collect();
-    crate::gostd::slices::stable_sort_by(&mut names, Ord::cmp);
+    names.sort();
 
     for name in names {
         let entries = &by_name[&name];

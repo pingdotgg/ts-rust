@@ -943,7 +943,7 @@ mod tests {
             took.push(ended.saturating_duration_since(canceller.join().unwrap()));
             assert_eq!(cycles, 0);
         }
-        crate::gostd::slices::stable_sort_by(&mut took, Ord::cmp);
+        took.sort();
         assert!(
             took[10] < std::time::Duration::from_millis(10),
             "median {:?} from the cancel to the end of run_loop",

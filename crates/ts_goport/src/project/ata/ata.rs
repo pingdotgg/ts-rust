@@ -284,8 +284,8 @@ impl TypingsInstaller {
     ) -> Result<TypingsInstallResult, GoError> {
         let mut result = self.discover_and_install_typings(ctx, request).await;
         if let Ok(result) = &mut result {
-            crate::gostd::slices::stable_sort_by(&mut result.typings_files, Ord::cmp);
-            crate::gostd::slices::stable_sort_by(&mut result.files_to_watch, Ord::cmp);
+            result.typings_files.sort();
+            result.files_to_watch.sort();
             request.logger.log(&format!(
                 "ATA:: Got install request for: {}",
                 request.project_id.string()

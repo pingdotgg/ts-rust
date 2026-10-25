@@ -1869,7 +1869,7 @@ mod tests {
             ));
             true
         });
-        crate::gostd::slices::stable_sort_by(&mut entries, Ord::cmp);
+        entries.sort();
         entries
     }
 

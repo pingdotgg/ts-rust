@@ -404,7 +404,7 @@ impl ApiStabilityAnalysis {
                 .copied()
                 .filter(|symbol| !seen.contains(symbol))
                 .collect();
-            crate::gostd::slices::stable_sort_by(&mut missing, |&left, &right| {
+            missing.sort_by(|&left, &right| {
                 crate::scanner_util::compare_go_strings(
                     &api_stability_symbol_visit_key(c, left),
                     &api_stability_symbol_visit_key(c, right),
@@ -420,7 +420,7 @@ impl ApiStabilityAnalysis {
                 .copied()
                 .filter(|key| !seen.contains(key))
                 .collect();
-            crate::gostd::slices::stable_sort_by(&mut missing, |left, right| {
+            missing.sort_by(|left, right| {
                 crate::scanner_util::compare_go_strings(
                     &api_stability_type_visit_key(c, left),
                     &api_stability_type_visit_key(c, right),
@@ -437,7 +437,7 @@ impl ApiStabilityAnalysis {
                 .copied()
                 .filter(|key| !seen.contains(key))
                 .collect();
-            crate::gostd::slices::stable_sort_by(&mut missing, |left, right| {
+            missing.sort_by(|left, right| {
                 crate::scanner_util::compare_go_strings(
                     &api_stability_type_visit_key(c, left),
                     &api_stability_type_visit_key(c, right),
@@ -454,7 +454,7 @@ impl ApiStabilityAnalysis {
                 .copied()
                 .filter(|key| !seen.contains(key))
                 .collect();
-            crate::gostd::slices::stable_sort_by(&mut missing, |left, right| {
+            missing.sort_by(|left, right| {
                 crate::scanner_util::compare_go_strings(
                     &api_stability_signature_visit_key(c, left),
                     &api_stability_signature_visit_key(c, right),

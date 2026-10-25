@@ -1844,7 +1844,7 @@ pub mod internal_language {
                     variant_index(a) < variant_index(b)
                 });
                 // Go: internal/language/compose.go:28 sort.Strings(b.extensions)
-                crate::gostd::slices::stable_sort_by(&mut self.extensions, Ord::cmp);
+                self.extensions.sort();
 
                 if !self.private.is_empty() {
                     self.extensions.push(self.private.clone());

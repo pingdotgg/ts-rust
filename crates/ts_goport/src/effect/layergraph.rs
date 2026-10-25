@@ -1467,9 +1467,7 @@ fn layer_magic_from_output_types(
     // Sort roots by layer shape, then provides/requires count.
     // PORT: Go `slices.SortFunc`; the comparison ends with the index, so the
     // order is total and the sort kind does not show.
-    crate::gostd::slices::stable_sort_by(&mut root_indices, |&a, &b| {
-        compare_nodes_by_order(&reversed_graph, a, b).cmp(&0)
-    });
+    root_indices.sort_by(|&a, &b| compare_nodes_by_order(&reversed_graph, a, b).cmp(&0));
 
     // Step 4: Run custom DFS post-order with ordering on the reversed graph
     let all_nodes = dfs_post_order_with_order(&reversed_graph, &root_indices);
@@ -1583,9 +1581,7 @@ fn neighbors_outgoing_sorted(
     node_index: NodeIndex,
 ) -> Vec<NodeIndex> {
     let mut neighbors = g.neighbors_directed(node_index, Direction::Outgoing);
-    crate::gostd::slices::stable_sort_by(&mut neighbors, |&a, &b| {
-        compare_nodes_by_order(g, a, b).cmp(&0)
-    });
+    neighbors.sort_by(|&a, &b| compare_nodes_by_order(g, a, b).cmp(&0));
     neighbors
 }
 

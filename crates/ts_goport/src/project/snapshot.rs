@@ -65,7 +65,7 @@ impl Snapshot {
                         .iter()
                         .cloned(),
                 );
-                crate::gostd::slices::stable_sort_by(&mut content_mapper_extensions, Ord::cmp);
+                content_mapper_extensions.sort();
                 content_mapper_extensions.dedup();
 
                 let mut content_mapper_watched_files: FxHashSet<tspath::Path> =

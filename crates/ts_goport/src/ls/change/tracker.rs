@@ -183,7 +183,7 @@ impl Tracker {
             changes.shift_remove(file_name);
             unmappable.push(file_name.clone());
         }
-        crate::gostd::slices::stable_sort_by(&mut unmappable, Ord::cmp);
+        unmappable.sort();
         (changes, unmappable)
     }
 

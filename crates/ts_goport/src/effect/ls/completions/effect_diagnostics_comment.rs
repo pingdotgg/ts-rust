@@ -71,7 +71,7 @@ fn run_effect_diagnostics_comment(
 
     // Collect and sort all diagnostic rule names
     let mut names: Vec<&str> = rules::ALL.iter().map(|r| r.name).collect();
-    crate::gostd::slices::stable_sort_by(&mut names, Ord::cmp);
+    names.sort_unstable();
 
     let all_diagnostics = names.join(",");
     let disable_snippet =

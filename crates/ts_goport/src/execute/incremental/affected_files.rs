@@ -1124,7 +1124,7 @@ mod tests {
             .map(base_name)
             .filter(ours)
             .collect();
-        crate::gostd::slices::stable_sort_by(&mut kept, Ord::cmp);
+        kept.sort();
         drop((old, new));
         release_program(first);
         if let Some(warm) = warm {
@@ -1163,7 +1163,7 @@ mod tests {
         let mut c_files: Vec<String> = (0..project.others - updated_others)
             .map(|i| format!("c{i}.ts"))
             .collect();
-        crate::gostd::slices::stable_sort_by(&mut c_files, Ord::cmp);
+        c_files.sort();
         assert_eq!(kept, c_files);
     }
 
@@ -1336,7 +1336,7 @@ mod tests {
             .map(|i| format!("b{i}.ts"))
             .chain((0..project.others).map(|i| format!("c{i}.ts")))
             .collect();
-        crate::gostd::slices::stable_sort_by(&mut others, Ord::cmp);
+        others.sort();
         assert_eq!(kept, others);
     }
 }

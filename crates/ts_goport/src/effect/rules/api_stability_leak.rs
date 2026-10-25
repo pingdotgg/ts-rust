@@ -85,7 +85,7 @@ fn check_api_stability_leaks(ctx: &mut RuleContext<'_, '_>) -> Vec<Diagnostic> {
 fn sorted_api_stability_exports(ctx: &mut RuleContext<'_, '_>, module: SymbolId) -> Vec<SymbolId> {
     let mut exports = ctx.tp.checker.get_exports_of_module_exported(module);
     let c = &*ctx.tp.checker;
-    crate::gostd::slices::stable_sort_by(&mut exports, |&left, &right| {
+    exports.sort_by(|&left, &right| {
         if left.is_nil() || right.is_nil() {
             if left == right {
                 return std::cmp::Ordering::Equal;

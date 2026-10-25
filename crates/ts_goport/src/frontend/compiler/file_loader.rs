@@ -3176,7 +3176,7 @@ mod tests {
                 true
             });
         }
-        crate::gostd::slices::stable_sort_by(&mut package_jsons, Ord::cmp);
+        package_jsons.sort();
         package_jsons.dedup();
         writeln!(out, "package.json {package_jsons:?}").unwrap();
         for (code, args) in traces.borrow().iter() {
@@ -4665,8 +4665,8 @@ declare module "user" { import { x } from "amb"; export const y: typeof x; }
         // One request per mapped file: a file with two requests, or with
         // none, fails here.
         let mut want: Vec<String> = (0..40).map(|i| format!("/src/C{i}.vue")).collect();
-        crate::gostd::slices::stable_sort_by(&mut want, Ord::cmp);
-        crate::gostd::slices::stable_sort_by(&mut serial_transforms, Ord::cmp);
+        want.sort();
+        serial_transforms.sort();
         assert_eq!(serial_transforms, want);
         for attempt in 0..10 {
             let label = format!("mapped_parallel_{attempt}");
@@ -4683,7 +4683,7 @@ declare module "user" { import { x } from "amb"; export const y: typeof x; }
                 .lock()
                 .unwrap()
                 .retain(|name| !held.contains(name));
-            crate::gostd::slices::stable_sort_by(&mut parallel_transforms, Ord::cmp);
+            parallel_transforms.sort();
             assert_eq!(parallel_transforms, want, "one transform per file");
             assert_eq!(parallel.join("\n"), serial.join("\n"));
             if !parse_workers_enabled() {

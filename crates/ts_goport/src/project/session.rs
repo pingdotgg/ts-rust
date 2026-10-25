@@ -2538,7 +2538,7 @@ impl Session {
                 .logf(&format!("  Request wait time: {:?}", timings.request_wait));
         }
         let mut identities: Vec<&String> = timings.mappers.keys().collect();
-        crate::gostd::slices::stable_sort_by(&mut identities, Ord::cmp);
+        identities.sort();
         for identity in identities {
             let mapper = &timings.mappers[identity];
             if !has_content_mapper_operation_timing(mapper) {
@@ -2751,7 +2751,7 @@ impl Session {
                 .iter()
                 .cloned(),
         );
-        crate::gostd::slices::stable_sort_by(&mut extensions, Ord::cmp);
+        extensions.sort();
         extensions.dedup();
 
         // Background tasks may finish out of order; never let an older snapshot's task overwrite the

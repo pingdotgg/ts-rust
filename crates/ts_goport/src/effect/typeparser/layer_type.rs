@@ -93,7 +93,7 @@ impl TypeParser<'_> {
             // Sort so properties containing "LayerTypeId" come first (optimization heuristic)
             // Go sort.SliceStable with less(i, j) = iHas && !jHas.
             let c = &*self.checker;
-            crate::gostd::slices::stable_sort_by(&mut candidates, |&i, &j| {
+            candidates.sort_by(|&i, &j| {
                 let i_has = c.sym(i).name.as_str().contains("LayerTypeId");
                 let j_has = c.sym(j).name.as_str().contains("LayerTypeId");
                 if i_has && !j_has {

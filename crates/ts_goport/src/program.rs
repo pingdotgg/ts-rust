@@ -2560,7 +2560,7 @@ fn bind_order(files: &[(Node, bool)]) -> Vec<usize> {
         .filter(|&i| nodes[i] >= BIG_BIND_FILE)
         .collect();
     // A stable sort: files of the same size keep file order.
-    crate::gostd::slices::stable_sort_by(&mut order, |&a, &b| nodes[b].cmp(&nodes[a]));
+    order.sort_by_key(|&i| std::cmp::Reverse(nodes[i]));
     order.extend((0..files.len()).filter(|&i| nodes[i] < BIG_BIND_FILE));
     order
 }
@@ -4320,7 +4320,7 @@ fn fast_cost_split(
                     .filter(|&target| target != position)
             })
             .collect();
-        crate::gostd::slices::stable_sort_by(&mut targets, Ord::cmp);
+        targets.sort_unstable();
         targets.dedup();
         imports.push(targets);
     }
@@ -7142,7 +7142,7 @@ mod tests {
                 });
                 drop(joined);
                 let mut late: Vec<(usize, bool)> = arrived.iter().collect();
-                crate::gostd::slices::stable_sort_by(&mut late, Ord::cmp);
+                late.sort_unstable();
                 let _ = done.send((early, late));
             });
             let (early, late) = ended

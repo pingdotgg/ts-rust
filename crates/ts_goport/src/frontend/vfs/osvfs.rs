@@ -779,9 +779,7 @@ fn os_read_dir(dirname: &str) -> io::Result<Vec<DirEntry>> {
                 .cmp(&crate::scanner_util::go_string_bytes(&b.name)) as i32
         });
     } else {
-        crate::gostd::slices::stable_sort_by(&mut entries, |a, b| {
-            a.name.as_bytes().cmp(b.name.as_bytes())
-        });
+        entries.sort_unstable_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
     }
     Ok(entries)
 }
@@ -1592,7 +1590,7 @@ mod tests {
                 .into_iter()
                 .map(|entry| (entry.name, entry.typ))
                 .collect();
-            crate::gostd::slices::stable_sort_by(&mut names, |a, b| a.0.cmp(&b.0));
+            names.sort_by(|a, b| a.0.cmp(&b.0));
             names
         };
         let from_d_type = names(read_dir_entries(root, &Rc::from(root)));

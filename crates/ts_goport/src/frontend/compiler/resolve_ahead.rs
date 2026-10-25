@@ -1401,7 +1401,7 @@ fn debug_check_answer(
 
 fn sorted(paths: &FxHashSet<Path>) -> Vec<&str> {
     let mut paths: Vec<&str> = paths.iter().map(Path::as_str).collect();
-    crate::gostd::slices::stable_sort_by(&mut paths, Ord::cmp);
+    paths.sort_unstable();
     paths
 }
 

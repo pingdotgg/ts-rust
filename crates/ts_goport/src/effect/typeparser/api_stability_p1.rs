@@ -1339,7 +1339,7 @@ pub fn sort_api_stability_dependencies(c: &Checker, deps: &mut [ApiStabilityDepe
             )
         })
         .collect();
-    crate::gostd::slices::stable_sort_by(deps, |left, right| {
+    deps.sort_by(|left, right| {
         let left_name = &names[&(left.symbol, left.signature, left.declaration)];
         let right_name = &names[&(right.symbol, right.signature, right.declaration)];
         if left_name != right_name {

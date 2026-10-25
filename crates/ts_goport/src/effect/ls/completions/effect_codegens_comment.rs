@@ -31,7 +31,7 @@ fn run_effect_codegens_comment(
 
     // Collect and sort all codegen names
     let mut names: Vec<&str> = codegens::ALL.iter().map(|c| c.name).collect();
-    crate::gostd::slices::stable_sort_by(&mut names, Ord::cmp);
+    names.sort_unstable();
 
     let all_codegens = names.join(",");
     let enable_snippet = format!("${{1|{all_codegens}|}} $0");
