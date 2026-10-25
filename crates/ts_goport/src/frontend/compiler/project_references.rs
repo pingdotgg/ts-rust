@@ -856,7 +856,10 @@ impl ProjectReferenceDtsFakingVfs {
         // If it contains node_modules check if its one of the symlinked path we know of
         let mut exists = false;
         for (directory_path, known_directory_link) in &known_directory_links {
-            if !file_or_directory_path.starts_with(directory_path.as_str()) {
+            // PORT: Go also skips `directoryPath == fileOrDirectoryPath`. The
+            // port's keys end in '/' and `file_or_directory_path` is normal
+            // (no last '/'), so `contains_path` already rejects that case.
+            if !directory_path.contains_path(&file_or_directory_path) {
                 continue;
             }
             // ts#64544: the real name keeps the spelling of the real

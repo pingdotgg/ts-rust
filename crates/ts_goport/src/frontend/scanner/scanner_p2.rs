@@ -108,8 +108,9 @@ fn window_identifier_token(window: &[u8; IDENT_WINDOW], len: usize) -> SyntaxKin
         return SyntaxKind::Identifier;
     }
     let (lo_mask, hi_mask) = KEYWORD_WORD_MASKS[len];
-    let lo = u64::from_le_bytes(window[..8].try_into().unwrap_or_default()) & lo_mask;
-    let hi = u64::from_le_bytes(window[8..].try_into().unwrap_or_default()) & hi_mask;
+    let word = u128::from_le_bytes(*window);
+    let lo = word as u64 & lo_mask;
+    let hi = (word >> 64) as u64 & hi_mask;
     let slot = &KEYWORD_SLOTS[keyword_slot(lo)];
     // A name has no zero byte, so equal padded words mean an equal text.
     if slot.lo == lo && slot.hi == hi {

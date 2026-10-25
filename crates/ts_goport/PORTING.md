@@ -1236,7 +1236,9 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
     and a `tsc -p` without watch pay nothing per block id. A worker has one
     generator and only it moves its block counter, so the log does not
     list the blocks: block k starts k blocks after the counter at
-    `record_symbol_ids`, with k * 256 block ids before it. The global
+    `record_symbol_ids`. On a worker that counts its block ids, k * 256
+    block ids come before block k. A worker that does not count them (the
+    one worker of its pool) logs 0 there, as no clock is read. The global
     counter counts on by the winning global ids and the
     global ids of the workers' own symbols, in clock order; the block
     counter counts on by every block, whole blocks in clock order of the
@@ -1258,9 +1260,12 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
     depends on timing outside tests, as in Go; a test builds each task to
     the end before the next one starts.
   - wasm makes each checker of a pool at its first job. Before a pool
-    hands its ids on, it makes each checker that had no job
-    (`program::make_unmade_checkers`), with the pool's program current and
-    outside the `POOLS` borrow. Go makes every checker of a pool at once
+    that carries hands its ids on (when its task is built or watch mode
+    makes the next program, when its program is released, and before the
+    next `--singleThreaded` pool takes them), it makes each checker that
+    had no job (`program::make_unmade_checkers`), with the pool's program
+    current and outside the `POOLS` borrow. Go makes every checker of a
+    pool at once
     (checkerpool.go:367), and a native worker makes its checker when it
     starts, so the ids of each `NewChecker` count. A checker has no job
     when a syntax error stops the check (program.go:2066) and it owns no
@@ -1287,7 +1292,12 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
 
   Other API pools and the language server's programs and search threads
   do not carry ids: each program's checkers count from the loading
-  thread's ids.
+  thread's ids. This includes the API build orchestrator (`handleBuild`,
+  ts#64158): it builds `tsc -b` tasks but does not call
+  `carry_symbol_ids_of_every_pool`, so only its one-checker
+  `--singleThreaded` pools carry, as above. Go's builds there share the
+  process counters with the other requests, so a later build counts on
+  from the ids before it. Known gap; no test covers it.
 - One thread can hold checkers of several programs (the language server's
   dispatch thread). Make a checker's program current while the checker runs
   (`core::enter_program`): the `program.rs` functions that checker code

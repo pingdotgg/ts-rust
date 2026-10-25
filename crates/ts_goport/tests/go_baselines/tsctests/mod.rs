@@ -1,3 +1,4 @@
+mod build_extends_cycle_order;
 mod build_info_corrupt;
 mod build_prefetch_rereads;
 mod checker_common_source_directory;
@@ -8,6 +9,7 @@ mod extended_counts;
 mod file_delete;
 mod flag_bytes;
 mod identity_matching_slots;
+mod import_type_qualifier_depth;
 mod jsdoc_cut;
 mod large_union_order;
 mod never_intersection_order;
