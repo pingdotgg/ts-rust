@@ -2472,6 +2472,8 @@ pub fn with_synthetic_list<R>(list: SyntheticList, f: impl FnOnce(&SyntheticList
 }
 
 /// The number of nodes in `list`.
+// SIZE (inlineout1): out of line, as `synthetic_list_node`.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_list_len(list: SyntheticList) -> usize {
     ARENA.with(|a| {
@@ -2521,6 +2523,9 @@ pub fn synthetic_list_nodes_and_loc(list: SyntheticList) -> (Vec<Node>, TextRang
 }
 
 /// Node `i` of `list`. Panics when `i` is out of range, like Go.
+// SIZE (inlineout1): out of line. PGO put a copy (about 700 bytes) in the
+// synthetic arm of each hot `NodeSlice::get`, which a check never takes.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_list_node(list: SyntheticList, i: usize) -> Node {
     ARENA.with(|a| {
@@ -2796,6 +2801,9 @@ pub fn alloc_synthetic_print_node(kind: SyntaxKind, data: BoxedData) -> Node {
     alloc_synthetic_node_in(true, kind, data)
 }
 
+// SIZE (inlineout1): out of line, as `synthetic_child_id`: PGO put a copy
+// in the synthetic arm of hot `NodeFactory::new_node` callers.
+#[inline(never)]
 fn alloc_synthetic_node_in(print: bool, kind: SyntaxKind, data: BoxedData) -> Node {
     debug_assert!(
         data.view().matches_syntax_kind(kind),
@@ -2946,6 +2954,10 @@ pub fn source_file_copy_from(node: Node, other: Node) {
 /// The synthetic-space id that stands for `n` inside synthetic `NodeData`.
 /// Nil maps to the nil slot. A parsed node gets (or reuses) an alias slot,
 /// which belongs to its file version or to the thread (`alias_owner`).
+// SIZE (inlineout1): out of line. PGO put a copy (about 1.6 KB) in each of
+// 153 hot factory callers (`NodeFactory::id`), where the parser's store
+// target never takes it.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_child_id(n: Node) -> crate::astdata::NodeId {
     if n.is_nil() {
@@ -3016,6 +3028,8 @@ pub fn new_synthetic_node_list(nodes: &[Node], loc: TextRange) -> NodeList {
 /// `new_synthetic_node_list`; with `print` (a to-string factory), in a
 /// print scope the list belongs to the print owner
 /// (`alloc_synthetic_print_node`).
+// SIZE (inlineout1): out of line, as `alloc_synthetic_node_in`.
+#[inline(never)]
 #[must_use]
 pub fn new_synthetic_node_list_in(print: bool, nodes: &[Node], loc: TextRange) -> NodeList {
     let list = ts_list(nodes, loc, false, crate::astdata::ModifierFlags::default());
@@ -3045,6 +3059,8 @@ pub fn new_synthetic_modifier_list_in(print: bool, nodes: &[Node], loc: TextRang
 // PORT: a synthetic node that takes a list gets a copy, so the list has the
 // lifetime of the node. `NodeList` equality on the copy is false where Go
 // compares equal pointers.
+// SIZE (inlineout1): out of line, as `alloc_synthetic_node_in`.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_list_value(print: bool, list: NodeList) -> Option<crate::astdata::NodeList> {
     let copy = list_copy(list)?;
@@ -3073,6 +3089,8 @@ fn list_copy(list: NodeList) -> Option<SyntheticListData> {
 /// Like `synthetic_list_value` for a list field that astdata requires. Go
 /// `nil` becomes an empty list with an undefined `Loc`.
 // PORT: Go keeps `nil`; `NodeList::is_nil` on that field is false here.
+// SIZE (inlineout1): out of line, as `alloc_synthetic_node_in`.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_req_list_value(print: bool, list: NodeList) -> crate::astdata::NodeList {
     synthetic_list_value(print, list).unwrap_or_else(|| {
