@@ -23,46 +23,22 @@ pub struct InlineCompletionContext {
 impl UnmarshalerFrom for InlineCompletionContext {
     // Go: (s *InlineCompletionContext) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_TRIGGER_KIND: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"triggerKind\"" => {
-                    missing &= !MISSING_TRIGGER_KIND;
-                    json_unmarshal_decode(dec, &mut self.trigger_kind)?;
-                }
-                b"\"selectedCompletionInfo\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("selectedCompletionInfo"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.selected_completion_info)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_TRIGGER_KIND != 0 {
-                missing_props.push("triggerKind".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"triggerKind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"selectedCompletionInfo\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.trigger_kind),
+            _ => json_unmarshal_decode(dec, &mut self.selected_completion_info),
+        })
     }
 }
 
@@ -111,48 +87,22 @@ pub struct StringValue {
 impl UnmarshalerFrom for StringValue {
     // Go: (s *StringValue) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const MISSING_VALUE: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"value\"" => {
-                    missing &= !MISSING_VALUE;
-                    json_unmarshal_decode(dec, &mut self.value)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            if missing & MISSING_VALUE != 0 {
-                missing_props.push("value".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"value\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            _ => json_unmarshal_decode(dec, &mut self.value),
+        })
     }
 }
 
@@ -186,30 +136,14 @@ pub struct InlineCompletionOptions {
 impl UnmarshalerFrom for InlineCompletionOptions {
     // Go: (s *InlineCompletionOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -248,43 +182,14 @@ pub struct TextDocumentContentOptions {
 impl UnmarshalerFrom for TextDocumentContentOptions {
     // Go: (s *TextDocumentContentOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_SCHEMES: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"schemes\"" => {
-                    missing &= !MISSING_SCHEMES;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("schemes"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.schemes)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_SCHEMES != 0 {
-                missing_props.push("schemes".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"schemes\"",
+            required: true,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.schemes),
+        })
     }
 }
 
@@ -1427,48 +1332,22 @@ pub struct Unregistration {
 impl UnmarshalerFrom for Unregistration {
     // Go: (s *Unregistration) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_ID: u64 = 1 << 0;
-        const MISSING_METHOD: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"id\"" => {
-                    missing &= !MISSING_ID;
-                    json_unmarshal_decode(dec, &mut self.id)?;
-                }
-                b"\"method\"" => {
-                    missing &= !MISSING_METHOD;
-                    json_unmarshal_decode(dec, &mut self.method)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_ID != 0 {
-                missing_props.push("id".to_string());
-            }
-            if missing & MISSING_METHOD != 0 {
-                missing_props.push("method".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"id\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"method\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.id),
+            _ => json_unmarshal_decode(dec, &mut self.method),
+        })
     }
 }
 
@@ -1714,246 +1593,232 @@ pub struct ServerCapabilities {
 impl UnmarshalerFrom for ServerCapabilities {
     // Go: (s *ServerCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"positionEncoding\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("positionEncoding"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.position_encoding)?;
-                }
-                b"\"textDocumentSync\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("textDocumentSync"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.text_document_sync)?;
-                }
-                b"\"completionProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("completionProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.completion_provider)?;
-                }
-                b"\"hoverProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("hoverProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.hover_provider)?;
-                }
-                b"\"signatureHelpProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("signatureHelpProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.signature_help_provider)?;
-                }
-                b"\"declarationProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("declarationProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.declaration_provider)?;
-                }
-                b"\"definitionProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("definitionProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.definition_provider)?;
-                }
-                b"\"typeDefinitionProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("typeDefinitionProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.type_definition_provider)?;
-                }
-                b"\"implementationProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("implementationProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.implementation_provider)?;
-                }
-                b"\"referencesProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("referencesProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.references_provider)?;
-                }
-                b"\"documentHighlightProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentHighlightProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_highlight_provider)?;
-                }
-                b"\"documentSymbolProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentSymbolProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_symbol_provider)?;
-                }
-                b"\"codeActionProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeActionProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_action_provider)?;
-                }
-                b"\"codeLensProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeLensProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_lens_provider)?;
-                }
-                b"\"documentLinkProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentLinkProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_link_provider)?;
-                }
-                b"\"colorProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("colorProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.color_provider)?;
-                }
-                b"\"workspaceSymbolProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workspaceSymbolProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.workspace_symbol_provider)?;
-                }
-                b"\"documentFormattingProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentFormattingProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_formatting_provider)?;
-                }
-                b"\"documentRangeFormattingProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentRangeFormattingProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_range_formatting_provider)?;
-                }
-                b"\"documentOnTypeFormattingProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentOnTypeFormattingProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_on_type_formatting_provider)?;
-                }
-                b"\"renameProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("renameProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.rename_provider)?;
-                }
-                b"\"foldingRangeProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("foldingRangeProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.folding_range_provider)?;
-                }
-                b"\"selectionRangeProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("selectionRangeProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.selection_range_provider)?;
-                }
-                b"\"executeCommandProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("executeCommandProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.execute_command_provider)?;
-                }
-                b"\"callHierarchyProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("callHierarchyProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.call_hierarchy_provider)?;
-                }
-                b"\"linkedEditingRangeProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("linkedEditingRangeProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.linked_editing_range_provider)?;
-                }
-                b"\"semanticTokensProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("semanticTokensProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.semantic_tokens_provider)?;
-                }
-                b"\"monikerProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("monikerProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.moniker_provider)?;
-                }
-                b"\"typeHierarchyProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("typeHierarchyProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.type_hierarchy_provider)?;
-                }
-                b"\"inlineValueProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlineValueProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inline_value_provider)?;
-                }
-                b"\"inlayHintProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlayHintProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inlay_hint_provider)?;
-                }
-                b"\"diagnosticProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("diagnosticProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.diagnostic_provider)?;
-                }
-                b"\"inlineCompletionProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlineCompletionProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inline_completion_provider)?;
-                }
-                b"\"workspace\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workspace"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.workspace)?;
-                }
-                b"\"experimental\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("experimental"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.experimental)?;
-                }
-                b"\"_vs_onAutoInsertProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_onAutoInsertProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_on_auto_insert_provider)?;
-                }
-                b"\"_vs_referencesProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_referencesProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_references_provider)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"positionEncoding\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"textDocumentSync\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"completionProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"hoverProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"signatureHelpProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"declarationProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"definitionProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"typeDefinitionProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"implementationProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"referencesProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentHighlightProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentSymbolProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeActionProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeLensProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentLinkProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"colorProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"workspaceSymbolProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentFormattingProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentRangeFormattingProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentOnTypeFormattingProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"renameProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"foldingRangeProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"selectionRangeProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"executeCommandProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"callHierarchyProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"linkedEditingRangeProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"semanticTokensProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"monikerProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"typeHierarchyProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlineValueProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlayHintProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"diagnosticProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlineCompletionProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"workspace\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"experimental\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_onAutoInsertProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_referencesProvider\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.position_encoding),
+            1 => json_unmarshal_decode(dec, &mut self.text_document_sync),
+            2 => json_unmarshal_decode(dec, &mut self.completion_provider),
+            3 => json_unmarshal_decode(dec, &mut self.hover_provider),
+            4 => json_unmarshal_decode(dec, &mut self.signature_help_provider),
+            5 => json_unmarshal_decode(dec, &mut self.declaration_provider),
+            6 => json_unmarshal_decode(dec, &mut self.definition_provider),
+            7 => json_unmarshal_decode(dec, &mut self.type_definition_provider),
+            8 => json_unmarshal_decode(dec, &mut self.implementation_provider),
+            9 => json_unmarshal_decode(dec, &mut self.references_provider),
+            10 => json_unmarshal_decode(dec, &mut self.document_highlight_provider),
+            11 => json_unmarshal_decode(dec, &mut self.document_symbol_provider),
+            12 => json_unmarshal_decode(dec, &mut self.code_action_provider),
+            13 => json_unmarshal_decode(dec, &mut self.code_lens_provider),
+            14 => json_unmarshal_decode(dec, &mut self.document_link_provider),
+            15 => json_unmarshal_decode(dec, &mut self.color_provider),
+            16 => json_unmarshal_decode(dec, &mut self.workspace_symbol_provider),
+            17 => json_unmarshal_decode(dec, &mut self.document_formatting_provider),
+            18 => json_unmarshal_decode(dec, &mut self.document_range_formatting_provider),
+            19 => json_unmarshal_decode(dec, &mut self.document_on_type_formatting_provider),
+            20 => json_unmarshal_decode(dec, &mut self.rename_provider),
+            21 => json_unmarshal_decode(dec, &mut self.folding_range_provider),
+            22 => json_unmarshal_decode(dec, &mut self.selection_range_provider),
+            23 => json_unmarshal_decode(dec, &mut self.execute_command_provider),
+            24 => json_unmarshal_decode(dec, &mut self.call_hierarchy_provider),
+            25 => json_unmarshal_decode(dec, &mut self.linked_editing_range_provider),
+            26 => json_unmarshal_decode(dec, &mut self.semantic_tokens_provider),
+            27 => json_unmarshal_decode(dec, &mut self.moniker_provider),
+            28 => json_unmarshal_decode(dec, &mut self.type_hierarchy_provider),
+            29 => json_unmarshal_decode(dec, &mut self.inline_value_provider),
+            30 => json_unmarshal_decode(dec, &mut self.inlay_hint_provider),
+            31 => json_unmarshal_decode(dec, &mut self.diagnostic_provider),
+            32 => json_unmarshal_decode(dec, &mut self.inline_completion_provider),
+            33 => json_unmarshal_decode(dec, &mut self.workspace),
+            34 => json_unmarshal_decode(dec, &mut self.experimental),
+            35 => json_unmarshal_decode(dec, &mut self.vs_on_auto_insert_provider),
+            _ => json_unmarshal_decode(dec, &mut self.vs_references_provider),
+        })
     }
 }
 
@@ -2214,46 +2079,22 @@ pub struct ServerInfo {
 impl UnmarshalerFrom for ServerInfo {
     // Go: (s *ServerInfo) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_NAME: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"name\"" => {
-                    missing &= !MISSING_NAME;
-                    json_unmarshal_decode(dec, &mut self.name)?;
-                }
-                b"\"version\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("version"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.version)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_NAME != 0 {
-                missing_props.push("name".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"name\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"version\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.name),
+            _ => json_unmarshal_decode(dec, &mut self.version),
+        })
     }
 }
 
@@ -2289,48 +2130,22 @@ pub struct VersionedTextDocumentIdentifier {
 impl UnmarshalerFrom for VersionedTextDocumentIdentifier {
     // Go: (s *VersionedTextDocumentIdentifier) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_URI: u64 = 1 << 0;
-        const MISSING_VERSION: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"uri\"" => {
-                    missing &= !MISSING_URI;
-                    json_unmarshal_decode(dec, &mut self.uri)?;
-                }
-                b"\"version\"" => {
-                    missing &= !MISSING_VERSION;
-                    json_unmarshal_decode(dec, &mut self.version)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_URI != 0 {
-                missing_props.push("uri".to_string());
-            }
-            if missing & MISSING_VERSION != 0 {
-                missing_props.push("version".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"uri\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"version\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.uri),
+            _ => json_unmarshal_decode(dec, &mut self.version),
+        })
     }
 }
 
@@ -2363,30 +2178,14 @@ pub struct SaveOptions {
 impl UnmarshalerFrom for SaveOptions {
     // Go: (s *SaveOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"includeText\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("includeText"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.include_text)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"includeText\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.include_text),
+        })
     }
 }
 
@@ -2421,48 +2220,22 @@ pub struct FileEvent {
 impl UnmarshalerFrom for FileEvent {
     // Go: (s *FileEvent) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_URI: u64 = 1 << 0;
-        const MISSING_TYPE: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"uri\"" => {
-                    missing &= !MISSING_URI;
-                    json_unmarshal_decode(dec, &mut self.uri)?;
-                }
-                b"\"type\"" => {
-                    missing &= !MISSING_TYPE;
-                    json_unmarshal_decode(dec, &mut self.type_)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_URI != 0 {
-                missing_props.push("uri".to_string());
-            }
-            if missing & MISSING_TYPE != 0 {
-                missing_props.push("type".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"uri\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"type\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.uri),
+            _ => json_unmarshal_decode(dec, &mut self.type_),
+        })
     }
 }
 
@@ -2501,46 +2274,22 @@ pub struct FileSystemWatcher {
 impl UnmarshalerFrom for FileSystemWatcher {
     // Go: (s *FileSystemWatcher) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_GLOB_PATTERN: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"globPattern\"" => {
-                    missing &= !MISSING_GLOB_PATTERN;
-                    json_unmarshal_decode(dec, &mut self.glob_pattern)?;
-                }
-                b"\"kind\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("kind"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_GLOB_PATTERN != 0 {
-                missing_props.push("globPattern".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"globPattern\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"kind\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.glob_pattern),
+            _ => json_unmarshal_decode(dec, &mut self.kind),
+        })
     }
 }
 
@@ -2614,90 +2363,64 @@ pub struct Diagnostic {
 impl UnmarshalerFrom for Diagnostic {
     // Go: (s *Diagnostic) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_RANGE: u64 = 1 << 0;
-        const MISSING_MESSAGE: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"range\"" => {
-                    missing &= !MISSING_RANGE;
-                    json_unmarshal_decode(dec, &mut self.range)?;
-                }
-                b"\"severity\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("severity"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.severity)?;
-                }
-                b"\"code\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("code"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code)?;
-                }
-                b"\"codeDescription\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeDescription"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_description)?;
-                }
-                b"\"source\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("source"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.source)?;
-                }
-                b"\"message\"" => {
-                    missing &= !MISSING_MESSAGE;
-                    json_unmarshal_decode(dec, &mut self.message)?;
-                }
-                b"\"tags\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("tags"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.tags)?;
-                }
-                b"\"relatedInformation\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("relatedInformation"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.related_information)?;
-                }
-                b"\"data\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("data"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.data)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_RANGE != 0 {
-                missing_props.push("range".to_string());
-            }
-            if missing & MISSING_MESSAGE != 0 {
-                missing_props.push("message".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"range\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"severity\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"code\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeDescription\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"source\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"message\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"tags\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"relatedInformation\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"data\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.range),
+            1 => json_unmarshal_decode(dec, &mut self.severity),
+            2 => json_unmarshal_decode(dec, &mut self.code),
+            3 => json_unmarshal_decode(dec, &mut self.code_description),
+            4 => json_unmarshal_decode(dec, &mut self.source),
+            5 => json_unmarshal_decode(dec, &mut self.message),
+            6 => json_unmarshal_decode(dec, &mut self.tags),
+            7 => json_unmarshal_decode(dec, &mut self.related_information),
+            _ => json_unmarshal_decode(dec, &mut self.data),
+        })
     }
 }
 
@@ -2754,46 +2477,22 @@ pub struct CompletionContext {
 impl UnmarshalerFrom for CompletionContext {
     // Go: (s *CompletionContext) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_TRIGGER_KIND: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"triggerKind\"" => {
-                    missing &= !MISSING_TRIGGER_KIND;
-                    json_unmarshal_decode(dec, &mut self.trigger_kind)?;
-                }
-                b"\"triggerCharacter\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("triggerCharacter"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trigger_character)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_TRIGGER_KIND != 0 {
-                missing_props.push("triggerKind".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"triggerKind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"triggerCharacter\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.trigger_kind),
+            _ => json_unmarshal_decode(dec, &mut self.trigger_character),
+        })
     }
 }
 
@@ -2833,36 +2532,22 @@ pub struct CompletionItemLabelDetails {
 impl UnmarshalerFrom for CompletionItemLabelDetails {
     // Go: (s *CompletionItemLabelDetails) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"detail\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("detail"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.detail)?;
-                }
-                b"\"description\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("description"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.description)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"detail\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"description\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.detail),
+            _ => json_unmarshal_decode(dec, &mut self.description),
+        })
     }
 }
 
@@ -2903,56 +2588,28 @@ pub struct InsertReplaceEdit {
 impl UnmarshalerFrom for InsertReplaceEdit {
     // Go: (s *InsertReplaceEdit) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_NEW_TEXT: u64 = 1 << 0;
-        const MISSING_INSERT: u64 = 1 << 1;
-        const MISSING_REPLACE: u64 = 1 << 2;
-        const _MISSING_LAST: u64 = 1 << 3;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"newText\"" => {
-                    missing &= !MISSING_NEW_TEXT;
-                    json_unmarshal_decode(dec, &mut self.new_text)?;
-                }
-                b"\"insert\"" => {
-                    missing &= !MISSING_INSERT;
-                    json_unmarshal_decode(dec, &mut self.insert)?;
-                }
-                b"\"replace\"" => {
-                    missing &= !MISSING_REPLACE;
-                    json_unmarshal_decode(dec, &mut self.replace)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_NEW_TEXT != 0 {
-                missing_props.push("newText".to_string());
-            }
-            if missing & MISSING_INSERT != 0 {
-                missing_props.push("insert".to_string());
-            }
-            if missing & MISSING_REPLACE != 0 {
-                missing_props.push("replace".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"newText\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"insert\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"replace\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.new_text),
+            1 => json_unmarshal_decode(dec, &mut self.insert),
+            _ => json_unmarshal_decode(dec, &mut self.replace),
+        })
     }
 }
 
@@ -3022,54 +2679,40 @@ pub struct CompletionItemDefaults {
 impl UnmarshalerFrom for CompletionItemDefaults {
     // Go: (s *CompletionItemDefaults) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"commitCharacters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("commitCharacters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.commit_characters)?;
-                }
-                b"\"editRange\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("editRange"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.edit_range)?;
-                }
-                b"\"insertTextFormat\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("insertTextFormat"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.insert_text_format)?;
-                }
-                b"\"insertTextMode\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("insertTextMode"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.insert_text_mode)?;
-                }
-                b"\"data\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("data"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.data)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"commitCharacters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"editRange\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"insertTextFormat\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"insertTextMode\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"data\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.commit_characters),
+            1 => json_unmarshal_decode(dec, &mut self.edit_range),
+            2 => json_unmarshal_decode(dec, &mut self.insert_text_format),
+            3 => json_unmarshal_decode(dec, &mut self.insert_text_mode),
+            _ => json_unmarshal_decode(dec, &mut self.data),
+        })
     }
 }
 
@@ -3168,36 +2811,22 @@ pub struct CompletionItemApplyKinds {
 impl UnmarshalerFrom for CompletionItemApplyKinds {
     // Go: (s *CompletionItemApplyKinds) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"commitCharacters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("commitCharacters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.commit_characters)?;
-                }
-                b"\"data\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("data"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.data)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"commitCharacters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"data\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.commit_characters),
+            _ => json_unmarshal_decode(dec, &mut self.data),
+        })
     }
 }
 
@@ -3259,54 +2888,40 @@ pub struct CompletionOptions {
 impl UnmarshalerFrom for CompletionOptions {
     // Go: (s *CompletionOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"triggerCharacters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("triggerCharacters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trigger_characters)?;
-                }
-                b"\"allCommitCharacters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("allCommitCharacters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.all_commit_characters)?;
-                }
-                b"\"resolveProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resolveProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resolve_provider)?;
-                }
-                b"\"completionItem\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("completionItem"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.completion_item)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"triggerCharacters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"allCommitCharacters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resolveProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"completionItem\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            1 => json_unmarshal_decode(dec, &mut self.trigger_characters),
+            2 => json_unmarshal_decode(dec, &mut self.all_commit_characters),
+            3 => json_unmarshal_decode(dec, &mut self.resolve_provider),
+            _ => json_unmarshal_decode(dec, &mut self.completion_item),
+        })
     }
 }
 
@@ -3360,30 +2975,14 @@ pub struct HoverOptions {
 impl UnmarshalerFrom for HoverOptions {
     // Go: (s *HoverOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -3439,60 +3038,34 @@ pub struct SignatureHelpContext {
 impl UnmarshalerFrom for SignatureHelpContext {
     // Go: (s *SignatureHelpContext) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_TRIGGER_KIND: u64 = 1 << 0;
-        const MISSING_IS_RETRIGGER: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"triggerKind\"" => {
-                    missing &= !MISSING_TRIGGER_KIND;
-                    json_unmarshal_decode(dec, &mut self.trigger_kind)?;
-                }
-                b"\"triggerCharacter\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("triggerCharacter"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trigger_character)?;
-                }
-                b"\"isRetrigger\"" => {
-                    missing &= !MISSING_IS_RETRIGGER;
-                    json_unmarshal_decode(dec, &mut self.is_retrigger)?;
-                }
-                b"\"activeSignatureHelp\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("activeSignatureHelp"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.active_signature_help)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_TRIGGER_KIND != 0 {
-                missing_props.push("triggerKind".to_string());
-            }
-            if missing & MISSING_IS_RETRIGGER != 0 {
-                missing_props.push("isRetrigger".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"triggerKind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"triggerCharacter\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"isRetrigger\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"activeSignatureHelp\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.trigger_kind),
+            1 => json_unmarshal_decode(dec, &mut self.trigger_character),
+            2 => json_unmarshal_decode(dec, &mut self.is_retrigger),
+            _ => json_unmarshal_decode(dec, &mut self.active_signature_help),
+        })
     }
 }
 
@@ -3561,61 +3134,40 @@ pub struct SignatureInformation {
 impl UnmarshalerFrom for SignatureInformation {
     // Go: (s *SignatureInformation) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_LABEL: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"label\"" => {
-                    missing &= !MISSING_LABEL;
-                    json_unmarshal_decode(dec, &mut self.label)?;
-                }
-                b"\"documentation\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentation"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.documentation)?;
-                }
-                b"\"parameters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("parameters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.parameters)?;
-                }
-                b"\"activeParameter\"" => {
-                    json_unmarshal_decode(dec, &mut self.active_parameter)?;
-                }
-                b"\"_vs_colorizedLabel\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_colorizedLabel"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_colorized_label)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_LABEL != 0 {
-                missing_props.push("label".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"label\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"documentation\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"parameters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"activeParameter\"",
+                required: false,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"_vs_colorizedLabel\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.label),
+            1 => json_unmarshal_decode(dec, &mut self.documentation),
+            2 => json_unmarshal_decode(dec, &mut self.parameters),
+            3 => json_unmarshal_decode(dec, &mut self.active_parameter),
+            _ => json_unmarshal_decode(dec, &mut self.vs_colorized_label),
+        })
     }
 }
 
@@ -3670,42 +3222,28 @@ pub struct SignatureHelpOptions {
 impl UnmarshalerFrom for SignatureHelpOptions {
     // Go: (s *SignatureHelpOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"triggerCharacters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("triggerCharacters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trigger_characters)?;
-                }
-                b"\"retriggerCharacters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("retriggerCharacters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.retrigger_characters)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"triggerCharacters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"retriggerCharacters\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            1 => json_unmarshal_decode(dec, &mut self.trigger_characters),
+            _ => json_unmarshal_decode(dec, &mut self.retrigger_characters),
+        })
     }
 }
 
@@ -3755,30 +3293,14 @@ pub struct DefinitionOptions {
 impl UnmarshalerFrom for DefinitionOptions {
     // Go: (s *DefinitionOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -3816,40 +3338,14 @@ pub struct ReferenceContext {
 impl UnmarshalerFrom for ReferenceContext {
     // Go: (s *ReferenceContext) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_INCLUDE_DECLARATION: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"includeDeclaration\"" => {
-                    missing &= !MISSING_INCLUDE_DECLARATION;
-                    json_unmarshal_decode(dec, &mut self.include_declaration)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_INCLUDE_DECLARATION != 0 {
-                missing_props.push("includeDeclaration".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"includeDeclaration\"",
+            required: true,
+            reject_null: false,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.include_declaration),
+        })
     }
 }
 
@@ -3885,30 +3381,14 @@ pub struct ReferenceOptions {
 impl UnmarshalerFrom for ReferenceOptions {
     // Go: (s *ReferenceOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -3944,30 +3424,14 @@ pub struct DocumentHighlightOptions {
 impl UnmarshalerFrom for DocumentHighlightOptions {
     // Go: (s *DocumentHighlightOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -4018,60 +3482,34 @@ pub struct BaseSymbolInformation {
 impl UnmarshalerFrom for BaseSymbolInformation {
     // Go: (s *BaseSymbolInformation) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_NAME: u64 = 1 << 0;
-        const MISSING_KIND: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"name\"" => {
-                    missing &= !MISSING_NAME;
-                    json_unmarshal_decode(dec, &mut self.name)?;
-                }
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"tags\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("tags"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.tags)?;
-                }
-                b"\"containerName\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("containerName"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.container_name)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_NAME != 0 {
-                missing_props.push("name".to_string());
-            }
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"name\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"tags\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"containerName\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.name),
+            1 => json_unmarshal_decode(dec, &mut self.kind),
+            2 => json_unmarshal_decode(dec, &mut self.tags),
+            _ => json_unmarshal_decode(dec, &mut self.container_name),
+        })
     }
 }
 
@@ -4114,36 +3552,22 @@ pub struct DocumentSymbolOptions {
 impl UnmarshalerFrom for DocumentSymbolOptions {
     // Go: (s *DocumentSymbolOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"label\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("label"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.label)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"label\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.label),
+        })
     }
 }
 
@@ -4197,55 +3621,28 @@ pub struct CodeActionContext {
 impl UnmarshalerFrom for CodeActionContext {
     // Go: (s *CodeActionContext) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_DIAGNOSTICS: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"diagnostics\"" => {
-                    missing &= !MISSING_DIAGNOSTICS;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("diagnostics"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.diagnostics)?;
-                }
-                b"\"only\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("only"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.only)?;
-                }
-                b"\"triggerKind\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("triggerKind"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trigger_kind)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_DIAGNOSTICS != 0 {
-                missing_props.push("diagnostics".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"diagnostics\"",
+                required: true,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"only\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"triggerKind\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.diagnostics),
+            1 => json_unmarshal_decode(dec, &mut self.only),
+            _ => json_unmarshal_decode(dec, &mut self.trigger_kind),
+        })
     }
 }
 
@@ -4283,40 +3680,14 @@ pub struct CodeActionDisabled {
 impl UnmarshalerFrom for CodeActionDisabled {
     // Go: (s *CodeActionDisabled) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_REASON: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"reason\"" => {
-                    missing &= !MISSING_REASON;
-                    json_unmarshal_decode(dec, &mut self.reason)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_REASON != 0 {
-                missing_props.push("reason".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"reason\"",
+            required: true,
+            reject_null: false,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.reason),
+        })
     }
 }
 
@@ -4375,48 +3746,34 @@ pub struct CodeActionOptions {
 impl UnmarshalerFrom for CodeActionOptions {
     // Go: (s *CodeActionOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"codeActionKinds\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeActionKinds"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_action_kinds)?;
-                }
-                b"\"documentation\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentation"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.documentation)?;
-                }
-                b"\"resolveProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resolveProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resolve_provider)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeActionKinds\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentation\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resolveProvider\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            1 => json_unmarshal_decode(dec, &mut self.code_action_kinds),
+            2 => json_unmarshal_decode(dec, &mut self.documentation),
+            _ => json_unmarshal_decode(dec, &mut self.resolve_provider),
+        })
     }
 }
 
@@ -4460,40 +3817,14 @@ pub struct LocationUriOnly {
 impl UnmarshalerFrom for LocationUriOnly {
     // Go: (s *LocationUriOnly) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_URI: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"uri\"" => {
-                    missing &= !MISSING_URI;
-                    json_unmarshal_decode(dec, &mut self.uri)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_URI != 0 {
-                missing_props.push("uri".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"uri\"",
+            required: true,
+            reject_null: false,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.uri),
+        })
     }
 }
 
@@ -4530,36 +3861,22 @@ pub struct WorkspaceSymbolOptions {
 impl UnmarshalerFrom for WorkspaceSymbolOptions {
     // Go: (s *WorkspaceSymbolOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"resolveProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resolveProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resolve_provider)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resolveProvider\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.resolve_provider),
+        })
     }
 }
 
@@ -4599,36 +3916,22 @@ pub struct CodeLensOptions {
 impl UnmarshalerFrom for CodeLensOptions {
     // Go: (s *CodeLensOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"resolveProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resolveProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resolve_provider)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resolveProvider\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.resolve_provider),
+        })
     }
 }
 
@@ -4668,36 +3971,22 @@ pub struct DocumentLinkOptions {
 impl UnmarshalerFrom for DocumentLinkOptions {
     // Go: (s *DocumentLinkOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"resolveProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resolveProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resolve_provider)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resolveProvider\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.resolve_provider),
+        })
     }
 }
 
@@ -4753,66 +4042,40 @@ pub struct FormattingOptions {
 impl UnmarshalerFrom for FormattingOptions {
     // Go: (s *FormattingOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_TAB_SIZE: u64 = 1 << 0;
-        const MISSING_INSERT_SPACES: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"tabSize\"" => {
-                    missing &= !MISSING_TAB_SIZE;
-                    json_unmarshal_decode(dec, &mut self.tab_size)?;
-                }
-                b"\"insertSpaces\"" => {
-                    missing &= !MISSING_INSERT_SPACES;
-                    json_unmarshal_decode(dec, &mut self.insert_spaces)?;
-                }
-                b"\"trimTrailingWhitespace\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("trimTrailingWhitespace"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trim_trailing_whitespace)?;
-                }
-                b"\"insertFinalNewline\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("insertFinalNewline"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.insert_final_newline)?;
-                }
-                b"\"trimFinalNewlines\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("trimFinalNewlines"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.trim_final_newlines)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_TAB_SIZE != 0 {
-                missing_props.push("tabSize".to_string());
-            }
-            if missing & MISSING_INSERT_SPACES != 0 {
-                missing_props.push("insertSpaces".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"tabSize\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"insertSpaces\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"trimTrailingWhitespace\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"insertFinalNewline\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"trimFinalNewlines\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.tab_size),
+            1 => json_unmarshal_decode(dec, &mut self.insert_spaces),
+            2 => json_unmarshal_decode(dec, &mut self.trim_trailing_whitespace),
+            3 => json_unmarshal_decode(dec, &mut self.insert_final_newline),
+            _ => json_unmarshal_decode(dec, &mut self.trim_final_newlines),
+        })
     }
 }
 
@@ -4866,30 +4129,14 @@ pub struct DocumentFormattingOptions {
 impl UnmarshalerFrom for DocumentFormattingOptions {
     // Go: (s *DocumentFormattingOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -4930,36 +4177,22 @@ pub struct DocumentRangeFormattingOptions {
 impl UnmarshalerFrom for DocumentRangeFormattingOptions {
     // Go: (s *DocumentRangeFormattingOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"rangesSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("rangesSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.ranges_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"rangesSupport\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.ranges_support),
+        })
     }
 }
 
@@ -5000,46 +4233,22 @@ pub struct DocumentOnTypeFormattingOptions {
 impl UnmarshalerFrom for DocumentOnTypeFormattingOptions {
     // Go: (s *DocumentOnTypeFormattingOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_FIRST_TRIGGER_CHARACTER: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"firstTriggerCharacter\"" => {
-                    missing &= !MISSING_FIRST_TRIGGER_CHARACTER;
-                    json_unmarshal_decode(dec, &mut self.first_trigger_character)?;
-                }
-                b"\"moreTriggerCharacter\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("moreTriggerCharacter"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.more_trigger_character)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_FIRST_TRIGGER_CHARACTER != 0 {
-                missing_props.push("firstTriggerCharacter".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"firstTriggerCharacter\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"moreTriggerCharacter\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.first_trigger_character),
+            _ => json_unmarshal_decode(dec, &mut self.more_trigger_character),
+        })
     }
 }
 
@@ -5086,36 +4295,22 @@ pub struct RenameOptions {
 impl UnmarshalerFrom for RenameOptions {
     // Go: (s *RenameOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"prepareProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("prepareProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.prepare_provider)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"prepareProvider\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.prepare_provider),
+        })
     }
 }
 
@@ -5154,48 +4349,22 @@ pub struct PrepareRenamePlaceholder {
 impl UnmarshalerFrom for PrepareRenamePlaceholder {
     // Go: (s *PrepareRenamePlaceholder) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_RANGE: u64 = 1 << 0;
-        const MISSING_PLACEHOLDER: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"range\"" => {
-                    missing &= !MISSING_RANGE;
-                    json_unmarshal_decode(dec, &mut self.range)?;
-                }
-                b"\"placeholder\"" => {
-                    missing &= !MISSING_PLACEHOLDER;
-                    json_unmarshal_decode(dec, &mut self.placeholder)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_RANGE != 0 {
-                missing_props.push("range".to_string());
-            }
-            if missing & MISSING_PLACEHOLDER != 0 {
-                missing_props.push("placeholder".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"range\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"placeholder\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.range),
+            _ => json_unmarshal_decode(dec, &mut self.placeholder),
+        })
     }
 }
 
@@ -5227,40 +4396,14 @@ pub struct PrepareRenameDefaultBehavior {
 impl UnmarshalerFrom for PrepareRenameDefaultBehavior {
     // Go: (s *PrepareRenameDefaultBehavior) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_DEFAULT_BEHAVIOR: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"defaultBehavior\"" => {
-                    missing &= !MISSING_DEFAULT_BEHAVIOR;
-                    json_unmarshal_decode(dec, &mut self.default_behavior)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_DEFAULT_BEHAVIOR != 0 {
-                missing_props.push("defaultBehavior".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"defaultBehavior\"",
+            required: true,
+            reject_null: false,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.default_behavior),
+        })
     }
 }
 
@@ -5294,49 +4437,22 @@ pub struct ExecuteCommandOptions {
 impl UnmarshalerFrom for ExecuteCommandOptions {
     // Go: (s *ExecuteCommandOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_COMMANDS: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"commands\"" => {
-                    missing &= !MISSING_COMMANDS;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("commands"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.commands)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_COMMANDS != 0 {
-                missing_props.push("commands".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"commands\"",
+                required: true,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            _ => json_unmarshal_decode(dec, &mut self.commands),
+        })
     }
 }
 
@@ -5376,30 +4492,14 @@ pub struct WorkspaceEditMetadata {
 impl UnmarshalerFrom for WorkspaceEditMetadata {
     // Go: (s *WorkspaceEditMetadata) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"isRefactoring\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("isRefactoring"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.is_refactoring)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"isRefactoring\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.is_refactoring),
+        })
     }
 }
 
@@ -5429,30 +4529,14 @@ pub struct WorkDoneProgressOptions {
 impl UnmarshalerFrom for WorkDoneProgressOptions {
     // Go: (s *WorkDoneProgressOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"workDoneProgress\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.work_done_progress),
+        })
     }
 }
 
@@ -5492,54 +4576,22 @@ pub struct SemanticTokensLegend {
 impl UnmarshalerFrom for SemanticTokensLegend {
     // Go: (s *SemanticTokensLegend) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_TOKEN_TYPES: u64 = 1 << 0;
-        const MISSING_TOKEN_MODIFIERS: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"tokenTypes\"" => {
-                    missing &= !MISSING_TOKEN_TYPES;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("tokenTypes"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.token_types)?;
-                }
-                b"\"tokenModifiers\"" => {
-                    missing &= !MISSING_TOKEN_MODIFIERS;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("tokenModifiers"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.token_modifiers)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_TOKEN_TYPES != 0 {
-                missing_props.push("tokenTypes".to_string());
-            }
-            if missing & MISSING_TOKEN_MODIFIERS != 0 {
-                missing_props.push("tokenModifiers".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"tokenTypes\"",
+                required: true,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"tokenModifiers\"",
+                required: true,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.token_types),
+            _ => json_unmarshal_decode(dec, &mut self.token_modifiers),
+        })
     }
 }
 
@@ -5574,30 +4626,14 @@ pub struct SemanticTokensFullDelta {
 impl UnmarshalerFrom for SemanticTokensFullDelta {
     // Go: (s *SemanticTokensFullDelta) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"delta\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("delta"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.delta)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"delta\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.delta),
+        })
     }
 }
 
@@ -5636,48 +4672,22 @@ pub struct OptionalVersionedTextDocumentIdentifier {
 impl UnmarshalerFrom for OptionalVersionedTextDocumentIdentifier {
     // Go: (s *OptionalVersionedTextDocumentIdentifier) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_URI: u64 = 1 << 0;
-        const MISSING_VERSION: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"uri\"" => {
-                    missing &= !MISSING_URI;
-                    json_unmarshal_decode(dec, &mut self.uri)?;
-                }
-                b"\"version\"" => {
-                    missing &= !MISSING_VERSION;
-                    json_unmarshal_decode(dec, &mut self.version)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_URI != 0 {
-                missing_props.push("uri".to_string());
-            }
-            if missing & MISSING_VERSION != 0 {
-                missing_props.push("version".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"uri\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"version\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.uri),
+            _ => json_unmarshal_decode(dec, &mut self.version),
+        })
     }
 }
 
@@ -5720,56 +4730,28 @@ pub struct AnnotatedTextEdit {
 impl UnmarshalerFrom for AnnotatedTextEdit {
     // Go: (s *AnnotatedTextEdit) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_RANGE: u64 = 1 << 0;
-        const MISSING_NEW_TEXT: u64 = 1 << 1;
-        const MISSING_ANNOTATION_ID: u64 = 1 << 2;
-        const _MISSING_LAST: u64 = 1 << 3;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"range\"" => {
-                    missing &= !MISSING_RANGE;
-                    json_unmarshal_decode(dec, &mut self.range)?;
-                }
-                b"\"newText\"" => {
-                    missing &= !MISSING_NEW_TEXT;
-                    json_unmarshal_decode(dec, &mut self.new_text)?;
-                }
-                b"\"annotationId\"" => {
-                    missing &= !MISSING_ANNOTATION_ID;
-                    json_unmarshal_decode(dec, &mut self.annotation_id)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_RANGE != 0 {
-                missing_props.push("range".to_string());
-            }
-            if missing & MISSING_NEW_TEXT != 0 {
-                missing_props.push("newText".to_string());
-            }
-            if missing & MISSING_ANNOTATION_ID != 0 {
-                missing_props.push("annotationId".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"range\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"newText\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"annotationId\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.range),
+            1 => json_unmarshal_decode(dec, &mut self.new_text),
+            _ => json_unmarshal_decode(dec, &mut self.annotation_id),
+        })
     }
 }
 
@@ -5811,57 +4793,28 @@ pub struct SnippetTextEdit {
 impl UnmarshalerFrom for SnippetTextEdit {
     // Go: (s *SnippetTextEdit) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_RANGE: u64 = 1 << 0;
-        const MISSING_SNIPPET: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"range\"" => {
-                    missing &= !MISSING_RANGE;
-                    json_unmarshal_decode(dec, &mut self.range)?;
-                }
-                b"\"snippet\"" => {
-                    missing &= !MISSING_SNIPPET;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("snippet"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.snippet)?;
-                }
-                b"\"annotationId\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("annotationId"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.annotation_id)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_RANGE != 0 {
-                missing_props.push("range".to_string());
-            }
-            if missing & MISSING_SNIPPET != 0 {
-                missing_props.push("snippet".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"range\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"snippet\"",
+                required: true,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"annotationId\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.range),
+            1 => json_unmarshal_decode(dec, &mut self.snippet),
+            _ => json_unmarshal_decode(dec, &mut self.annotation_id),
+        })
     }
 }
 
@@ -5900,46 +4853,22 @@ pub struct ResourceOperation {
 impl UnmarshalerFrom for ResourceOperation {
     // Go: (s *ResourceOperation) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"annotationId\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("annotationId"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.annotation_id)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"annotationId\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            _ => json_unmarshal_decode(dec, &mut self.annotation_id),
+        })
     }
 }
 
@@ -5975,36 +4904,22 @@ pub struct CreateFileOptions {
 impl UnmarshalerFrom for CreateFileOptions {
     // Go: (s *CreateFileOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"overwrite\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("overwrite"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.overwrite)?;
-                }
-                b"\"ignoreIfExists\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("ignoreIfExists"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.ignore_if_exists)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"overwrite\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"ignoreIfExists\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.overwrite),
+            _ => json_unmarshal_decode(dec, &mut self.ignore_if_exists),
+        })
     }
 }
 
@@ -6040,36 +4955,22 @@ pub struct RenameFileOptions {
 impl UnmarshalerFrom for RenameFileOptions {
     // Go: (s *RenameFileOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"overwrite\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("overwrite"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.overwrite)?;
-                }
-                b"\"ignoreIfExists\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("ignoreIfExists"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.ignore_if_exists)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"overwrite\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"ignoreIfExists\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.overwrite),
+            _ => json_unmarshal_decode(dec, &mut self.ignore_if_exists),
+        })
     }
 }
 
@@ -6105,36 +5006,22 @@ pub struct DeleteFileOptions {
 impl UnmarshalerFrom for DeleteFileOptions {
     // Go: (s *DeleteFileOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"recursive\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("recursive"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.recursive)?;
-                }
-                b"\"ignoreIfNotExists\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("ignoreIfNotExists"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.ignore_if_not_exists)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"recursive\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"ignoreIfNotExists\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.recursive),
+            _ => json_unmarshal_decode(dec, &mut self.ignore_if_not_exists),
+        })
     }
 }
 
@@ -6189,52 +5076,28 @@ pub struct FileOperationPattern {
 impl UnmarshalerFrom for FileOperationPattern {
     // Go: (s *FileOperationPattern) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_GLOB: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"glob\"" => {
-                    missing &= !MISSING_GLOB;
-                    json_unmarshal_decode(dec, &mut self.glob)?;
-                }
-                b"\"matches\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("matches"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.matches)?;
-                }
-                b"\"options\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("options"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.options)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_GLOB != 0 {
-                missing_props.push("glob".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"glob\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"matches\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"options\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.glob),
+            1 => json_unmarshal_decode(dec, &mut self.matches),
+            _ => json_unmarshal_decode(dec, &mut self.options),
+        })
     }
 }
 
@@ -6278,57 +5141,28 @@ pub struct FullDocumentDiagnosticReport {
 impl UnmarshalerFrom for FullDocumentDiagnosticReport {
     // Go: (s *FullDocumentDiagnosticReport) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const MISSING_ITEMS: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"resultId\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resultId"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.result_id)?;
-                }
-                b"\"items\"" => {
-                    missing &= !MISSING_ITEMS;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("items"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.items)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            if missing & MISSING_ITEMS != 0 {
-                missing_props.push("items".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"resultId\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"items\"",
+                required: true,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            1 => json_unmarshal_decode(dec, &mut self.result_id),
+            _ => json_unmarshal_decode(dec, &mut self.items),
+        })
     }
 }
 
@@ -6372,48 +5206,22 @@ pub struct UnchangedDocumentDiagnosticReport {
 impl UnmarshalerFrom for UnchangedDocumentDiagnosticReport {
     // Go: (s *UnchangedDocumentDiagnosticReport) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const MISSING_RESULT_ID: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"resultId\"" => {
-                    missing &= !MISSING_RESULT_ID;
-                    json_unmarshal_decode(dec, &mut self.result_id)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            if missing & MISSING_RESULT_ID != 0 {
-                missing_props.push("resultId".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"resultId\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            _ => json_unmarshal_decode(dec, &mut self.result_id),
+        })
     }
 }
 
@@ -6463,73 +5271,40 @@ pub struct WorkspaceFullDocumentDiagnosticReport {
 impl UnmarshalerFrom for WorkspaceFullDocumentDiagnosticReport {
     // Go: (s *WorkspaceFullDocumentDiagnosticReport) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const MISSING_ITEMS: u64 = 1 << 1;
-        const MISSING_URI: u64 = 1 << 2;
-        const MISSING_VERSION: u64 = 1 << 3;
-        const _MISSING_LAST: u64 = 1 << 4;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"resultId\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resultId"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.result_id)?;
-                }
-                b"\"items\"" => {
-                    missing &= !MISSING_ITEMS;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("items"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.items)?;
-                }
-                b"\"uri\"" => {
-                    missing &= !MISSING_URI;
-                    json_unmarshal_decode(dec, &mut self.uri)?;
-                }
-                b"\"version\"" => {
-                    missing &= !MISSING_VERSION;
-                    json_unmarshal_decode(dec, &mut self.version)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            if missing & MISSING_ITEMS != 0 {
-                missing_props.push("items".to_string());
-            }
-            if missing & MISSING_URI != 0 {
-                missing_props.push("uri".to_string());
-            }
-            if missing & MISSING_VERSION != 0 {
-                missing_props.push("version".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"resultId\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"items\"",
+                required: true,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"uri\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"version\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            1 => json_unmarshal_decode(dec, &mut self.result_id),
+            2 => json_unmarshal_decode(dec, &mut self.items),
+            3 => json_unmarshal_decode(dec, &mut self.uri),
+            _ => json_unmarshal_decode(dec, &mut self.version),
+        })
     }
 }
 
@@ -6585,64 +5360,34 @@ pub struct WorkspaceUnchangedDocumentDiagnosticReport {
 impl UnmarshalerFrom for WorkspaceUnchangedDocumentDiagnosticReport {
     // Go: (s *WorkspaceUnchangedDocumentDiagnosticReport) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const MISSING_RESULT_ID: u64 = 1 << 1;
-        const MISSING_URI: u64 = 1 << 2;
-        const MISSING_VERSION: u64 = 1 << 3;
-        const _MISSING_LAST: u64 = 1 << 4;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"resultId\"" => {
-                    missing &= !MISSING_RESULT_ID;
-                    json_unmarshal_decode(dec, &mut self.result_id)?;
-                }
-                b"\"uri\"" => {
-                    missing &= !MISSING_URI;
-                    json_unmarshal_decode(dec, &mut self.uri)?;
-                }
-                b"\"version\"" => {
-                    missing &= !MISSING_VERSION;
-                    json_unmarshal_decode(dec, &mut self.version)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            if missing & MISSING_RESULT_ID != 0 {
-                missing_props.push("resultId".to_string());
-            }
-            if missing & MISSING_URI != 0 {
-                missing_props.push("uri".to_string());
-            }
-            if missing & MISSING_VERSION != 0 {
-                missing_props.push("version".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"resultId\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"uri\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"version\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            1 => json_unmarshal_decode(dec, &mut self.result_id),
+            2 => json_unmarshal_decode(dec, &mut self.uri),
+            _ => json_unmarshal_decode(dec, &mut self.version),
+        })
     }
 }
 
@@ -6685,48 +5430,22 @@ pub struct SelectedCompletionInfo {
 impl UnmarshalerFrom for SelectedCompletionInfo {
     // Go: (s *SelectedCompletionInfo) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_RANGE: u64 = 1 << 0;
-        const MISSING_TEXT: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"range\"" => {
-                    missing &= !MISSING_RANGE;
-                    json_unmarshal_decode(dec, &mut self.range)?;
-                }
-                b"\"text\"" => {
-                    missing &= !MISSING_TEXT;
-                    json_unmarshal_decode(dec, &mut self.text)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_RANGE != 0 {
-                missing_props.push("range".to_string());
-            }
-            if missing & MISSING_TEXT != 0 {
-                missing_props.push("text".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"range\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"text\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.range),
+            _ => json_unmarshal_decode(dec, &mut self.text),
+        })
     }
 }
 
@@ -6766,46 +5485,22 @@ pub struct ClientInfo {
 impl UnmarshalerFrom for ClientInfo {
     // Go: (s *ClientInfo) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_NAME: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"name\"" => {
-                    missing &= !MISSING_NAME;
-                    json_unmarshal_decode(dec, &mut self.name)?;
-                }
-                b"\"version\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("version"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.version)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_NAME != 0 {
-                missing_props.push("name".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"name\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"version\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.name),
+            _ => json_unmarshal_decode(dec, &mut self.version),
+        })
     }
 }
 
@@ -6867,89 +5562,73 @@ pub struct ClientCapabilities {
 impl UnmarshalerFrom for ClientCapabilities {
     // Go: (s *ClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workspace\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workspace"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.workspace)?;
-                }
-                b"\"textDocument\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("textDocument"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.text_document)?;
-                }
-                b"\"window\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("window"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.window)?;
-                }
-                b"\"general\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("general"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.general)?;
-                }
-                b"\"experimental\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("experimental"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.experimental)?;
-                }
-                b"\"_vs_supportsVisualStudioExtensions\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_supportsVisualStudioExtensions"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_supports_visual_studio_extensions)?;
-                }
-                b"\"_vs_supportedSnippetVersion\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_supportedSnippetVersion"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_supported_snippet_version)?;
-                }
-                b"\"_vs_supportsNotIncludingTextInTextDocumentDidOpen\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null(
-                            "_vs_supportsNotIncludingTextInTextDocumentDidOpen",
-                        ));
-                    }
-                    json_unmarshal_decode(
-                        dec,
-                        &mut self.vs_supports_not_including_text_in_text_document_did_open,
-                    )?;
-                }
-                b"\"_vs_supportsIconExtensions\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_supportsIconExtensions"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_supports_icon_extensions)?;
-                }
-                b"\"_vs_supportsDiagnosticRequests\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("_vs_supportsDiagnosticRequests"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.vs_supports_diagnostic_requests)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workspace\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"textDocument\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"window\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"general\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"experimental\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_supportsVisualStudioExtensions\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_supportedSnippetVersion\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_supportsNotIncludingTextInTextDocumentDidOpen\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_supportsIconExtensions\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"_vs_supportsDiagnosticRequests\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.workspace),
+            1 => json_unmarshal_decode(dec, &mut self.text_document),
+            2 => json_unmarshal_decode(dec, &mut self.window),
+            3 => json_unmarshal_decode(dec, &mut self.general),
+            4 => json_unmarshal_decode(dec, &mut self.experimental),
+            5 => json_unmarshal_decode(dec, &mut self.vs_supports_visual_studio_extensions),
+            6 => json_unmarshal_decode(dec, &mut self.vs_supported_snippet_version),
+            7 => json_unmarshal_decode(
+                dec,
+                &mut self.vs_supports_not_including_text_in_text_document_did_open,
+            ),
+            8 => json_unmarshal_decode(dec, &mut self.vs_supports_icon_extensions),
+            _ => json_unmarshal_decode(dec, &mut self.vs_supports_diagnostic_requests),
+        })
     }
 }
 
@@ -7042,54 +5721,40 @@ pub struct TextDocumentSyncOptions {
 impl UnmarshalerFrom for TextDocumentSyncOptions {
     // Go: (s *TextDocumentSyncOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"openClose\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("openClose"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.open_close)?;
-                }
-                b"\"change\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("change"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.change)?;
-                }
-                b"\"willSave\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willSave"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_save)?;
-                }
-                b"\"willSaveWaitUntil\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willSaveWaitUntil"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_save_wait_until)?;
-                }
-                b"\"save\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("save"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.save)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"openClose\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"change\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willSave\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willSaveWaitUntil\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"save\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.open_close),
+            1 => json_unmarshal_decode(dec, &mut self.change),
+            2 => json_unmarshal_decode(dec, &mut self.will_save),
+            3 => json_unmarshal_decode(dec, &mut self.will_save_wait_until),
+            _ => json_unmarshal_decode(dec, &mut self.save),
+        })
     }
 }
 
@@ -7148,42 +5813,28 @@ pub struct WorkspaceOptions {
 impl UnmarshalerFrom for WorkspaceOptions {
     // Go: (s *WorkspaceOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workspaceFolders\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workspaceFolders"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.workspace_folders)?;
-                }
-                b"\"fileOperations\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("fileOperations"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.file_operations)?;
-                }
-                b"\"textDocumentContent\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("textDocumentContent"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.text_document_content)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workspaceFolders\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"fileOperations\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"textDocumentContent\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.workspace_folders),
+            1 => json_unmarshal_decode(dec, &mut self.file_operations),
+            _ => json_unmarshal_decode(dec, &mut self.text_document_content),
+        })
     }
 }
 
@@ -7232,54 +5883,28 @@ pub struct TextDocumentContentChangePartial {
 impl UnmarshalerFrom for TextDocumentContentChangePartial {
     // Go: (s *TextDocumentContentChangePartial) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_RANGE: u64 = 1 << 0;
-        const MISSING_TEXT: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"range\"" => {
-                    missing &= !MISSING_RANGE;
-                    json_unmarshal_decode(dec, &mut self.range)?;
-                }
-                b"\"rangeLength\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("rangeLength"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.range_length)?;
-                }
-                b"\"text\"" => {
-                    missing &= !MISSING_TEXT;
-                    json_unmarshal_decode(dec, &mut self.text)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_RANGE != 0 {
-                missing_props.push("range".to_string());
-            }
-            if missing & MISSING_TEXT != 0 {
-                missing_props.push("text".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"range\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"rangeLength\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"text\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.range),
+            1 => json_unmarshal_decode(dec, &mut self.range_length),
+            _ => json_unmarshal_decode(dec, &mut self.text),
+        })
     }
 }
 
@@ -7313,40 +5938,14 @@ pub struct TextDocumentContentChangeWholeDocument {
 impl UnmarshalerFrom for TextDocumentContentChangeWholeDocument {
     // Go: (s *TextDocumentContentChangeWholeDocument) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_TEXT: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"text\"" => {
-                    missing &= !MISSING_TEXT;
-                    json_unmarshal_decode(dec, &mut self.text)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_TEXT != 0 {
-                missing_props.push("text".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"text\"",
+            required: true,
+            reject_null: false,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.text),
+        })
     }
 }
 
@@ -7380,40 +5979,14 @@ pub struct CodeDescription {
 impl UnmarshalerFrom for CodeDescription {
     // Go: (s *CodeDescription) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_HREF: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"href\"" => {
-                    missing &= !MISSING_HREF;
-                    json_unmarshal_decode(dec, &mut self.href)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_HREF != 0 {
-                missing_props.push("href".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"href\"",
+            required: true,
+            reject_null: false,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.href),
+        })
     }
 }
 
@@ -7450,48 +6023,22 @@ pub struct DiagnosticRelatedInformation {
 impl UnmarshalerFrom for DiagnosticRelatedInformation {
     // Go: (s *DiagnosticRelatedInformation) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_LOCATION: u64 = 1 << 0;
-        const MISSING_MESSAGE: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"location\"" => {
-                    missing &= !MISSING_LOCATION;
-                    json_unmarshal_decode(dec, &mut self.location)?;
-                }
-                b"\"message\"" => {
-                    missing &= !MISSING_MESSAGE;
-                    json_unmarshal_decode(dec, &mut self.message)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_LOCATION != 0 {
-                missing_props.push("location".to_string());
-            }
-            if missing & MISSING_MESSAGE != 0 {
-                missing_props.push("message".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"location\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"message\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.location),
+            _ => json_unmarshal_decode(dec, &mut self.message),
+        })
     }
 }
 
@@ -7527,48 +6074,22 @@ pub struct EditRangeWithInsertReplace {
 impl UnmarshalerFrom for EditRangeWithInsertReplace {
     // Go: (s *EditRangeWithInsertReplace) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_INSERT: u64 = 1 << 0;
-        const MISSING_REPLACE: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"insert\"" => {
-                    missing &= !MISSING_INSERT;
-                    json_unmarshal_decode(dec, &mut self.insert)?;
-                }
-                b"\"replace\"" => {
-                    missing &= !MISSING_REPLACE;
-                    json_unmarshal_decode(dec, &mut self.replace)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_INSERT != 0 {
-                missing_props.push("insert".to_string());
-            }
-            if missing & MISSING_REPLACE != 0 {
-                missing_props.push("replace".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"insert\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"replace\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.insert),
+            _ => json_unmarshal_decode(dec, &mut self.replace),
+        })
     }
 }
 
@@ -7605,30 +6126,14 @@ pub struct ServerCompletionItemOptions {
 impl UnmarshalerFrom for ServerCompletionItemOptions {
     // Go: (s *ServerCompletionItemOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"labelDetailsSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("labelDetailsSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.label_details_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"labelDetailsSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.label_details_support),
+        })
     }
 }
 
@@ -7668,48 +6173,22 @@ pub struct MarkedStringWithLanguage {
 impl UnmarshalerFrom for MarkedStringWithLanguage {
     // Go: (s *MarkedStringWithLanguage) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_LANGUAGE: u64 = 1 << 0;
-        const MISSING_VALUE: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"language\"" => {
-                    missing &= !MISSING_LANGUAGE;
-                    json_unmarshal_decode(dec, &mut self.language)?;
-                }
-                b"\"value\"" => {
-                    missing &= !MISSING_VALUE;
-                    json_unmarshal_decode(dec, &mut self.value)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_LANGUAGE != 0 {
-                missing_props.push("language".to_string());
-            }
-            if missing & MISSING_VALUE != 0 {
-                missing_props.push("value".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"language\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"value\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.language),
+            _ => json_unmarshal_decode(dec, &mut self.value),
+        })
     }
 }
 
@@ -7758,46 +6237,22 @@ pub struct ParameterInformation {
 impl UnmarshalerFrom for ParameterInformation {
     // Go: (s *ParameterInformation) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_LABEL: u64 = 1 << 0;
-        const _MISSING_LAST: u64 = 1 << 1;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"label\"" => {
-                    missing &= !MISSING_LABEL;
-                    json_unmarshal_decode(dec, &mut self.label)?;
-                }
-                b"\"documentation\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentation"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.documentation)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_LABEL != 0 {
-                missing_props.push("label".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"label\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"documentation\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.label),
+            _ => json_unmarshal_decode(dec, &mut self.documentation),
+        })
     }
 }
 
@@ -7841,51 +6296,22 @@ pub struct CodeActionKindDocumentation {
 impl UnmarshalerFrom for CodeActionKindDocumentation {
     // Go: (s *CodeActionKindDocumentation) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_KIND: u64 = 1 << 0;
-        const MISSING_COMMAND: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"kind\"" => {
-                    missing &= !MISSING_KIND;
-                    json_unmarshal_decode(dec, &mut self.kind)?;
-                }
-                b"\"command\"" => {
-                    missing &= !MISSING_COMMAND;
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("command"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.command)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_KIND != 0 {
-                missing_props.push("kind".to_string());
-            }
-            if missing & MISSING_COMMAND != 0 {
-                missing_props.push("command".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"kind\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"command\"",
+                required: true,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.kind),
+            _ => json_unmarshal_decode(dec, &mut self.command),
+        })
     }
 }
 
@@ -7920,30 +6346,14 @@ pub struct FileOperationPatternOptions {
 impl UnmarshalerFrom for FileOperationPatternOptions {
     // Go: (s *FileOperationPatternOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"ignoreCase\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("ignoreCase"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.ignore_case)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"ignoreCase\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.ignore_case),
+        })
     }
 }
 
@@ -8047,120 +6457,106 @@ pub struct WorkspaceClientCapabilities {
 impl UnmarshalerFrom for WorkspaceClientCapabilities {
     // Go: (s *WorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"applyEdit\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("applyEdit"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.apply_edit)?;
-                }
-                b"\"workspaceEdit\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workspaceEdit"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.workspace_edit)?;
-                }
-                b"\"didChangeConfiguration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didChangeConfiguration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_change_configuration)?;
-                }
-                b"\"didChangeWatchedFiles\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didChangeWatchedFiles"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_change_watched_files)?;
-                }
-                b"\"symbol\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("symbol"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.symbol)?;
-                }
-                b"\"executeCommand\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("executeCommand"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.execute_command)?;
-                }
-                b"\"workspaceFolders\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workspaceFolders"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.workspace_folders)?;
-                }
-                b"\"configuration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("configuration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.configuration)?;
-                }
-                b"\"semanticTokens\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("semanticTokens"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.semantic_tokens)?;
-                }
-                b"\"codeLens\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeLens"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_lens)?;
-                }
-                b"\"fileOperations\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("fileOperations"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.file_operations)?;
-                }
-                b"\"inlineValue\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlineValue"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inline_value)?;
-                }
-                b"\"inlayHint\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlayHint"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inlay_hint)?;
-                }
-                b"\"diagnostics\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("diagnostics"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.diagnostics)?;
-                }
-                b"\"foldingRange\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("foldingRange"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.folding_range)?;
-                }
-                b"\"textDocumentContent\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("textDocumentContent"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.text_document_content)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"applyEdit\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"workspaceEdit\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didChangeConfiguration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didChangeWatchedFiles\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"symbol\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"executeCommand\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"workspaceFolders\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"configuration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"semanticTokens\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeLens\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"fileOperations\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlineValue\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlayHint\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"diagnostics\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"foldingRange\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"textDocumentContent\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.apply_edit),
+            1 => json_unmarshal_decode(dec, &mut self.workspace_edit),
+            2 => json_unmarshal_decode(dec, &mut self.did_change_configuration),
+            3 => json_unmarshal_decode(dec, &mut self.did_change_watched_files),
+            4 => json_unmarshal_decode(dec, &mut self.symbol),
+            5 => json_unmarshal_decode(dec, &mut self.execute_command),
+            6 => json_unmarshal_decode(dec, &mut self.workspace_folders),
+            7 => json_unmarshal_decode(dec, &mut self.configuration),
+            8 => json_unmarshal_decode(dec, &mut self.semantic_tokens),
+            9 => json_unmarshal_decode(dec, &mut self.code_lens),
+            10 => json_unmarshal_decode(dec, &mut self.file_operations),
+            11 => json_unmarshal_decode(dec, &mut self.inline_value),
+            12 => json_unmarshal_decode(dec, &mut self.inlay_hint),
+            13 => json_unmarshal_decode(dec, &mut self.diagnostics),
+            14 => json_unmarshal_decode(dec, &mut self.folding_range),
+            _ => json_unmarshal_decode(dec, &mut self.text_document_content),
+        })
     }
 }
 
@@ -8363,216 +6759,202 @@ pub struct TextDocumentClientCapabilities {
 impl UnmarshalerFrom for TextDocumentClientCapabilities {
     // Go: (s *TextDocumentClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"synchronization\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("synchronization"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.synchronization)?;
-                }
-                b"\"filters\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("filters"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.filters)?;
-                }
-                b"\"completion\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("completion"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.completion)?;
-                }
-                b"\"hover\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("hover"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.hover)?;
-                }
-                b"\"signatureHelp\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("signatureHelp"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.signature_help)?;
-                }
-                b"\"declaration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("declaration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.declaration)?;
-                }
-                b"\"definition\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("definition"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.definition)?;
-                }
-                b"\"typeDefinition\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("typeDefinition"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.type_definition)?;
-                }
-                b"\"implementation\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("implementation"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.implementation)?;
-                }
-                b"\"references\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("references"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.references)?;
-                }
-                b"\"documentHighlight\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentHighlight"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_highlight)?;
-                }
-                b"\"documentSymbol\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentSymbol"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_symbol)?;
-                }
-                b"\"codeAction\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeAction"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_action)?;
-                }
-                b"\"codeLens\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("codeLens"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.code_lens)?;
-                }
-                b"\"documentLink\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentLink"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_link)?;
-                }
-                b"\"colorProvider\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("colorProvider"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.color_provider)?;
-                }
-                b"\"formatting\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("formatting"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.formatting)?;
-                }
-                b"\"rangeFormatting\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("rangeFormatting"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.range_formatting)?;
-                }
-                b"\"onTypeFormatting\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("onTypeFormatting"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.on_type_formatting)?;
-                }
-                b"\"rename\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("rename"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.rename)?;
-                }
-                b"\"foldingRange\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("foldingRange"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.folding_range)?;
-                }
-                b"\"selectionRange\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("selectionRange"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.selection_range)?;
-                }
-                b"\"publishDiagnostics\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("publishDiagnostics"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.publish_diagnostics)?;
-                }
-                b"\"callHierarchy\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("callHierarchy"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.call_hierarchy)?;
-                }
-                b"\"semanticTokens\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("semanticTokens"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.semantic_tokens)?;
-                }
-                b"\"linkedEditingRange\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("linkedEditingRange"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.linked_editing_range)?;
-                }
-                b"\"moniker\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("moniker"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.moniker)?;
-                }
-                b"\"typeHierarchy\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("typeHierarchy"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.type_hierarchy)?;
-                }
-                b"\"inlineValue\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlineValue"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inline_value)?;
-                }
-                b"\"inlayHint\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlayHint"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inlay_hint)?;
-                }
-                b"\"diagnostic\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("diagnostic"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.diagnostic)?;
-                }
-                b"\"inlineCompletion\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("inlineCompletion"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.inline_completion)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"synchronization\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"filters\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"completion\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"hover\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"signatureHelp\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"declaration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"definition\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"typeDefinition\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"implementation\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"references\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentHighlight\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentSymbol\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeAction\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"codeLens\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"documentLink\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"colorProvider\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"formatting\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"rangeFormatting\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"onTypeFormatting\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"rename\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"foldingRange\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"selectionRange\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"publishDiagnostics\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"callHierarchy\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"semanticTokens\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"linkedEditingRange\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"moniker\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"typeHierarchy\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlineValue\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlayHint\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"diagnostic\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"inlineCompletion\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.synchronization),
+            1 => json_unmarshal_decode(dec, &mut self.filters),
+            2 => json_unmarshal_decode(dec, &mut self.completion),
+            3 => json_unmarshal_decode(dec, &mut self.hover),
+            4 => json_unmarshal_decode(dec, &mut self.signature_help),
+            5 => json_unmarshal_decode(dec, &mut self.declaration),
+            6 => json_unmarshal_decode(dec, &mut self.definition),
+            7 => json_unmarshal_decode(dec, &mut self.type_definition),
+            8 => json_unmarshal_decode(dec, &mut self.implementation),
+            9 => json_unmarshal_decode(dec, &mut self.references),
+            10 => json_unmarshal_decode(dec, &mut self.document_highlight),
+            11 => json_unmarshal_decode(dec, &mut self.document_symbol),
+            12 => json_unmarshal_decode(dec, &mut self.code_action),
+            13 => json_unmarshal_decode(dec, &mut self.code_lens),
+            14 => json_unmarshal_decode(dec, &mut self.document_link),
+            15 => json_unmarshal_decode(dec, &mut self.color_provider),
+            16 => json_unmarshal_decode(dec, &mut self.formatting),
+            17 => json_unmarshal_decode(dec, &mut self.range_formatting),
+            18 => json_unmarshal_decode(dec, &mut self.on_type_formatting),
+            19 => json_unmarshal_decode(dec, &mut self.rename),
+            20 => json_unmarshal_decode(dec, &mut self.folding_range),
+            21 => json_unmarshal_decode(dec, &mut self.selection_range),
+            22 => json_unmarshal_decode(dec, &mut self.publish_diagnostics),
+            23 => json_unmarshal_decode(dec, &mut self.call_hierarchy),
+            24 => json_unmarshal_decode(dec, &mut self.semantic_tokens),
+            25 => json_unmarshal_decode(dec, &mut self.linked_editing_range),
+            26 => json_unmarshal_decode(dec, &mut self.moniker),
+            27 => json_unmarshal_decode(dec, &mut self.type_hierarchy),
+            28 => json_unmarshal_decode(dec, &mut self.inline_value),
+            29 => json_unmarshal_decode(dec, &mut self.inlay_hint),
+            30 => json_unmarshal_decode(dec, &mut self.diagnostic),
+            _ => json_unmarshal_decode(dec, &mut self.inline_completion),
+        })
     }
 }
 
@@ -8703,42 +7085,28 @@ pub struct WindowClientCapabilities {
 impl UnmarshalerFrom for WindowClientCapabilities {
     // Go: (s *WindowClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"workDoneProgress\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("workDoneProgress"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.work_done_progress)?;
-                }
-                b"\"showMessage\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("showMessage"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.show_message)?;
-                }
-                b"\"showDocument\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("showDocument"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.show_document)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"workDoneProgress\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"showMessage\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"showDocument\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.work_done_progress),
+            1 => json_unmarshal_decode(dec, &mut self.show_message),
+            _ => json_unmarshal_decode(dec, &mut self.show_document),
+        })
     }
 }
 
@@ -8816,48 +7184,34 @@ pub struct GeneralClientCapabilities {
 impl UnmarshalerFrom for GeneralClientCapabilities {
     // Go: (s *GeneralClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"staleRequestSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("staleRequestSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.stale_request_support)?;
-                }
-                b"\"regularExpressions\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("regularExpressions"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.regular_expressions)?;
-                }
-                b"\"markdown\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("markdown"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.markdown)?;
-                }
-                b"\"positionEncodings\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("positionEncodings"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.position_encodings)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"staleRequestSupport\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"regularExpressions\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"markdown\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"positionEncodings\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.stale_request_support),
+            1 => json_unmarshal_decode(dec, &mut self.regular_expressions),
+            2 => json_unmarshal_decode(dec, &mut self.markdown),
+            _ => json_unmarshal_decode(dec, &mut self.position_encodings),
+        })
     }
 }
 
@@ -8918,36 +7272,22 @@ pub struct WorkspaceFoldersServerCapabilities {
 impl UnmarshalerFrom for WorkspaceFoldersServerCapabilities {
     // Go: (s *WorkspaceFoldersServerCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"supported\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("supported"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.supported)?;
-                }
-                b"\"changeNotifications\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("changeNotifications"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.change_notifications)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"supported\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"changeNotifications\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.supported),
+            _ => json_unmarshal_decode(dec, &mut self.change_notifications),
+        })
     }
 }
 
@@ -9002,60 +7342,46 @@ pub struct FileOperationOptions {
 impl UnmarshalerFrom for FileOperationOptions {
     // Go: (s *FileOperationOptions) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"didCreate\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didCreate"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_create)?;
-                }
-                b"\"willCreate\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willCreate"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_create)?;
-                }
-                b"\"didRename\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didRename"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_rename)?;
-                }
-                b"\"willRename\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willRename"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_rename)?;
-                }
-                b"\"didDelete\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didDelete"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_delete)?;
-                }
-                b"\"willDelete\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willDelete"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_delete)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"didCreate\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willCreate\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didRename\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willRename\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didDelete\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willDelete\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.did_create),
+            1 => json_unmarshal_decode(dec, &mut self.will_create),
+            2 => json_unmarshal_decode(dec, &mut self.did_rename),
+            3 => json_unmarshal_decode(dec, &mut self.will_rename),
+            4 => json_unmarshal_decode(dec, &mut self.did_delete),
+            _ => json_unmarshal_decode(dec, &mut self.will_delete),
+        })
     }
 }
 
@@ -9105,48 +7431,22 @@ pub struct RelativePattern {
 impl UnmarshalerFrom for RelativePattern {
     // Go: (s *RelativePattern) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        const MISSING_BASE_URI: u64 = 1 << 0;
-        const MISSING_PATTERN: u64 = 1 << 1;
-        const _MISSING_LAST: u64 = 1 << 2;
-        let mut missing = _MISSING_LAST - 1;
-
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"baseUri\"" => {
-                    missing &= !MISSING_BASE_URI;
-                    json_unmarshal_decode(dec, &mut self.base_uri)?;
-                }
-                b"\"pattern\"" => {
-                    missing &= !MISSING_PATTERN;
-                    json_unmarshal_decode(dec, &mut self.pattern)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        if missing != 0 {
-            let mut missing_props: Vec<String> = Vec::new();
-            if missing & MISSING_BASE_URI != 0 {
-                missing_props.push("baseUri".to_string());
-            }
-            if missing & MISSING_PATTERN != 0 {
-                missing_props.push("pattern".to_string());
-            }
-            return Err(err_missing(&missing_props));
-        }
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"baseUri\"",
+                required: true,
+                reject_null: false,
+            },
+            StructureMember {
+                quoted: "\"pattern\"",
+                required: true,
+                reject_null: false,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.base_uri),
+            _ => json_unmarshal_decode(dec, &mut self.pattern),
+        })
     }
 }
 
@@ -9215,66 +7515,52 @@ pub struct WorkspaceEditClientCapabilities {
 impl UnmarshalerFrom for WorkspaceEditClientCapabilities {
     // Go: (s *WorkspaceEditClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"documentChanges\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("documentChanges"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.document_changes)?;
-                }
-                b"\"resourceOperations\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resourceOperations"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resource_operations)?;
-                }
-                b"\"failureHandling\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("failureHandling"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.failure_handling)?;
-                }
-                b"\"normalizesLineEndings\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("normalizesLineEndings"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.normalizes_line_endings)?;
-                }
-                b"\"changeAnnotationSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("changeAnnotationSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.change_annotation_support)?;
-                }
-                b"\"metadataSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("metadataSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.metadata_support)?;
-                }
-                b"\"snippetEditSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("snippetEditSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.snippet_edit_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"documentChanges\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resourceOperations\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"failureHandling\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"normalizesLineEndings\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"changeAnnotationSupport\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"metadataSupport\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"snippetEditSupport\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.document_changes),
+            1 => json_unmarshal_decode(dec, &mut self.resource_operations),
+            2 => json_unmarshal_decode(dec, &mut self.failure_handling),
+            3 => json_unmarshal_decode(dec, &mut self.normalizes_line_endings),
+            4 => json_unmarshal_decode(dec, &mut self.change_annotation_support),
+            5 => json_unmarshal_decode(dec, &mut self.metadata_support),
+            _ => json_unmarshal_decode(dec, &mut self.snippet_edit_support),
+        })
     }
 }
 
@@ -9337,30 +7623,14 @@ pub struct DidChangeConfigurationClientCapabilities {
 impl UnmarshalerFrom for DidChangeConfigurationClientCapabilities {
     // Go: (s *DidChangeConfigurationClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"dynamicRegistration\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+        })
     }
 }
 
@@ -9404,36 +7674,22 @@ pub struct DidChangeWatchedFilesClientCapabilities {
 impl UnmarshalerFrom for DidChangeWatchedFilesClientCapabilities {
     // Go: (s *DidChangeWatchedFilesClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                b"\"relativePatternSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("relativePatternSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.relative_pattern_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"dynamicRegistration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"relativePatternSupport\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+            _ => json_unmarshal_decode(dec, &mut self.relative_pattern_support),
+        })
     }
 }
 
@@ -9492,48 +7748,34 @@ pub struct WorkspaceSymbolClientCapabilities {
 impl UnmarshalerFrom for WorkspaceSymbolClientCapabilities {
     // Go: (s *WorkspaceSymbolClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                b"\"symbolKind\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("symbolKind"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.symbol_kind)?;
-                }
-                b"\"tagSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("tagSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.tag_support)?;
-                }
-                b"\"resolveSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("resolveSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.resolve_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"dynamicRegistration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"symbolKind\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"tagSupport\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"resolveSupport\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+            1 => json_unmarshal_decode(dec, &mut self.symbol_kind),
+            2 => json_unmarshal_decode(dec, &mut self.tag_support),
+            _ => json_unmarshal_decode(dec, &mut self.resolve_support),
+        })
     }
 }
 
@@ -9576,30 +7818,14 @@ pub struct ExecuteCommandClientCapabilities {
 impl UnmarshalerFrom for ExecuteCommandClientCapabilities {
     // Go: (s *ExecuteCommandClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"dynamicRegistration\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+        })
     }
 }
 
@@ -9642,30 +7868,14 @@ pub struct SemanticTokensWorkspaceClientCapabilities {
 impl UnmarshalerFrom for SemanticTokensWorkspaceClientCapabilities {
     // Go: (s *SemanticTokensWorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"refreshSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("refreshSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.refresh_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"refreshSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.refresh_support),
+        })
     }
 }
 
@@ -9703,30 +7913,14 @@ pub struct CodeLensWorkspaceClientCapabilities {
 impl UnmarshalerFrom for CodeLensWorkspaceClientCapabilities {
     // Go: (s *CodeLensWorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"refreshSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("refreshSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.refresh_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"refreshSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.refresh_support),
+        })
     }
 }
 
@@ -9781,66 +7975,52 @@ pub struct FileOperationClientCapabilities {
 impl UnmarshalerFrom for FileOperationClientCapabilities {
     // Go: (s *FileOperationClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                b"\"didCreate\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didCreate"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_create)?;
-                }
-                b"\"willCreate\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willCreate"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_create)?;
-                }
-                b"\"didRename\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didRename"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_rename)?;
-                }
-                b"\"willRename\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willRename"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_rename)?;
-                }
-                b"\"didDelete\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didDelete"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_delete)?;
-                }
-                b"\"willDelete\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willDelete"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_delete)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"dynamicRegistration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didCreate\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willCreate\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didRename\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willRename\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didDelete\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willDelete\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+            1 => json_unmarshal_decode(dec, &mut self.did_create),
+            2 => json_unmarshal_decode(dec, &mut self.will_create),
+            3 => json_unmarshal_decode(dec, &mut self.did_rename),
+            4 => json_unmarshal_decode(dec, &mut self.will_rename),
+            5 => json_unmarshal_decode(dec, &mut self.did_delete),
+            _ => json_unmarshal_decode(dec, &mut self.will_delete),
+        })
     }
 }
 
@@ -9897,30 +8077,14 @@ pub struct InlineValueWorkspaceClientCapabilities {
 impl UnmarshalerFrom for InlineValueWorkspaceClientCapabilities {
     // Go: (s *InlineValueWorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"refreshSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("refreshSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.refresh_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"refreshSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.refresh_support),
+        })
     }
 }
 
@@ -9960,30 +8124,14 @@ pub struct InlayHintWorkspaceClientCapabilities {
 impl UnmarshalerFrom for InlayHintWorkspaceClientCapabilities {
     // Go: (s *InlayHintWorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"refreshSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("refreshSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.refresh_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"refreshSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.refresh_support),
+        })
     }
 }
 
@@ -10023,30 +8171,14 @@ pub struct DiagnosticWorkspaceClientCapabilities {
 impl UnmarshalerFrom for DiagnosticWorkspaceClientCapabilities {
     // Go: (s *DiagnosticWorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"refreshSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("refreshSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.refresh_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"refreshSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.refresh_support),
+        })
     }
 }
 
@@ -10088,30 +8220,14 @@ pub struct FoldingRangeWorkspaceClientCapabilities {
 impl UnmarshalerFrom for FoldingRangeWorkspaceClientCapabilities {
     // Go: (s *FoldingRangeWorkspaceClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"refreshSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("refreshSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.refresh_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"refreshSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.refresh_support),
+        })
     }
 }
 
@@ -10145,30 +8261,14 @@ pub struct TextDocumentContentClientCapabilities {
 impl UnmarshalerFrom for TextDocumentContentClientCapabilities {
     // Go: (s *TextDocumentContentClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"dynamicRegistration\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+        })
     }
 }
 
@@ -10215,48 +8315,34 @@ pub struct TextDocumentSyncClientCapabilities {
 impl UnmarshalerFrom for TextDocumentSyncClientCapabilities {
     // Go: (s *TextDocumentSyncClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                b"\"willSave\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willSave"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_save)?;
-                }
-                b"\"willSaveWaitUntil\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("willSaveWaitUntil"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.will_save_wait_until)?;
-                }
-                b"\"didSave\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("didSave"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.did_save)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"dynamicRegistration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willSave\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"willSaveWaitUntil\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"didSave\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+            1 => json_unmarshal_decode(dec, &mut self.will_save),
+            2 => json_unmarshal_decode(dec, &mut self.will_save_wait_until),
+            _ => json_unmarshal_decode(dec, &mut self.did_save),
+        })
     }
 }
 
@@ -10305,30 +8391,14 @@ pub struct TextDocumentFilterClientCapabilities {
 impl UnmarshalerFrom for TextDocumentFilterClientCapabilities {
     // Go: (s *TextDocumentFilterClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"relativePatternSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("relativePatternSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.relative_pattern_support)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[StructureMember {
+            quoted: "\"relativePatternSupport\"",
+            required: false,
+            reject_null: true,
+        }];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            _ => json_unmarshal_decode(dec, &mut self.relative_pattern_support),
+        })
     }
 }
 
@@ -10389,60 +8459,46 @@ pub struct CompletionClientCapabilities {
 impl UnmarshalerFrom for CompletionClientCapabilities {
     // Go: (s *CompletionClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                b"\"completionItem\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("completionItem"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.completion_item)?;
-                }
-                b"\"completionItemKind\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("completionItemKind"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.completion_item_kind)?;
-                }
-                b"\"insertTextMode\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("insertTextMode"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.insert_text_mode)?;
-                }
-                b"\"contextSupport\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("contextSupport"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.context_support)?;
-                }
-                b"\"completionList\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("completionList"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.completion_list)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"dynamicRegistration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"completionItem\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"completionItemKind\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"insertTextMode\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"contextSupport\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"completionList\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+            1 => json_unmarshal_decode(dec, &mut self.completion_item),
+            2 => json_unmarshal_decode(dec, &mut self.completion_item_kind),
+            3 => json_unmarshal_decode(dec, &mut self.insert_text_mode),
+            4 => json_unmarshal_decode(dec, &mut self.context_support),
+            _ => json_unmarshal_decode(dec, &mut self.completion_list),
+        })
     }
 }
 
@@ -10497,36 +8553,22 @@ pub struct HoverClientCapabilities {
 impl UnmarshalerFrom for HoverClientCapabilities {
     // Go: (s *HoverClientCapabilities) UnmarshalJSONFrom
     fn unmarshal_json_from(&mut self, dec: &mut JsonDecoder<'_>) -> Result<(), JsonError> {
-        let k = dec.peek_kind();
-        if k != b'{' {
-            return Err(err_not_object(k));
-        }
-        dec.read_token()?;
-
-        while dec.peek_kind() != b'}' {
-            let name = dec.read_value()?;
-            match name {
-                b"\"dynamicRegistration\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("dynamicRegistration"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.dynamic_registration)?;
-                }
-                b"\"contentFormat\"" => {
-                    if dec.peek_kind() == b'n' {
-                        return Err(err_null("contentFormat"));
-                    }
-                    json_unmarshal_decode(dec, &mut self.content_format)?;
-                }
-                _ => {
-                    dec.skip_value()?;
-                }
-            }
-        }
-
-        dec.read_token()?;
-
-        Ok(())
+        const MEMBERS: &[StructureMember] = &[
+            StructureMember {
+                quoted: "\"dynamicRegistration\"",
+                required: false,
+                reject_null: true,
+            },
+            StructureMember {
+                quoted: "\"contentFormat\"",
+                required: false,
+                reject_null: true,
+            },
+        ];
+        unmarshal_structure(dec, MEMBERS, &mut |i, dec| match i {
+            0 => json_unmarshal_decode(dec, &mut self.dynamic_registration),
+            _ => json_unmarshal_decode(dec, &mut self.content_format),
+        })
     }
 }
 

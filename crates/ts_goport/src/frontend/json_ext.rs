@@ -1579,10 +1579,24 @@ pub fn marshal_opt_field<T: MarshalerTo>(
 /// name in input order; `field` decodes the value and returns `true`, or
 /// returns `false` for an unknown name, which is then skipped. Names match
 /// exactly. Any other kind is an error after its first token.
+/// The body is `unmarshal_struct_fields_dyn`, so each struct adds only its
+/// `field` function.
+#[inline(always)]
 pub fn unmarshal_struct_fields(
     dec: &mut JsonDecoder<'_>,
     go_type: &str,
     mut field: impl FnMut(&str, &mut JsonDecoder<'_>) -> Result<bool, JsonError>,
+) -> Result<bool, JsonError> {
+    unmarshal_struct_fields_dyn(dec, go_type, &mut field)
+}
+
+/// `unmarshal_struct_fields` with a `field` function whose type is erased:
+/// one copy for all structs.
+#[inline(never)]
+pub fn unmarshal_struct_fields_dyn(
+    dec: &mut JsonDecoder<'_>,
+    go_type: &str,
+    field: &mut dyn FnMut(&str, &mut JsonDecoder<'_>) -> Result<bool, JsonError>,
 ) -> Result<bool, JsonError> {
     let tok = dec.read_token()?;
     match tok {
