@@ -439,21 +439,22 @@ pub fn unmarshal_json_method_error(val: &[u8], go_type: &str, message: String) -
     SemanticError::after(k, "", go_type, &err.message).into_json_error()
 }
 
-/// Go `newSemanticErrorWithPosition` for the type `T` of an
-/// `UnmarshalJSONFrom` method (arshal_methods.go:343): a plain error from
-/// the method gets the Go type of `T`. A `SemanticError` keeps its type, and
-/// other errors pass through.
+/// Go `newSemanticErrorWithPosition` for the type of an `UnmarshalJSONFrom`
+/// method (arshal_methods.go:343): a plain error from the method gets the Go
+/// type of `rust_type` (the `std::any::type_name` of the method's type). A
+/// `SemanticError` keeps its type, and other errors pass through.
 ///
 /// PORT: Go wraps at every type that has a method. The port wraps at every
 /// `json_unmarshal_decode::<T>`, so the innermost type whose method made the
 /// error names it. Only method types make plain errors (`SemanticError::method`);
-/// the errors of the default arshalers have their type already.
+/// the errors of the default arshalers have their type already. Not generic,
+/// so the binary holds one copy.
 #[must_use]
-pub fn wrap_method_error<T: ?Sized>(err: JsonError) -> JsonError {
+pub fn wrap_method_error(err: JsonError, rust_type: &str) -> JsonError {
     match SemanticError::of(&err) {
         Some(mut s) if !s.wrapped => {
             s.wrapped = true;
-            s.go_type = go_type_name::<T>();
+            s.go_type = go_type_string(rust_type);
             s.into_json_error()
         }
         _ => err,
@@ -698,7 +699,7 @@ pub fn go_type_name<T: ?Sized>() -> String {
 }
 
 /// `go_type_name` of the Rust type that `rust` (`std::any::type_name`) names.
-/// Cold error paths take the name as a string so that they are not generic.
+/// Error paths take the name as a string so that they are not generic.
 pub(crate) fn go_type_string(rust: &str) -> String {
     let (path, args) = match rust.find('<') {
         Some(i) if rust.ends_with('>') => {

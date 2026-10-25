@@ -2254,8 +2254,9 @@ pub fn json_unmarshal_decode<T: UnmarshalerFrom + ?Sized>(
     out: &mut T,
 ) -> Result<(), JsonError> {
     let (prev_depth, prev_len) = dec.depth_length();
-    out.unmarshal_json_from(dec)
-        .map_err(crate::frontend::json_ext::wrap_method_error::<T>)?;
+    out.unmarshal_json_from(dec).map_err(|err| {
+        crate::frontend::json_ext::wrap_method_error(err, std::any::type_name::<T>())
+    })?;
     let (curr_depth, curr_len) = dec.depth_length();
     if prev_depth != curr_depth || prev_len + 1 != curr_len {
         return Err(dec.non_singular_value_error(
