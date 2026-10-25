@@ -128,6 +128,13 @@ wrap class). Where Go adds or compares such values as `int`, do it in `i64`
 and give Go's panic text (`write_code_snippet`,
 `scanner_util::panic_past_text`).
 
+The identifier count is not safe in `i32`: the speculative JSDoc tag parses
+of one file can make more than 2^31 identifiers (idcount64). So it is `i64`
+(`Parser::identifier_count`, `SourceFile::identifier_count`,
+`program::identifier_count` and the `Identifiers` row of the statistics). Go's
+`int` wraps past 2^63, so its adds use `wrapping_add`: a debug build gives the
+release result and does not panic.
+
 PORT limit: in a text with bytes that are not valid UTF-8, the port form is
 longer than Go's bytes (marker units, `gostring::go_byte_offset`). Past the
 units, a port offset is `extra` more than its Go offset. A Go offset within
