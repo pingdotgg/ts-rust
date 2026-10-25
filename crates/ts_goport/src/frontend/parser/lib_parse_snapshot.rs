@@ -1744,19 +1744,6 @@ mod tests {
         frontend::parser::lib_parse_snapshot::tests::generate_lib_parse_snapshot -- --ignored --exact` \
         (through scripts/run-cargo-capped.sh)";
 
-    /// Snapshot libs (`snapshot_libs`) that get no section. No perf9 project
-    /// uses lib.webworker (the default libs take lib.dom), so its section
-    /// would only add binary size.
-    const SKIPPED_LIBS: &[&str] = &["lib.webworker.d.ts"];
-
-    /// The libs that get a section, largest first.
-    fn parse_snapshot_libs() -> Vec<&'static str> {
-        snapshot_libs()
-            .into_iter()
-            .filter(|lib| !SKIPPED_LIBS.contains(lib))
-            .collect()
-    }
-
     /// The parse options and the text of bundled lib `lib`, as the program
     /// loader gives them (the path is not read by the parse).
     fn lib_input(lib: &str) -> (SourceFileParseOptions, &'static str) {
@@ -1855,7 +1842,7 @@ mod tests {
     #[ignore = "writes src/frontend/parser/lib_parse.bin"]
     fn generate_lib_parse_snapshot() {
         let mut sections = Vec::new();
-        for lib in parse_snapshot_libs() {
+        for lib in snapshot_libs() {
             let (opts, text) = lib_input(lib);
             // The process-wide unported counts: run this test alone.
             let unported = unported_report();
@@ -1910,7 +1897,7 @@ mod tests {
     /// live one, with no change to the state of the thread.
     #[test]
     fn snapshot_matches_live_parse() {
-        for lib in parse_snapshot_libs() {
+        for lib in snapshot_libs() {
             let (opts, text) = lib_input(lib);
             let live = live_parse(&opts, text).unwrap_or_else(|e| panic!("{lib}: {e}"));
             let expected = section(&opts, text, &live);
@@ -1984,7 +1971,7 @@ mod tests {
     /// is parsed live into the same store.
     #[test]
     fn bad_section_parses_live() {
-        let lib = parse_snapshot_libs()[0];
+        let lib = snapshot_libs()[0];
         let (opts, text) = lib_input(lib);
         let live = live_parse(&opts, text).unwrap_or_else(|e| panic!("{lib}: {e}"));
         let mut section = section(&opts, text, &live);
