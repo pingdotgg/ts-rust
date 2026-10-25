@@ -2013,22 +2013,11 @@ pub fn read_ast_node_miss<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R
     read_ast_node_cold(n, read)
 }
 
-/// `read_ast_node_miss` for a node that is not of the hot file version.
-#[cfg(not(target_family = "wasm"))]
-#[cold]
-#[inline(never)]
-fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
-    if n.file_index() == SYNTHETIC_NODE_FILE {
-        return read(synthetic_ast_node(n).data.view());
-    }
-    crate::ast::store::read_store_node_miss(n, read)
-}
-
-/// wasm: `read_ast_node_miss` for a node that is not of the hot file
-/// version, with the miss code once (`read_ast_node_cold_dyn`): `read` runs
-/// through `&mut dyn FnMut`. One copy per reader type was 119 KB of the
-/// module (101 copies).
-#[cfg(target_family = "wasm")]
+/// `read_ast_node_miss` for a node that is not of the hot file version,
+/// with the miss code once (`read_ast_node_cold_dyn`): `read` runs through
+/// `&mut dyn FnMut`.
+// PERF: astcold1 (size plan C2). One copy per reader type was 258 KB of the
+// PGO tsc (103 copies) and 119 KB of the wasm module (101 copies).
 #[cold]
 #[inline(never)]
 fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
@@ -2040,8 +2029,7 @@ fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
     result.expect("the node is read once")
 }
 
-/// wasm: `read_ast_node_cold` with one copy for all readers.
-#[cfg(target_family = "wasm")]
+/// `read_ast_node_cold` with one copy for all readers.
 #[cold]
 #[inline(never)]
 fn read_ast_node_cold_dyn(n: Node, read: &mut dyn FnMut(NodeData<'_>)) {
