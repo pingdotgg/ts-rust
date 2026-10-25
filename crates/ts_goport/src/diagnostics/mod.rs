@@ -64,7 +64,9 @@ impl fmt::Display for Category {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Message {
     code: u32,
-    category: Category,
+    /// The `Category` as a byte (`category_byte`): a catalog entry is 40
+    /// bytes, not 48.
+    category: u8,
     /// The key of a message made with `Message::new`. `None` in a catalog
     /// entry: `key` makes its key from the text.
     key: Option<&'static str>,
@@ -98,7 +100,7 @@ impl Message {
         );
         Self {
             code,
-            category,
+            category: category_byte(category),
             key: Some(key),
             text,
             reports_unnecessary,
@@ -125,7 +127,7 @@ impl Message {
         let _ = key;
         Self {
             code,
-            category,
+            category: category_byte(category),
             key: None,
             text: if cfg!(target_family = "wasm") {
                 ""
@@ -151,7 +153,7 @@ impl Message {
 
     #[must_use]
     pub const fn category(self) -> Category {
-        self.category
+        Category(self.category as i32)
     }
 
     /// The localization key. A catalog entry makes it from its text as
@@ -367,6 +369,18 @@ pub fn message_by_key(key: &str) -> Option<&'static Message> {
     message_by_code(code.parse().ok()?).filter(|message| message.key() == key)
 }
 
+/// `category` as the byte that a `Message` keeps. Every message has one of
+/// the four named categories.
+const fn category_byte(category: Category) -> u8 {
+    match category {
+        Category::Warning => 0,
+        Category::Error => 1,
+        Category::Suggestion => 2,
+        Category::Message => 3,
+        _ => panic!("a message has a named category"),
+    }
+}
+
 /// The key of the `CATALOG` message with `code`, made on its first read.
 fn catalog_key(code: u32) -> &'static str {
     static KEYS: std::sync::OnceLock<Box<[std::sync::OnceLock<Box<str>>]>> =
@@ -385,7 +399,7 @@ impl fmt::Debug for Message {
         formatter
             .debug_struct("Message")
             .field("code", &self.code)
-            .field("category", &self.category)
+            .field("category", &self.category())
             .field("key", &self.key())
             .field("text", &self.text())
             .field("reports_unnecessary", &self.reports_unnecessary)
