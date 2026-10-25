@@ -3318,7 +3318,7 @@ function generateCode(): Map<string, string> {
             writeLine(`        }`);
             writeLine(`        // PORT: Go writes the method as a raw JSON string value; the method`);
             writeLine(`        // names need no escaping, so the string marshaler writes the same bytes.`);
-            writeLine(`        marshal_field(enc, &mut first, "method", method)?;`);
+            writeLine(`        marshal_field(enc, &mut first, "method", &method)?;`);
             writeLine(`        marshal_field(enc, &mut first, "registerOptions", &opts)?;`);
             writeLine(`        write_object_end(enc);`);
             writeLine(`        Ok(())`);

@@ -469,12 +469,22 @@ pub fn wrap_method_error(err: JsonError, rust_type: &str) -> JsonError {
 /// PORT: the pointer is found again from `data` and the decoder's input
 /// offset where decoding stopped (Go `InputOffset`). A method that
 /// unmarshals a raw sub-value (LSP unions) uses `unmarshal_read_value`.
-pub fn unmarshal_root<T: UnmarshalerFrom + ?Sized>(
+/// The body is `unmarshal_root_dyn`, so each `T` adds only this call.
+#[inline(always)]
+pub fn unmarshal_root<T: UnmarshalerFrom>(data: &[u8], v: &mut T) -> Result<(), JsonError> {
+    unmarshal_root_dyn(data, v, std::any::type_name::<T>())
+}
+
+/// `unmarshal_root` of a value whose type is erased. `rust_type` is the
+/// `std::any::type_name` of the value's type (errors show its Go type).
+#[inline(never)]
+pub fn unmarshal_root_dyn(
     data: &[u8],
-    v: &mut T,
+    v: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
 ) -> Result<(), JsonError> {
     let mut dec = JsonDecoder::new(data, JsonOptions::default());
-    let err = match json_unmarshal_decode(&mut dec, v) {
+    let err = match json_unmarshal_decode_dyn(&mut dec, v, rust_type) {
         Ok(()) => return dec.check_eof(),
         Err(err) => err,
     };
@@ -530,11 +540,19 @@ pub fn error_pointer(data: &[u8], end: usize, pos: ErrorPos) -> String {
 /// pointer, which the caller's arshaler fills in with the pointer of the
 /// value the method read: here the error is given `ErrorPos::After` and no
 /// pointer, so `unmarshal_root` finds that value.
-pub fn unmarshal_read_value<T: UnmarshalerFrom + ?Sized>(
+#[inline(always)]
+pub fn unmarshal_read_value<T: UnmarshalerFrom>(data: &[u8], v: &mut T) -> Result<(), JsonError> {
+    unmarshal_read_value_dyn(data, v, std::any::type_name::<T>())
+}
+
+/// `unmarshal_read_value` of a value whose type is erased.
+#[inline(never)]
+pub fn unmarshal_read_value_dyn(
     data: &[u8],
-    v: &mut T,
+    v: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
 ) -> Result<(), JsonError> {
-    let err = match unmarshal_root(data, v) {
+    let err = match unmarshal_root_dyn(data, v, rust_type) {
         Ok(()) => return Ok(()),
         Err(err) => err,
     };
@@ -700,7 +718,7 @@ pub fn go_type_name<T: ?Sized>() -> String {
 
 /// `go_type_name` of the Rust type that `rust` (`std::any::type_name`) names.
 /// Error paths take the name as a string so that they are not generic.
-pub(crate) fn go_type_string(rust: &str) -> String {
+pub fn go_type_string(rust: &str) -> String {
     let (path, args) = match rust.find('<') {
         Some(i) if rust.ends_with('>') => {
             (&rust[..i], split_type_args(&rust[i + 1..rust.len() - 1]))
@@ -1499,12 +1517,26 @@ pub fn write_object_end(enc: &mut String) {
 }
 
 /// Writes one struct field (`"name":value`), with a comma before every
-/// field but the first.
-pub fn marshal_field<T: MarshalerTo + ?Sized>(
+/// field but the first. The body is `marshal_field_dyn`: the marshaler of
+/// `T` is one function that every struct shares, not a copy inlined into
+/// each struct.
+#[inline(always)]
+pub fn marshal_field<T: MarshalerTo>(
     enc: &mut String,
     first: &mut bool,
     name: &str,
     value: &T,
+) -> Result<(), JsonError> {
+    marshal_field_dyn(enc, first, name, value)
+}
+
+/// `marshal_field` of a value whose type is erased: one copy for all types.
+#[inline(never)]
+pub fn marshal_field_dyn(
+    enc: &mut String,
+    first: &mut bool,
+    name: &str,
+    value: &dyn MarshalerTo,
 ) -> Result<(), JsonError> {
     if !*first {
         enc.push(',');
@@ -1525,7 +1557,7 @@ pub fn marshal_field_omitzero<T: MarshalerTo + IsZero>(
     if value.is_zero() {
         return Ok(());
     }
-    marshal_field(enc, first, name, value)
+    marshal_field_dyn(enc, first, name, value)
 }
 
 /// An optional field (Go `*T` with `omitzero`): skipped when `None`.
@@ -1537,7 +1569,7 @@ pub fn marshal_opt_field<T: MarshalerTo>(
 ) -> Result<(), JsonError> {
     match value {
         None => Ok(()),
-        Some(v) => marshal_field(enc, first, name, v),
+        Some(v) => marshal_field_dyn(enc, first, name, v),
     }
 }
 
@@ -1577,14 +1609,25 @@ pub fn unmarshal_struct_fields(
 // jsontext.WithIndentPrefix(prefix) and jsontext.WithIndent(indent):
 // multiline output, a space after each colon, no space after commas, no
 // newline inside an empty object or array, no trailing newline.
-pub fn marshal_indent<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn marshal_indent<T: MarshalerTo>(
     value: &T,
+    prefix: &str,
+    indent: &str,
+) -> Result<String, JsonError> {
+    marshal_indent_dyn(value, prefix, indent)
+}
+
+/// `marshal_indent` of a value whose type is erased.
+#[inline(never)]
+pub fn marshal_indent_dyn(
+    value: &dyn MarshalerTo,
     prefix: &str,
     indent: &str,
 ) -> Result<String, JsonError> {
     if prefix.is_empty() && indent.is_empty() {
         // WithIndentPrefix and WithIndent imply multiline output, so skip them.
-        return json_marshal(value, &[]);
+        return json_marshal_dyn(value, &[]);
     }
     // Go: jsontext/options.go:265 WithIndentPrefix, :232 WithIndent.
     let s = prefix.trim_matches(|c| c == ' ' || c == '\t');
@@ -1601,7 +1644,7 @@ pub fn marshal_indent<T: MarshalerTo + ?Sized>(
             quote_rune(s.as_bytes())
         );
     }
-    let compact = json_marshal(value, &[])?;
+    let compact = json_marshal_dyn(value, &[])?;
     let mut dec = JsonDecoder::new(
         compact.as_bytes(),
         JsonOptions {

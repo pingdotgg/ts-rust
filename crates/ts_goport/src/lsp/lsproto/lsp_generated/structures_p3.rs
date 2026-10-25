@@ -613,7 +613,7 @@ impl MarshalerTo for Registration {
         }
         // PORT: Go writes the method as a raw JSON string value; the method
         // names need no escaping, so the string marshaler writes the same bytes.
-        marshal_field(enc, &mut first, "method", method)?;
+        marshal_field(enc, &mut first, "method", &method)?;
         marshal_field(enc, &mut first, "registerOptions", &opts)?;
         write_object_end(enc);
         Ok(())
