@@ -2013,7 +2013,13 @@ pub fn read_ast_node_miss<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R
     read_ast_node_cold(n, read)
 }
 
-/// `read_ast_node_miss` for a node that is not of the hot file version.
+/// `read_ast_node_miss` for a node that is not of the hot file version. A
+/// synthetic node is read here. A store node goes through
+/// `read_store_node_cold_dyn` with `read` as `&mut dyn FnMut`, so the store
+/// miss code is there once.
+// PERF: astcold1 (size plan C2). With the store miss code in each copy,
+// the 103 copies were 258 KB of the PGO tsc. The synthetic read (the emit
+// transforms read many synthetic nodes) keeps its direct call.
 #[cfg(not(target_family = "wasm"))]
 #[cold]
 #[inline(never)]
@@ -2021,6 +2027,19 @@ fn read_ast_node_cold<R>(n: Node, read: impl FnOnce(NodeData<'_>) -> R) -> R {
     if n.file_index() == SYNTHETIC_NODE_FILE {
         return read(synthetic_ast_node(n).data.view());
     }
+    let mut read = Some(read);
+    let mut result = None;
+    read_store_node_cold_dyn(n, &mut |node| {
+        result = Some((read.take().expect("the node is read once"))(node));
+    });
+    result.expect("the node is read once")
+}
+
+/// `read_ast_node_cold` of a store node, with one copy for all readers.
+#[cfg(not(target_family = "wasm"))]
+#[cold]
+#[inline(never)]
+fn read_store_node_cold_dyn(n: Node, read: &mut dyn FnMut(NodeData<'_>)) {
     crate::ast::store::read_store_node_miss(n, read)
 }
 
