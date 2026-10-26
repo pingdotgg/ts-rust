@@ -463,21 +463,39 @@ impl Checker {
                     {
                         return;
                     }
-                    let res = find_many_ancestors(
-                        location,
-                        &[
-                            is_meta_property,
-                            is_decorator,
-                            is_for_in_or_of_statement,
-                            is_computed_property_name,
-                            is_heritage_clause,
-                        ],
-                    );
-                    let meta_property = res[0];
-                    let decorator = res[1];
-                    let for_node = res[2];
-                    let computed_name = res[3];
-                    let heritage_clause = res[4];
+                    // Go: checker.go:28857 ast.FindManyAncestors(location, ast.IsMetaProperty,
+                    // ast.IsDecorator, ast.IsForInOrOfStatement, ast.IsComputedPropertyName,
+                    // ast.IsHeritageClause) (ast/utilities.go:970).
+                    // PERF: emitscan1. Each Go callback is a test of one kind, and no two
+                    // callbacks match the same kind (ast_generated.go:4455, 837, 798, 2247;
+                    // utilities.go:219). One kind read per ancestor selects the slot. The walk
+                    // reads kinds and parents from the published store
+                    // (`find_ancestor_with_kind`), not 5 registry reads per step. The slots,
+                    // the fill order (nearest first) and the stop when all 5 are found are Go's.
+                    let mut res = [Node::NIL; 5];
+                    let mut found = 0;
+                    find_ancestor_with_kind(location, |n, kind| {
+                        let i = match kind {
+                            SyntaxKind::MetaProperty => 0,
+                            SyntaxKind::Decorator => 1,
+                            SyntaxKind::ForInStatement | SyntaxKind::ForOfStatement => 2,
+                            SyntaxKind::ComputedPropertyName => 3,
+                            SyntaxKind::HeritageClause => 4,
+                            _ => return false,
+                        };
+                        if res[i].is_nil() {
+                            res[i] = n;
+                            found += 1;
+                        }
+                        found == res.len()
+                    });
+                    let [
+                        meta_property,
+                        decorator,
+                        for_node,
+                        computed_name,
+                        heritage_clause,
+                    ] = res;
                     if meta_property.is_some() {
                         return; // identifiers in meta properties shouldn't be resolved, but are expressions, so must be filtered
                     }
