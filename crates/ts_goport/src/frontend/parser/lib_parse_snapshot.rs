@@ -56,7 +56,10 @@
 //! - the `ParsedSourceFile` fields in declaration order, with node handles
 //!   as slot indexes (0 is nil), and the import specifiers.
 
-use crate::ast::store::{LibListTable, LibParseSlot, load_lib_parse_slots, reset_file_store};
+use crate::ast::store::{
+    LibListTable, LibParseSlot, load_lib_parse_slots, mark_lib_parse_snapshot_store,
+    reset_file_store,
+};
 #[cfg(test)]
 use crate::ast::store::{lib_parse_slot_views, lib_parse_store_dump};
 use crate::astdata::NodeData;
@@ -383,6 +386,7 @@ fn decode(
     if d.r.remaining() != 0 {
         return None;
     }
+    mark_lib_parse_snapshot_store(store);
     // The store writes of Go `finishSourceFile` (parser_p1.rs), then the
     // freeze of `parse_into_store`.
     set_file_store_js_doc_cache(store, &file.jsdoc_cache);
