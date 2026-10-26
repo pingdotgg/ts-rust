@@ -1207,12 +1207,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "a11fde0dbef0d8112",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "a71e4194e752fd84f",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R244 pipeline (candidate.sh side)."
