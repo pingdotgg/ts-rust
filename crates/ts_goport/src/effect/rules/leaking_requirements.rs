@@ -116,7 +116,7 @@ fn run_leaking_requirements(ctx: &mut RuleContext<'_, '_>) -> Vec<Diagnostic> {
                     .iter()
                     .map(|&t| (ctx.tp.checker.type_to_string_exported(t), t))
                     .collect();
-                keyed.sort_by(|a, b| a.0.cmp(&b.0));
+                crate::gostd::slices::stable_sort_by(&mut keyed, |a, b| a.0.cmp(&b.0));
                 leaked = keyed.into_iter().map(|(_, t)| t).collect();
 
                 // Format as "TypeA | TypeB | TypeC"

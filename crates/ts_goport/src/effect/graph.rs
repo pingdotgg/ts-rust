@@ -440,7 +440,7 @@ impl<N, E> Graph<N, E> {
             }
         }
         let mut result: Vec<NodeIndex> = seen.into_iter().collect();
-        result.sort_unstable();
+        crate::gostd::slices::stable_sort_by(&mut result, Ord::cmp);
         result
     }
 
@@ -515,7 +515,7 @@ impl<N, E> Graph<N, E> {
             self.adjacency.get(&node_index)
         };
         let mut sorted: Vec<EdgeIndex> = adj_list.cloned().unwrap_or_default();
-        sorted.sort_unstable();
+        crate::gostd::slices::stable_sort_by(&mut sorted, Ord::cmp);
         let mut result = Vec::with_capacity(sorted.len());
         for ei in &sorted {
             if let Some(edge) = self.edges.get(ei) {

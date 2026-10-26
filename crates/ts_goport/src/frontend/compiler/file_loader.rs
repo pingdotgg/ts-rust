@@ -76,6 +76,7 @@ pub struct FileLoader {
     pub lib_file_count: Cell<i32>,
 
     pub factory: NodeFactory,
+    pub synthetic_owner: Rc<crate::ast::LoadSyntheticOwner>,
 
     pub project_reference_file_mapper: Rc<RefCell<ProjectReferenceFileMapper>>,
     pub dts_directories: FxHashSet<Path>,
@@ -205,6 +206,9 @@ pub struct ProcessedFiles {
     pub source_file_meta_datas: Rc<FxHashMap<Path, SourceFileMetaData>>,
     pub jsx_runtime_import_specifiers: Option<Rc<FxHashMap<Path, Rc<JsxRuntimeImportSpecifier>>>>,
     pub import_helpers_import_specifiers: Option<Rc<FxHashMap<Path, Node>>>,
+    /// Keeps the nodes of jsx_runtime_import_specifiers and import_helpers_import_specifiers alive.
+    /// A clone (update_program, program_new.rs:706; Go program.go:336 shares processedFiles) shares it.
+    pub synthetic_owner: Option<Rc<crate::ast::LoadSyntheticOwner>>,
     pub lib_files: Rc<FxHashMap<Path, Rc<LibFile>>>,
     // List of present unsupported extensions
     pub source_files_found_searching_node_modules: Rc<FxHashSet<Path>>,
@@ -294,6 +298,7 @@ pub fn process_all_program_files(
         lib_file_count: Cell::new(0),
         // PORT: Go uses the zero `ast.NodeFactory`, which makes synthetic nodes.
         factory: NodeFactory::new(),
+        synthetic_owner: Rc::new(crate::ast::LoadSyntheticOwner::new()),
         project_reference_file_mapper: Rc::new(RefCell::new(ProjectReferenceFileMapper::new(
             &opts,
             host.clone(),
@@ -2234,6 +2239,7 @@ impl FileLoader {
 
     // Go: fileloader.go:960 (*fileLoader).createSyntheticImport
     pub fn create_synthetic_import(&self, text: &str, file: &ParsedSourceFile) -> Node {
+        let _owner = self.synthetic_owner.enter();
         let external_helpers_module_reference =
             self.factory.new_string_literal(text, TokenFlags::NONE);
         let import_decl = self.factory.new_import_declaration(
@@ -3170,7 +3176,7 @@ mod tests {
                 true
             });
         }
-        package_jsons.sort();
+        crate::gostd::slices::stable_sort_by(&mut package_jsons, Ord::cmp);
         package_jsons.dedup();
         writeln!(out, "package.json {package_jsons:?}").unwrap();
         for (code, args) in traces.borrow().iter() {
@@ -4659,8 +4665,8 @@ declare module "user" { import { x } from "amb"; export const y: typeof x; }
         // One request per mapped file: a file with two requests, or with
         // none, fails here.
         let mut want: Vec<String> = (0..40).map(|i| format!("/src/C{i}.vue")).collect();
-        want.sort();
-        serial_transforms.sort();
+        crate::gostd::slices::stable_sort_by(&mut want, Ord::cmp);
+        crate::gostd::slices::stable_sort_by(&mut serial_transforms, Ord::cmp);
         assert_eq!(serial_transforms, want);
         for attempt in 0..10 {
             let label = format!("mapped_parallel_{attempt}");
@@ -4677,7 +4683,7 @@ declare module "user" { import { x } from "amb"; export const y: typeof x; }
                 .lock()
                 .unwrap()
                 .retain(|name| !held.contains(name));
-            parallel_transforms.sort();
+            crate::gostd::slices::stable_sort_by(&mut parallel_transforms, Ord::cmp);
             assert_eq!(parallel_transforms, want, "one transform per file");
             assert_eq!(parallel.join("\n"), serial.join("\n"));
             if !parse_workers_enabled() {

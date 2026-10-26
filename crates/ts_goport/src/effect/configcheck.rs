@@ -46,7 +46,7 @@ pub fn validate(options: &CompilerOptions, source_file: Node) -> Vec<Diagnostic>
                     && by_name(rules::ALL, name).is_none()
             })
             .collect();
-        unknown.sort();
+        crate::gostd::slices::stable_sort_by(&mut unknown, Ord::cmp);
         for name in unknown {
             let property = find_property(syntax, name);
             let node = if property.is_some() {

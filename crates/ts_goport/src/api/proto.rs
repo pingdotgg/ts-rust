@@ -1108,7 +1108,7 @@ struct SortedMapJSON<'a, V>(&'a FxHashMap<String, V>);
 impl<V: MarshalerTo> MarshalerTo for SortedMapJSON<'_, V> {
     fn marshal_json_to(&self, enc: &mut String) -> Result<(), JsonError> {
         let mut entries: Vec<(&String, &V)> = self.0.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
+        crate::gostd::slices::stable_sort_by(&mut entries, |a, b| a.0.cmp(b.0));
         enc.push('{');
         for (i, (k, v)) in entries.into_iter().enumerate() {
             if i > 0 {
@@ -5416,22 +5416,36 @@ pub fn unmarshal_payload(
 
 // Go: proto.go:2034 unmarshallerFor
 // `unmarshal_root` is Go `json.Unmarshal` with the v2 error text.
+// PORT: the decode and the error text are `unmarshal_params`, so each `T`
+// adds only its zero value and the box.
 pub fn unmarshaller_for<T: UnmarshalerFrom + Default + AnyValue>(
     data: &[u8],
 ) -> Result<Option<Box<dyn AnyValue>>, GoError> {
-    let mut v = T::default();
-    if let Err(err) = unmarshal_root(data, &mut v) {
+    let mut v = Box::new(T::default());
+    unmarshal_params(data, &mut *v, std::any::type_name::<T>())?;
+    Ok(Some(v))
+}
+
+// The body of `unmarshaller_for` for a value whose type is erased.
+// `rust_type` is the `std::any::type_name` of the value's type.
+#[inline(never)]
+fn unmarshal_params(
+    data: &[u8],
+    v: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
+) -> Result<(), GoError> {
+    if let Err(err) = json_ext::unmarshal_root_dyn(data, v, rust_type) {
         let err = errors::from_value(err);
         return Err(errors::errorf(
             format!(
                 "failed to unmarshal *{}: {}",
-                go_type_name::<T>(),
+                json_ext::go_type_string(rust_type),
                 err.error()
             ),
             vec![err],
         ));
     }
-    Ok(Some(Box::new(v)))
+    Ok(())
 }
 
 // Go: proto.go:2042 noParams

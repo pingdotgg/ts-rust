@@ -2147,7 +2147,9 @@ fn get_common_parents_worker(
                         entry.1.push(g[last_common_index + 1..].to_vec());
                     }
                     // PORT: Go sorts by bytes (see `compare_go_bytes`).
-                    ordered_groups.sort_by(|a, b| compare_go_bytes(a.as_str(), b.as_str()));
+                    crate::gostd::slices::stable_sort_by(&mut ordered_groups, |a, b| {
+                        compare_go_bytes(a.as_str(), b.as_str())
+                    });
                     let mut result = Vec::with_capacity(new_groups.len());
                     for key in &ordered_groups {
                         let (head, tails) = &new_groups[key];

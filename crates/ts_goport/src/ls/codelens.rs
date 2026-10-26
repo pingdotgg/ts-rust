@@ -292,7 +292,7 @@ impl LanguageService {
 // `LspAny`, so each value is marshaled and read back as `LspAny`. Objects
 // keep key order and integers write the same text, so the output JSON is
 // the same.
-fn to_lsp_any<T: MarshalerTo + ?Sized>(value: &T) -> LspAny {
+fn to_lsp_any<T: MarshalerTo>(value: &T) -> LspAny {
     let text = json_marshal(value, &[]).expect("marshal code lens argument");
     let mut out = LspAny::Null;
     json_unmarshal(text.as_bytes(), &mut out, &[]).expect("unmarshal code lens argument");

@@ -107,7 +107,9 @@ pub fn analyze_all_of_map_to_for_each(
     }
 
     // PORT: Go uses sort.Slice (not stable); this sort is stable.
-    matches.sort_by(|a, b| a.location.pos().cmp(&b.location.pos()));
+    crate::gostd::slices::stable_sort_by(&mut matches, |a, b| {
+        a.location.pos().cmp(&b.location.pos())
+    });
     matches
 }
 

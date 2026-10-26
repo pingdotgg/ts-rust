@@ -156,6 +156,9 @@ impl Checker {
     }
 
     // Go: checker/symbolaccessibility.go:118 getWithAlternativeContainers
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs only for a symbol
+    // that is not accessible as it is.
+    #[inline(never)]
     pub fn get_with_alternative_containers(
         &mut self,
         container: SymbolId,
