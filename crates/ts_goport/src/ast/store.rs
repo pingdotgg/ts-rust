@@ -147,6 +147,8 @@ impl NodeHeader {
 /// The default value is an empty placeholder with no slots.
 #[derive(Default)]
 struct FileStore {
+    /// parsehash1: set when `lib_parse_snapshot::decode` loaded this store from `lib_parse.bin`. The bind snapshot key then skips `parse_hash` (`lib_snapshot.rs`, `SnapshotKey::check`).
+    lib_parse_snapshot: bool,
     file_name: &'static str,
     /// The file text. A freeable file version shares it (`FileText::Shared`)
     /// with its parse and program inputs, and it goes with them.
@@ -7541,6 +7543,16 @@ pub(crate) struct LibParseSlot {
 impl LibParseSlot {
     pub(crate) const LINK_END: u32 = LINK_END;
     pub(crate) const LINK_NONE: u32 = LINK_NONE;
+}
+
+/// Marks unpublished store `file` as loaded from `lib_parse.bin` (parsehash1).
+pub(crate) fn mark_lib_parse_snapshot_store(file: usize) {
+    with_store_mut(file, |s| s.lib_parse_snapshot = true);
+}
+
+/// True when store `file` was loaded from `lib_parse.bin`. False for a live parse and for a file with no store this thread can see.
+pub(crate) fn store_from_lib_parse_snapshot(file: usize) -> bool {
+    try_with_store(file, |s| s.lib_parse_snapshot).unwrap_or(false)
 }
 
 /// R3-1: fills store `file`, which `new_file_store` or
