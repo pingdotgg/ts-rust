@@ -1092,6 +1092,11 @@ pub struct Checker {
     pub enum_number_index_info: IndexInfoId,
     pub any_base_type_index_info: IndexInfoId,
     pub pattern_ambient_modules: Vec<PatternAmbientModule>,
+    /// PORT: the Go bytes (`go_string_bytes`) of the prefix and suffix of each
+    /// `pattern_ambient_modules` entry, in the same order. Written with the list
+    /// (checker_p02 `initialize_checker` and `merge_pattern_ambient_modules`), so a
+    /// pattern test does not convert them again.
+    pub pattern_ambient_module_go_bytes: Vec<(Vec<u8>, Vec<u8>)>,
     pub pattern_ambient_module_augmentations: SymbolTable,
     pub pattern_ambient_module_augmentation_targets: SymbolTable,
     pub module_import_attributes_types: FxHashMap<SymbolId, TypeId>,
@@ -1640,6 +1645,7 @@ impl Checker {
             enum_number_index_info: IndexInfoId::NIL,
             any_base_type_index_info: IndexInfoId::NIL,
             pattern_ambient_modules: Vec::new(),
+            pattern_ambient_module_go_bytes: Vec::new(),
             pattern_ambient_module_augmentations: SymbolTable::NIL,
             pattern_ambient_module_augmentation_targets: SymbolTable::NIL,
             module_import_attributes_types: FxHashMap::default(),
