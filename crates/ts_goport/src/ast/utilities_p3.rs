@@ -1,5 +1,6 @@
 //! Go `internal/ast/utilities.go` lines 1806-2728.
 
+use crate::gostd::slices::go_ptr_slice_grow;
 use crate::prelude::*;
 
 // Go: ast/utilities.go:1913 GetSuperContainer
@@ -874,66 +875,148 @@ pub fn is_break_or_continue_statement(node: Node) -> bool {
 // prior to invoking `GetModuleInstanceState` is not sufficient. It is, however, necessary that the `Parent` pointers
 // for all ancestors of the `Node` provided to `GetModuleInstanceState` have been set.
 
-// A stack of virtual `Parent` pointers. `None` is the empty stack (Go `nil`).
-// PORT: Go keeps the stack in a slice and `pushAncestor` is an `append`, so a push is O(1). Here each entry
-// lives in its caller's frame and points to the entry below it: a push is O(1) too, and allocates nothing.
-// An entry never changes after its push, so two pushes onto one stack see the same entries below them.
-// (A copy of the slice on each push made a push O(depth): N nested namespaces cost O(N^3).)
+// A Go `[]*Node` value of the `ancestors` stack, as a slice header: `len` entries from slot `start` of the
+// call's `ModuleInstanceWalk`, in a backing array of capacity `cap`. `NIL` is Go's nil slice.
 #[derive(Clone, Copy)]
-pub struct AncestorStack<'a> {
-    parent: Node,
-    rest: Option<&'a AncestorStack<'a>>,
+struct Ancestors {
+    start: u32,
+    len: u32,
+    cap: u32,
 }
 
-// Push a virtual parent pointer onto `ancestors` and return it. The caller keeps the result in a local and
-// passes `Some(&local)`.
-// Go: ast/utilities.go:2428 pushAncestor
-pub fn push_ancestor<'a>(
-    ancestors: Option<&'a AncestorStack<'a>>,
-    parent: Node,
-) -> AncestorStack<'a> {
-    AncestorStack {
-        parent,
-        rest: ancestors,
+impl Ancestors {
+    const NIL: Self = Self {
+        start: 0,
+        len: 0,
+        cap: 0,
+    };
+}
+
+// The state of one GetModuleInstanceState call: Go's `visited` map and the backing arrays of its `ancestors`
+// slices.
+// PORT: Go `append` writes into the backing array while the capacity allows, and `ancestors[:n]` keeps the
+// capacity. So a push after a pop writes over entries that an outer frame still holds, and that frame's next
+// getModuleInstanceStateForAliasTarget walk reads them: it can then search blocks that are not ancestors of
+// the specifier, and the state differs from the real scope in both directions. The port keeps Go's arrays and
+// capacities so that each walk reads what Go reads. `visited` is keyed by the Node handle instead of Go
+// `NodeId` (same identity).
+#[derive(Default)]
+struct ModuleInstanceWalk {
+    visited: FxHashMap<Node, ModuleInstanceState>,
+    // The slots of all live backing arrays, one array after the other.
+    slots: Vec<Node>,
+}
+
+impl ModuleInstanceWalk {
+    // Push a virtual parent pointer onto `ancestors` and return it.
+    // PORT: Go `append(ancestors, parent)`. `stack_store` is true while the calling frame's 32-byte stack store
+    // for this append is unused: for an append that does not escape, Go 1.27 gives the first append to an
+    // empty slice in a frame that store (cap 4) instead of calling growslice (cmd/compile ssagen
+    // `(*state).append`).
+    // Go: ast/utilities.go:2428 pushAncestor
+    #[inline]
+    fn push_ancestor(
+        &mut self,
+        ancestors: Ancestors,
+        parent: Node,
+        stack_store: &mut bool,
+    ) -> Ancestors {
+        let Ancestors { start, len, cap } = ancestors;
+        if len < cap {
+            self.slots[(start + len) as usize] = parent;
+            return Ancestors {
+                start,
+                len: len + 1,
+                cap,
+            };
+        }
+        self.grow_ancestors(ancestors, parent, stack_store)
     }
-}
 
-// If a virtual `Parent` exists on the stack, returns the previous stack entry and the virtual `Parent`.
-// Otherwise, we return `nil` and the value of `node.Parent`.
-// Go: ast/utilities.go:2434 popAncestor
-pub fn pop_ancestor<'a>(
-    ancestors: Option<&'a AncestorStack<'a>>,
-    node: Node,
-) -> (Option<&'a AncestorStack<'a>>, Node) {
-    match ancestors {
-        None => (None, node.parent()),
-        Some(top) => (top.rest, top.parent),
+    // The `append` of push_ancestor to a full slice: a new backing array at the end of `slots`.
+    #[inline(never)]
+    fn grow_ancestors(
+        &mut self,
+        ancestors: Ancestors,
+        parent: Node,
+        stack_store: &mut bool,
+    ) -> Ancestors {
+        let Ancestors { start, len, cap } = ancestors;
+        let new_cap = if len == 0 && std::mem::take(stack_store) {
+            4
+        } else {
+            go_ptr_slice_grow(cap as usize, len as usize + 1)
+        };
+        let new_start = self.slots.len();
+        let old = start as usize..(start + len) as usize;
+        self.slots.extend_from_within(old);
+        self.slots.push(parent);
+        self.slots.resize(new_start + new_cap, Node::NIL);
+        Ancestors {
+            start: new_start as u32,
+            len: len + 1,
+            cap: new_cap as u32,
+        }
+    }
+
+    // If a virtual `Parent` exists on the stack, returns the previous stack entry and the virtual `Parent`.
+    // Otherwise, we return `nil` and the value of `node.Parent`.
+    // Go: ast/utilities.go:2434 popAncestor
+    #[inline]
+    fn pop_ancestor(&self, ancestors: Ancestors, node: Node) -> (Ancestors, Node) {
+        if ancestors.len == 0 {
+            return (Ancestors::NIL, node.parent());
+        }
+        let len = ancestors.len - 1;
+        let parent = self.slots[(ancestors.start + len) as usize];
+        (Ancestors { len, ..ancestors }, parent)
     }
 }
 
 // Go type ModuleInstanceState (ast/utilities.go:2294) lives in crate::flags.
 
+thread_local! {
+    // PERF: the `slots` buffer of the last GetModuleInstanceState call on this thread, empty, kept for the
+    // next call so that a call does not grow a new buffer from nothing. A call takes it out, so a nested
+    // call gets a new one.
+    static WALK_SLOTS: std::cell::Cell<Vec<Node>> = const { std::cell::Cell::new(Vec::new()) };
+}
+
+// The largest `slots` capacity that WALK_SLOTS keeps (512 KiB). A larger buffer is freed after its call.
+const MAX_KEPT_WALK_SLOTS: usize = 1 << 16;
+
 // Go: ast/utilities.go:2451 GetModuleInstanceState
 pub fn get_module_instance_state(node: Node) -> ModuleInstanceState {
     // PORT: Go passes a nil `visited` map and getModuleInstanceStateCached allocates it on first use.
     // Every later call shares that map, so allocating it here is equivalent.
-    let mut visited: FxHashMap<Node, ModuleInstanceState> = FxHashMap::default();
-    get_module_instance_state_unexported(node, None, &mut visited)
+    // PERF: `slots` is the empty buffer of an earlier call. Every backing array is written in full when it is
+    // made (grow_ancestors), so no value of the earlier call is read.
+    let mut walk = ModuleInstanceWalk {
+        visited: FxHashMap::default(),
+        slots: WALK_SLOTS.take(),
+    };
+    let state = get_module_instance_state_unexported(node, Ancestors::NIL, &mut walk);
+    let mut slots = walk.slots;
+    if slots.capacity() <= MAX_KEPT_WALK_SLOTS {
+        slots.clear();
+        WALK_SLOTS.set(slots);
+    }
+    state
 }
 
 // PORT: Go `getModuleInstanceState` has the same snake name as the exported
 // `GetModuleInstanceState`. The exported one keeps the plain name because
 // other packages call it; this private one gets the `_unexported` suffix.
-// `visited` is keyed by the Node handle instead of Go `NodeId` (same identity).
 // Go: ast/utilities.go:2455 getModuleInstanceState
 fn get_module_instance_state_unexported(
     node: Node,
-    ancestors: Option<&AncestorStack<'_>>,
-    visited: &mut FxHashMap<Node, ModuleInstanceState>,
+    ancestors: Ancestors,
+    walk: &mut ModuleInstanceWalk,
 ) -> ModuleInstanceState {
     let body = node.body();
     if body.is_some() {
-        get_module_instance_state_cached(body, Some(&push_ancestor(ancestors, node)), visited)
+        let ancestors = walk.push_ancestor(ancestors, node, &mut true);
+        get_module_instance_state_cached(body, ancestors, walk)
     } else {
         ModuleInstanceState::INSTANTIATED
     }
@@ -942,26 +1025,31 @@ fn get_module_instance_state_unexported(
 // Go: ast/utilities.go:2464 getModuleInstanceStateCached
 fn get_module_instance_state_cached(
     node: Node,
-    ancestors: Option<&AncestorStack<'_>>,
-    visited: &mut FxHashMap<Node, ModuleInstanceState>,
+    ancestors: Ancestors,
+    walk: &mut ModuleInstanceWalk,
 ) -> ModuleInstanceState {
-    if let Some(&cached) = visited.get(&node) {
+    if let Some(&cached) = walk.visited.get(&node) {
         if cached != ModuleInstanceState::UNKNOWN {
             return cached;
         }
         return ModuleInstanceState::NON_INSTANTIATED;
     }
-    visited.insert(node, ModuleInstanceState::UNKNOWN);
-    let result = get_module_instance_state_worker(node, ancestors, visited);
-    visited.insert(node, result);
+    walk.visited.insert(node, ModuleInstanceState::UNKNOWN);
+    // PORT: the arrays that the worker makes are dead when it returns, because no caller holds a slice of them
+    // (Go's GC frees them). Its writes into older arrays stay. So the walk keeps only the arrays of the frames on
+    // the call stack.
+    let live = walk.slots.len();
+    let result = get_module_instance_state_worker(node, ancestors, walk);
+    walk.slots.truncate(live);
+    walk.visited.insert(node, result);
     result
 }
 
 // Go: ast/utilities.go:2481 getModuleInstanceStateWorker
 fn get_module_instance_state_worker(
     node: Node,
-    ancestors: Option<&AncestorStack<'_>>,
-    visited: &mut FxHashMap<Node, ModuleInstanceState>,
+    ancestors: Ancestors,
+    walk: &mut ModuleInstanceWalk,
 ) -> ModuleInstanceState {
     // A module is uninstantiated if it contains only
     match node.kind() {
@@ -989,14 +1077,11 @@ fn get_module_instance_state_worker(
                 && export_clause.kind() == SyntaxKind::NamedExports
             {
                 let mut state = ModuleInstanceState::NON_INSTANTIATED;
-                let node_ancestors = push_ancestor(ancestors, node);
-                let ancestors = push_ancestor(Some(&node_ancestors), export_clause);
-                for specifier in export_clause.elements().to_vec() {
-                    let specifier_state = get_module_instance_state_for_alias_target(
-                        specifier,
-                        Some(&ancestors),
-                        visited,
-                    );
+                let ancestors = walk.push_ancestor(ancestors, node, &mut true);
+                let ancestors = walk.push_ancestor(ancestors, export_clause, &mut true);
+                for specifier in export_clause.elements() {
+                    let specifier_state =
+                        get_module_instance_state_for_alias_target(specifier, ancestors, walk);
                     if specifier_state > state {
                         state = specifier_state;
                     }
@@ -1009,9 +1094,9 @@ fn get_module_instance_state_worker(
         }
         SyntaxKind::ModuleBlock => {
             let mut state = ModuleInstanceState::NON_INSTANTIATED;
-            let ancestors = push_ancestor(ancestors, node);
+            let ancestors = walk.push_ancestor(ancestors, node, &mut true);
             node.for_each_child(&mut |n: Node| -> bool {
-                let child_state = get_module_instance_state_cached(n, Some(&ancestors), visited);
+                let child_state = get_module_instance_state_cached(n, ancestors, walk);
                 match child_state {
                     ModuleInstanceState::NON_INSTANTIATED => {
                         return false;
@@ -1031,7 +1116,7 @@ fn get_module_instance_state_worker(
             return state;
         }
         SyntaxKind::ModuleDeclaration => {
-            return get_module_instance_state_unexported(node, ancestors, visited);
+            return get_module_instance_state_unexported(node, ancestors, walk);
         }
         _ => {}
     }
@@ -1041,26 +1126,28 @@ fn get_module_instance_state_worker(
 // Go: ast/utilities.go:2535 getModuleInstanceStateForAliasTarget
 fn get_module_instance_state_for_alias_target(
     node: Node,
-    ancestors: Option<&AncestorStack<'_>>,
-    visited: &mut FxHashMap<Node, ModuleInstanceState>,
+    ancestors: Ancestors,
+    walk: &mut ModuleInstanceWalk,
 ) -> ModuleInstanceState {
     let name = node.property_name_or_name();
     if name.kind() != SyntaxKind::Identifier {
         // Skip for invalid syntax like this: export { "x" }
         return ModuleInstanceState::INSTANTIATED;
     }
-    let (mut ancestors, mut p) = pop_ancestor(ancestors, node);
+    // PORT: the frame's stack store for the push below. One store serves every iteration of the loop, so only
+    // the first push onto an empty stack gets it (see push_ancestor).
+    let mut stack_store = true;
+    let (mut ancestors, mut p) = walk.pop_ancestor(ancestors, node);
     while p.is_some() {
         if is_block(p) || is_module_block(p) || is_source_file(p) {
             let mut found = ModuleInstanceState::UNKNOWN;
-            let statements_ancestors = push_ancestor(ancestors, p);
-            for statement in p.statements().to_vec() {
+            let statements_ancestors = walk.push_ancestor(ancestors, p, &mut stack_store);
+            // PERF: the lists are read in place, as Go ranges over them. A heap copy of each block's statements for
+            // each specifier was about half of deep-nested-1500-preserve (followups82).
+            for statement in p.statements() {
                 if node_has_name(statement, name) {
-                    let state = get_module_instance_state_cached(
-                        statement,
-                        Some(&statements_ancestors),
-                        visited,
-                    );
+                    let state =
+                        get_module_instance_state_cached(statement, statements_ancestors, walk);
                     if found == ModuleInstanceState::UNKNOWN || state > found {
                         found = state;
                     }
@@ -1080,7 +1167,7 @@ fn get_module_instance_state_for_alias_target(
                 return found;
             }
         }
-        let (next_ancestors, next_p) = pop_ancestor(ancestors, p);
+        let (next_ancestors, next_p) = walk.pop_ancestor(ancestors, p);
         ancestors = next_ancestors;
         p = next_p;
     }
@@ -1102,8 +1189,12 @@ pub fn node_has_name(statement: Node, id: Node) -> bool {
         return is_identifier(name) && name.text() == id.text();
     }
     if is_variable_statement(statement) {
-        let declarations = statement.declaration_list().declarations().nodes().to_vec();
-        return declarations.iter().any(|&d| node_has_name(d, id));
+        return statement
+            .declaration_list()
+            .declarations()
+            .nodes()
+            .iter()
+            .any(|d| node_has_name(d, id));
     }
     false
 }
@@ -1763,6 +1854,95 @@ mod node_at_position_cursor_tests {
                     "position {position}, JSDoc {include_js_doc}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod module_instance_state_tests {
+    use super::*;
+    use crate::frontend::parser::{SourceFileParseOptions, parse_source_file};
+    use crate::frontend::tspath::Path;
+
+    /// The state of namespace `O` in `body`, which goes in
+    /// `declare const y: number; declare namespace O { ... }`.
+    fn state_of_o(body: &str) -> ModuleInstanceState {
+        let text: &'static str =
+            format!("export {{}};\ndeclare const y: number;\ndeclare namespace O {{\n{body}\n}}\n")
+                .leak();
+        let options = SourceFileParseOptions {
+            file_name: "/index.ts".to_string(),
+            path: Path("/index.ts".to_string()),
+            ..Default::default()
+        };
+        let file = parse_source_file(&options, text, ScriptKind::TS).root;
+        let o = file
+            .statements()
+            .to_vec()
+            .into_iter()
+            .find(|s| s.kind() == SyntaxKind::ModuleDeclaration);
+        get_module_instance_state(o.unwrap())
+    }
+
+    /// Go's `ancestors` slices share backing arrays, so the walk for one
+    /// export specifier can write over stack entries that a later walk
+    /// reads. Each case gives the state of the Go oracle at the pin
+    /// (NonInstantiated: TS2708 at `let v = O;`), not the state of the real
+    /// scope, which is the other one in the first three cases
+    /// (ancshare1 go-note, cases s1 to s4 and ladder m1).
+    #[test]
+    fn state_reads_shared_ancestor_arrays_like_go() {
+        let non = ModuleInstanceState::NON_INSTANTIATED;
+        let inst = ModuleInstanceState::INSTANTIATED;
+        let cases = [
+            // T's chain writes over I and its block, so `y` finds `interface y`.
+            (
+                "s1",
+                "namespace I { export { T, y }; } namespace T { interface y {} }",
+                non,
+            ),
+            // T's block goes where P's block was, so `y` skips `interface y` in P.
+            (
+                "s2",
+                "namespace P { interface y {} namespace I { export { T, y }; } } namespace T { }",
+                inst,
+            ),
+            // Two export lists of one block share its array.
+            (
+                "s3",
+                "namespace P { namespace I { export { T }; export { y }; } } namespace T { interface y {} }",
+                non,
+            ),
+            // The array is full, so the second export list copies it first.
+            (
+                "s4",
+                "namespace I { export { T }; export { y }; } namespace T { interface y {} }",
+                inst,
+            ),
+            // Two merged declarations of N: the walk of the first writes over the block of the second.
+            (
+                "merged",
+                "namespace A { namespace B { export { N }; } namespace N { export { Z }; } \
+                 namespace N { export { y }; } } namespace Z { interface y {} }",
+                non,
+            ),
+            // The inner walk for Z writes in the cap-8 array while T's chain fits in it, not after.
+            (
+                "m1-k1",
+                "namespace I1 { export { T, y }; } namespace T { namespace D1 { export { Z }; } } \
+                 namespace Z { interface y {} }",
+                non,
+            ),
+            (
+                "m1-k2",
+                "namespace I1 { export { T, y }; } \
+                 namespace T { namespace D1 { namespace D2 { export { Z }; } } } \
+                 namespace Z { interface y {} }",
+                inst,
+            ),
+        ];
+        for (name, body, want) in cases {
+            assert_eq!(state_of_o(body), want, "{name}");
         }
     }
 }

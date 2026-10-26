@@ -982,7 +982,9 @@ impl Checker {
             }
         }
         // ts#64621, Go N' checker.go:24334: a stable order for the type mapper.
-        result.sort_by(|a, b| self.compare_types(*a, *b).cmp(&0));
+        crate::gostd::slices::stable_sort_by(&mut result, |a, b| {
+            self.compare_types(*a, *b).cmp(&0)
+        });
         result
     }
 

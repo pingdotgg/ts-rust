@@ -1087,19 +1087,21 @@ impl JsonDecoder<'_> {
         JsonError::new(syntactic_error_text(&err, pointer, pos))
     }
 
-    /// Go `errNonSingularValue` of an `UnmarshalJSONFrom` method of the Go
-    /// type of `T` that did not read exactly one value, wrapped by
-    /// `newSemanticErrorWithPosition`: the pointer points to the next value
-    /// when the method read nothing (`read_nothing`), else to the parent
-    /// (Go `where` 0).
+    /// Go `errNonSingularValue` of an `UnmarshalJSONFrom` method that did not
+    /// read exactly one value, wrapped by `newSemanticErrorWithPosition`: the
+    /// pointer points to the next value when the method read nothing
+    /// (`read_nothing`), else to the parent (Go `where` 0). `rust_type` is the
+    /// `std::any::type_name` of the method's type; the text shows its Go type.
+    ///
+    /// PORT: not generic, so the binary holds one copy of this cold path.
     #[cold]
-    fn non_singular_value_error<T: ?Sized>(&self, read_nothing: bool) -> JsonError {
+    fn non_singular_value_error(&self, rust_type: &str, read_nothing: bool) -> JsonError {
         let at = if read_nothing { 1 } else { 0 };
         crate::frontend::json_ext::SemanticError {
             wrapped: true,
             json_kind: 0,
             json_value: String::new(),
-            go_type: crate::frontend::json_ext::go_type_name::<T>(),
+            go_type: crate::frontend::json_ext::go_type_string(rust_type),
             pointer: Some(self.stack_pointer(at)),
             byte_offset: self.skip_ws(self.pos),
             pos: crate::frontend::json_ext::ErrorPos::Before,
@@ -1680,10 +1682,15 @@ const ALLOW_INVALID: &[JsonOption] = &[JsonOption::AllowInvalidUtf8(true)];
 // bytes; the output here is always UTF-8 text. With `AllowInvalidUTF8`, Go
 // writes U+FFFD for each invalid byte of a string, which the string
 // marshaler does for the port form (`append_json_quote`).
-pub fn json_marshal<T: MarshalerTo + ?Sized>(
-    input: &T,
-    opts: &[JsonOption],
-) -> Result<String, JsonError> {
+// The body is `json_marshal_dyn`, so each `T` adds only this call.
+#[inline(always)]
+pub fn json_marshal<T: MarshalerTo>(input: &T, opts: &[JsonOption]) -> Result<String, JsonError> {
+    json_marshal_dyn(input, opts)
+}
+
+/// `json_marshal` of a value whose type is erased: one copy for all types.
+#[inline(never)]
+pub fn json_marshal_dyn(input: &dyn MarshalerTo, opts: &[JsonOption]) -> Result<String, JsonError> {
     let mut all: Vec<JsonOption> = ALLOW_INVALID.to_vec();
     all.extend_from_slice(opts);
     let _ = JsonOptions::from_options(&all);
@@ -1747,12 +1754,23 @@ fn json_check_nesting_depth(compact: &str) -> Result<(), JsonError> {
 // value first (`json_marshal`) and writes nothing on a marshal error. Like Go
 // (`jsonflags.OmitTopLevelNewline` in v2 `MarshalWrite`), the output has no
 // trailing newline. A write error is returned as a `JsonError`.
-pub fn json_marshal_write<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn json_marshal_write<T: MarshalerTo>(
     out: &mut dyn std::io::Write,
     input: &T,
     opts: &[JsonOption],
 ) -> Result<(), JsonError> {
-    let b = json_marshal(input, opts)?;
+    json_marshal_write_dyn(out, input, opts)
+}
+
+/// `json_marshal_write` of a value whose type is erased.
+#[inline(never)]
+pub fn json_marshal_write_dyn(
+    out: &mut dyn std::io::Write,
+    input: &dyn MarshalerTo,
+    opts: &[JsonOption],
+) -> Result<(), JsonError> {
+    let b = json_marshal_dyn(input, opts)?;
     out.write_all(b.as_bytes())
         .map_err(|err| JsonError::new(err.to_string()))
 }
@@ -1765,18 +1783,29 @@ pub fn json_marshal_write<T: MarshalerTo + ?Sized>(
 // `appendWhitespace`). That whitespace depends only on the token sequence,
 // so this marshals compact output and replays its tokens through the same
 // rules (`json_append_multiline`).
-pub fn json_marshal_indent<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn json_marshal_indent<T: MarshalerTo>(
     input: &T,
+    prefix: &str,
+    indent: &str,
+) -> Result<String, JsonError> {
+    json_marshal_indent_dyn(input, prefix, indent)
+}
+
+/// `json_marshal_indent` of a value whose type is erased.
+#[inline(never)]
+pub fn json_marshal_indent_dyn(
+    input: &dyn MarshalerTo,
     prefix: &str,
     indent: &str,
 ) -> Result<String, JsonError> {
     if prefix.is_empty() && indent.is_empty() {
         // WithIndentPrefix and WithIndent imply multiline output, so skip them.
-        return json_marshal(input, &[]);
+        return json_marshal_dyn(input, &[]);
     }
     json_check_indent(prefix, " in indent prefix");
     json_check_indent(indent, " in indent");
-    let compact = json_marshal(input, &[])?;
+    let compact = json_marshal_dyn(input, &[])?;
     json_append_multiline(&compact, prefix, indent)
 }
 
@@ -1950,38 +1979,6 @@ fn json_append_multiline(compact: &str, prefix: &str, indent: &str) -> Result<St
     json_append_multiline_pieces(compact, prefix, indent, None)
 }
 
-/// The size classes of the Go allocator (internal/runtime/gc/sizeclasses.go
-/// `SizeClassToSize`, go1.27.1).
-const GO_SIZE_CLASSES: [usize; 67] = [
-    8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352,
-    384, 416, 448, 480, 512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048,
-    2304, 2688, 3072, 3200, 3456, 4096, 4864, 5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728,
-    10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480, 21760, 24576, 27264, 28672,
-    32768,
-];
-
-// Go: runtime/slice.go growslice (`nextslicecap`) and runtime/msize.go
-// roundupsize, for a `[]byte` (noscan)
-/// The capacity of a Go `[]byte` with capacity `old_cap` after an `append`
-/// that needs `new_len` bytes.
-fn go_byte_slice_grow(old_cap: usize, new_len: usize) -> usize {
-    let mut new_cap = old_cap;
-    if new_len > 2 * old_cap {
-        new_cap = new_len;
-    } else if old_cap < 256 {
-        new_cap = 2 * old_cap;
-    } else {
-        while new_cap < new_len {
-            new_cap += (new_cap + 3 * 256) >> 2;
-        }
-    }
-    match GO_SIZE_CLASSES.iter().find(|&&size| size >= new_cap) {
-        Some(&size) => size,
-        // A large object takes whole pages of 8 KiB.
-        None => new_cap.next_multiple_of(8192),
-    }
-}
-
 /// Where Go's streaming `jsontext.Encoder` (v2 `MarshalWrite` to an
 /// `io.Writer` that is not a `bytes.Buffer`) writes its buffer out, for
 /// `json_marshal_indent_write`. Its buffer starts empty and grows by Go
@@ -2013,7 +2010,7 @@ impl JsonStreamPieces {
     /// Go `slices.Grow(e.Buf, n)`.
     fn reserve(&mut self, n: usize) {
         if n > 0 && self.len + n > self.cap {
-            self.cap = go_byte_slice_grow(self.cap, self.len + n);
+            self.cap = crate::gostd::slices::go_byte_slice_grow(self.cap, self.len + n);
         }
     }
 
@@ -2201,19 +2198,31 @@ fn json_append_multiline_pieces(
 // PORT notes there and on `json_marshal_write`). There is no trailing
 // newline. It goes out in the writes of Go's streaming encoder
 // (`JsonStreamPieces`), after the whole value is marshaled.
-pub fn json_marshal_indent_write<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn json_marshal_indent_write<T: MarshalerTo>(
     out: &mut dyn std::io::Write,
     input: &T,
     prefix: &str,
     indent: &str,
 ) -> Result<(), JsonError> {
+    json_marshal_indent_write_dyn(out, input, prefix, indent)
+}
+
+/// `json_marshal_indent_write` of a value whose type is erased.
+#[inline(never)]
+pub fn json_marshal_indent_write_dyn(
+    out: &mut dyn std::io::Write,
+    input: &dyn MarshalerTo,
+    prefix: &str,
+    indent: &str,
+) -> Result<(), JsonError> {
     if prefix.is_empty() && indent.is_empty() {
         // WithIndentPrefix and WithIndent imply multiline output, so skip them.
-        return json_marshal_write(out, input, &[]);
+        return json_marshal_write_dyn(out, input, &[]);
     }
     json_check_indent(prefix, " in indent prefix");
     json_check_indent(indent, " in indent");
-    let compact = json_marshal(input, &[])?;
+    let compact = json_marshal_dyn(input, &[])?;
     let mut pieces = JsonStreamPieces::default();
     let b = json_append_multiline_pieces(&compact, prefix, indent, Some(&mut pieces))?;
     let mut start = 0;
@@ -2230,13 +2239,27 @@ pub fn json_marshal_indent_write<T: MarshalerTo + ?Sized>(
 // Go: json/json.go:56 Unmarshal
 // PORT: `out` implements `UnmarshalerFrom` in place of Go reflection. Like
 // Go, `out` is not reset on error, and the input must hold exactly one value.
-pub fn json_unmarshal<T: UnmarshalerFrom + ?Sized>(
+// The body is `json_unmarshal_dyn`, so each `T` adds only this call.
+#[inline(always)]
+pub fn json_unmarshal<T: UnmarshalerFrom>(
     input: &[u8],
     out: &mut T,
     opts: &[JsonOption],
 ) -> Result<(), JsonError> {
+    json_unmarshal_dyn(input, out, std::any::type_name::<T>(), opts)
+}
+
+/// `json_unmarshal` of a value whose type is erased. `rust_type` is the
+/// `std::any::type_name` of the value's type (errors show its Go type).
+#[inline(never)]
+pub fn json_unmarshal_dyn(
+    input: &[u8],
+    out: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
+    opts: &[JsonOption],
+) -> Result<(), JsonError> {
     let mut dec = JsonDecoder::new(input, JsonOptions::from_options(opts));
-    json_unmarshal_decode(&mut dec, out)?;
+    json_unmarshal_decode_dyn(&mut dec, out, rust_type)?;
     dec.check_eof()
 }
 
@@ -2247,18 +2270,35 @@ pub fn json_unmarshal<T: UnmarshalerFrom + ?Sized>(
 // (`json_ext::wrap_method_error`), as the v2 arshaler of a type with an
 // `UnmarshalJSONFrom` method does, and an error that already has its type
 // keeps it. The method must read exactly one value.
-pub fn json_unmarshal_decode<T: UnmarshalerFrom + ?Sized>(
+// The body is `json_unmarshal_decode_dyn`: each `T` adds only this call, and
+// the `UnmarshalerFrom` method of `T` is one function that every caller
+// shares (through the vtable), not a copy inlined into each caller.
+#[inline(always)]
+pub fn json_unmarshal_decode<T: UnmarshalerFrom>(
     dec: &mut JsonDecoder<'_>,
     out: &mut T,
 ) -> Result<(), JsonError> {
+    json_unmarshal_decode_dyn(dec, out, std::any::type_name::<T>())
+}
+
+/// `json_unmarshal_decode` of a value whose type is erased. `rust_type` is
+/// the `std::any::type_name` of the value's type (errors show its Go type).
+/// PORT: not in Go; one copy for all types (Go's arshalers use reflection).
+#[inline(never)]
+pub fn json_unmarshal_decode_dyn(
+    dec: &mut JsonDecoder<'_>,
+    out: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
+) -> Result<(), JsonError> {
     let (prev_depth, prev_len) = dec.depth_length();
     out.unmarshal_json_from(dec)
-        .map_err(crate::frontend::json_ext::wrap_method_error::<T>)?;
+        .map_err(|err| crate::frontend::json_ext::wrap_method_error(err, rust_type))?;
     let (curr_depth, curr_len) = dec.depth_length();
     if prev_depth != curr_depth || prev_len + 1 != curr_len {
-        return Err(
-            dec.non_singular_value_error::<T>(prev_depth == curr_depth && prev_len == curr_len)
-        );
+        return Err(dec.non_singular_value_error(
+            rust_type,
+            prev_depth == curr_depth && prev_len == curr_len,
+        ));
     }
     Ok(())
 }
@@ -2480,7 +2520,7 @@ mod marshal_indent_tests {
                 .unwrap(),
             "{\n \t\"a\": [\n \t\t\"x\",\n \t\t\"y:{\"\n \t],\n \t\"b\": [],\n \t\"c\": [\n \t\t[\n \t\t\ttrue\n \t\t],\n \t\t[]\n \t]\n }"
         );
-        assert_eq!(json_marshal_indent("s", "", "  ").unwrap(), "\"s\"");
+        assert_eq!(json_marshal_indent(&"s", "", "  ").unwrap(), "\"s\"");
     }
 
     /// The compact `--showConfig` value of a config with 31 files (one name

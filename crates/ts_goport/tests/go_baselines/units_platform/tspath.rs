@@ -1566,3 +1566,35 @@ fn test_path_key_contains_path() {
         "^/~ts-uri~/custom/authority/src/file.ts"
     ));
 }
+
+// `Path::contains_path` is Go `PathKey.ContainsPath` (pathkey.go:155). The
+// answers are those of a followups79 probe of Go at 3e9236361fa9: roots
+// compare without case, dynamic roots with case.
+#[test]
+fn test_path_contains_path_is_path_key() {
+    let cases: &[(&str, &str, bool)] = &[
+        ("C:/p", "c:/p/a.ts", true),
+        ("c:/", "C:/a", true),
+        ("/ws", "/WS/a", false),
+        ("//Server/share/ws", "//server/share/ws/a", true),
+        ("/ws/", "/ws/a", true),
+        ("/ws", "/wsx", false),
+        ("/ws", "/ws", true),
+        ("/", "/a", true),
+        (
+            "^/~ts-uri~/custom/Authority/src",
+            "^/~ts-uri~/custom/authority/src/a.ts",
+            false,
+        ),
+        ("", "/a", false),
+    ];
+    for &(parent, child, contained) in cases {
+        let parent = tspath::Path(parent.to_string());
+        let child = tspath::Path(child.to_string());
+        assert_eq!(
+            parent.contains_path(&child),
+            contained,
+            "{parent:?} {child:?}"
+        );
+    }
+}

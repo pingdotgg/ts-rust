@@ -256,9 +256,10 @@ impl<'a> Parser<'a> {
         id
     }
 
-    // Go: parser/parser.go:3020 newIdentifier
+    // Go: parser/parser.go:3041 newIdentifier
     pub fn new_identifier(&mut self, text: &str) -> Node {
-        self.identifier_count += 1;
+        // Go `int` wraps (see `program::identifier_count`).
+        self.identifier_count = self.identifier_count.wrapping_add(1);
         let id = self.factory.new_identifier(text);
         if text == "await" {
             self.statement_has_await_identifier = true;
@@ -743,6 +744,12 @@ impl<'a> Parser<'a> {
             false, /*stopOnStartOfClassStaticBlock*/
         );
         self.context_flags = save_context_flags;
+        // PORT: not in Go (bindgapcost1). Each decorated parameter of a file
+        // is made here or is a reparse clone of one made here, so a file
+        // without this mark has none (`ParsedSourceFile::has_decorated_parameter`).
+        if modifiers.is_some() && modifiers.nodes().iter().any(is_decorator) {
+            self.has_decorated_parameter = true;
+        }
         if self.token == SyntaxKind::ThisKeyword {
             let name = self.create_identifier(true /*isIdentifier*/);
             let type_node = self.parse_type_annotation();

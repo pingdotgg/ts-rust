@@ -4,6 +4,7 @@
 #                                     Rust: plus the postinstall npm/install.js, which rewrites
 #                                     bin/tsc on POSIX to run the native tsc without Node.
 #   @typescript/typescript-linux-x64  lib/tsc (the native tsc) and the lib files next to it.
+#                                     Rust: plus lib/loc, the locale catalogs (copy-libs.sh).
 # The layout follows the Go checkout's Herebyfile.mjs (npm/pack.mjs has the details).
 #
 # usage: npm-pack.sh <out-dir> <tsc>
@@ -41,7 +42,7 @@
 # <out-dir>.
 set -euo pipefail
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-usage() { sed -n '9,35p' "$0" >&2; exit 2; }
+usage() { sed -n '10,36p' "$0" >&2; exit 2; }
 
 go_version="" name=typescript also=() package_version=()
 while [[ ${1:-} == --name || ${1:-} == --also || ${1:-} == --package-version ]]; do
@@ -92,8 +93,12 @@ else
   [[ -x $exe ]] || { echo "not executable: $exe" >&2; exit 2; }
   libs="$build/libs"
   "$repo/crates/ts_goport/scripts/copy-libs.sh" "$libs"
-  diff -rq "$libs" "$go_dir/internal/bundled/libs" > /dev/null ||
+  diff -rq -x loc "$libs" "$go_dir/internal/bundled/libs" > /dev/null ||
     { echo "the lib files of $repo differ from the pin's ($go_dir): wrong pin?" >&2; exit 1; }
+  # The locale catalogs (lib/loc) are the pin's internal/diagnostics/loc/*.json.gz.
+  diff -q <(cd "$libs/loc" && sha256sum -- *) \
+    <(cd "$go_dir/internal/diagnostics/loc" && sha256sum -- *.json.gz) > /dev/null ||
+    { echo "the locale catalogs of $repo differ from the pin's ($go_dir): wrong pin?" >&2; exit 1; }
   if [[ -f $(dirname "$exe")/COMMIT ]]; then git_head=$(cat "$(dirname "$exe")/COMMIT"); else git_head=$(git -C "$repo" rev-parse HEAD); fi
 fi
 

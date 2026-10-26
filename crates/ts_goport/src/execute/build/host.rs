@@ -414,9 +414,17 @@ impl BuildHost {
     /// with parse workers off after the first build (`prefetch`) the parses
     /// of a cycle ran on one thread (query-persist-client-core rebuilds took
     /// 2.7 times as long). A parse of the same text with the same options is
-    /// the same file, so the output does not change. A bundled lib never
-    /// changes. A `.d.ts` or `.json` file comes here through `source_files`
-    /// (`get_source_file`), so in one cycle only its first parse comes here.
+    /// the same file. But a kept parse keeps the bind of the program that
+    /// bound it, where Go gives each build program a new, unbound `.ts` or
+    /// `.js` file. The file format line of the include processor reads the
+    /// bound CommonJS indicator only after this program's bind
+    /// (`IncludeProcessor::program_bound`), as Go reads its new file. The
+    /// bind sets that indicator from the parse only, so after the bind a kept
+    /// file reads what a new one would. `--diagnostics` "Symbols" still
+    /// counts the bind of kept files (in a cycle with a syntax error Go binds
+    /// nothing). A bundled lib never changes. A `.d.ts` or `.json` file
+    /// comes here through `source_files` (`get_source_file`), so in one cycle
+    /// only its first parse comes here.
     fn watch_source_file(&self, opts: &SourceFileParseOptions) -> Option<Rc<ParsedSourceFile>> {
         // watchreset1r: each call is one Go parse, so each parse given here
         // is noted (`program::note_go_parse`): the bind of a program that

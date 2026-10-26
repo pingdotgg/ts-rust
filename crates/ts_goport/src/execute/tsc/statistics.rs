@@ -300,7 +300,8 @@ impl Statistics {
         // Aggregate statistics
         self.files += stat.files;
         self.lines += stat.lines;
-        self.identifiers += stat.identifiers;
+        // Go `int` wraps (see `program::identifier_count`).
+        self.identifiers = self.identifiers.wrapping_add(stat.identifiers);
         self.symbols += stat.symbols;
         self.types += stat.types;
         self.instantiations += stat.instantiations;

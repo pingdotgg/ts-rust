@@ -161,7 +161,7 @@ impl UnmarshalerFrom for RequestFileSystem {
 /// Go map keys in sorted order (see `RequestFileSystem`).
 fn sorted_keys<V>(map: &FxHashMap<String, V>) -> Vec<&String> {
     let mut keys: Vec<&String> = map.keys().collect();
-    keys.sort();
+    crate::gostd::slices::stable_sort_by(&mut keys, Ord::cmp);
     keys
 }
 
@@ -713,8 +713,8 @@ impl RequestFileSystemImpl {
                     .insert(name);
             }
         }
-        result.files.sort();
-        result.directories.sort();
+        crate::gostd::slices::stable_sort_by(&mut result.files, Ord::cmp);
+        crate::gostd::slices::stable_sort_by(&mut result.directories, Ord::cmp);
         result
     }
 
@@ -770,8 +770,8 @@ pub fn merge_entries(
         }
     }
     result.symlinks = Some(symlinks);
-    result.files.sort();
-    result.directories.sort();
+    crate::gostd::slices::stable_sort_by(&mut result.files, Ord::cmp);
+    crate::gostd::slices::stable_sort_by(&mut result.directories, Ord::cmp);
     result
 }
 

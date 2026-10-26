@@ -478,6 +478,10 @@ impl PayloadDecoder<'_, '_, '_, '_> {
 }
 
 impl<'a> Decoder<'a> {
+    // PERF (queryload1): keep the whole loop inline. The inlineout1 split
+    // (`var_rest` out of line) cut `load_lib_parse_slots` from 238 KB to
+    // 119 KB under PGO, but cost Query load-only +0.5 to +1.0% st
+    // instructions (int104b leave-one-out).
     #[inline]
     fn var(&mut self) -> Option<u64> {
         let mut value = 0u64;
@@ -894,6 +898,7 @@ impl<'a> Decoder<'a> {
             text_count: self.usize()?,
             common_js_module_indicator: self.node()?,
             external_module_indicator: self.node()?,
+            has_decorated_parameter: self.flag()?,
             // A lib file is never freed.
             version: std::cell::OnceCell::new(),
         })
@@ -1551,6 +1556,7 @@ impl Encoder {
             text_count,
             common_js_module_indicator,
             external_module_indicator,
+            has_decorated_parameter,
             version: _,
         } = file;
         if *store != self.store {
@@ -1623,6 +1629,7 @@ impl Encoder {
         self.count(*text_count);
         self.node(*common_js_module_indicator)?;
         self.node(*external_module_indicator)?;
+        self.u8(u8::from(*has_decorated_parameter));
         Ok(())
     }
 }
@@ -1744,19 +1751,6 @@ mod tests {
         frontend::parser::lib_parse_snapshot::tests::generate_lib_parse_snapshot -- --ignored --exact` \
         (through scripts/run-cargo-capped.sh)";
 
-    /// Snapshot libs (`snapshot_libs`) that get no section. No perf9 project
-    /// uses lib.webworker (the default libs take lib.dom), so its section
-    /// would only add binary size.
-    const SKIPPED_LIBS: &[&str] = &["lib.webworker.d.ts"];
-
-    /// The libs that get a section, largest first.
-    fn parse_snapshot_libs() -> Vec<&'static str> {
-        snapshot_libs()
-            .into_iter()
-            .filter(|lib| !SKIPPED_LIBS.contains(lib))
-            .collect()
-    }
-
     /// The parse options and the text of bundled lib `lib`, as the program
     /// loader gives them (the path is not read by the parse).
     fn lib_input(lib: &str) -> (SourceFileParseOptions, &'static str) {
@@ -1855,7 +1849,7 @@ mod tests {
     #[ignore = "writes src/frontend/parser/lib_parse.bin"]
     fn generate_lib_parse_snapshot() {
         let mut sections = Vec::new();
-        for lib in parse_snapshot_libs() {
+        for lib in snapshot_libs() {
             let (opts, text) = lib_input(lib);
             // The process-wide unported counts: run this test alone.
             let unported = unported_report();
@@ -1910,7 +1904,7 @@ mod tests {
     /// live one, with no change to the state of the thread.
     #[test]
     fn snapshot_matches_live_parse() {
-        for lib in parse_snapshot_libs() {
+        for lib in snapshot_libs() {
             let (opts, text) = lib_input(lib);
             let live = live_parse(&opts, text).unwrap_or_else(|e| panic!("{lib}: {e}"));
             let expected = section(&opts, text, &live);
@@ -1984,7 +1978,7 @@ mod tests {
     /// is parsed live into the same store.
     #[test]
     fn bad_section_parses_live() {
-        let lib = parse_snapshot_libs()[0];
+        let lib = snapshot_libs()[0];
         let (opts, text) = lib_input(lib);
         let live = live_parse(&opts, text).unwrap_or_else(|e| panic!("{lib}: {e}"));
         let mut section = section(&opts, text, &live);

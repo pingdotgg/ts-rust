@@ -2367,7 +2367,7 @@ impl<'a> FileNodeReader<'a> {
 // file checks of a program read the config file before the publish: a
 // `paths` diagnostic reads every `paths` key before its own, as Go
 // (`for_each_property_assignment`).
-pub struct BuildStoreReads<'a> {
+pub(crate) struct BuildStoreReads<'a> {
     file: usize,
     store: &'a FileStore,
     /// The store has no alias slot, so an id needs no record read
@@ -2448,8 +2448,10 @@ impl BuildStoreReads<'_> {
 /// `read` on the reads of unpublished store `file` of this thread (built
 /// or detached). `None` when `file` is not such a store (published, of
 /// another thread or synthetic) and when the store is borrowed for a
-/// write. `read` must not make or change nodes of the store.
-pub fn with_build_store_reads<R>(
+/// write. `read` must not make or change nodes of the store: a write in
+/// `read` panics on the store's `RefCell`. Crate-private for that reason:
+/// its one caller is `find_property_assignment` (tsoptions).
+pub(crate) fn with_build_store_reads<R>(
     file: usize,
     read: impl FnOnce(&BuildStoreReads<'_>) -> R,
 ) -> Option<R> {
@@ -2822,12 +2824,16 @@ fn identifier_name(names: &mut IdentNames, text: &str) -> (Name, bool) {
 /// `identifier_name` of a text that `IdentNames::find_whole` did not find:
 /// a text over `IdentKey::WHOLE` bytes (found with a text compare) or a text
 /// that is not in the cache (interned, then put in).
+// PERF: this makes the key again, and does not take it from
+// `identifier_name`: a 32-byte argument goes through the stack, which the
+// hit path of `identifier_name` would pay for. Making it again costs only
+// the misses.
 #[cold]
 #[inline(never)]
 fn identifier_name_slow(names: &mut IdentNames, text: &str) -> (Name, bool) {
     let key = IdentKey::new(text.as_bytes());
     if key.len > IdentKey::WHOLE
-        && let Some(found) = names.find(key, text)
+        && let Some(found) = names.find_long(key, text)
     {
         return found;
     }
@@ -2922,11 +2928,12 @@ struct IdentEntry {
 const IDENT_KEYWORD: u32 = 1 << 31;
 
 impl IdentEntry {
-    /// True when this entry holds the text `text`, whose key is `key`.
+    /// True when this entry holds the text `text`, whose key is `key`. The
+    /// text is compared too, so this is right for a text of any length
+    /// (`holds_key` is enough for at most `IdentKey::WHOLE` bytes).
     #[inline]
     fn holds(&self, key: IdentKey, text: &str) -> bool {
-        self.holds_key(key)
-            && (key.len <= IdentKey::WHOLE || Name::from_id(self.id).as_str() == text)
+        self.holds_key(key) && Name::from_id(self.id).as_str() == text
     }
 
     /// True when this entry has the key `key`: it holds the text of `key`
@@ -2989,8 +2996,10 @@ const IDENT_MAX_SETS: usize = 1 << 15;
 
 impl IdentNames {
     /// The name and keyword bit of `text` (key `key`) when the table has it.
+    /// For a text over `IdentKey::WHOLE` bytes: a shorter one uses
+    /// `find_whole`, which compares no text.
     #[inline]
-    fn find(&mut self, key: IdentKey, text: &str) -> Option<(Name, bool)> {
+    fn find_long(&mut self, key: IdentKey, text: &str) -> Option<(Name, bool)> {
         let set = self.sets.get_mut((key.set_hash() >> self.shift) as usize)?;
         let [first, second] = &mut set.0;
         if first.holds(key, text) {
@@ -3003,8 +3012,8 @@ impl IdentNames {
         None
     }
 
-    /// `find` of a text of at most `IdentKey::WHOLE` bytes, whose key is the
-    /// whole text: no text compare.
+    /// `find_long` of a text of at most `IdentKey::WHOLE` bytes, whose key is
+    /// the whole text: no text compare.
     #[inline]
     fn find_whole(&mut self, key: IdentKey) -> Option<(Name, bool)> {
         debug_assert!(key.len <= IdentKey::WHOLE);

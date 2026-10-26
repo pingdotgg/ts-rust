@@ -110,7 +110,7 @@ fn check_outdated_api_property_access(
         return None;
     }
 
-    let migration = EFFECT_MODULE_MIGRATION_DB.get(identifier_name)?.clone();
+    let migration = *EFFECT_MODULE_MIGRATION_DB.get(identifier_name)?;
 
     // Skip unchanged entries — they exist in both v3 and v4
     if migration.tag == MigrationTag::Unchanged {
@@ -155,7 +155,7 @@ fn check_outdated_api_property_access(
 // Go: migrationHintText
 fn migration_hint_text(m: &Migration) -> String {
     match m.tag {
-        MigrationTag::Removed => m.alternative_pattern.clone(),
+        MigrationTag::Removed => m.alternative_pattern.to_string(),
         MigrationTag::RenamedSameBehaviour => format!("Renamed to {}.", m.new_name),
         MigrationTag::RenamedAndNeedsOptions => {
             format!("Renamed to {}. {}", m.new_name, m.options_instructions)

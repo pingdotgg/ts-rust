@@ -40,8 +40,9 @@ pub struct IncludeProcessor {
     pub(crate) computed_diagnostics: OnceCell<RefCell<DiagnosticsCollection>>,
     /// PORT: Go builds `computed_diagnostics` lazily, from
     /// `GetProgramDiagnostics` or `GetIncludeProcessorDiagnostics`. The port
-    /// builds it when it makes the program (`GoSharedState::new`), before
-    /// `ExplainFiles` can run. The `redirectAndFileFormat` lines that the
+    /// builds it there too, and also after the bind that comes before a
+    /// checker read (`go_frontend::fill_include_diagnostics`), which can be
+    /// before `ExplainFiles` runs. The `redirectAndFileFormat` lines that the
     /// collection makes (with absolute names) wait here until the port
     /// reaches a point where Go builds the collection
     /// (`mark_diagnostics_read`). Until then `ExplainFiles` makes its own
@@ -51,6 +52,12 @@ pub struct IncludeProcessor {
     /// `computed_diagnostics`. The checker threads set it
     /// (`GoSharedState::get_include_processor_diagnostics`), so it is shared.
     pub(crate) diagnostics_read: Arc<AtomicBool>,
+    /// True once the bind of this program ran (`program::bind_all`, through
+    /// `GoSharedState::mark_program_bound`). Until then the file format
+    /// lines read only the parse indicator (`redirect_and_implied_format`).
+    /// The bind runs on any thread, so it is shared. A clone (Go
+    /// `ReuseProgram`, a new program) starts with a new `false` flag.
+    pub(crate) program_bound: Arc<AtomicBool>,
     // PORT: Go nil `*ast.ObjectLiteralExpression` is `Node::NIL`.
     pub(crate) compiler_options_syntax: OnceCell<Node>,
 }
@@ -386,12 +393,23 @@ impl IncludeProcessor {
             ));
         }
 
-        // PORT: Go `ast.IsExternalOrCommonJSModule` reads the indicators on
-        // the source file. `prog()` is not set during program construction,
-        // so this reads the `ParsedSourceFile` fields.
+        // Go `ast.IsExternalOrCommonJSModule` reads the CommonJS indicator
+        // that the binder sets, so a file with only CommonJS syntax gets its
+        // line only when it is bound before this first (cached) call.
+        // PORT: Go gives a program a file that an earlier program bound only
+        // where the program binds all files before this read (plain
+        // `--watch`, `--incremental`, the LSP and the API). `tsc -b --watch`
+        // keeps a parse, with its bind, across programs
+        // (`BuildHost::watch_source_file`), where Go parses a `.ts` or `.js`
+        // file again for each program. So the bound indicator is read only
+        // after this program's bind (`program_bound`); before it, only the
+        // parse indicator, as Go reads a new, unbound file. The bind sets the
+        // indicator from the parse only, so a kept bind gives the same value
+        // as this program's bind would.
         if let Some(source_file) = &source_file
             && (source_file.external_module_indicator.is_some()
-                || source_file.common_js_module_indicator.is_some())
+                || (self.program_bound.load(Ordering::Acquire)
+                    && super::program_new::is_external_or_common_js_module_of(source_file)))
         {
             let meta_data = program.get_source_file_meta_data(&file.path());
             // ts#64159 (includeprocessor.go:168): the package.json name is
@@ -469,7 +487,7 @@ mod tests {
         let src = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"));
         let mut found = Vec::new();
         visit(src, src, &mut found);
-        found.sort();
+        crate::gostd::slices::stable_sort_by(&mut found, Ord::cmp);
         assert_eq!(
             found,
             [

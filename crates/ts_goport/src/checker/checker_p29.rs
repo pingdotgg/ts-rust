@@ -29,10 +29,13 @@ impl Checker {
 
     // Go: checker/checker.go:26657 getIntersectionTypeEx
     // PORT: Go `orderedSet[*Type]` is a stack `TypeSet` here. It keeps
-    // insertion order and `contains`/`add` match Go (Go only adds values it
-    // has not seen). Intersections are small, so a linear `contains` is
-    // cheaper than a hash set. The reductions below change the set in place,
-    // and `new_intersection_type` copies it only when it creates the type.
+    // insertion order, and `contains` and `push` are Go `contains` and `add`
+    // (checker/utilities.go:963, :971). Go `add` appends with no duplicate
+    // test: each caller tests `contains` or a flag first
+    // (addTypeToIntersection, checker.go:26882 and :26865). Intersections
+    // are small, so a linear `contains` is cheaper than a hash set. The
+    // reductions below change the set in place, and `new_intersection_type`
+    // copies it only when it creates the type.
     pub fn get_intersection_type_ex(
         &mut self,
         types: &[TypeId],
@@ -286,7 +289,7 @@ impl Checker {
     // intersection make it empty (an object or non-primitive type with null or undefined under
     // strictNullChecks, or two disjoint domains). get_intersection_type_ex and the dead-row skip
     // of get_cross_product_intersections both use it, so they cannot drift apart.
-    // Go: checker/checker.go:26678 (inline in getIntersectionTypeEx)
+    // Go: checker/checker.go:26678 getIntersectionTypeEx: the inline disjoint-domain test
     #[inline]
     fn includes_disjoint_domains(&self, includes: TypeFlags) -> bool {
         let dd = TypeFlags::DISJOINT_DOMAINS;
@@ -391,10 +394,10 @@ impl Checker {
         if self.is_empty_anonymous_object_type(t) {
             if !includes.intersects(TypeFlags::INCLUDES_EMPTY_OBJECT) {
                 includes |= TypeFlags::INCLUDES_EMPTY_OBJECT;
-                // Go `orderedSet.Add` adds only values it has not seen.
-                if !type_set.contains(&t) {
-                    type_set.push(t);
-                }
+                // Go `typeSet.add(t)`: the checker's `orderedSet.add`
+                // appends with no duplicate test. The flag test above keeps
+                // a second empty object out.
+                type_set.push(t);
             }
         } else {
             if flags.intersects(TypeFlags::ANY_OR_UNKNOWN) {

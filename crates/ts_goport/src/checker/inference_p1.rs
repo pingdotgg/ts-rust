@@ -1443,10 +1443,10 @@ impl Checker {
             // when inferring from string[] | string[][] to T[] | T[][], the inference of string we make from
             // relating string[][] to T[][] is of higher quality than the inference of string[] we make relating
             // string[][] to T[].
-            // PORT: Go `slices.SortFunc` is `gostd::slices::sort_func` (Go
-            // pdqsort), so the comparisons, and the type arguments that
-            // `get_type_depth` resolves, come in Go's order.
-            crate::gostd::slices::sort_func(
+            // PORT: Go `slices.SortFunc` is `gostd::slices::sort_func_hot` (Go
+            // pdqsort; a hot site), so the comparisons, and the type arguments
+            // that `get_type_depth` resolves, come in Go's order.
+            crate::gostd::slices::sort_func_hot(
                 &mut matched_targets[..],
                 |&t1: &TypeId, &t2: &TypeId| self.compare_types_and_depth(t1, t2),
             );

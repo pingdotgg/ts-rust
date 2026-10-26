@@ -554,11 +554,11 @@ impl Checker {
     // `file_index_map` reads as index 0, as in Go, so it ties with the file at
     // index 0 and the order is not transitive (the auto-import registry
     // checks package files that are not in the program). Rust std `sort_by`
-    // can panic on that; `gostd::slices::sort_func` is Go's pdqsort, which
-    // does not, and gives Go's order (and Go's order of the `get_symbol_id`
-    // calls) for any comparator.
+    // can panic on that; `gostd::slices::sort_func_hot` (a hot site) is Go's
+    // pdqsort, which does not, and gives Go's order (and Go's order of the
+    // `get_symbol_id` calls) for any comparator.
     pub(crate) fn sort_symbol_sort_keys(&self, keys: &mut [SymbolSortKey]) {
-        crate::gostd::slices::sort_func(keys, |a, b| {
+        crate::gostd::slices::sort_func_hot(keys, |a, b| {
             // PERF: two different packed orders give the sign that the full
             // comparator gets from `compare_nodes`, from the declaration
             // test or from the names (see `SymbolSortKey::order`), and the
@@ -1411,12 +1411,13 @@ impl Checker {
             self.sort_large_union_types(types);
             return;
         }
+        // Hot sites: `sort_stable_func_hot`.
         if types.len() < KEYED_SORT_MIN {
-            crate::gostd::slices::sort_stable_func(types, |&a, &b| self.compare_types(a, b));
+            crate::gostd::slices::sort_stable_func_hot(types, |&a, &b| self.compare_types(a, b));
             return;
         }
         let mut keyed = self.union_sort_keys(types);
-        crate::gostd::slices::sort_stable_func(&mut keyed, |&(k1, t1), &(k2, t2)| {
+        crate::gostd::slices::sort_stable_func_hot(&mut keyed, |&(k1, t1), &(k2, t2)| {
             self.compare_keyed_types(k1, t1, k2, t2)
         });
         for (slot, &(_, t)) in types.iter_mut().zip(&keyed) {
@@ -1445,7 +1446,8 @@ impl Checker {
             });
             *t = TypeId(slot);
         }
-        crate::gostd::slices::sort_stable_func(types, |&a, &b| {
+        // A hot site (long lists): `sort_stable_func_hot`.
+        crate::gostd::slices::sort_stable_func_hot(types, |&a, &b| {
             if a == b {
                 return 0;
             }

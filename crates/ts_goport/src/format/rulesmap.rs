@@ -1,28 +1,28 @@
 use crate::format::prelude::*;
 
 use crate::flags_macros::go_enum;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 // Go: format/rulesmap.go:11 getRules
 // PORT: Go appends to the caller's slice and returns it. The caller (span.go)
 // reuses one slice, so this appends to `rules` in place.
-pub fn get_rules(context: &mut FormattingContext, rules: &mut Vec<Arc<RuleImpl>>) {
+pub fn get_rules(context: &mut FormattingContext, rules: &mut Vec<&'static RuleImpl>) {
     let bucket = &get_rules_map()[get_rule_bucket_index(
         context.current_token_span.kind,
         context.next_token_span.kind,
     ) as usize];
     if !bucket.is_empty() {
         let mut rule_action_mask = RuleAction::NONE;
-        'outer: for rule in bucket {
+        'outer: for &rule in bucket {
             let accept_rule_actions = !get_rule_action_exclusion(rule_action_mask);
             if rule.action().intersects(accept_rule_actions) {
                 let preds = rule.context();
                 for p in preds {
-                    if !p(context) {
+                    if !p.call(context) {
                         continue 'outer;
                     }
                 }
-                rules.push(rule.clone());
+                rules.push(rule);
                 rule_action_mask |= rule.action();
             }
         }
@@ -70,16 +70,16 @@ pub fn get_rule_action_exclusion(rule_action: RuleAction) -> RuleAction {
 
 // Go: format/rulesmap.go:66 getRulesMap
 // PORT: Go `sync.OnceValue(buildRulesMap)` is a process-wide LazyLock.
-pub fn get_rules_map() -> &'static [Vec<Arc<RuleImpl>>] {
-    static RULES_MAP: LazyLock<Vec<Vec<Arc<RuleImpl>>>> = LazyLock::new(build_rules_map);
+pub fn get_rules_map() -> &'static [Vec<&'static RuleImpl>] {
+    static RULES_MAP: LazyLock<Vec<Vec<&'static RuleImpl>>> = LazyLock::new(build_rules_map);
     &RULES_MAP
 }
 
 // Go: format/rulesmap.go:68 buildRulesMap
-pub fn build_rules_map() -> Vec<Vec<Arc<RuleImpl>>> {
+pub fn build_rules_map() -> Vec<Vec<&'static RuleImpl>> {
     let rules = get_all_rules();
     // Map from bucket index to array of rules
-    let mut m: Vec<Vec<Arc<RuleImpl>>> =
+    let mut m: Vec<Vec<&'static RuleImpl>> =
         vec![Vec::new(); (MAP_ROW_LENGTH * MAP_ROW_LENGTH) as usize];
     // This array is used only during construction of the rulesbucket in the map
     let mut rules_bucket_construction_state_list: Vec<i32> = vec![0; m.len()];
@@ -93,7 +93,7 @@ pub fn build_rules_map() -> Vec<Vec<Arc<RuleImpl>>> {
                 // inserts into the bucket in place.
                 add_rule(
                     &mut m[index as usize],
-                    &rule.rule,
+                    rule.rule,
                     specific_rule,
                     &mut rules_bucket_construction_state_list,
                     index,
@@ -133,8 +133,8 @@ go_enum!(RulesPosition, i32 {
 // Go: format/rulesmap.go:114 addRule
 // PORT: Go returns the grown slice; here the bucket is updated in place.
 pub fn add_rule(
-    rules: &mut Vec<Arc<RuleImpl>>,
-    rule: &Arc<RuleImpl>,
+    rules: &mut Vec<&'static RuleImpl>,
+    rule: &'static RuleImpl,
     specific_tokens: bool,
     construction_state: &mut [i32],
     rules_bucket_index: i32,
@@ -159,10 +159,7 @@ pub fn add_rule(
 
     let state = construction_state[rules_bucket_index as usize];
 
-    rules.insert(
-        get_rule_insertion_index(state, position) as usize,
-        rule.clone(),
-    );
+    rules.insert(get_rule_insertion_index(state, position) as usize, rule);
     construction_state[rules_bucket_index as usize] = increase_insertion_index(state, position);
 }
 

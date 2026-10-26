@@ -401,12 +401,14 @@ impl Diagnostic {
             return self.message_text.clone();
         }
         let message = (!is_nil_message(self.message)).then_some(self.message);
-        crate::diagnostics_loc::localize(
-            locale,
-            message,
-            self.message_key(),
-            &self.display_message_args(),
-        )
+        // The key goes only with the nil message: a catalog message makes
+        // its key on demand (`Message::key`).
+        let key = if message.is_some() {
+            ""
+        } else {
+            self.message_key()
+        };
+        crate::diagnostics_loc::localize(locale, message, key, &self.display_message_args())
     }
 
     // Go: ast/diagnostic.go:125 String
@@ -544,6 +546,8 @@ pub fn format_message(message: &'static crate::diagnostics::Message, args: &[Str
 // An unknown key (a bad `.tsbuildinfo`) is a nil message that keeps the key
 // (`unknown_key_message`), so `localize` panics when Go does, with Go's
 // text, and the build info keeps the key.
+// SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per diagnostic.
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn new_diagnostic_from_serialized(

@@ -457,6 +457,9 @@ impl ProjectReferenceFileMapper {
     }
 
     // Go: projectreferencefilemapper.go:100 (*projectReferenceFileMapper).getRedirectForResolution
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module
+    // resolution.
+    #[inline(never)]
     #[must_use]
     pub fn get_redirect_for_resolution(
         &self,
@@ -591,6 +594,9 @@ impl ProjectReferenceFileMapper {
     // PORT: `loader` is set only while a program with project references
     // loads, which is Go's `len(ResolvedProjectReferencePaths()) != 0` on the
     // builder; after the load this only reads the map, as in Go.
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module
+    // resolution.
+    #[inline(never)]
     #[must_use]
     pub fn get_source_to_dts_if_symlink(
         &self,
@@ -856,7 +862,10 @@ impl ProjectReferenceDtsFakingVfs {
         // If it contains node_modules check if its one of the symlinked path we know of
         let mut exists = false;
         for (directory_path, known_directory_link) in &known_directory_links {
-            if !file_or_directory_path.starts_with(directory_path.as_str()) {
+            // PORT: Go also skips `directoryPath == fileOrDirectoryPath`. The
+            // port's keys end in '/' and `file_or_directory_path` is normal
+            // (no last '/'), so `contains_path` already rejects that case.
+            if !directory_path.contains_path(&file_or_directory_path) {
                 continue;
             }
             // ts#64544: the real name keeps the spelling of the real

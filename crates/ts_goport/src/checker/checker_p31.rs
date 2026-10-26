@@ -567,8 +567,15 @@ impl Checker {
                     while is_property_access_or_qualified_name(top_prop) {
                         // Names in an import type's qualifier (`ns.y` in `typeof import("./b").ns.y`) are exports of the imported module, not references to this file's imports
                         // (ts#64636, Go N' checker.go:28844)
+                        // PERF: deepqual1. Go asks `isImportTypeQualifierPart` at each
+                        // node, and it climbs to the top of the QualifiedName chain each
+                        // time: the emit walk over an N-level name is O(N^3). Every node
+                        // in a chain has the answer of the chain top, and the loop reaches
+                        // the top unless it returns first, so the test runs only at the
+                        // top. Returns are Go's for every input.
                         if is_part_of_type_node(top_prop)
-                            || is_import_type_qualifier_part(top_prop).is_some()
+                            || (!is_qualified_name(top_prop.parent())
+                                && is_import_type_qualifier_part(top_prop).is_some())
                         {
                             return;
                         }

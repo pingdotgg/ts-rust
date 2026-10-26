@@ -3,8 +3,11 @@
 //! `getLocalizedMessages`, `Format`).
 //!
 //! PORT: the message catalogs are the Go files `diagnostics/loc/*.json.gz`,
-//! copied unchanged to `crates/ts_goport/data/loc/` and embedded with
-//! `include_bytes!` in place of Go `//go:embed`.
+//! copied unchanged to `crates/ts_goport/data/loc/`. The default build
+//! embeds them with `include_bytes!` in place of Go `//go:embed`. A
+//! `noembed` build (the release tsc) reads them from `<lib dir>/loc/` when a
+//! run first needs one (only with a locale), so they are not in the binary
+//! (1.1 MB). Go embeds them in its noembed build too.
 //! PORT: Go `sync.OnceValue` is a `OnceLock` per catalog, and the Go
 //! `sync.Map` cache is a `Mutex` around a map.
 
@@ -65,30 +68,127 @@ static LOCALE_FUNCS: [Option<fn() -> &'static LocaleMessages>; 14] = [
 /// `flate2` reads the header lazily, so a bad header panics with the first
 /// message. Go `gzip.Reader` reads concatenated members, like
 /// `MultiGzDecoder`. The embedded data is valid, so neither panic happens.
-fn load_locale_data(data: &[u8]) -> LocaleMessages {
+/// The error is Go's panic text; the embed build panics with it.
+fn load_locale_data(data: &[u8]) -> Result<LocaleMessages, String> {
     let mut gr = flate2::read::MultiGzDecoder::new(data);
     let mut decoded = Vec::new();
     if let Err(err) = gr.read_to_end(&mut decoded) {
-        panic!("failed to create gzip reader: {err}");
+        return Err(format!("failed to create gzip reader: {err}"));
     }
     let mut result = LocaleMessages::default();
     if let Err(err) = json_unmarshal(&decoded, &mut result, &[]) {
-        panic!("failed to unmarshal locale data: {err}");
+        return Err(format!("failed to unmarshal locale data: {err}"));
     }
-    result
+    Ok(result)
 }
 
 /// Go: one `//go:embed loc/<locale>.json.gz` variable and its
 /// `sync.OnceValue` loader.
+#[cfg(not(feature = "noembed"))]
 macro_rules! locale_data {
     ($data:ident, $func:ident, $file:literal) => {
         static $data: &[u8] = include_bytes!(concat!("../data/loc/", $file));
 
         fn $func() -> &'static LocaleMessages {
             static MESSAGES: OnceLock<LocaleMessages> = OnceLock::new();
-            MESSAGES.get_or_init(|| load_locale_data($data))
+            MESSAGES.get_or_init(|| load_locale_data($data).unwrap_or_else(|err| panic!("{err}")))
         }
     };
+}
+
+/// noembed: the loader reads `<lib dir>/loc/<file>` (`load_locale_file`).
+/// `$data` is not used.
+#[cfg(feature = "noembed")]
+macro_rules! locale_data {
+    ($data:ident, $func:ident, $file:literal) => {
+        fn $func() -> &'static LocaleMessages {
+            static MESSAGES: OnceLock<LocaleMessages> = OnceLock::new();
+            MESSAGES.get_or_init(|| load_locale_file($file))
+        }
+    };
+}
+
+/// noembed: the catalog `file` from `<lib dir>/loc/`, where
+/// `scripts/copy-libs.sh` and the release packages put it. A file that is
+/// missing or bad ends the run with a clear error, not a panic and not
+/// English text.
+// PORT: not in Go (Go embeds the catalogs in its noembed build too).
+#[cfg(feature = "noembed")]
+#[cold]
+fn load_locale_file(file: &str) -> LocaleMessages {
+    let path = locale_file_path(file);
+    read_locale_file(&path).unwrap_or_else(|err| locale_file_exit(file, &err))
+}
+
+/// noembed: the path of catalog `file`.
+#[cfg(feature = "noembed")]
+fn locale_file_path(file: &str) -> String {
+    format!("{}/loc/{file}", crate::frontend::bundled::lib_path())
+}
+
+/// noembed: ends the run when catalog `file` cannot be read (`err`).
+#[cfg(feature = "noembed")]
+#[cold]
+fn locale_file_exit(file: &str, err: &str) -> ! {
+    let locale = file.trim_end_matches(".json.gz");
+    // The output so far comes first, as for a panic (bin/tsgo.rs).
+    crate::execute::tsc::stdio::flush_cli_stdout_at_exit();
+    let text = format!(
+        "error: cannot read the {locale} messages: {err}\n\
+         This tsc reads them from the loc directory next to it. Install it again.\n"
+    );
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes());
+    // Go `ExitStatusDiagnosticsPresent_OutputsSkipped`, as for the other
+    // setup errors (an invalid locale is TS6048).
+    std::process::exit(1)
+}
+
+/// The catalog file of each `LOCALE_FUNCS` entry (the `locale_data!` lines
+/// below), for `preload_localized_messages`.
+// PORT: not in Go.
+static LOCALE_FILES: [&str; 14] = [
+    "",
+    "zh-CN.json.gz",
+    "zh-TW.json.gz",
+    "cs-CZ.json.gz",
+    "de-DE.json.gz",
+    "es-ES.json.gz",
+    "fr-FR.json.gz",
+    "it-IT.json.gz",
+    "ja-JP.json.gz",
+    "ko-KR.json.gz",
+    "pl-PL.json.gz",
+    "pt-BR.json.gz",
+    "ru-RU.json.gz",
+    "tr-TR.json.gz",
+];
+
+/// In a noembed build, opens the catalog file of `locale`, so that a
+/// missing file ends the run before any output (`locale_file_exit`), not
+/// after a partial diagnostic line. The tsc command line calls it first.
+/// The read and decode wait for the first message, as in Go (they cost
+/// about 17M instructions). The default build does nothing here.
+// PORT: not in Go.
+pub fn preload_localized_messages(locale: &Locale) {
+    #[cfg(feature = "noembed")]
+    if locale.0 != language::Tag::UND {
+        let (index, confidence) = MATCHER.match_(std::slice::from_ref(&locale.0));
+        if confidence >= language::Confidence::Low
+            && let Some(&file) = LOCALE_FILES.get(index).filter(|file| !file.is_empty())
+        {
+            let path = locale_file_path(file);
+            if let Err(err) = std::fs::File::open(&path) {
+                locale_file_exit(file, &format!("{path}: {err}"));
+            }
+        }
+    }
+}
+
+/// Reads and decodes the catalog file at `path` (the noembed loader).
+// PORT: not in Go.
+fn read_locale_file(path: &str) -> Result<LocaleMessages, String> {
+    let data = std::fs::read(path).map_err(|err| format!("{path}: {err}"))?;
+    load_locale_data(&data).map_err(|err| format!("{path}: {err}"))
 }
 
 // Go: diagnostics/loc_generated.go:63 zhCNData, zhCN
@@ -332,6 +432,38 @@ mod tests {
         for f in LOCALE_FUNCS.iter().flatten() {
             assert!(!f().is_empty());
         }
+    }
+
+    /// `LOCALE_FILES` names the catalog of each `LOCALE_FUNCS` entry.
+    #[test]
+    fn locale_files_name_the_catalogs() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/loc");
+        for (file, f) in LOCALE_FILES.iter().zip(LOCALE_FUNCS) {
+            match f {
+                None => assert!(file.is_empty()),
+                Some(f) => assert_eq!(&read_locale_file(&format!("{dir}/{file}")).unwrap(), f()),
+            }
+        }
+    }
+
+    /// The noembed loader: a catalog file gives the embedded messages, and
+    /// a missing or bad file gives an error that names it.
+    #[test]
+    fn locale_files_read_like_the_embedded_catalogs() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/loc");
+        let read = read_locale_file(&format!("{dir}/de-DE.json.gz")).unwrap();
+        assert_eq!(&read, de_de());
+
+        let missing = format!("{dir}/xx-XX.json.gz");
+        let err = read_locale_file(&missing).unwrap_err();
+        assert!(err.starts_with(&format!("{missing}: ")), "{err}");
+
+        let bad = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+        let err = read_locale_file(bad).unwrap_err();
+        assert!(
+            err.starts_with(&format!("{bad}: failed to create gzip reader")),
+            "{err}"
+        );
     }
 
     #[test]

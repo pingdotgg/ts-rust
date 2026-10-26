@@ -42,10 +42,17 @@ pub(super) struct GoSharedState {
     /// Go `processedFiles.importHelpersImportSpecifiers`, by file path.
     import_helpers_import_specifiers: FxHashMap<String, Node>,
     /// Go include processor diagnostics of each program file, by file index.
-    include_diagnostics: FxHashMap<usize, Vec<Diagnostic>>,
+    /// Go builds them at the first read (`includeProcessor.getDiagnostics`),
+    /// and their file format lines read the bound CommonJS indicator. The
+    /// loading thread builds them at such a read, or after the bind that
+    /// comes before any checker read (`fill_include_diagnostics`).
+    include_diagnostics: OnceLock<FxHashMap<usize, Vec<Diagnostic>>>,
     /// The frontend `IncludeProcessor::diagnostics_read`: set where Go builds
     /// the include processor diagnostics (`get_include_processor_diagnostics`).
     include_diagnostics_read: Arc<std::sync::atomic::AtomicBool>,
+    /// The frontend `IncludeProcessor::program_bound`: set when the bind of
+    /// this program ran (`mark_program_bound`).
+    program_bound: Arc<std::sync::atomic::AtomicBool>,
     /// Go `projectReferenceFileMapper.realpathDtsToSource` after the load,
     /// by path: the entries with a source (`get_parse_file_redirect`).
     realpath_dts_to_source: FxHashMap<String, Arc<SourceOutputAndProjectReference>>,
@@ -671,6 +678,17 @@ pub(super) fn new_program_version(
     )
 }
 
+/// Builds the include processor diagnostics of `p`, the current program,
+/// where Go first reads them (`GetProgramDiagnostics`), or after the bind
+/// that comes before any checker read (`create_checkers`, and the bind of a
+/// project version). Does nothing when they are built.
+pub(super) fn fill_include_diagnostics(p: &NewProgram) {
+    let tables = held_tables(prog());
+    if let Some(go) = &tables.go {
+        go.fill_include_diagnostics(p, &tables.file_by_path);
+    }
+}
+
 thread_local! {
     /// Source files that were parsed on this thread outside a program load
     /// (the language server parse cache) and are not published yet, by
@@ -1133,13 +1151,6 @@ fn build_program(
     {
         tables.package_json_cache = Arc::clone(&old.tables.package_json_cache);
     }
-    if check_version_tables() {
-        tables
-            .go
-            .as_ref()
-            .expect("a Go frontend program has shared state")
-            .assert_include_diagnostics(np);
-    }
     drop(replaced);
     drop(previous);
     let program_state = ProgramState {
@@ -1283,7 +1294,7 @@ fn full_tables_of(
         file_by_path,
         file_meta,
     } = parts;
-    let go = GoSharedState::new(np, previous, None, &file_by_path);
+    let go = GoSharedState::new(np, previous, None);
     VersionTables {
         go: Some(go),
         file_versions: np
@@ -1445,12 +1456,7 @@ fn reused_tables(np: &NewProgram, old: &PreviousVersion, replaced: &[Replaced]) 
                 .filter_map(|r| r.file.version.get().cloned()),
         )
         .collect();
-    let go = GoSharedState::new(
-        np,
-        Some((old_np, old_shared)),
-        Some(replaced),
-        &old.file_by_path,
-    );
+    let go = GoSharedState::new(np, Some((old_np, old_shared)), Some(replaced));
     VersionTables {
         go: Some(go),
         file_versions,
@@ -1715,13 +1721,12 @@ impl GoSharedState {
     /// changed, and the versions that are alive keep one copy. `replaced`
     /// is set when `p` replaced these files of `previous` in place
     /// (`replaced_files`): then the copies by file id start from those of
-    /// `previous`. `file_by_path` holds the slots of the program files
-    /// (`VersionTables::file_by_path`).
+    /// `previous`. The include processor diagnostics come later
+    /// (`fill_include_diagnostics`).
     fn new(
         p: &NewProgram,
         previous: Option<(&NewProgram, &GoSharedState)>,
         replaced: Option<&[Replaced]>,
-        file_by_path: &FxHashMap<String, usize>,
     ) -> Self {
         let program_files = p.source_files();
         // The old version when `p` replaced files of it in place.
@@ -1771,7 +1776,6 @@ impl GoSharedState {
             .flat_map(|map| map.iter())
             .map(|(path, &specifier)| (path.0.clone(), specifier))
             .collect();
-        let include_diagnostics = include_diagnostics_of(p, file_by_path);
         let redirect_targets = files
             .redirect_targets_map
             .iter()
@@ -1921,8 +1925,9 @@ impl GoSharedState {
             resolved_modules,
             jsx_runtime_import_specifiers,
             import_helpers_import_specifiers,
-            include_diagnostics,
+            include_diagnostics: OnceLock::new(),
             include_diagnostics_read: Arc::clone(&p.include_processor.diagnostics_read),
+            program_bound: Arc::clone(&p.include_processor.program_bound),
             realpath_dts_to_source,
             redirect_targets,
             references,
@@ -2125,24 +2130,64 @@ impl GoSharedState {
             .unwrap_or(Node::NIL)
     }
 
+    /// Marks the bind of this program as run (`program::bind_all`, any
+    /// thread). From then on the file format lines of the include processor
+    /// read the bound CommonJS indicator (`IncludeProcessor::program_bound`).
+    pub(super) fn mark_program_bound(&self) {
+        self.program_bound
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     // Go: compiler/program.go:869 GetIncludeProcessorDiagnostics (the
     // include processor part)
+    // PORT: a read on the loading thread builds them. A checker thread reads
+    // them after the loading thread built them (`fill_include_diagnostics`);
+    // a first read on a checker thread panics (`go_frontend`). The test
+    // `include_diagnostics_are_built_before_checker_threads_read` pins it.
     pub(super) fn get_include_processor_diagnostics(&self, file: Node) -> Vec<Diagnostic> {
         // Go builds the collection here (`includeProcessor.getDiagnostics`).
         self.include_diagnostics_read
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        if self.include_diagnostics.get().is_none()
+            && let Some(p) = go_frontend()
+        {
+            self.fill_include_diagnostics(&p, &held_tables(prog()).file_by_path);
+        }
         self.include_diagnostics
+            .get()
+            .expect("include processor diagnostics read before they are built")
             .get(&file.file_index())
             .cloned()
             .unwrap_or_default()
     }
 
+    /// True when the include processor diagnostics are built.
+    #[cfg(test)]
+    pub(super) fn include_diagnostics_built(&self) -> bool {
+        self.include_diagnostics.get().is_some()
+    }
+
+    /// Builds the include processor diagnostics of `p`, the frontend
+    /// program of this state, once. `file_by_path` holds the slots of the
+    /// program files (`VersionTables::file_by_path`).
+    fn fill_include_diagnostics(&self, p: &NewProgram, file_by_path: &FxHashMap<String, usize>) {
+        let mut built = false;
+        self.include_diagnostics.get_or_init(|| {
+            built = true;
+            include_diagnostics_of(p, file_by_path)
+        });
+        if built && check_version_tables() {
+            self.assert_include_diagnostics(p);
+        }
+    }
+
     /// Panics when the copies by file id differ from those of `full`, which
     /// `GoSharedState::new` made for the same program with no replaced
     /// files (`assert_same_tables`). The other copies are made the same way
-    /// for both.
+    /// for both. The include processor diagnostics are not built yet;
+    /// `fill_include_diagnostics` checks them against the frontend
+    /// collection.
     fn assert_same(&self, full: &GoSharedState) {
-        assert_same_include_diagnostics(&self.include_diagnostics, &full.include_diagnostics);
         assert_eq!(self.references, full.references, "preserved references");
         let mut redirects: Vec<_> = self.redirects_for_resolution.keys().collect();
         let mut full_redirects: Vec<_> = full.redirects_for_resolution.keys().collect();
@@ -2172,7 +2217,12 @@ impl GoSharedState {
                 (!diagnostics.is_empty()).then_some((file.store, diagnostics))
             })
             .collect();
-        assert_same_include_diagnostics(&self.include_diagnostics, &each_file);
+        assert_same_include_diagnostics(
+            self.include_diagnostics
+                .get()
+                .expect("include processor diagnostics are built"),
+            &each_file,
+        );
     }
 }
 
@@ -2922,5 +2972,97 @@ pub(super) mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+    }
+
+    // followups82 (R238 reviewer, loadparity2): Go builds the include
+    // processor diagnostics at their first read (includeprocessor.go:37
+    // getDiagnostics, a sync.Once that any goroutine can run). A checker
+    // reads them only after the bind that its creation runs (checker.go:936
+    // NewChecker calls BindSourceFiles), so on any goroutine that first
+    // read gives the bound collection. The port reads the frontend program on the loading thread
+    // only (`program::go_frontend`), so it builds that same collection
+    // there, after the bind and before a checker thread can read it:
+    // `create_checkers` (tsc) and `bind_source_files` (LSP). This pins the
+    // rule: a load builds nothing, each path builds, and the checker threads
+    // read the built copy (a first read there would panic).
+    #[test]
+    fn include_diagnostics_are_built_before_checker_threads_read() {
+        let dir = std::env::temp_dir().join(format!("goport-include-diags-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let globals = "interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n\
+                       interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n\
+                       interface Number {}\ninterface Object {}\ninterface RegExp {}\n\
+                       interface String {}\n";
+        let files = [
+            ("globals.d.ts", globals),
+            (
+                "a.ts",
+                "/// <reference path=\"missing.ts\" />\nexport const a = 1;\n",
+            ),
+            ("b.ts", "export const b = 2;\n"),
+        ];
+        for (name, text) in files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        let config_of = |name: &str, single_threaded: bool| -> String {
+            let config = dir.join(format!("{name}.json"));
+            std::fs::write(
+                &config,
+                format!(
+                    r#"{{ "compilerOptions": {{ "noLib": true, "types": [], "noEmit": true,
+                         "singleThreaded": {single_threaded} }},
+                         "files": ["globals.d.ts", "a.ts", "b.ts"] }}"#
+                ),
+            )
+            .unwrap();
+            config.to_string_lossy().replace('\\', "/")
+        };
+        // tsc: `create_checkers` builds them after its bind, with one
+        // checker thread and with more.
+        for (name, single_threaded) in [("tsc-single", true), ("tsc", false)] {
+            let config = config_of(name, single_threaded);
+            let messages = std::thread::spawn(move || {
+                let built = || with_go(GoSharedState::include_diagnostics_built);
+                let program = try_load_version(&config, |_| {})
+                    .unwrap_or_else(|e| panic!("cannot load {config}: {e}"));
+                let scope = crate::core::enter_program(Some(program));
+                assert!(!built(), "{config}: the load built them");
+                let messages: Vec<String> = program
+                    .source_files()
+                    .flat_map(|file| get_semantic_diagnostics(file.root))
+                    .map(|d| format_diagnostic(&d))
+                    .collect();
+                assert!(built(), "{config}: the check did not build them");
+                drop(scope);
+                release_program(program);
+                messages
+            })
+            .join()
+            .unwrap();
+            assert!(
+                messages.len() == 1 && messages[0].contains("TS6053"),
+                "{name}: the checker thread reads the include diagnostic: {messages:?}"
+            );
+        }
+        // LSP: `bind_source_files` builds them after its bind.
+        let config = config_of("lsp", false);
+        std::thread::spawn(move || {
+            let opts = load_config(&config, |_| {}, &mut CompileTimes::default()).unwrap();
+            let p = super::super::ls_program::new_program(opts, None);
+            let version = super::super::ls_program::program_version(&p);
+            let built = || {
+                held_tables(version)
+                    .go
+                    .as_ref()
+                    .is_some_and(GoSharedState::include_diagnostics_built)
+            };
+            assert!(!built(), "the LSP program version built them");
+            super::super::ls_program::bind_source_files(&p);
+            assert!(built(), "bind_source_files did not build them");
+        })
+        .join()
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

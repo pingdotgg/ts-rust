@@ -9,86 +9,139 @@
 //! PORT: Go `int` indexes are `isize` here (some Go loops count down past
 //! zero); they are cast to `usize` only to index the slice.
 //!
-//! Also `stable_sort_by`, Rust's stable `sort_by` with one copy on wasm.
+//! `sort_func`, `sort_stable_func`, `sort_slice` and `stable_sort_by` have
+//! one copy of each algorithm for all element types (`by_index`). Hot sites
+//! call `sort_func_hot`, `sort_stable_func_hot` and `stable_sort_by_hot`,
+//! which have one copy per element and comparator type.
+//!
+//! Also the capacity that Go `append` gives a full slice
+//! (`go_byte_slice_grow`, `go_ptr_slice_grow`) for ports whose result depends
+//! on it.
 
 use crate::prelude::*;
 
-#[cfg(target_family = "wasm")]
 pub use by_index::{sort_func, sort_slice, sort_stable_func, stable_sort_by};
+#[cfg(target_family = "wasm")]
+pub use by_index::{
+    sort_func as sort_func_hot, sort_stable_func as sort_stable_func_hot,
+    stable_sort_by as stable_sort_by_hot,
+};
 
-/// wasm: `sort_func`, `sort_stable_func`, `sort_slice` and `stable_sort_by`
-/// with one copy of each algorithm for all element types. Each sorts the
-/// indexes of `x` (`u32`) with a `dyn` comparator, then puts `x` in that
-/// order. The Go algorithms make the same comparisons, in the same order,
-/// and the same swaps on the indexes as on `x`, so the result is the same
-/// (for `stable_sort_by`, see there). One copy per element and comparator
-/// type was 49 KB of the module (123 copies) for the Go sorts, and 50 KB
-/// (15 copies) for std's stable sort.
-#[cfg(any(test, target_family = "wasm"))]
+/// `stable_sort_by` for hot sites: Rust's stable `x.sort_by(cmp)`, with a
+/// copy per element and comparator type. On wasm it is `stable_sort_by`.
+#[cfg(not(target_family = "wasm"))]
+pub fn stable_sort_by_hot<T, F: FnMut(&T, &T) -> std::cmp::Ordering>(x: &mut [T], cmp: F) {
+    x.sort_by(cmp);
+}
+
+/// `sort_func`, `sort_stable_func`, `sort_slice` and `stable_sort_by` with
+/// one copy of each algorithm for all element types. Each sorts the indexes
+/// of `x` (`u32`) with a `dyn` comparator, then puts `x` in that order. The
+/// Go algorithms make the same comparisons, in the same order, and the same
+/// swaps on the indexes as on `x`, so the result is the same (for
+/// `stable_sort_by`, see there). A copy per element and comparator type is
+/// about 4 to 10 KB of native code (about 0.6 MB in all) and was 49 KB of
+/// the wasm module (123 copies) for the Go sorts, and 50 KB (15 copies) for
+/// std's stable sort. A slice of under 2 elements returns at once: no
+/// algorithm compares there.
 mod by_index {
     use super::{LessSwap, bits_len, pdqsort_cmp_func, pdqsort_func, stable_cmp_func};
     use std::cmp::Ordering;
 
-    /// Go `slices.SortFunc` (see the native `sort_func`).
+    /// Go `slices.SortFunc` (see `sort_func_hot`).
     pub fn sort_func<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
-        let mut order = indexes(x);
-        let n = order.len() as isize;
-        let mut by_index = |a: &u32, b: &u32| cmp(&x[*a as usize], &x[*b as usize]);
-        let mut by_index: &mut dyn FnMut(&u32, &u32) -> i32 = &mut by_index;
-        pdqsort_cmp_func(&mut order, 0, n, bits_len(n as usize), &mut by_index);
-        put_in_order(x, &mut order);
+        if x.len() < 2 {
+            return;
+        }
+        let mut order = indexes(x.len());
+        sort_indexes_cmp(&mut order, &mut |a, b| {
+            cmp(&x[*a as usize], &x[*b as usize])
+        });
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
-    /// Go `slices.SortStableFunc` (see the native `sort_stable_func`).
+    /// Go `slices.SortStableFunc` (see `sort_stable_func_hot`).
     pub fn sort_stable_func<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
-        let mut order = indexes(x);
-        let n = order.len() as isize;
-        let mut by_index = |a: &u32, b: &u32| cmp(&x[*a as usize], &x[*b as usize]);
-        let mut by_index: &mut dyn FnMut(&u32, &u32) -> i32 = &mut by_index;
-        stable_cmp_func(&mut order, n, &mut by_index);
-        put_in_order(x, &mut order);
+        if x.len() < 2 {
+            return;
+        }
+        let mut order = indexes(x.len());
+        stable_sort_indexes_cmp(&mut order, &mut |a, b| {
+            cmp(&x[*a as usize], &x[*b as usize])
+        });
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
-    /// Go `sort.Slice` (see the native `sort_slice`).
+    /// Go `sort.Slice` (`sort/slice.go:24`; the algorithm is `pdqsort_func`).
     pub fn sort_slice<T, F: FnMut(&T, &T) -> bool>(x: &mut [T], mut less: F) {
-        let mut order = indexes(x);
-        let n = order.len() as isize;
-        let mut by_index = |a: &u32, b: &u32| less(&x[*a as usize], &x[*b as usize]);
-        let by_index: &mut dyn FnMut(&u32, &u32) -> bool = &mut by_index;
-        let mut data = LessSwap {
-            data: &mut order,
-            less_fn: by_index,
-        };
-        pdqsort_func(&mut data, 0, n, bits_len(n as usize));
-        put_in_order(x, &mut order);
+        if x.len() < 2 {
+            return;
+        }
+        let mut order = indexes(x.len());
+        sort_indexes_less(&mut order, &mut |a, b| {
+            less(&x[*a as usize], &x[*b as usize])
+        });
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
-    /// Rust's `x.sort_by(cmp)` (see the native `stable_sort_by`). std's sort
-    /// makes other comparisons on the indexes than on `x`. But with a strict
-    /// weak order, a stable sort has one correct result, so it is the same.
+    /// Rust's stable `x.sort_by(cmp)`, for a `cmp` that is a strict weak
+    /// order (for example a compare of plain keys). Use it in place of
+    /// `sort`, `sort_by` and `sort_by_key` at cold sites. std's sort makes
+    /// other comparisons on the indexes than on `x`. But with a strict weak
+    /// order, a stable sort has one correct result, so it is the same.
     pub fn stable_sort_by<T, F: FnMut(&T, &T) -> Ordering>(x: &mut [T], mut cmp: F) {
-        let mut order = indexes(x);
+        if x.len() < 2 {
+            return;
+        }
+        let mut order = indexes(x.len());
         sort_indexes(&mut order, &mut |a, b| {
             cmp(&x[*a as usize], &x[*b as usize])
         });
-        put_in_order(x, &mut order);
+        put_in_order(&mut order, &mut |i, j| x.swap(i, j));
     }
 
-    /// std's stable sort of `order`, in one function: `sort_by` inlines its
-    /// insertion sort for short slices into the caller.
+    // The sorts of `order`, each in one function: without `inline(never)`
+    // the callers could inline a copy (std's `sort_by` inlines its insertion
+    // sort for short slices into the caller).
+
+    #[inline(never)]
+    fn sort_indexes_cmp(order: &mut [u32], mut cmp: &mut dyn FnMut(&u32, &u32) -> i32) {
+        let n = order.len() as isize;
+        pdqsort_cmp_func(order, 0, n, bits_len(n as usize), &mut cmp);
+    }
+
+    #[inline(never)]
+    fn stable_sort_indexes_cmp(order: &mut [u32], mut cmp: &mut dyn FnMut(&u32, &u32) -> i32) {
+        let n = order.len() as isize;
+        stable_cmp_func(order, n, &mut cmp);
+    }
+
+    #[inline(never)]
+    fn sort_indexes_less(order: &mut [u32], less: &mut dyn FnMut(&u32, &u32) -> bool) {
+        let n = order.len() as isize;
+        let mut data = LessSwap {
+            data: order,
+            less_fn: less,
+        };
+        pdqsort_func(&mut data, 0, n, bits_len(n as usize));
+    }
+
     #[inline(never)]
     fn sort_indexes(order: &mut [u32], cmp: &mut dyn FnMut(&u32, &u32) -> Ordering) {
         order.sort_by(cmp);
     }
 
-    /// The indexes of `x`, in order.
-    fn indexes<T>(x: &[T]) -> Vec<u32> {
-        (0..u32::try_from(x.len()).expect("a slice of under 4G elements")).collect()
+    /// The indexes `0..len`, in order.
+    #[inline(never)]
+    fn indexes(len: usize) -> Vec<u32> {
+        (0..u32::try_from(len).expect("a slice of under 4G elements")).collect()
     }
 
     /// Moves the element at `order[i]` of `x` to `i`, for each `i`, by
     /// following each cycle of `order` with swaps. Leaves `order` as `0..n`.
-    fn put_in_order<T>(x: &mut [T], order: &mut [u32]) {
+    /// `swap(i, j)` swaps elements `i` and `j` of `x`.
+    #[inline(never)]
+    fn put_in_order(order: &mut [u32], swap: &mut dyn FnMut(usize, usize)) {
         for start in 0..order.len() {
             let mut current = start;
             loop {
@@ -97,21 +150,11 @@ mod by_index {
                 if next == start {
                     break;
                 }
-                x.swap(current, next);
+                swap(current, next);
                 current = next;
             }
         }
     }
-}
-
-/// Rust's stable `x.sort_by(cmp)`, for a `cmp` that is a strict weak order
-/// (for example a compare of plain keys). Use it in place of `sort`,
-/// `sort_by` and `sort_by_key` in code that the wasm module has: there all
-/// element types share one copy of std's sort (`by_index`), and that copy
-/// gives the same result only for a strict weak order.
-#[cfg(not(target_family = "wasm"))]
-pub fn stable_sort_by<T, F: FnMut(&T, &T) -> std::cmp::Ordering>(x: &mut [T], cmp: F) {
-    x.sort_by(cmp);
 }
 
 // Go: slices/sort.go:30 SortFunc
@@ -124,8 +167,12 @@ pub fn stable_sort_by<T, F: FnMut(&T, &T) -> std::cmp::Ordering>(x: &mut [T], cm
 /// SortFunc requires that cmp is a strict weak ordering.
 /// See <https://en.wikipedia.org/wiki/Weak_ordering#Strict_weak_orderings>.
 /// The function should return 0 for incomparable items.
+///
+/// PORT: `sort_func` (`by_index`) is this sort with one copy for all element
+/// types. This one is for hot sites: its copy per element and comparator
+/// type saves the index vector and the `dyn` calls.
 #[cfg(not(target_family = "wasm"))]
-pub fn sort_func<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
+pub fn sort_func_hot<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
     let n = x.len() as isize;
     pdqsort_cmp_func(x, 0, n, bits_len(n as usize), &mut cmp);
 }
@@ -134,8 +181,11 @@ pub fn sort_func<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
 /// SortStableFunc sorts the slice x while keeping the original order of
 /// equal elements, using cmp to compare elements in the same way as
 /// [SortFunc].
+///
+/// PORT: for hot sites, as `sort_func_hot`; `sort_stable_func` is the copy
+/// for all element types.
 #[cfg(not(target_family = "wasm"))]
-pub fn sort_stable_func<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
+pub fn sort_stable_func_hot<T, F: FnMut(&T, &T) -> i32>(x: &mut [T], mut cmp: F) {
     let n = x.len() as isize;
     stable_cmp_func(x, n, &mut cmp);
 }
@@ -826,9 +876,11 @@ pub fn rotate_cmp_func<T, F: FnMut(&T, &T) -> i32>(
 /// the Interface type's Less method.
 ///
 /// PORT: Go `less(i, j int)` reads `x[i]` and `x[j]`; here `less` gets
-/// the two elements. Go's reflect swapper is `<[T]>::swap`.
-#[cfg(not(target_family = "wasm"))]
-pub fn sort_slice<T, F: FnMut(&T, &T) -> bool>(x: &mut [T], less: F) {
+/// the two elements. Go's reflect swapper is `<[T]>::swap`. `sort_slice`
+/// (`by_index`) is this sort with one copy for all element types; this
+/// direct one is for the tests (no hot site sorts with `sort.Slice`).
+#[cfg(test)]
+fn sort_slice_direct<T, F: FnMut(&T, &T) -> bool>(x: &mut [T], less: F) {
     let length = x.len() as isize;
     let limit = bits_len(length as usize);
     let mut data = LessSwap {
@@ -1419,9 +1471,98 @@ pub fn rotate_func<T, F: FnMut(&T, &T) -> bool>(
     swap_range_func(data, m - i, m, i);
 }
 
+/// The size classes of the Go allocator (internal/runtime/gc/sizeclasses.go
+/// `SizeClassToSize`, go1.27.1, without class 0).
+const GO_SIZE_CLASSES: [usize; 67] = [
+    8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352,
+    384, 416, 448, 480, 512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048,
+    2304, 2688, 3072, 3200, 3456, 4096, 4864, 5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728,
+    10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480, 21760, 24576, 27264, 28672,
+    32768,
+];
+
+// Go: runtime/slice.go nextslicecap (go1.27.1)
+/// The capacity that growslice asks for before it rounds up to a size class.
+fn next_slice_cap(new_len: usize, old_cap: usize) -> usize {
+    let mut new_cap = old_cap;
+    let double_cap = new_cap + new_cap;
+    if new_len > double_cap {
+        return new_len;
+    }
+    const THRESHOLD: usize = 256;
+    if old_cap < THRESHOLD {
+        return double_cap;
+    }
+    loop {
+        // Transition from growing 2x for small slices to growing 1.25x for
+        // large slices.
+        new_cap += (new_cap + 3 * THRESHOLD) >> 2;
+        if new_cap >= new_len {
+            return new_cap;
+        }
+    }
+}
+
+// Go: runtime/msize.go roundupsize (go1.27.1, 64-bit)
+/// The usable size of the block that mallocgc gives for `size` bytes. An
+/// object with pointers (`noscan` false) over 512 bytes has an 8-byte malloc
+/// header in its block.
+fn round_up_size(size: usize, noscan: bool) -> usize {
+    const MAX_SMALL_SIZE: usize = 32768;
+    const MALLOC_HEADER_SIZE: usize = 8;
+    const MIN_SIZE_FOR_MALLOC_HEADER: usize = 512;
+    const PAGE_SIZE: usize = 8192;
+    if size <= MAX_SMALL_SIZE - MALLOC_HEADER_SIZE {
+        let header = if !noscan && size > MIN_SIZE_FOR_MALLOC_HEADER {
+            MALLOC_HEADER_SIZE
+        } else {
+            0
+        };
+        let class = GO_SIZE_CLASSES
+            .iter()
+            .find(|&&class| class >= size + header);
+        return class.expect("a small object fits a size class") - header;
+    }
+    // A large object takes whole pages.
+    size.next_multiple_of(PAGE_SIZE)
+}
+
+// Go: runtime/slice.go growslice for a `[]byte` (noscan)
+/// The capacity of a full Go `[]byte` with capacity `old_cap` after an
+/// `append` that needs `new_len` bytes.
+pub fn go_byte_slice_grow(old_cap: usize, new_len: usize) -> usize {
+    round_up_size(next_slice_cap(new_len, old_cap), true)
+}
+
+// Go: runtime/slice.go growslice for a `[]*T` (elements of 8 bytes with
+// pointers)
+/// The capacity of a full Go `[]*T` with capacity `old_cap` after an
+/// `append` that needs `new_len` elements: 1, 2, 4, 8, 16, 32, 64, 143, 287,
+/// 607, 1023, ... when it grows by one each time.
+pub fn go_ptr_slice_grow(old_cap: usize, new_len: usize) -> usize {
+    round_up_size(next_slice_cap(new_len, old_cap) * 8, false) / 8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The capacities of a `[]*T` that grows by one append at a time, as Go
+    /// go1.27.1 prints them (`cap` after each growth).
+    #[test]
+    fn go_ptr_slice_grow_ladder() {
+        let mut ladder = vec![];
+        let mut cap = 0;
+        while cap < 48128 {
+            cap = go_ptr_slice_grow(cap, cap + 1);
+            ladder.push(cap);
+        }
+        let go = [
+            1, 2, 4, 8, 16, 32, 64, 143, 287, 607, 1023, 1535, 2303, 3071, 4095, 6144, 8192, 11264,
+            14336, 18432, 23552, 29696, 37888, 48128,
+        ];
+        assert_eq!(ladder, go);
+    }
 
     /// A `(file, pos, id)` key and the comparator shape of Go
     /// `compareSymbolsWorker`: files 0 and 1 are in the file index map
@@ -1496,19 +1637,28 @@ mod tests {
         ];
 
         let mut a = keys(64);
+        sort_func_hot(&mut a, cmp_keys);
+        assert_eq!(ids(&a), go_unstable);
+        let mut a = keys(64);
         sort_func(&mut a, cmp_keys);
         assert_eq!(ids(&a), go_unstable);
 
+        let mut b = keys(64);
+        sort_stable_func_hot(&mut b, cmp_keys);
+        assert_eq!(ids(&b), go_stable);
         let mut b = keys(64);
         sort_stable_func(&mut b, cmp_keys);
         assert_eq!(ids(&b), go_stable);
 
         let mut c = keys(64);
+        sort_slice_direct(&mut c, |x, y| cmp_keys(x, y) < 0);
+        assert_eq!(ids(&c), go_unstable);
+        let mut c = keys(64);
         sort_slice(&mut c, |x, y| cmp_keys(x, y) < 0);
         assert_eq!(ids(&c), go_unstable);
     }
 
-    /// The wasm sorts (`by_index`) give the same permutation as the direct
+    /// The index sorts (`by_index`) give the same permutation as the direct
     /// sorts, for a comparator that is not transitive and for one that
     /// answers at random: they make the same comparisons in the same order.
     #[test]
@@ -1516,36 +1666,36 @@ mod tests {
         for n in [0, 1, 2, 12, 13, 20, 21, 50, 64, 100, 300] {
             let input = keys(n);
             let (mut want, mut got) = (input.clone(), input.clone());
-            sort_func(&mut want, cmp_keys);
+            sort_func_hot(&mut want, cmp_keys);
             by_index::sort_func(&mut got, cmp_keys);
             assert_eq!(ids(&got), ids(&want));
             let (mut want, mut got) = (input.clone(), input.clone());
-            sort_stable_func(&mut want, cmp_keys);
+            sort_stable_func_hot(&mut want, cmp_keys);
             by_index::sort_stable_func(&mut got, cmp_keys);
             assert_eq!(ids(&got), ids(&want));
             let (mut want, mut got) = (input.clone(), input.clone());
-            sort_slice(&mut want, |x, y| cmp_keys(x, y) < 0);
+            sort_slice_direct(&mut want, |x, y| cmp_keys(x, y) < 0);
             by_index::sort_slice(&mut got, |x, y| cmp_keys(x, y) < 0);
             assert_eq!(ids(&got), ids(&want));
 
             let seed = n as u64 + 7;
             let (mut a, mut b) = (Xorshift(seed), Xorshift(seed));
             let (mut want, mut got) = (input.clone(), input.clone());
-            sort_func(&mut want, |_, _| (a.next() % 3) as i32 - 1);
+            sort_func_hot(&mut want, |_, _| (a.next() % 3) as i32 - 1);
             by_index::sort_func(&mut got, |_, _| (b.next() % 3) as i32 - 1);
             assert_eq!(ids(&got), ids(&want));
             let (mut want, mut got) = (input.clone(), input.clone());
-            sort_stable_func(&mut want, |_, _| (a.next() % 3) as i32 - 1);
+            sort_stable_func_hot(&mut want, |_, _| (a.next() % 3) as i32 - 1);
             by_index::sort_stable_func(&mut got, |_, _| (b.next() % 3) as i32 - 1);
             assert_eq!(ids(&got), ids(&want));
             let (mut want, mut got) = (input.clone(), input);
-            sort_slice(&mut want, |_, _| a.next() % 2 == 0);
+            sort_slice_direct(&mut want, |_, _| a.next() % 2 == 0);
             by_index::sort_slice(&mut got, |_, _| b.next() % 2 == 0);
             assert_eq!(ids(&got), ids(&want));
         }
     }
 
-    /// The wasm `stable_sort_by` gives the same order as std's `sort_by` for
+    /// The index `stable_sort_by` gives the same order as std's `sort_by` for
     /// strict weak orders with many equal keys, at sizes that reach std's
     /// insertion sort and its driftsort.
     #[test]
@@ -1572,12 +1722,18 @@ mod tests {
         for n in [0, 1, 2, 12, 13, 20, 21, 50, 100, 300] {
             let input: Vec<u32> = (0..n).collect();
             let mut a = input.clone();
-            sort_func(&mut a, |_, _| (rng.next() % 3) as i32 - 1);
+            sort_func_hot(&mut a, |_, _| (rng.next() % 3) as i32 - 1);
             let mut b = input.clone();
-            sort_stable_func(&mut b, |_, _| (rng.next() % 3) as i32 - 1);
+            sort_stable_func_hot(&mut b, |_, _| (rng.next() % 3) as i32 - 1);
             let mut c = input.clone();
-            sort_slice(&mut c, |_, _| rng.next() % 2 == 0);
-            for mut out in [a, b, c] {
+            sort_slice_direct(&mut c, |_, _| rng.next() % 2 == 0);
+            let mut d = input.clone();
+            sort_func(&mut d, |_, _| (rng.next() % 3) as i32 - 1);
+            let mut e = input.clone();
+            sort_stable_func(&mut e, |_, _| (rng.next() % 3) as i32 - 1);
+            let mut f = input.clone();
+            sort_slice(&mut f, |_, _| rng.next() % 2 == 0);
+            for mut out in [a, b, c, d, e, f] {
                 out.sort_unstable();
                 assert_eq!(out, input);
             }

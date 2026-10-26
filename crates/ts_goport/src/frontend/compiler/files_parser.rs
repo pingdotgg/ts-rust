@@ -354,6 +354,14 @@ fn set_task_path(loader: &FileLoader, task: &mut ParseTask) {
             task.normalized_file_path
         );
     }
+    // `start` looks the path up with the hash that a parse worker made
+    // (`ParseTask::path_hash`, loadfree1). A wrong hash would miss the task
+    // data of the path and replace it with no error.
+    debug_assert!(
+        task.path_hash == 0 || task.path_hash == FxBuildHasher.hash_one(&task.path),
+        "worker path hash of task {}",
+        task.normalized_file_path
+    );
 }
 
 /// Go `filesParser.taskDataByPath`.
@@ -707,15 +715,13 @@ impl FilesParser {
             set_task_path(loader, &mut task.borrow_mut());
             // Go `taskDataByPath.LoadOrStore(task.path, ..)`
             // (filesparser.go:279), the load part, with the hash that the
-            // worker made when the task has one.
+            // worker made when the task has one (`set_task_path` checks it).
             let existing = {
                 let task = task.borrow();
-                let hasher = self.task_data_by_path.hasher();
                 let hash = match task.path_hash {
-                    0 => hasher.hash_one(&task.path),
+                    0 => self.task_data_by_path.hasher().hash_one(&task.path),
                     hash => hash,
                 };
-                debug_assert_eq!(hash, hasher.hash_one(&task.path), "{}", task.path.0);
                 self.task_data_by_path
                     .raw_entry()
                     .from_key_hashed_nocheck(hash, &task.path)
@@ -1297,7 +1303,7 @@ impl FilesParser {
                     if let Some(tasks_seen_by_name_ignore_case) =
                         self.tasks_seen_by_name_ignore_case.as_mut()
                     {
-                        let path_lower_case = to_file_name_lower_case(&t.path);
+                        let path_lower_case = t.path.case_insensitive_key();
                         // PERF (collect1): one lookup (Go: a get, then a set).
                         let first = match tasks_seen_by_name_ignore_case.entry(path_lower_case) {
                             std::collections::hash_map::Entry::Occupied(entry) => {
@@ -1562,6 +1568,7 @@ impl FilesParser {
         }
 
         ProcessedFiles {
+            synthetic_owner: Some(Rc::clone(&loader.synthetic_owner)),
             finished_processing: true,
             load_stats: LoadStatCache(Cell::new(self.load_stats.take())),
             resolver: loader.resolver.clone(),
@@ -1754,9 +1761,9 @@ mod file_maps_tests {
                 .source_files_found_searching_node_modules
                 .into_iter()
                 .collect();
-            resolved.sort_by(|a, b| a.0.cmp(&b.0));
-            metas.sort_by(|a, b| a.0.0.cmp(&b.0.0));
-            found.sort_by(|a, b| a.0.cmp(&b.0));
+            crate::gostd::slices::stable_sort_by(&mut resolved, |a, b| a.0.cmp(&b.0));
+            crate::gostd::slices::stable_sort_by(&mut metas, |a, b| a.0.0.cmp(&b.0.0));
+            crate::gostd::slices::stable_sort_by(&mut found, |a, b| a.0.cmp(&b.0));
             (resolved, metas, found)
         };
         let serial = sorted(FileMaps::collect(true, walk(false)));
@@ -3235,7 +3242,7 @@ impl PrefetchShared {
             })
             .collect();
         // Stable: files of one size keep the root order.
-        sized.sort_by_key(|(size, _)| *size);
+        crate::gostd::slices::stable_sort_by(&mut sized, |(a, _), (b, _)| a.cmp(b));
         let largest = sized.split_off(sized.len().saturating_sub(count));
         let mut queue = lock(&self.queue);
         let mut pushed = 0;

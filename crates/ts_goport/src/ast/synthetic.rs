@@ -570,6 +570,8 @@ enum OwnerKey {
     Base,
     /// A language server program version (`GoProgram::id`).
     Program(u32),
+    /// The synthetic imports of one program load (`LoadSyntheticOwner`), freed when its last holder drops.
+    Load(u32),
     /// The alias slots of the nodes of a freeable file version (its file
     /// id) and the entries made in its file scopes, in chunks of their own.
     File(u32),
@@ -631,6 +633,7 @@ struct SyntheticArena {
     /// The chunks of each program version that is an owner on this thread,
     /// by `GoProgram::id`.
     owners: FxHashMap<u32, OwnerChunks>,
+    loads: FxHashMap<u32, OwnerChunks>,
     /// The chunks of each freeable file version (`OwnerKey::File`), by
     /// file id.
     alias_files: FxHashMap<u32, OwnerChunks>,
@@ -692,6 +695,7 @@ impl SyntheticArena {
             slices: Vec::new(),
             base: OwnerChunks::EMPTY,
             owners: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
+            loads: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
             alias_files: FxHashMap::with_hasher(rustc_hash::FxBuildHasher),
             dead_seen: 0,
             last: None,
@@ -721,7 +725,7 @@ impl SyntheticArena {
     /// owner gives every entry to the thread.
     #[inline]
     fn current_owner(&mut self) -> OwnerKey {
-        if self.owners.is_empty() {
+        if self.owners.is_empty() && self.loads.is_empty() {
             return OwnerKey::Base;
         }
         if let Some(owner) = SCOPE_OWNER.with(Cell::get) {
@@ -857,12 +861,13 @@ impl SyntheticArena {
             slots,
             base,
             owners,
+            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
         push_slot_into(slots, shared, chunks, owner, slot)
     }
 
@@ -885,12 +890,13 @@ impl SyntheticArena {
             datas,
             base,
             owners,
+            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
         let data = push_data_into(datas, shared, chunks, node);
         push_slot_into(slots, shared, chunks, owner, slot(data))
     }
@@ -911,12 +917,13 @@ impl SyntheticArena {
             datas,
             base,
             owners,
+            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
         push_data_into(datas, shared, chunks, node)
     }
 
@@ -933,12 +940,13 @@ impl SyntheticArena {
             lists,
             base,
             owners,
+            loads,
             alias_files,
             shared,
             print,
             ..
         } = self;
-        let chunks = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
+        let chunks = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
         // PERF (followups59): one table read for the open chunk, as in
         // `push_slot_into`.
         if let Some(&c) = chunks.lists.last() {
@@ -963,6 +971,18 @@ impl SyntheticArena {
     // t5, t6); out of line it is +0.15% there, with the same emit gain.
     #[inline(never)]
     fn node(&self, n: Node) -> &SyntheticNode {
+        self.node_inline(n)
+    }
+
+    /// `node`, inlined: for the few readers that the emit transforms call
+    /// for each node they visit (`synthetic_kind`, `with_node`,
+    /// `synthetic_ast_node`, `synthetic_list_of`). Each has one copy, so
+    /// this adds no code at the field read sites.
+    // PERF: synthread1. uprobes on R237, VS Code `--singleThreaded` with
+    // emit: 124M `node` calls more than with `--noEmit` (40M for `kind`,
+    // 32M for node data, 17M for `loc`).
+    #[inline(always)]
+    fn node_inline(&self, n: Node) -> &SyntheticNode {
         match self.slot(slot_index(n)) {
             Slot::Node(s) => s,
             other => not_a_node_slot(other),
@@ -970,6 +990,10 @@ impl SyntheticArena {
     }
 
     /// The Go node that synthetic-space id `index` stands for.
+    // PERF: synthread1. Inlined into its few callers (`resolve_synthetic_id`,
+    // which `Node::new_slow` calls for each child id of factory data, and
+    // the list reads): out of line it was one more call per child id.
+    #[inline(always)]
     fn resolve(&self, index: usize) -> Node {
         // The nil id, also in an arena with no slot yet.
         if index == NIL_SLOT as usize {
@@ -1021,6 +1045,7 @@ fn new_chunk_number(
 fn owner_chunks<'a>(
     base: &'a mut OwnerChunks,
     owners: &'a mut FxHashMap<u32, OwnerChunks>,
+    loads: &'a mut FxHashMap<u32, OwnerChunks>,
     alias_files: &'a mut FxHashMap<u32, OwnerChunks>,
     print: &'a mut OwnerChunks,
     owner: OwnerKey,
@@ -1029,6 +1054,7 @@ fn owner_chunks<'a>(
         OwnerKey::Base => base,
         OwnerKey::Print => print,
         OwnerKey::Program(id) => owners.get_mut(&id).expect("synthetic owner is not open"),
+        OwnerKey::Load(id) => loads.get_mut(&id).expect("synthetic owner is not open"),
         OwnerKey::File(file) => alias_files
             .get_mut(&file)
             .expect("synthetic owner is not open"),
@@ -1157,6 +1183,67 @@ pub fn open_synthetic_owner(id: u32) {
         );
         a.last = None;
     });
+}
+
+/// Owner of the synthetic imports of one program load (FileLoader::create_synthetic_import).
+/// Go: fileloader.go:960 makes them with the loader's factory, and only the program's maps
+/// (filesparser.go:535-544) reach them, so the GC frees them with the program. ProcessedFiles
+/// holds it; the last drop frees the entries on this thread. !Send.
+pub struct LoadSyntheticOwner {
+    id: u32,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+static NEXT_LOAD_OWNER: AtomicU32 = AtomicU32::new(1); // global: ids never repeat, even after an arena is replaced
+impl LoadSyntheticOwner {
+    pub fn new() -> Self {
+        Self {
+            id: NEXT_LOAD_OWNER.fetch_add(1, Ordering::Relaxed),
+            _not_send: std::marker::PhantomData,
+        }
+    }
+    #[must_use]
+    pub fn enter(&self) -> SyntheticOwnerScope {
+        if !owners_enabled() {
+            return enter_base_synthetic_owner();
+        }
+        ARENA.with(|a| {
+            a.borrow_mut().loads.entry(self.id).or_default();
+        });
+        enter_owner_scope(OwnerKey::Load(self.id))
+    }
+}
+impl Drop for LoadSyntheticOwner {
+    fn drop(&mut self) {
+        let freed = ARENA
+            .try_with(|a| {
+                let Ok(mut a) = a.try_borrow_mut() else {
+                    return None;
+                }; // borrowed: keep (leak), never panic
+                let chunks = a.loads.remove(&self.id)?; // replaced or forgotten arena: no-op
+                let slots: Vec<_> = chunks
+                    .slots
+                    .iter()
+                    .map(|&c| a.slots.take(c as usize))
+                    .collect();
+                let datas: Vec<_> = chunks
+                    .datas
+                    .iter()
+                    .map(|&c| a.datas.take(c as usize))
+                    .collect();
+                let lists: Vec<_> = chunks
+                    .lists
+                    .iter()
+                    .map(|&c| a.lists.take(c as usize))
+                    .collect();
+                a.compact();
+                Some((slots, datas, lists))
+            })
+            .ok()
+            .flatten();
+        if let Some(freed) = freed {
+            crate::gostd::local::drop_after_pause(Box::new(freed));
+        }
+    }
 }
 
 /// Frees the synthetic entries of program version `id` on this thread.
@@ -1368,11 +1455,12 @@ impl SyntheticArena {
         let SyntheticArena {
             base,
             owners,
+            loads,
             alias_files,
             print,
             ..
         } = self;
-        let target = owner_chunks(base, owners, alias_files, &mut print.chunks, owner);
+        let target = owner_chunks(base, owners, loads, alias_files, &mut print.chunks, owner);
         fn put(dst: &mut Vec<u32>, src: Vec<u32>) {
             let at = dst.len().saturating_sub(1);
             dst.splice(at..at, src);
@@ -1612,6 +1700,7 @@ pub fn install_synthetic_seed(seed: SyntheticSeed) {
         slices: seed.slices,
         base: OwnerChunks::default(),
         owners: FxHashMap::default(),
+        loads: FxHashMap::default(),
         alias_files: FxHashMap::default(),
         dead_seen: 0,
         last: None,
@@ -1656,6 +1745,7 @@ pub fn install_twin_synthetic_arena(shared: Arc<SharedChunks>) {
         slices: Vec::new(),
         base: OwnerChunks::default(),
         owners: FxHashMap::default(),
+        loads: FxHashMap::default(),
         alias_files: FxHashMap::default(),
         dead_seen: 0,
         last: None,
@@ -1728,6 +1818,12 @@ pub fn is_synthetic_node(n: Node) -> bool {
 
 /// Hook for `Node::new(SYNTHETIC_NODE_FILE, id)`: the Go node that a child id
 /// inside synthetic `NodeData` stands for.
+// PERF: synthread1. Inlined into `Node::new_slow`, whose store path is out
+// of line, so this read has a small frame there (uprobes on R237, VS Code
+// `--singleThreaded`: 16M more `new_slow` calls with emit than with
+// `--noEmit`; bpftrace, TypeORM: 73% of them are factory nodes, 27% parsed
+// nodes, through their alias slots).
+#[inline]
 #[must_use]
 pub fn resolve_synthetic_id(id: crate::astdata::NodeId) -> Node {
     ARENA.with(|a| a.borrow().resolve(id.index()))
@@ -1735,7 +1831,7 @@ pub fn resolve_synthetic_id(id: crate::astdata::NodeId) -> Node {
 
 /// Reads the node slot of a synthetic handle.
 fn with_node<R>(n: Node, f: impl FnOnce(&SyntheticNode) -> R) -> R {
-    ARENA.with(|a| f(a.borrow().node(n)))
+    ARENA.with(|a| f(a.borrow().node_inline(n)))
 }
 
 /// Writes the node slot of a synthetic handle. Panics on a parsed node.
@@ -1780,7 +1876,7 @@ impl std::ops::Deref for HeldNode {
 fn synthetic_ast_node(n: Node) -> HeldNode {
     ARENA.with(|a| {
         let a = a.borrow();
-        let i = a.node(n).data as usize;
+        let i = a.node_inline(n).data as usize;
         HeldNode {
             chunk: Rc::clone(a.datas.at(i / DATA_CHUNK)),
             cell: i % DATA_CHUNK,
@@ -2323,7 +2419,7 @@ pub fn synthetic_loc(n: Node) -> TextRange {
 pub fn synthetic_kind(n: Node) -> SyntaxKind {
     ARENA.with(|a| {
         let a = a.borrow();
-        let s = a.node(n);
+        let s = a.node_inline(n);
         debug_assert_eq!(s.kind, a.data(s.data).kind, "synthetic slot kind");
         s.kind
     })
@@ -2381,7 +2477,7 @@ pub enum SyntheticList {
 pub fn synthetic_list_of(n: Node, sel: ListSel) -> Option<Option<SyntheticList>> {
     ARENA.with(|a| {
         let a = a.borrow();
-        let data = a.node(n).data;
+        let data = a.node_inline(n).data;
         sel(a.data(data).data.view()).map(|l| {
             l.map(|l| SyntheticList::Own {
                 index: l.index() as u32,
@@ -2398,6 +2494,8 @@ pub fn with_synthetic_list<R>(list: SyntheticList, f: impl FnOnce(&SyntheticList
 }
 
 /// The number of nodes in `list`.
+// SIZE (inlineout1): out of line, as `synthetic_list_node`.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_list_len(list: SyntheticList) -> usize {
     ARENA.with(|a| {
@@ -2447,6 +2545,9 @@ pub fn synthetic_list_nodes_and_loc(list: SyntheticList) -> (Vec<Node>, TextRang
 }
 
 /// Node `i` of `list`. Panics when `i` is out of range, like Go.
+// SIZE (inlineout1): out of line. PGO put a copy (about 700 bytes) in the
+// synthetic arm of each hot `NodeSlice::get`, which a check never takes.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_list_node(list: SyntheticList, i: usize) -> Node {
     ARENA.with(|a| {
@@ -2722,6 +2823,9 @@ pub fn alloc_synthetic_print_node(kind: SyntaxKind, data: BoxedData) -> Node {
     alloc_synthetic_node_in(true, kind, data)
 }
 
+// SIZE (inlineout1): out of line, as `synthetic_child_id`: PGO put a copy
+// in the synthetic arm of hot `NodeFactory::new_node` callers.
+#[inline(never)]
 fn alloc_synthetic_node_in(print: bool, kind: SyntaxKind, data: BoxedData) -> Node {
     debug_assert!(
         data.view().matches_syntax_kind(kind),
@@ -2872,6 +2976,10 @@ pub fn source_file_copy_from(node: Node, other: Node) {
 /// The synthetic-space id that stands for `n` inside synthetic `NodeData`.
 /// Nil maps to the nil slot. A parsed node gets (or reuses) an alias slot,
 /// which belongs to its file version or to the thread (`alias_owner`).
+// SIZE (inlineout1): out of line. PGO put a copy (about 1.6 KB) in each of
+// 153 hot factory callers (`NodeFactory::id`), where the parser's store
+// target never takes it.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_child_id(n: Node) -> crate::astdata::NodeId {
     if n.is_nil() {
@@ -2942,6 +3050,8 @@ pub fn new_synthetic_node_list(nodes: &[Node], loc: TextRange) -> NodeList {
 /// `new_synthetic_node_list`; with `print` (a to-string factory), in a
 /// print scope the list belongs to the print owner
 /// (`alloc_synthetic_print_node`).
+// SIZE (inlineout1): out of line, as `alloc_synthetic_node_in`.
+#[inline(never)]
 #[must_use]
 pub fn new_synthetic_node_list_in(print: bool, nodes: &[Node], loc: TextRange) -> NodeList {
     let list = ts_list(nodes, loc, false, crate::astdata::ModifierFlags::default());
@@ -2971,6 +3081,8 @@ pub fn new_synthetic_modifier_list_in(print: bool, nodes: &[Node], loc: TextRang
 // PORT: a synthetic node that takes a list gets a copy, so the list has the
 // lifetime of the node. `NodeList` equality on the copy is false where Go
 // compares equal pointers.
+// SIZE (inlineout1): out of line, as `alloc_synthetic_node_in`.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_list_value(print: bool, list: NodeList) -> Option<crate::astdata::NodeList> {
     let copy = list_copy(list)?;
@@ -2999,6 +3111,8 @@ fn list_copy(list: NodeList) -> Option<SyntheticListData> {
 /// Like `synthetic_list_value` for a list field that astdata requires. Go
 /// `nil` becomes an empty list with an undefined `Loc`.
 // PORT: Go keeps `nil`; `NodeList::is_nil` on that field is false here.
+// SIZE (inlineout1): out of line, as `alloc_synthetic_node_in`.
+#[inline(never)]
 #[must_use]
 pub fn synthetic_req_list_value(print: bool, list: NodeList) -> crate::astdata::NodeList {
     synthetic_list_value(print, list).unwrap_or_else(|| {
@@ -3258,6 +3372,31 @@ mod tests {
             })
             .join()
             .expect("seed thread panicked");
+            free_synthetic_nodes();
+        })
+        .join()
+        .expect("test thread panicked");
+    }
+
+    #[test]
+    fn load_owner_frees_imports_after_its_last_holder_drops() {
+        std::thread::spawn(|| {
+            let f = NodeFactory::new();
+            let base = f.new_identifier("base");
+            let n0 = synthetic_live_slot_count();
+            let owner = Rc::new(LoadSyntheticOwner::new());
+            let other = Rc::clone(&owner);
+            {
+                let _owner = owner.enter();
+                let import = f.new_string_literal("tslib", TokenFlags::NONE);
+                assert_eq!(import.text(), "tslib");
+                assert_eq!(synthetic_live_slot_count(), n0 + 1);
+            }
+            drop(other);
+            assert_eq!(synthetic_live_slot_count(), n0 + 1);
+            drop(owner);
+            assert_eq!(synthetic_live_slot_count(), n0);
+            assert_eq!(base.text(), "base");
             free_synthetic_nodes();
         })
         .join()

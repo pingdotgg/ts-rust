@@ -686,8 +686,8 @@ impl SpanMap {
             return Vec::new();
         }
         // Go `slices.Sort`: equal positions are indistinguishable, so any sort gives Go's order.
-        starts.sort_unstable();
-        ends.sort_unstable();
+        crate::gostd::slices::stable_sort_by(&mut starts, Ord::cmp);
+        crate::gostd::slices::stable_sort_by(&mut ends, Ord::cmp);
         let mut results: Vec<MappedSpan> = Vec::with_capacity(starts.len().min(ends.len()));
         for (i, &virtual_start) in starts.iter().enumerate() {
             // Go `slices.BinarySearch(ends, virtualStart)`.

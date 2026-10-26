@@ -1138,6 +1138,37 @@ impl Checker {
         says_no
     }
 
+    /// True when the access memo already shows that `is_matching_reference(
+    /// source, target)` is false: `source` is the synthetic property access in
+    /// the memo (`SyntheticAccessMemo`), `target` is a property access, and the
+    /// two names differ. It only reads; any other case is false, and the
+    /// caller makes the full call.
+    // PERF: this8000. The same answer as the two-property-access arm of
+    // `is_matching_reference_kinds` (Go checker/flow.go:1621-1625: a
+    // PropertyAccessExpression name is `Name().Text()`, flow.go:1728-1729,
+    // and different names give false before the expressions are compared),
+    // without the call. A constructor walk compares its one synthetic
+    // `this.<name>` with each assignment. Whether PGO inlines that call
+    // changed with unrelated code (int103: +16.6% st instructions on
+    // js-this-8000 and ts-this-8000).
+    #[inline(always)]
+    pub fn synthetic_access_memo_says_no(
+        &self,
+        source: Node,
+        source_kind: SyntaxKind,
+        target: Node,
+        target_kind: SyntaxKind,
+    ) -> bool {
+        let memo = &self.matching_reference_memo.access;
+        let says_no = source_kind == SyntaxKind::PropertyAccessExpression
+            && target_kind == SyntaxKind::PropertyAccessExpression
+            && memo.node == source
+            && memo.name != target.name().text_name();
+        debug_assert!(!says_no || is_synthetic_node(source));
+        debug_assert!(!says_no || memo.name == source.name().text_name());
+        says_no
+    }
+
     /// The merge rule that the chkA early returns depend on (the declaration
     /// test in `is_matching_reference_kind` and
     /// `matching_reference_memo_says_no`): when `export_symbol` is the merged

@@ -235,6 +235,9 @@ pub fn tsc_build_compilation(
 ) -> CommandLineResult {
     let build_command = parse_build_command_line(command_line_args, &SystemParseConfigHost(&*sys));
     let locale = build_command.locale();
+    // PORT: not in Go. A noembed build checks the catalog file of the locale
+    // here, before any output (see `preload_localized_messages`).
+    crate::diagnostics_loc::preload_localized_messages(&locale);
     let report_diagnostic = create_diagnostic_reporter(
         &*sys,
         sys.writer(),
@@ -303,6 +306,9 @@ pub fn tsc_compilation(
     let testing = hooks.testing();
     let mut config_file_name = String::new();
     let locale = command_line.locale();
+    // PORT: not in Go. A noembed build checks the catalog file of the locale
+    // here, before any output (see `preload_localized_messages`).
+    crate::diagnostics_loc::preload_localized_messages(&locale);
     let mut report_diagnostic: DiagnosticReporter =
         hooks.diagnostic_reporter(create_diagnostic_reporter(
             &*sys,
