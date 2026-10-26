@@ -1575,31 +1575,65 @@ pub fn append_json_quote_port_form_list(enc: &mut String, list: &[impl AsRef<str
     enc.push(']');
 }
 
+// Go: jsonwire/encode.go:65 AppendQuote: copies runs of bytes that need no escape.
 fn append_json_quote_with(enc: &mut String, s: &str, replace_invalid: bool) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
+    // GO_STRING_MARKER (U+FDD0) is EF B7 90. 0xEF is always a lead byte.
+    const MARKER: &[u8] = "\u{FDD0}".as_bytes();
+    let bytes = s.as_bytes();
+    enc.reserve(s.len() + 2); // Go: slices.Grow(dst, len(src)+2)
     enc.push('"');
-    let mut chars = s.char_indices();
-    while let Some((i, c)) = chars.next() {
-        match c {
-            '"' => enc.push_str("\\\""),
-            '\\' => enc.push_str("\\\\"),
-            '\u{8}' => enc.push_str("\\b"),
-            '\u{C}' => enc.push_str("\\f"),
-            '\n' => enc.push_str("\\n"),
-            '\r' => enc.push_str("\\r"),
-            '\t' => enc.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let b = c as usize;
-                enc.push_str("\\u00");
-                enc.push(char::from(HEX[b >> 4]));
-                enc.push(char::from(HEX[b & 0xF]));
+    let mut run = 0; // first byte not yet copied
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let special = b < 0x20
+            || b == b'"'
+            || b == b'\\'
+            || (b == MARKER[0] && bytes[i..].starts_with(MARKER));
+        if !special {
+            i += 1;
+            continue;
+        }
+        enc.push_str(&s[run..i]); // i is a char boundary: b is ASCII or a lead byte
+        match b {
+            b'"' => {
+                enc.push_str("\\\"");
+                i += 1;
             }
-            GO_STRING_MARKER => {
+            b'\\' => {
+                enc.push_str("\\\\");
+                i += 1;
+            }
+            0x08 => {
+                enc.push_str("\\b");
+                i += 1;
+            }
+            0x0C => {
+                enc.push_str("\\f");
+                i += 1;
+            }
+            b'\n' => {
+                enc.push_str("\\n");
+                i += 1;
+            }
+            b'\r' => {
+                enc.push_str("\\r");
+                i += 1;
+            }
+            b'\t' => {
+                enc.push_str("\\t");
+                i += 1;
+            }
+            b if b < 0x20 => {
+                enc.push_str("\\u00");
+                enc.push(char::from(HEX[usize::from(b >> 4)]));
+                enc.push(char::from(HEX[usize::from(b & 0xF)]));
+                i += 1;
+            }
+            _ => {
+                // The marker: same unit handling as the old code.
                 let (unit, size) = go_unit_at(s, i);
-                if size > c.len_utf8() {
-                    // Skip the second char of the unit.
-                    chars.next();
-                }
                 match unit {
                     GoUnit::InvalidByte(_) | GoUnit::Surrogate(_) if replace_invalid => {
                         for _ in 0..unit.go_len() {
@@ -1608,10 +1642,12 @@ fn append_json_quote_with(enc: &mut String, s: &str, replace_invalid: bool) {
                     }
                     _ => enc.push_str(&s[i..i + size]),
                 }
+                i += size; // old code: skip c, then chars.next() when size > 3
             }
-            c => enc.push(c),
         }
+        run = i;
     }
+    enc.push_str(&s[run..]);
     enc.push('"');
 }
 
@@ -2729,5 +2765,112 @@ mod decode_string_tests {
                 JsonToken::EndObject,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::*;
+    use crate::scanner_util::{fuse_surrogate_bytes, go_string_from_bytes};
+
+    fn reference(enc: &mut String, s: &str, replace_invalid: bool) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        enc.push('"');
+        let mut chars = s.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '"' => enc.push_str("\\\""),
+                '\\' => enc.push_str("\\\\"),
+                '\u{8}' => enc.push_str("\\b"),
+                '\u{C}' => enc.push_str("\\f"),
+                '\n' => enc.push_str("\\n"),
+                '\r' => enc.push_str("\\r"),
+                '\t' => enc.push_str("\\t"),
+                c if (c as u32) < 0x20 => {
+                    let b = c as usize;
+                    enc.push_str("\\u00");
+                    enc.push(char::from(HEX[b >> 4]));
+                    enc.push(char::from(HEX[b & 0xF]));
+                }
+                GO_STRING_MARKER => {
+                    let (unit, size) = go_unit_at(s, i);
+                    if size > c.len_utf8() {
+                        // Skip the second char of the unit.
+                        chars.next();
+                    }
+                    match unit {
+                        GoUnit::InvalidByte(_) | GoUnit::Surrogate(_) if replace_invalid => {
+                            for _ in 0..unit.go_len() {
+                                enc.push(char::REPLACEMENT_CHARACTER);
+                            }
+                        }
+                        _ => enc.push_str(&s[i..i + size]),
+                    }
+                }
+                c => enc.push(c),
+            }
+        }
+        enc.push('"');
+    }
+
+    #[test]
+    fn quote_fast_path_matches_reference() {
+        let surrogate = go_string_from_bytes(vec![0xED, 0xA0, 0x80]);
+        let mut cases: Vec<String> = [
+            "",
+            "plain ASCII",
+            "\u{7F}",
+            "\"",
+            "\\",
+            "</a>&",
+            "é",
+            "日本",
+            "😀",
+            "\u{2028}",
+            "\u{2029}",
+            "\u{FFFD}",
+            "\u{FEFF}",
+            "\u{FDD0}",
+            "\u{FDD0}start",
+            "end\u{FDD0}",
+            "\u{FDD0}a",
+            "\u{FDD0}\"",
+            "\u{FDD0}\\",
+            "\u{FDD0}\u{FDD0}",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        for byte in 0x00..=0x1F {
+            let c = char::from(byte);
+            cases.push(c.to_string());
+            cases.push(format!("before{c}after"));
+        }
+        cases.push(go_string_from_bytes(vec![0xFF]));
+        cases.push(go_string_from_bytes(vec![b'a', 0x80, b'"']));
+        cases.push(fuse_surrogate_bytes(&surrogate).into_owned());
+        cases.push(surrogate);
+        let check = |s: &str| {
+            for replace_invalid in [true, false] {
+                let mut actual = String::from("prefix");
+                let mut expected = actual.clone();
+                append_json_quote_with(&mut actual, s, replace_invalid);
+                reference(&mut expected, s, replace_invalid);
+                assert_eq!(
+                    actual, expected,
+                    "s={s:?}, replace_invalid={replace_invalid}"
+                );
+            }
+        };
+        for a in &cases {
+            check(a);
+            for b in &cases {
+                let pair = format!("{a}{b}");
+                check(&pair);
+                for c in &cases {
+                    check(&format!("{pair}{c}"));
+                }
+            }
+        }
     }
 }
