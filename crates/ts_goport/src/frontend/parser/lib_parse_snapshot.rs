@@ -1996,5 +1996,9 @@ mod tests {
         );
         assert_eq!(file_store_slot_count(store), 1, "the store is not empty");
         assert!(!is_file_store_frozen(store));
+        assert!(
+            !crate::ast::store::store_from_lib_parse_snapshot(store),
+            "a failed decode does not mark the store"
+        );
     }
 }
