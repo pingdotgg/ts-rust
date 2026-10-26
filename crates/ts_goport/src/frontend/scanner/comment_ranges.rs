@@ -10,7 +10,7 @@ use crate::scanner_util::{is_shebang_trivia, scan_shebang_trivia};
 use super::scanner_p1::{rune_to_char, utf8_decode_rune_in_string};
 
 // Go: scanner/scanner.go:2799 GetLeadingCommentRanges
-// PORT: Go returns an `iter.Seq`. All callers collect it, so this returns a Vec.
+// PORT: `for_each_comment_range` is Go's `iter.Seq`; these functions collect it into a Vec.
 pub fn get_leading_comment_ranges(f: &NodeFactory, text: &str, pos: i32) -> Vec<CommentRange> {
     iterate_comment_ranges(f, text, pos, false)
 }
@@ -26,14 +26,17 @@ pub fn get_trailing_comment_ranges(f: &NodeFactory, text: &str, pos: i32) -> Vec
 static BLOCK_COMMENT_END: LazyLock<memmem::Finder<'static>> =
     LazyLock::new(|| memmem::Finder::new("*/"));
 
-// Go: scanner/scanner.go:2813 iterateCommentRanges
-fn iterate_comment_ranges(
+// Go: scanner/scanner.go:2814 iterateCommentRanges (the iter.Seq body).
+// PORT: Go returns an iter.Seq. This calls `yield_` for each range and stops when it returns false.
+// PERF: callers in the printer use this so that no Vec is returned by value (effectemit1).
+#[inline]
+pub fn for_each_comment_range(
     f: &NodeFactory,
     text: &str,
     pos: i32,
     trailing: bool,
-) -> Vec<CommentRange> {
-    let mut out = Vec::new();
+    mut yield_: impl FnMut(CommentRange) -> bool,
+) {
     let bytes = text.as_bytes();
     let len = bytes.len() as i32;
     let mut pos = pos;
@@ -102,12 +105,14 @@ fn iterate_comment_ranges(
                     }
                     if collecting {
                         if has_pending_comment_range {
-                            out.push(f.new_comment_range(
+                            if !yield_(f.new_comment_range(
                                 pending_kind,
                                 pending_pos,
                                 pending_end,
                                 pending_has_trailing_new_line,
-                            ));
+                            )) {
+                                return;
+                            }
                         }
                         pending_pos = start_pos;
                         pending_end = pos;
@@ -132,12 +137,26 @@ fn iterate_comment_ranges(
         }
     }
     if has_pending_comment_range {
-        out.push(f.new_comment_range(
+        yield_(f.new_comment_range(
             pending_kind,
             pending_pos,
             pending_end,
             pending_has_trailing_new_line,
         ));
     }
+}
+
+// Go: scanner/scanner.go:2813 iterateCommentRanges
+fn iterate_comment_ranges(
+    f: &NodeFactory,
+    text: &str,
+    pos: i32,
+    trailing: bool,
+) -> Vec<CommentRange> {
+    let mut out = Vec::new();
+    for_each_comment_range(f, text, pos, trailing, |c| {
+        out.push(c);
+        true
+    });
     out
 }
