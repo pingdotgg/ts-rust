@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Count st emit instructions and check every output against the base.
-Usage: python3 -I counts.py OUT BASE LANE PHASES_TSV PROJECTS ROUNDS [--noEmit]
+Usage: python3 -I counts.py OUT BASE LANE PHASES_TSV PROJECTS ROUNDS [--noEmit|--forceEmit]
 The median of all measured rounds is the lane's two-cell acceptance bar.
 """
 import csv
@@ -17,8 +17,9 @@ import subprocess
 import sys
 
 out, base, lane, phases, names, rounds = sys.argv[1:7]
-assert sys.argv[7:] in ([], ['--noEmit'])
-no_emit = bool(sys.argv[7:])
+assert sys.argv[7:] in ([], ['--noEmit'], ['--forceEmit'])
+no_emit = sys.argv[7:] == ['--noEmit']
+force_emit = sys.argv[7:] == ['--forceEmit']
 rounds = int(rounds)
 out = Path(out)
 out.mkdir(parents=True, exist_ok=False)
@@ -40,7 +41,7 @@ probe = subprocess.run([perf, 'stat', '-e', 'instructions:u', 'true'], capture_o
 prefix = [] if probe.returncode == 0 else ['sudo', '-n']
 cpus = os.environ.get('CPUS', '0-15')
 meta = {'host': socket.gethostname(), 'perf': perf, 'prefix': prefix, 'env': env, 'cpus': cpus,
-        'rounds': rounds, 'noEmit': no_emit, 'base': base, 'lane': lane, 'knownGo': known, 'commands': []}
+        'rounds': rounds, 'noEmit': no_emit, 'forceEmit': force_emit, 'base': base, 'lane': lane, 'knownGo': known, 'commands': []}
 for side, binary in [('base', base), ('lane', lane)]:
     meta[side + 'Sha256'] = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
 (out / 'host.json').write_text(json.dumps(meta, indent=2) + '\n')
@@ -72,7 +73,7 @@ with (out / 'runs.tsv').open('w') as tsv:
         flags = flags.replace('--noEmit', '').split()
         if no_emit:
             flags += ['--noEmit']
-        elif name == 'playwright':
+        elif force_emit or name == 'playwright':
             flags += ['--noEmit', 'false']
         show = subprocess.run([base, '-p', cfg, *flags, '--showConfig'], cwd=cwd, env=env, capture_output=True, check=True)
         config = json.loads(show.stdout)
@@ -130,6 +131,6 @@ with (out / 'runs.tsv').open('w') as tsv:
         (out / 'host.json').write_text(json.dumps(meta, indent=2) + '\n')
         print(name, json.dumps(summary[name]), flush=True)
 bar = all(v[f'rounds{rounds}']['deltaPercent'] <= 0.1 for v in summary.values())
-if not no_emit:
+if not no_emit and {'vscode', 'typeorm'} <= summary.keys():
     bar = bar and all(summary[p][f'rounds{rounds}']['deltaPercent'] <= -0.3 for p in ('vscode', 'typeorm'))
 print('KEEP' if bar else 'DROP', flush=True)
