@@ -1085,6 +1085,9 @@ impl Checker {
     }
 
     // Go: checker/checker.go:5523 checkImportBinding
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per import
+    // binding.
+    #[inline(never)]
     pub fn check_import_binding(&mut self, node: Node) {
         self.check_collisions_for_declaration_name(node, node.name());
         self.check_alias_symbol(node);

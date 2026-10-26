@@ -10,12 +10,12 @@ use crate::transformers::modifier_visitor::extract_modifiers;
 
 /// Go `transformers.Transformer` visitor plumbing.
 ///
-/// PORT: Go builds each `*ast.NodeVisitor` once, closing over the
-/// transformer. Here a visitor holds `&mut` to the transformer in its `ctx`,
-/// so it is built for each call. `root_visit` is Go `tx.visit`, the callback
-/// of the root visitor `tx.Visitor()`. The default methods are Go
-/// `tx.Visitor().VisitX(..)` and the `EmitContext` visitor hooks called with
-/// `tx.Visitor()`.
+/// PORT: Go builds `tx.visitor` once (`transformers/transformer.go:23`) and
+/// returns it from `Visitor()` (`transformer.go:31`). The port builds a
+/// `NodeVisitor` for each call with a borrowed callback, so the call does not
+/// allocate. It holds `&mut` to the transformer in `ctx`. `root_visit` is Go
+/// `tx.visit`. The default methods are Go `tx.Visitor().VisitX(..)` and the
+/// `EmitContext` visitor hooks called with `tx.Visitor()`.
 pub(crate) trait TxVisitors: Sized {
     /// Go `tx.EmitContext()`.
     fn ec(&self) -> Rc<EmitContext>;
@@ -31,10 +31,8 @@ pub(crate) trait TxVisitors: Sized {
         f: impl FnOnce(&mut NodeVisitor<'_, &mut Self>) -> R,
     ) -> R {
         let ec = self.ec();
-        let mut visitor = ec.new_node_visitor(
-            move |node, v: &mut NodeVisitor<'_, &mut Self>| visit(v.ctx, node),
-            self,
-        );
+        let cb = move |node: Node, v: &mut NodeVisitor<'_, &mut Self>| visit(v.ctx, node);
+        let mut visitor = ec.new_node_visitor_ref(&cb, self);
         f(&mut visitor)
     }
 

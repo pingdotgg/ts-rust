@@ -297,7 +297,7 @@ impl<T> WatchedFiles<T> {
                 .directories_outside_workspace
                 .retain(|dir| !is_network_path(dir));
             let mut globs = result.patterns_inside_workspace.clone();
-            globs.sort();
+            crate::gostd::slices::stable_sort_by(&mut globs, Ord::cmp);
             globs.dedup();
 
             let ignored = result.ignored.clone();
@@ -329,7 +329,7 @@ impl<T> WatchedFiles<T> {
                 changed = true;
             }
             let mut dirs_outside = result.directories_outside_workspace;
-            dirs_outside.sort();
+            crate::gostd::slices::stable_sort_by(&mut dirs_outside, Ord::cmp);
             dirs_outside.dedup();
             let same_outside_watchers = {
                 let outside_workspace_watchers = self.outside_workspace_watchers.borrow();
@@ -521,7 +521,7 @@ pub fn create_resolution_lookup_glob_mapper(
             for dir in node_modules_directories.values() {
                 node_modules_globs.push(get_recursive_glob_pattern(dir));
             }
-            node_modules_globs.sort();
+            crate::gostd::slices::stable_sort_by(&mut node_modules_globs, Ord::cmp);
             globs.extend(node_modules_globs);
         }
         let mut outside_dirs: Vec<String> = Vec::new();
@@ -537,7 +537,7 @@ pub fn create_resolution_lookup_glob_mapper(
                         ..Default::default()
                     },
                 );
-            external_directory_parents.sort();
+            crate::gostd::slices::stable_sort_by(&mut external_directory_parents, Ord::cmp);
             ignored = ignored_external_dirs;
             outside_dirs = external_directory_parents;
         }
@@ -596,7 +596,7 @@ pub fn get_typings_locations_globs(
         &get_path_components_for_watching,
         &compare_paths_options,
     );
-    external_directory_parents.sort();
+    crate::gostd::slices::stable_sort_by(&mut external_directory_parents, Ord::cmp);
     if include_workspace {
         globs.insert(
             tspath::to_path(
@@ -753,7 +753,7 @@ mod tests {
         ] {
             let got = get_typings_locations_globs(&files, location, "/ws", "/ws", false);
             let mut patterns = got.patterns_inside_workspace.clone();
-            patterns.sort();
+            crate::gostd::slices::stable_sort_by(&mut patterns, Ord::cmp);
             assert_eq!(got.directories_outside_workspace, outside, "{location}");
             assert_eq!(patterns, inside, "{location}");
             assert!(got.ignored.is_empty(), "{location}");

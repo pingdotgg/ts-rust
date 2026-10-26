@@ -546,6 +546,8 @@ pub fn format_message(message: &'static crate::diagnostics::Message, args: &[Str
 // An unknown key (a bad `.tsbuildinfo`) is a nil message that keeps the key
 // (`unknown_key_message`), so `localize` panics when Go does, with Go's
 // text, and the build info keeps the key.
+// SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per diagnostic.
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn new_diagnostic_from_serialized(

@@ -20,12 +20,25 @@ use crate::frontend::json_ext::{
 
 /// Go v2 `omitempty`: the member is dropped when its value marshals as
 /// `null`, `""`, `{}` or `[]` (v2 `UnwriteEmptyObjectMember`). A `false`
-/// or `0` is written.
-pub fn marshal_field_omitempty<T: MarshalerTo + ?Sized>(
+/// or `0` is written. The body is `marshal_field_omitempty_dyn`, so each `T`
+/// adds only this call.
+#[inline(always)]
+pub fn marshal_field_omitempty<T: MarshalerTo>(
     enc: &mut String,
     first: &mut bool,
     name: &str,
     value: &T,
+) -> Result<(), JsonError> {
+    marshal_field_omitempty_dyn(enc, first, name, value)
+}
+
+/// `marshal_field_omitempty` of a value whose type is erased.
+#[inline(never)]
+pub fn marshal_field_omitempty_dyn(
+    enc: &mut String,
+    first: &mut bool,
+    name: &str,
+    value: &dyn MarshalerTo,
 ) -> Result<(), JsonError> {
     let mut v = String::new();
     value.marshal_json_to(&mut v)?;

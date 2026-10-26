@@ -478,6 +478,10 @@ impl PayloadDecoder<'_, '_, '_, '_> {
 }
 
 impl<'a> Decoder<'a> {
+    // PERF (queryload1): keep the whole loop inline. The inlineout1 split
+    // (`var_rest` out of line) cut `load_lib_parse_slots` from 238 KB to
+    // 119 KB under PGO, but cost Query load-only +0.5 to +1.0% st
+    // instructions (int104b leave-one-out).
     #[inline]
     fn var(&mut self) -> Option<u64> {
         let mut value = 0u64;

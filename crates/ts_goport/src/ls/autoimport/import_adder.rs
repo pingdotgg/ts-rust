@@ -456,7 +456,7 @@ fn sorted_named_imports(m: Option<&FxHashMap<String, NewImportBinding>>) -> Vec<
         return Vec::new();
     };
     let mut keys: Vec<&String> = m.keys().collect();
-    keys.sort();
+    crate::gostd::slices::stable_sort_by(&mut keys, Ord::cmp);
     let mut result: Vec<NewImportBinding> = Vec::with_capacity(keys.len());
     for k in keys {
         result.push(m[k].clone());
