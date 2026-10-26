@@ -419,8 +419,18 @@ impl Checker {
                     }
                 }
             }
-            self.pattern_ambient_modules
-                .extend(file_bind_data(file).pattern_ambient_modules.iter().cloned());
+            {
+                let bind = file_bind_data(file);
+                let modules = &bind.pattern_ambient_modules;
+                self.pattern_ambient_modules.extend(modules.iter().cloned());
+                self.pattern_ambient_module_go_bytes
+                    .extend(modules.iter().map(|m| {
+                        (
+                            go_string_bytes(&m.pattern_prefix).into_owned(),
+                            go_string_bytes(&m.pattern_suffix).into_owned(),
+                        )
+                    }));
+            }
             augmentations.push(source_file_info(file).module_augmentations.clone());
             if file.symbol().is_some() {
                 // Merge in UMD exports with first-in-wins semantics (see #9771)
@@ -600,6 +610,17 @@ impl Checker {
             }
         }
         self.pattern_ambient_modules = grouped;
+        // Keep pattern_ambient_module_go_bytes in the same order as the merged list.
+        self.pattern_ambient_module_go_bytes = self
+            .pattern_ambient_modules
+            .iter()
+            .map(|m| {
+                (
+                    go_string_bytes(&m.pattern_prefix).into_owned(),
+                    go_string_bytes(&m.pattern_suffix).into_owned(),
+                )
+            })
+            .collect();
     }
 
     // Go: checker/checker.go:1462 mergeModuleAugmentation
