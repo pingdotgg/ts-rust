@@ -443,195 +443,226 @@ impl Checker {
                 self.mark_decorator_alias_referenced(location);
             }
             ReferenceHint::UNSPECIFIED => {
-                if location.flags().intersects(NodeFlags::IN_WITH_STATEMENT) {
+                // PERF: emitscan2. One view of `location`: one kind read and, for names, one
+                // parent read. They replace the separate kind predicates that Go calls
+                // (IsJsxTagName, IsIdentifier, IsShorthandPropertyAssignment,
+                // IsPropertyAccessOrQualifiedName, IsExportAssignment, IsJsxOpeningLikeElement,
+                // IsJsxOpeningFragment, IsImportEqualsDeclaration, IsExportSpecifier,
+                // CanHaveDecorators). These are all pure kind tests. The side-effect calls,
+                // their order and the returns are Go's.
+                let loc = NodeRef::new(location);
+                if loc.flags().intersects(NodeFlags::IN_WITH_STATEMENT) {
                     // We cannot answer semantic questions within a with block, do not proceed any further
                     return;
                 }
-                if is_jsx_tag_name(location) && is_jsx_intrinsic_tag_name(location) {
-                    return; // builtin JSX tag names aren't real type refs by most metrics, but are expressions, so must be filtered
-                }
-                if is_identifier(location) {
-                    // A shorthand property with an object-assignment-initializer (e.g. `{ s = 5 }`) is only valid inside a
-                    // destructuring assignment target. When it appears in an ordinary object literal expression, the checker
-                    // checks the initializer and never resolves the property name, so resolving it here would report a spurious
-                    // "No value exists in scope for the shorthand property" diagnostic. Skip such names to match checking.
-                    let parent = location.parent();
-                    if is_shorthand_property_assignment(parent)
-                        && parent.name() == location
-                        && parent.object_assignment_initializer().is_some()
-                        && !is_assignment_target(parent.parent())
-                    {
-                        return;
+                let kind = loc.kind();
+                if kind == SyntaxKind::Identifier || kind == SyntaxKind::JsxNamespacedName {
+                    // Go 28843. isJsxIntrinsicTagName (checker/utilities.go:1238) is false for every
+                    // other kind, and IsJsxTagName (ast/utilities.go:1391) only reads.
+                    let parent = loc.parent();
+                    if is_jsx_tag_name_of(location, parent) && is_jsx_intrinsic_tag_name(location) {
+                        return; // builtin JSX tag names aren't real type refs by most metrics, but are expressions, so must be filtered
                     }
-                    // Go: checker.go:28857 ast.FindManyAncestors(location, ast.IsMetaProperty,
-                    // ast.IsDecorator, ast.IsForInOrOfStatement, ast.IsComputedPropertyName,
-                    // ast.IsHeritageClause) (ast/utilities.go:970).
-                    // PERF: emitscan1. Each Go callback is a test of one kind, and no two
-                    // callbacks match the same kind (ast_generated.go:4455, 837, 798, 2247;
-                    // utilities.go:219). One kind read per ancestor selects the slot. The walk
-                    // reads kinds and parents from the published store
-                    // (`find_ancestor_with_kind`), not 5 registry reads per step. The slots,
-                    // the fill order (nearest first) and the stop when all 5 are found are Go's.
-                    let mut res = [Node::NIL; 5];
-                    let mut found = 0;
-                    find_ancestor_with_kind(location, |n, kind| {
-                        let i = match kind {
-                            SyntaxKind::MetaProperty => 0,
-                            SyntaxKind::Decorator => 1,
-                            SyntaxKind::ForInStatement | SyntaxKind::ForOfStatement => 2,
-                            SyntaxKind::ComputedPropertyName => 3,
-                            SyntaxKind::HeritageClause => 4,
-                            _ => return false,
-                        };
-                        if res[i].is_nil() {
-                            res[i] = n;
-                            found += 1;
-                        }
-                        found == res.len()
-                    });
-                    let [
-                        meta_property,
-                        decorator,
-                        for_node,
-                        computed_name,
-                        heritage_clause,
-                    ] = res;
-                    if meta_property.is_some() {
-                        return; // identifiers in meta properties shouldn't be resolved, but are expressions, so must be filtered
-                    }
-                    if decorator.is_some() {
-                        // Decorators on nodes that cannot be decorated (e.g. class expressions, static blocks,
-                        // `this` parameters) are never resolved during normal checking, so resolving them here would
-                        // report spurious diagnostics. Only bail out for such invalid-position decorators; valid
-                        // decorator expressions must still be resolved and marked for emit.
-                        let decorated = decorator.parent();
-                        if decorated.is_some()
-                            && !node_can_be_decorated(
-                                self.legacy_decorators,
-                                decorated,
-                                decorated.parent(),
-                                decorated.parent().parent(),
-                            )
+                    if kind == SyntaxKind::Identifier {
+                        let parent_kind = parent.kind();
+                        let parent_node = parent.node();
+                        // A shorthand property with an object-assignment-initializer (e.g. `{ s = 5 }`) is only valid inside a
+                        // destructuring assignment target. When it appears in an ordinary object literal expression, the checker
+                        // checks the initializer and never resolves the property name, so resolving it here would report a spurious
+                        // "No value exists in scope for the shorthand property" diagnostic. Skip such names to match checking.
+                        if parent_kind == SyntaxKind::ShorthandPropertyAssignment
+                            && parent_node.name() == location
+                            && parent_node.object_assignment_initializer().is_some()
+                            && !is_assignment_target(parent_node.parent())
                         {
                             return;
                         }
-                    }
-                    // The right-hand side of a 'for-in'/'for-of' statement whose initializer is an empty variable
-                    // declaration list (a grammar error, e.g. `for (var of X)`) is never checked, because the RHS
-                    // is only checked while inferring the type of a variable declaration and there is none here.
-                    // Resolving identifiers in the RHS here would report spurious diagnostics.
-                    if for_node.is_some() {
-                        let initializer = for_node.initializer();
-                        let expression = for_node.expression();
-                        if is_variable_declaration_list(initializer)
-                            && initializer.declarations().nodes().len() == 0
-                            && expression.is_some()
-                            && (location == expression
-                                || is_node_descendant_of(location, expression))
-                        {
-                            return;
+                        // Go: checker.go:28857 ast.FindManyAncestors(location, ast.IsMetaProperty,
+                        // ast.IsDecorator, ast.IsForInOrOfStatement, ast.IsComputedPropertyName,
+                        // ast.IsHeritageClause) (ast/utilities.go:970).
+                        // PERF: emitscan1. Each Go callback is a test of one kind, and no two
+                        // callbacks match the same kind (ast_generated.go:4455, 837, 798, 2247;
+                        // utilities.go:219). One kind read per ancestor selects the slot. The walk
+                        // reads kinds and parents from the published store
+                        // (`find_ancestor_with_kind`), not 5 registry reads per step. The slots,
+                        // the fill order (nearest first) and the stop when all 5 are found are Go's.
+                        let mut res = [Node::NIL; 5];
+                        let mut found = 0;
+                        find_ancestor_with_kind(location, |n, kind| {
+                            let i = match kind {
+                                SyntaxKind::MetaProperty => 0,
+                                SyntaxKind::Decorator => 1,
+                                SyntaxKind::ForInStatement | SyntaxKind::ForOfStatement => 2,
+                                SyntaxKind::ComputedPropertyName => 3,
+                                SyntaxKind::HeritageClause => 4,
+                                _ => return false,
+                            };
+                            if res[i].is_nil() {
+                                res[i] = n;
+                                found += 1;
+                            }
+                            found == res.len()
+                        });
+                        let [
+                            meta_property,
+                            decorator,
+                            for_node,
+                            computed_name,
+                            heritage_clause,
+                        ] = res;
+                        if meta_property.is_some() {
+                            return; // identifiers in meta properties shouldn't be resolved, but are expressions, so must be filtered
                         }
-                    }
-                    // ts#64674, Go N' checker.go:28798: enum member names are checked now (checkEnumMember).
-                    if computed_name.is_some() {
-                        if is_invalid_computed_property_name(computed_name) {
-                            return;
-                        }
-                    }
-                    if heritage_clause.is_some() {
-                        // extends heritage clauses on interfaces are not expressions and are unchecked if they are
-                        if is_interface_declaration(heritage_clause.parent()) {
-                            return;
-                        }
-                        // On a class, only the first `extends` type is resolved as a value (the base class); any
-                        // additional `extends` types are grammar errors (e.g. `class C extends A extends B` or
-                        // `class C extends A, B`) and are never resolved during checking.
-                        if is_class_like(heritage_clause.parent())
-                            && heritage_clause.token() == SyntaxKind::ExtendsKeyword
-                        {
-                            let first_extends =
-                                get_class_extends_heritage_element(heritage_clause.parent());
-                            if first_extends.is_some()
-                                && location != first_extends
-                                && !is_node_descendant_of(location, first_extends)
+                        if decorator.is_some() {
+                            // Decorators on nodes that cannot be decorated (e.g. class expressions, static blocks,
+                            // `this` parameters) are never resolved during normal checking, so resolving them here would
+                            // report spurious diagnostics. Only bail out for such invalid-position decorators; valid
+                            // decorator expressions must still be resolved and marked for emit.
+                            let decorated = decorator.parent();
+                            if decorated.is_some()
+                                && !node_can_be_decorated(
+                                    self.legacy_decorators,
+                                    decorated,
+                                    decorated.parent(),
+                                    decorated.parent().parent(),
+                                )
                             {
                                 return;
                             }
                         }
-                    }
-                    // Identifiers in expression contexts are emitted, so we need to follow their referenced aliases and mark them as used
-                    // Some non-expression identifiers are also treated as expression identifiers for this purpose, eg, `a` in `b = {a}` or `q` in `import r = q`
-                    // This is the exception, rather than the rule - most non-expression identifiers are declaration names.
-                    if (is_expression_node(location)
-                        || is_shorthand_property_assignment(location.parent()))
-                        && should_mark_identifier_alias_referenced(location)
-                    {
-                        if is_property_access_or_qualified_name(location.parent()) {
-                            let left = if is_property_access_expression(location.parent()) {
-                                location.parent().expression()
-                            } else {
-                                location.parent().left()
-                            };
-                            if left != location {
-                                return; // Only mark the LHS (the RHS is a property lookup)
+                        // The right-hand side of a 'for-in'/'for-of' statement whose initializer is an empty variable
+                        // declaration list (a grammar error, e.g. `for (var of X)`) is never checked, because the RHS
+                        // is only checked while inferring the type of a variable declaration and there is none here.
+                        // Resolving identifiers in the RHS here would report spurious diagnostics.
+                        if for_node.is_some() {
+                            let initializer = for_node.initializer();
+                            let expression = for_node.expression();
+                            if is_variable_declaration_list(initializer)
+                                && initializer.declarations().nodes().len() == 0
+                                && expression.is_some()
+                                && (location == expression
+                                    || is_node_descendant_of(location, expression))
+                            {
+                                return;
                             }
                         }
-                        self.mark_identifier_alias_referenced(location);
-                        return;
-                    }
-                }
-                if is_property_access_or_qualified_name(location) {
-                    let mut top_prop = location;
-                    while is_property_access_or_qualified_name(top_prop) {
-                        // Names in an import type's qualifier (`ns.y` in `typeof import("./b").ns.y`) are exports of the imported module, not references to this file's imports
-                        // (ts#64636, Go N' checker.go:28844)
-                        // PERF: deepqual1. Go asks `isImportTypeQualifierPart` at each
-                        // node, and it climbs to the top of the QualifiedName chain each
-                        // time: the emit walk over an N-level name is O(N^3). Every node
-                        // in a chain has the answer of the chain top, and the loop reaches
-                        // the top unless it returns first, so the test runs only at the
-                        // top. Returns are Go's for every input.
-                        if is_part_of_type_node(top_prop)
-                            || (!is_qualified_name(top_prop.parent())
-                                && is_import_type_qualifier_part(top_prop).is_some())
+                        // ts#64674, Go N' checker.go:28798: enum member names are checked now (checkEnumMember).
+                        if computed_name.is_some() {
+                            if is_invalid_computed_property_name(computed_name) {
+                                return;
+                            }
+                        }
+                        if heritage_clause.is_some() {
+                            // extends heritage clauses on interfaces are not expressions and are unchecked if they are
+                            if is_interface_declaration(heritage_clause.parent()) {
+                                return;
+                            }
+                            // On a class, only the first `extends` type is resolved as a value (the base class); any
+                            // additional `extends` types are grammar errors (e.g. `class C extends A extends B` or
+                            // `class C extends A, B`) and are never resolved during checking.
+                            if is_class_like(heritage_clause.parent())
+                                && heritage_clause.token() == SyntaxKind::ExtendsKeyword
+                            {
+                                let first_extends =
+                                    get_class_extends_heritage_element(heritage_clause.parent());
+                                if first_extends.is_some()
+                                    && location != first_extends
+                                    && !is_node_descendant_of(location, first_extends)
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        // Identifiers in expression contexts are emitted, so we need to follow their referenced aliases and mark them as used
+                        // Some non-expression identifiers are also treated as expression identifiers for this purpose, eg, `a` in `b = {a}` or `q` in `import r = q`
+                        // This is the exception, rather than the rule - most non-expression identifiers are declaration names.
+                        if (is_expression_node_ref(loc)
+                            || parent_kind == SyntaxKind::ShorthandPropertyAssignment)
+                            && should_mark_identifier_alias_referenced(location)
                         {
+                            if matches!(
+                                parent_kind,
+                                SyntaxKind::PropertyAccessExpression | SyntaxKind::QualifiedName
+                            ) {
+                                let left = if parent_kind == SyntaxKind::PropertyAccessExpression {
+                                    parent_node.expression()
+                                } else {
+                                    parent_node.left()
+                                };
+                                if left != location {
+                                    return; // Only mark the LHS (the RHS is a property lookup)
+                                }
+                            }
+                            self.mark_identifier_alias_referenced(location);
                             return;
                         }
-                        top_prop = top_prop.parent();
                     }
-                    self.mark_property_alias_referenced(
-                        location,
-                        SymbolId::NIL, /*propSymbol*/
-                        TypeId::NIL,   /*parentType*/
-                    );
-                    return;
                 }
-                if is_export_assignment(location) {
-                    self.mark_export_assignment_alias_referenced(location);
-                    return;
-                }
-                if is_jsx_opening_like_element(location) || is_jsx_opening_fragment(location) {
-                    self.mark_jsx_alias_referenced(location);
-                    return;
-                }
-                if is_import_equals_declaration(location) {
-                    if is_internal_module_import_equals_declaration_p31(location)
-                        || self.check_external_import_or_export_declaration(location)
-                    {
-                        self.mark_import_equals_alias_referenced(location);
+                match kind {
+                    SyntaxKind::PropertyAccessExpression | SyntaxKind::QualifiedName => {
+                        let mut top_prop = location;
+                        while is_property_access_or_qualified_name(top_prop) {
+                            // Names in an import type's qualifier (`ns.y` in `typeof import("./b").ns.y`) are exports of the imported module, not references to this file's imports
+                            // (ts#64636, Go N' checker.go:28844)
+                            // PERF: deepqual1. Go asks `isImportTypeQualifierPart` at each
+                            // node, and it climbs to the top of the QualifiedName chain each
+                            // time: the emit walk over an N-level name is O(N^3). Every node
+                            // in a chain has the answer of the chain top, and the loop reaches
+                            // the top unless it returns first, so the test runs only at the
+                            // top. Returns are Go's for every input.
+                            if is_part_of_type_node(top_prop)
+                                || (!is_qualified_name(top_prop.parent())
+                                    && is_import_type_qualifier_part(top_prop).is_some())
+                            {
+                                return;
+                            }
+                            top_prop = top_prop.parent();
+                        }
+                        self.mark_property_alias_referenced(
+                            location,
+                            SymbolId::NIL, /*propSymbol*/
+                            TypeId::NIL,   /*parentType*/
+                        );
                         return;
                     }
-                    return;
-                }
-                if is_export_specifier(location) {
-                    self.mark_export_specifier_alias_referenced(location);
-                    return;
+                    SyntaxKind::ExportAssignment => {
+                        self.mark_export_assignment_alias_referenced(location);
+                        return;
+                    }
+                    SyntaxKind::JsxOpeningElement
+                    | SyntaxKind::JsxSelfClosingElement
+                    | SyntaxKind::JsxOpeningFragment => {
+                        self.mark_jsx_alias_referenced(location);
+                        return;
+                    }
+                    SyntaxKind::ImportEqualsDeclaration => {
+                        if is_internal_module_import_equals_declaration_p31(location)
+                            || self.check_external_import_or_export_declaration(location)
+                        {
+                            self.mark_import_equals_alias_referenced(location);
+                            return;
+                        }
+                        return;
+                    }
+                    SyntaxKind::ExportSpecifier => {
+                        self.mark_export_specifier_alias_referenced(location);
+                        return;
+                    }
+                    _ => {}
                 }
                 if !self.compiler_options.emit_decorator_metadata.is_true() {
                     return;
                 }
-                if !can_have_decorators(location)
-                    || !has_decorators(location)
+                if !matches!(
+                    kind,
+                    SyntaxKind::Parameter
+                        | SyntaxKind::PropertyDeclaration
+                        | SyntaxKind::MethodDeclaration
+                        | SyntaxKind::GetAccessor
+                        | SyntaxKind::SetAccessor
+                        | SyntaxKind::ClassExpression
+                        | SyntaxKind::ClassDeclaration
+                ) || !has_decorators(location)
                     || location.modifiers().is_nil()
                     || !node_can_be_decorated(
                         self.legacy_decorators,
