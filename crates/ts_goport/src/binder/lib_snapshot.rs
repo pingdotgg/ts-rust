@@ -206,7 +206,7 @@ impl SnapshotKey {
         if !text_matches(self.text, self.text_const, &source_file_text(file)) {
             return Err("text");
         }
-        // PERF (parsehash1): a store loaded from lib_parse.bin is `decode` of a section of the parse blob that SOURCES_HASH holds, and the generator binds only such parses (`generate_lib_bind_snapshot`). So its parse_hash is the stored one, and the walk over every slot (about 0.38 ms for lib.dom) is skipped. A live parse still hashes.
+        // PERF (parsehash1): a store loaded from lib_parse.bin is `decode` of a section of the parse blob that SOURCES_HASH holds, and the generator binds only such parses (`generate_lib_bind_snapshot`). So its parse_hash is the stored one, and the walk over every slot (about 0.38 ms for lib.dom) is skipped. A live parse still hashes. The skip is valid only while every fact that parse_hash reads comes from the decoded section; a change that sets a hashed fact from the caller (options or flags) must hash again.
         if !store_from_lib_parse_snapshot(file.file_index())
             && Some(self.parse) != parse_hash(file, go_file)
         {

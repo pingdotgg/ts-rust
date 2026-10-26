@@ -147,7 +147,10 @@ impl NodeHeader {
 /// The default value is an empty placeholder with no slots.
 #[derive(Default)]
 struct FileStore {
-    /// parsehash1: set when `lib_parse_snapshot::decode` loaded this store from `lib_parse.bin`. The bind snapshot key then skips `parse_hash` (`lib_snapshot.rs`, `SnapshotKey::check`).
+    /// parsehash1: set after a full, successful decode of a lib parse section
+    /// (from `lib_parse.bin` in a build; a test can also decode a section it encodes).
+    /// A failed decode leaves it false. The bind snapshot key then skips
+    /// `parse_hash` (`lib_snapshot.rs`, `SnapshotKey::check`).
     lib_parse_snapshot: bool,
     file_name: &'static str,
     /// The file text. A freeable file version shares it (`FileText::Shared`)
