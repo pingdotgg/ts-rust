@@ -14,7 +14,9 @@
 //! slot count, an xxh3 hash of its kinds, parser flags and names columns
 //! and of the file facts that the binder reads, and a compile-time hash of
 //! the binder sources (`SOURCES_HASH`). Any mismatch or load error binds the
-//! file live, so a stale blob costs time, not output.
+//! file live, so a stale blob costs time, not output. The parse hash is not
+//! computed for a parse loaded from `lib_parse.bin`, whose bytes are in
+//! `SOURCES_HASH`.
 //!
 //! Node references and flow ids are stored without the file index (the low
 //! half of the handle), and the load adds the program file index. Symbol
@@ -23,7 +25,8 @@
 //! id; any other name is stored as text and interned at load.
 //!
 //! After a change to the binder, `core.rs`, the parser or a bundled lib,
-//! write the blob again (the integrator does this after each merge round,
+//! and after each write of `lib_parse.bin`, write the blob again (the
+//! integrator does this after each merge round,
 //! as for PGO training):
 //!
 //! ```text
@@ -44,6 +47,7 @@
 //! the name, symbol, table and flow node counts (u32 each), the names, then
 //! the body that `encode` writes.
 
+use crate::ast::store::store_from_lib_parse_snapshot;
 use crate::frontend::bundled;
 use crate::prelude::*;
 use std::sync::OnceLock;
@@ -103,8 +107,9 @@ const D_SKIPPED_ON_NO_EMIT: u8 = 4;
 
 /// A compile-time hash of the sources whose change can change the bind
 /// output or the blob format: the binder, `core.rs` (arena, node data,
-/// names), the flag values, the lib name ids and this file. After a change
-/// there, every key misses until the blob is written again.
+/// names), the flag values, the lib name ids, this file and `lib_parse.bin`.
+/// A bind section is valid only for the parse blob that its generator embedded.
+/// After a change there, every key misses until the blob is written again.
 const SOURCES_HASH: u64 = {
     let hashes = [
         SOURCE_BINDER_P1,
@@ -114,6 +119,7 @@ const SOURCES_HASH: u64 = {
         SOURCE_FLAGS,
         SOURCE_LIB_NAMES,
         SOURCE_SNAPSHOT,
+        SOURCE_PARSE_BLOB,
     ];
     let mut hash = 0;
     let mut i = 0;
@@ -133,6 +139,7 @@ const SOURCE_CORE: u64 = const_hash(include_bytes!("../core.rs"));
 const SOURCE_FLAGS: u64 = const_hash(include_bytes!("../flags.rs"));
 const SOURCE_LIB_NAMES: u64 = const_hash(include_bytes!("../core/lib_names.rs"));
 const SOURCE_SNAPSHOT: u64 = const_hash(include_bytes!("lib_snapshot.rs"));
+const SOURCE_PARSE_BLOB: u64 = const_hash(include_bytes!("../frontend/parser/lib_parse.bin"));
 
 /// `SOURCES_HASH` and the text part of the keys (`SnapshotKey::text_const`)
 /// use the compile-time hash of `frontend/bundled.rs`. The lib parse
@@ -199,7 +206,10 @@ impl SnapshotKey {
         if !text_matches(self.text, self.text_const, &source_file_text(file)) {
             return Err("text");
         }
-        if Some(self.parse) != parse_hash(file, go_file) {
+        // PERF (parsehash1): a store loaded from lib_parse.bin is `decode` of a section of the parse blob that SOURCES_HASH holds, and the generator binds only such parses (`generate_lib_bind_snapshot`). So its parse_hash is the stored one, and the walk over every slot (about 0.38 ms for lib.dom) is skipped. A live parse still hashes.
+        if !store_from_lib_parse_snapshot(file.file_index())
+            && Some(self.parse) != parse_hash(file, go_file)
+        {
             return Err("parse");
         }
         Ok(())
@@ -1256,6 +1266,10 @@ mod tests {
     fn generate_lib_bind_snapshot() {
         let mut sections = Vec::new();
         for_each_lib_file("generate", |lib, file| {
+            assert!(
+                store_from_lib_parse_snapshot(file.file_index()),
+                "{lib}: the parse did not load from lib_parse.bin; write it first (scripts/goport/lib-blobs.sh write writes both blobs in order)"
+            );
             // The process-wide unported counts: run this test alone.
             let unported = unported_report();
             let start = std::time::Instant::now();
@@ -1295,6 +1309,24 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../src/binder/lib_bind.bin");
         std::fs::write(path, &blob).unwrap_or_else(|e| panic!("cannot write {path}: {e}"));
         eprintln!("wrote {path}: {} bytes", blob.len());
+    }
+
+    #[test]
+    fn bind_key_parse_is_snapshot_parse() {
+        for_each_lib_file("parsehash", |lib, file| {
+            assert!(store_from_lib_parse_snapshot(file.file_index()), "{lib}");
+            let entry = entries()
+                .iter()
+                .find(|entry| entry.name == lib)
+                .unwrap_or_else(|| panic!("lib_bind.bin has no {lib}: {REGENERATE}"));
+            let key = SnapshotKey::read(&mut SnapshotReader::new(entry.section))
+                .unwrap_or_else(|| panic!("{lib}: invalid bind snapshot key"));
+            assert_eq!(
+                Some(key.parse),
+                parse_hash(file, &crate::ast::go_file(file.file_index())),
+                "{lib}: bind key does not match the snapshot parse"
+            );
+        });
     }
 
     /// The embedded blob holds a section for each snapshot lib that equals
