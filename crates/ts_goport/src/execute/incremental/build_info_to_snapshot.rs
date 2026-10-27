@@ -8,9 +8,12 @@ use crate::frontend::prelude::*;
 use std::sync::Arc;
 
 // Go: incremental/buildinfotosnapshot.go:12 buildInfoToSnapshot
-// PORT: the options read from the build info are leaked to get the
-// `&'static CompilerOptions` that `Snapshot` keeps (see `Snapshot`). A
-// process reads at most one build info program.
+// PORT: the options read from the build info are interned
+// (`program::intern_compiler_options`) to get the `&'static CompilerOptions`
+// that `Snapshot` keeps. In `tsc -b -w` each rebuilt project reads its build
+// info in every cycle. The parsed value is dropped here, and equal values
+// share one copy, so nothing is kept per build. Go frees the options with
+// the old program.
 #[must_use]
 pub fn build_info_to_snapshot(
     build_info: &BuildInfo,
@@ -177,7 +180,7 @@ impl ToSnapshot<'_> {
         let options = self
             .build_info
             .get_compiler_options(&self.build_info_directory);
-        self.snapshot.options = Box::leak(Box::new(options));
+        self.snapshot.options = crate::program::intern_compiler_options(&options);
     }
 
     // Go: incremental/buildinfotosnapshot.go:115 setFileInfoAndEmitSignatures
