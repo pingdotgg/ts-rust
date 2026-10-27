@@ -1057,6 +1057,10 @@
       {
         "id": "editor-long-growth",
         "status": "open; caps 1.00, int87b-full editor items MATCH; live heap slope 1.7 to 2.0 MiB per 1,000 edits"
+      },
+      {
+        "id": "corpus-emit-sigsegv-int108",
+        "status": "open watch item: one SIGSEGV (exit -11, no panic text) on gate corpus-emit/10081 in int108-full (R244 + effectemit1c); not repeated in 50 single-case runs or 15,000 corpus-emit stage executions on int108 and R244 bins; 0 signal exits in int109-full and int110-full; the gate runner deletes RS_FAIL stderr (keep-stderr change to gate.sh waits for Theo); notes int108-gate-regression-2026-10-26, crash10081-stress-2026-10-26"
       }
     ],
     "id": "recovery-continuation-go-checker-port-123",
