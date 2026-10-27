@@ -1288,8 +1288,9 @@ impl Deref for SourceFileOrder {
 /// distinct value in the process, so the program versions of a language
 /// server session share one copy. Two values are the same only when
 /// `deep_equal` says so, so a copy keeps the `paths` order of its program.
-// PERF: a linear search, once per program. A process has one options value
-// per project config.
+// PERF: a linear search, once per program and once per build info read
+// (`build_info_to_snapshot`). A process has about two values per project
+// config: its program options and its build info options.
 pub(crate) fn intern_compiler_options(options: &CompilerOptions) -> &'static CompilerOptions {
     static INTERNED: Mutex<Vec<&'static CompilerOptions>> = Mutex::new(Vec::new());
     let mut interned = INTERNED.lock().unwrap_or_else(PoisonError::into_inner);
