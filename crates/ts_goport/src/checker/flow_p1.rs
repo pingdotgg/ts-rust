@@ -142,7 +142,7 @@ impl FlowState {
     pub fn flow_data<'g>(
         &mut self,
         flow: FlowNodeId,
-        guard: &'g mut Option<FileRef<FlowNode>>,
+        guard: &'g mut Option<FlowRef>,
     ) -> &'g FlowNode {
         let nodes = self.flow_nodes;
         // `checked_add`: the synthetic flow file is 0xffff_ffff, and on a
@@ -157,7 +157,7 @@ impl FlowState {
     fn flow_data_slow<'g>(
         &mut self,
         flow: FlowNodeId,
-        guard: &'g mut Option<FileRef<FlowNode>>,
+        guard: &'g mut Option<FlowRef>,
     ) -> &'g FlowNode {
         match static_file_flow_nodes(flow) {
             Some(nodes) => {

@@ -5,16 +5,40 @@
 use crate::prelude::*;
 
 /// File index for flow nodes that the checker creates. Go allocates
-/// `&ast.FlowNode{}` values; here they live in a leaked thread-local list.
+/// `&ast.FlowNode{}` values; here a thread-local list owns them.
 pub const SYNTHETIC_FLOW_FILE: usize = 0xffff_ffff;
 
 thread_local! {
-    static SYNTHETIC_FLOWS: RefCell<Vec<&'static FlowNode>> = const { RefCell::new(Vec::new()) };
+    static SYNTHETIC_FLOWS: RefCell<Vec<Rc<FlowNode>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Reads a flow node that `new_synthetic_flow_node` created.
-pub fn synthetic_flow(id: FlowNodeId) -> &'static FlowNode {
-    SYNTHETIC_FLOWS.with(|f| f.borrow()[id.local_index()])
+pub fn synthetic_flow(id: FlowNodeId) -> Rc<FlowNode> {
+    SYNTHETIC_FLOWS.with(|f| Rc::clone(&f.borrow()[id.local_index()]))
+}
+
+fn push_synthetic_flow(flow: FlowNode) -> FlowNodeId {
+    SYNTHETIC_FLOWS.with(|f| {
+        let mut f = f.borrow_mut();
+        f.push(Rc::new(flow));
+        FlowNodeId::new(SYNTHETIC_FLOW_FILE, f.len() - 1)
+    })
+}
+
+/// Frees the synthetic flow nodes of this thread. Their ids must not be read
+/// again on this thread. A checker worker of a released program calls it
+/// after dropping its checker (`program::release_program`).
+pub fn free_synthetic_flows() {
+    let flows = SYNTHETIC_FLOWS.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    drop(flows);
+}
+
+/// Leaks the synthetic flow nodes of this thread instead of freeing them when
+/// the thread ends. A checker worker of a one-program process calls it at the
+/// end of the process, where freeing only costs time (like the checker, see
+/// `program::create_checkers`).
+pub fn forget_synthetic_flows() {
+    SYNTHETIC_FLOWS.with(|f| std::mem::forget(std::mem::take(&mut *f.borrow_mut())));
 }
 
 impl Checker {
@@ -25,16 +49,11 @@ impl Checker {
         node: Node,
         antecedent: FlowNodeId,
     ) -> FlowNodeId {
-        let flow: &'static FlowNode = Box::leak(Box::new(FlowNode {
+        push_synthetic_flow(FlowNode {
             flags,
             node,
             antecedent,
             antecedents: Vec::new(),
-        }));
-        SYNTHETIC_FLOWS.with(|f| {
-            let mut f = f.borrow_mut();
-            f.push(flow);
-            FlowNodeId::new(SYNTHETIC_FLOW_FILE, f.len() - 1)
         })
     }
 
@@ -60,6 +79,43 @@ impl Checker {
             }
         }
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_flow_guard_survives_free() {
+        std::thread::spawn(|| {
+            let id0 = push_synthetic_flow(FlowNode {
+                flags: FlowFlags::START,
+                node: Node::NIL,
+                antecedent: FlowNodeId::NIL,
+                antecedents: Vec::new(),
+            });
+            let id1 = push_synthetic_flow(FlowNode {
+                flags: FlowFlags::TRUE_CONDITION,
+                node: Node(1),
+                antecedent: id0,
+                antecedents: Vec::new(),
+            });
+            let held = id0.get_flow();
+            assert_eq!(held.flags, FlowFlags::START);
+            assert_eq!(held.node, Node::NIL);
+            assert_eq!(held.antecedent, FlowNodeId::NIL);
+            {
+                let flow = id1.get_flow();
+                assert_eq!(flow.flags, FlowFlags::TRUE_CONDITION);
+                assert_eq!(flow.node, Node(1));
+                assert_eq!(flow.antecedent, id0);
+            }
+            free_synthetic_flows();
+            assert_eq!(held.flags, FlowFlags::START);
+        })
+        .join()
+        .unwrap();
     }
 }
 
