@@ -384,8 +384,8 @@ impl IdCarry {
 
 impl CheckerPool {
     /// Stops the workers: each drops its checker and frees its synthetic
-    /// nodes, then it closes their job queues and waits for each thread to
-    /// end, so the checkers and the nodes they made are freed on return.
+    /// nodes and synthetic flow nodes, then it closes their job queues and
+    /// waits for each thread to end, so their allocations are freed on return.
     fn shut_down(self) {
         for thread in self.stop() {
             // A job panic stays in its job result, so a worker ends normally.
@@ -394,9 +394,9 @@ impl CheckerPool {
     }
 
     /// `shut_down` without the wait: the workers drop their checkers, free
-    /// their synthetic nodes and end while the caller goes on. Only
-    /// `wait_for_background_releases` waits for them; at process exit a
-    /// worker that is still freeing just stops.
+    /// their synthetic nodes and synthetic flow nodes and end while the
+    /// caller goes on. Only `wait_for_background_releases` waits for them;
+    /// at process exit a worker that is still freeing just stops.
     fn shut_down_in_background(self) {
         let threads = self.stop();
         if threads.is_empty() {
@@ -420,8 +420,8 @@ impl CheckerPool {
     }
 
     /// Sends each worker the job that drops its checker and frees its
-    /// synthetic nodes, closes the job queues and returns the worker
-    /// threads, with the threads of the emit pool.
+    /// synthetic nodes and synthetic flow nodes, closes the job queues and
+    /// returns the worker threads, with the threads of the emit pool.
     #[cfg(not(target_family = "wasm"))]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
         self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
@@ -433,13 +433,14 @@ impl CheckerPool {
             pending: _,
         } = self;
         // A pool that only ends with the process forgets its checkers and
-        // synthetic nodes (see `create_checkers`); a released program frees
-        // them here.
+        // synthetic nodes and synthetic flow nodes (see `create_checkers`);
+        // a released program frees them here.
         for worker in &workers {
             let _ = worker.send(Box::new(|| {
                 stop_dts_twin();
                 drop(WORKER_CHECKER.with(|slot| slot.borrow_mut().take()));
                 free_synthetic_nodes();
+                crate::checker::free_synthetic_flows();
                 WORKER_RELEASED.with(|released| released.set(true));
             }));
         }
@@ -4500,14 +4501,15 @@ fn start_checkers(count: usize) -> CheckerPool {
                     // the loading thread ends, after every job sent its
                     // result, so this runs once per checker, at the end of
                     // the process. Like Go, which never frees a checker, the
-                    // checker and the synthetic nodes are not dropped:
-                    // freeing the checker arenas at thread exit cost 0.83%
-                    // of query CPU. `release_program` frees both first
-                    // (`CheckerPool::stop`), so a released program does not
-                    // leak them.
+                    // checker, synthetic nodes and synthetic flow nodes are
+                    // not dropped: freeing the checker arenas at thread exit
+                    // cost 0.83% of query CPU. `release_program` frees them
+                    // first (`CheckerPool::stop`), so a released program does
+                    // not leak them.
                     if !WORKER_RELEASED.with(std::cell::Cell::get) {
                         std::mem::forget(WORKER_CHECKER.with(|slot| slot.borrow_mut().take()));
                         forget_synthetic_nodes();
+                        crate::checker::forget_synthetic_flows();
                     }
                 });
             (sender, thread)
