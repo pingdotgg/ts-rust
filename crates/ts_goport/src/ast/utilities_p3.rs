@@ -1134,6 +1134,7 @@ fn get_module_instance_state_for_alias_target(
         // Skip for invalid syntax like this: export { "x" }
         return ModuleInstanceState::INSTANTIATED;
     }
+    let name_text = name.text_name();
     // PORT: the frame's stack store for the push below. One store serves every iteration of the loop, so only
     // the first push onto an empty stack gets it (see push_ancestor).
     let mut stack_store = true;
@@ -1145,7 +1146,7 @@ fn get_module_instance_state_for_alias_target(
             // PERF: the lists are read in place, as Go ranges over them. A heap copy of each block's statements for
             // each specifier was about half of deep-nested-1500-preserve (followups82).
             for statement in p.statements() {
-                if node_has_name(statement, name) {
+                if node_has_name(statement, &name_text) {
                     let state =
                         get_module_instance_state_cached(statement, statements_ancestors, walk);
                     if found == ModuleInstanceState::UNKNOWN || state > found {
@@ -1183,10 +1184,13 @@ pub fn is_instantiated_module(node: Node, preserve_const_enums: bool) -> bool {
 }
 
 // Go: ast/utilities.go:2578 NodeHasName
-pub fn node_has_name(statement: Node, id: Node) -> bool {
+// PORT: Go takes the id node and reads id.Text() on each call. The caller reads it once as a Name.
+// PERF: bindscan1. A frozen store Identifier compares name ids (Node::text_is), not texts. On T3 web this
+// path cost 2.4x Go, most of it in text reads and string compares.
+pub fn node_has_name(statement: Node, id_name: &Name) -> bool {
     let name = statement.name();
     if name.is_some() {
-        return is_identifier(name) && name.text() == id.text();
+        return is_identifier(name) && name.text_is(id_name);
     }
     if is_variable_statement(statement) {
         return statement
@@ -1194,7 +1198,7 @@ pub fn node_has_name(statement: Node, id: Node) -> bool {
             .declarations()
             .nodes()
             .iter()
-            .any(|d| node_has_name(d, id));
+            .any(|d| node_has_name(d, id_name));
     }
     false
 }
