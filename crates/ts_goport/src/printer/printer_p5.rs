@@ -38,10 +38,19 @@ fn get_leading_comment_ranges(text: &str, pos: i32) -> Vec<CommentRange> {
         .with(|f| crate::frontend::scanner::get_leading_comment_ranges(f, text, pos))
 }
 
-// Go: scanner/scanner.go:2803 GetTrailingCommentRanges
-fn get_trailing_comment_ranges(text: &str, pos: i32) -> Vec<CommentRange> {
+// Go: scanner/scanner.go:2814 iterateCommentRanges (an iter.Seq in Go). The
+// hot printer paths take each range through a callback: no Vec is returned by
+// value (effectemit1).
+#[inline]
+fn for_each_leading_comment_range(text: &str, pos: i32, yield_: impl FnMut(CommentRange) -> bool) {
     COMMENT_RANGE_FACTORY
-        .with(|f| crate::frontend::scanner::get_trailing_comment_ranges(f, text, pos))
+        .with(|f| crate::frontend::scanner::for_each_comment_range(f, text, pos, false, yield_))
+}
+
+#[inline]
+fn for_each_trailing_comment_range(text: &str, pos: i32, yield_: impl FnMut(CommentRange) -> bool) {
+    COMMENT_RANGE_FACTORY
+        .with(|f| crate::frontend::scanner::for_each_comment_range(f, text, pos, true, yield_))
 }
 
 impl Printer {
@@ -1113,12 +1122,16 @@ impl Printer {
         }
 
         let mut comments: Vec<CommentRange> = Vec::new();
-        for comment in get_leading_comment_ranges(&self.current_source_file_text(), pos) {
-            if self.should_write_comment(comment)
-                && self.should_emit_comment_if_triple_slash(comment, triple_slash)
-            {
-                comments.push(comment);
-            }
+        {
+            let text = self.current_source_file_text();
+            for_each_leading_comment_range(&text, pos, |comment| {
+                if self.should_write_comment(comment)
+                    && self.should_emit_comment_if_triple_slash(comment, triple_slash)
+                {
+                    comments.push(comment);
+                }
+                true
+            });
         }
 
         if !comments.is_empty()
@@ -1182,10 +1195,14 @@ impl Printer {
         }
 
         let mut comments: Vec<CommentRange> = Vec::new();
-        for comment in get_trailing_comment_ranges(&self.current_source_file_text(), pos) {
-            if self.should_write_comment(comment) {
-                comments.push(comment);
-            }
+        {
+            let text = self.current_source_file_text();
+            for_each_trailing_comment_range(&text, pos, |comment| {
+                if self.should_write_comment(comment) {
+                    comments.push(comment);
+                }
+                true
+            });
         }
 
         // trailing comments are normally emitted as space/*trailing comment1*/space/*trailing comment2*/
@@ -1208,7 +1225,14 @@ impl Printer {
             return;
         }
 
-        let comments = get_trailing_comment_ranges(&self.current_source_file_text(), pos);
+        let mut comments = Vec::new();
+        {
+            let text = self.current_source_file_text();
+            for_each_trailing_comment_range(&text, pos, |c| {
+                comments.push(c);
+                true
+            });
+        }
         if comments.is_empty() {
             return;
         }
