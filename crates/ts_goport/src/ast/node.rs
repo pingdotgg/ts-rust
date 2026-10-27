@@ -2760,6 +2760,24 @@ fn node_extra_in(go_file: &GoFile, extra: u32) -> &NodeBindExtra {
         .extra(extra)
 }
 
+/// A flow read that pins its file version or owns its synthetic node.
+pub enum FlowRef {
+    File(FileRef<FlowNode>),
+    Synthetic(Rc<FlowNode>),
+}
+
+impl std::ops::Deref for FlowRef {
+    type Target = FlowNode;
+
+    #[inline]
+    fn deref(&self) -> &FlowNode {
+        match self {
+            FlowRef::File(f) => f,
+            FlowRef::Synthetic(f) => f,
+        }
+    }
+}
+
 impl FlowNodeId {
     /// Go `*FlowNode` dereference. The guard pins a freeable file version
     /// while it lives; copy the fields out rather than keep it.
@@ -2769,9 +2787,9 @@ impl FlowNodeId {
     // (`get_flow_slow`). The synthetic id is above every publish, so the
     // static test misses it.
     #[must_use]
-    pub fn get_flow(self) -> FileRef<FlowNode> {
+    pub fn get_flow(self) -> FlowRef {
         match self.static_flow() {
-            Some(data) => FileRef::Static(data),
+            Some(data) => FlowRef::File(FileRef::Static(data)),
             None => self.get_flow_slow(),
         }
     }
@@ -2787,7 +2805,7 @@ impl FlowNodeId {
     // instructions in them (lsshells/m3/M3b/prof p7). This gives R134's
     // `&'static FlowNode` for a static file.
     #[inline]
-    pub fn get_flow_in(self, guard: &mut Option<FileRef<FlowNode>>) -> &FlowNode {
+    pub fn get_flow_in(self, guard: &mut Option<FlowRef>) -> &FlowNode {
         match self.static_flow() {
             Some(data) => data,
             None => self.get_flow_in_slow(guard),
@@ -2802,10 +2820,12 @@ impl FlowNodeId {
     // the version (two atomic writes per step).
     #[cold]
     #[inline(never)]
-    fn get_flow_in_slow(self, guard: &mut Option<FileRef<FlowNode>>) -> &FlowNode {
+    fn get_flow_in_slow(self, guard: &mut Option<FlowRef>) -> &FlowNode {
         let file = self.file_index();
         match guard {
-            Some(FileRef::Pinned { version, key, get }) if version.file() == file => {
+            Some(FlowRef::File(FileRef::Pinned { version, key, get }))
+                if version.file() == file =>
+            {
                 *key = self.local_index();
                 *get = flow_node_in;
             }
@@ -2827,17 +2847,19 @@ impl FlowNodeId {
     /// version.
     #[cold]
     #[inline(never)]
-    fn get_flow_slow(self) -> FileRef<FlowNode> {
+    fn get_flow_slow(self) -> FlowRef {
         if self.file_index() == crate::checker::SYNTHETIC_FLOW_FILE {
-            return FileRef::Static(crate::checker::synthetic_flow(self));
+            return FlowRef::Synthetic(crate::checker::synthetic_flow(self));
         }
         match crate::ast::go_file(self.file_index()) {
-            FileRef::Static(g) => FileRef::Static(&flow_nodes_of(g)[self.local_index()]),
-            FileRef::Pinned { version, .. } => FileRef::Pinned {
+            FileRef::Static(g) => {
+                FlowRef::File(FileRef::Static(&flow_nodes_of(g)[self.local_index()]))
+            }
+            FileRef::Pinned { version, .. } => FlowRef::File(FileRef::Pinned {
                 version,
                 key: self.local_index(),
                 get: flow_node_in,
-            },
+            }),
         }
     }
 }
