@@ -307,8 +307,9 @@ impl DiagnosticsOrBuildInfoDiagnosticsWithFileName {
 
 // Go: incremental/snapshot.go:306 snapshot
 // PORT: Go `options *core.CompilerOptions` is `&'static`: the program
-// options are static, and `buildInfoToSnapshot` leaks the options it reads
-// (one per process). `compiler.ProgramLike.Options` needs `&'static`.
+// options are static, and `buildInfoToSnapshot` interns the options it reads
+// (`program::intern_compiler_options`, one copy per distinct value).
+// `compiler.ProgramLike.Options` needs `&'static`.
 #[derive(Debug)]
 pub struct Snapshot {
     // These are the fields that get serialized
