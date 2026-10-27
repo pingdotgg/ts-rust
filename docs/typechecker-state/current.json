@@ -1226,12 +1226,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "ab8919e04894dd9b9",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "ac81b4e1ed6679148",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R247 pipeline (candidate.sh side)."
