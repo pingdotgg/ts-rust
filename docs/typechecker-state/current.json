@@ -1241,12 +1241,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "a445a75af5ad669c7",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "ae3c4da0f9ed8111f",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R250 pipeline (candidate.sh side)."
