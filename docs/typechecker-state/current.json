@@ -1236,12 +1236,12 @@
     "passingCredit": false,
     "auditor": {
       "role": "audit_accepted_roster",
-      "agent": "pending-new-auditor",
+      "agent": "a53445ad0a89d50cb",
       "verdict": "PENDING"
     },
     "reviewer": {
       "role": "independent_reviewer",
-      "agent": "pending-new-reviewer",
+      "agent": "aec67b74292d5606d",
       "verdict": "PENDING"
     },
     "nextPermittedAction": "Run the R249 pipeline (candidate.sh side)."
