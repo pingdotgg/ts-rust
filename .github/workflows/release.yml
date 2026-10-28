@@ -242,6 +242,21 @@ jobs:
           set -e
           cat check.txt
           [[ $rc == 2 ]] && grep -q "error TS2322" check.txt
+          # A locale: the tsc reads its catalog from loc/ next to it (copy-libs.sh). A missing catalog
+          # is a clear error (exit 1), not English text and not a panic.
+          set +e
+          "$dir/tsc$EXE" --noEmit --locale de a.ts > check-de.txt
+          rc=$?
+          mv "$dir/loc/de-DE.json.gz" de-DE.json.gz
+          "$dir/tsc$EXE" --noEmit --locale de a.ts > check-missing.txt 2>&1
+          rc_missing=$?
+          set -e
+          mv de-DE.json.gz "$dir/loc/de-DE.json.gz"
+          cat check-de.txt check-missing.txt
+          [[ $rc == 2 ]]
+          grep -q 'error TS2322: Der Typ "string"' check-de.txt
+          [[ $rc_missing == 1 ]]
+          grep -q "^error: cannot read the de-DE messages" check-missing.txt
           if [[ $RUNNER_OS == Linux ]]; then
             file "$dir/tsc" | tee /dev/stderr | grep -q "statically linked"
             # Static: it starts on musl (Alpine) too.
@@ -308,8 +323,8 @@ jobs:
           key=$(jq -r '.batch.upstreamPin.to // empty' docs/typechecker-state/current.json)
           python3 scripts/upstream/pin.py show ${key:+"$key"} > "$RUNNER_TEMP/pin.json"
           jq -r '"key=\(.key)", "repo=\(.repo)", "commit=\(.commit)", "subdir=\(.subdir // "")"' "$RUNNER_TEMP/pin.json" >> "$GITHUB_OUTPUT"
-      # npm-pack.sh reads the pin's package input (packages/), its lib files, its LICENSE.txt and
-      # NOTICE.txt, and builds the JS API with the repo's own tsc (npm workspaces at the root).
+      # npm-pack.sh reads the pin's package input (packages/), its lib files and locale catalogs, its
+      # LICENSE.txt and NOTICE.txt, and builds the JS API with the repo's own tsc (npm workspaces at the root).
       - name: Check out the pinned Go source
         uses: actions/checkout@v5
         with:
@@ -319,6 +334,7 @@ jobs:
           sparse-checkout: |
             packages
             ${{ steps.pin.outputs.subdir }}/internal/bundled/libs
+            ${{ steps.pin.outputs.subdir }}/internal/diagnostics/loc
           persist-credentials: false
       - uses: actions/setup-node@v5
         with:
@@ -349,8 +365,9 @@ jobs:
             cmp "$RUNNER_TEMP/pkg/tsc-rs-$platform-$VERSION.tgz" "$RUNNER_TEMP/pkg-ts/tsc-rs-$platform-$VERSION.tgz"
           done
           cp "$RUNNER_TEMP/pkg-ts/tsc-rs-typescript-$VERSION.tgz" "$RUNNER_TEMP/pkg/"
-      # One archive per platform: the platform package's lib dir (tsc and the lib files, which a
-      # noembed tsc reads next to it), LICENSE and NOTICE.txt. A .tar.gz, and a .zip for Windows.
+      # One archive per platform: the platform package's lib dir (tsc, and the lib files and loc/
+      # catalogs, which a noembed tsc reads next to it), LICENSE and NOTICE.txt. A .tar.gz, and a
+      # .zip for Windows.
       - name: Archives
         id: sums
         run: |
@@ -449,9 +466,14 @@ jobs:
           set +e
           npx tsc-rs --noEmit bad.ts > check.txt
           rc=$?
+          npx tsc-rs --noEmit --locale de bad.ts > check-de.txt
+          rc_de=$?
           set -e
-          cat check.txt
+          cat check.txt check-de.txt
           [[ $rc == 2 ]] && grep -q "error TS2322" check.txt
+          # The package's lib/loc holds the locale catalogs.
+          [[ $rc_de == 2 ]]
+          grep -q 'error TS2322: Der Typ "string"' check-de.txt
           # Emit.
           npx tsc-rs --outDir out --declaration ok.ts
           cat out/ok.js out/ok.d.ts

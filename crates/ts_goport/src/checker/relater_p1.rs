@@ -1175,6 +1175,9 @@ impl Checker {
     }
 
     // Go: checker/relater.go:438 elaborateError
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs only when a relation
+    // fails with an error to report.
+    #[inline(never)]
     pub fn elaborate_error(
         &mut self,
         node: Node,
@@ -1291,6 +1294,9 @@ impl Checker {
     }
 
     // Go: checker/relater.go:478 elaborateDidYouMeanToCallOrConstruct
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs only when a relation
+    // fails with an error to report.
+    #[inline(never)]
     pub fn elaborate_did_you_mean_to_call_or_construct(
         &mut self,
         node: Node,

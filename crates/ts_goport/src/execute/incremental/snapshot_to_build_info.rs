@@ -127,7 +127,8 @@ impl ToBuildInfo<'_> {
     fn to_file_id_list_id(&mut self, set: &FxIndexSet<Path>) -> BuildInfoFileIdListId {
         let mut file_ids: Vec<BuildInfoFileId> =
             set.iter().map(|path| self.to_file_id(path)).collect();
-        stable_sort_by(&mut file_ids, Ord::cmp);
+        // A hot site (one sort per file list of the build info).
+        crate::gostd::slices::stable_sort_by_hot(&mut file_ids, Ord::cmp);
 
         let mut file_id_list_id = self
             .file_names_to_file_id_list_id

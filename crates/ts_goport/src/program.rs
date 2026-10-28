@@ -384,8 +384,8 @@ impl IdCarry {
 
 impl CheckerPool {
     /// Stops the workers: each drops its checker and frees its synthetic
-    /// nodes, then it closes their job queues and waits for each thread to
-    /// end, so the checkers and the nodes they made are freed on return.
+    /// nodes and synthetic flow nodes, then it closes their job queues and
+    /// waits for each thread to end, so their allocations are freed on return.
     fn shut_down(self) {
         for thread in self.stop() {
             // A job panic stays in its job result, so a worker ends normally.
@@ -394,9 +394,9 @@ impl CheckerPool {
     }
 
     /// `shut_down` without the wait: the workers drop their checkers, free
-    /// their synthetic nodes and end while the caller goes on. Only
-    /// `wait_for_background_releases` waits for them; at process exit a
-    /// worker that is still freeing just stops.
+    /// their synthetic nodes and synthetic flow nodes and end while the
+    /// caller goes on. Only `wait_for_background_releases` waits for them;
+    /// at process exit a worker that is still freeing just stops.
     fn shut_down_in_background(self) {
         let threads = self.stop();
         if threads.is_empty() {
@@ -420,8 +420,8 @@ impl CheckerPool {
     }
 
     /// Sends each worker the job that drops its checker and frees its
-    /// synthetic nodes, closes the job queues and returns the worker
-    /// threads, with the threads of the emit pool.
+    /// synthetic nodes and synthetic flow nodes, closes the job queues and
+    /// returns the worker threads, with the threads of the emit pool.
     #[cfg(not(target_family = "wasm"))]
     fn stop(mut self) -> Vec<std::thread::JoinHandle<()>> {
         self.carry_symbol_ids(self.carry.is_some_and(|carry| carry.single));
@@ -433,13 +433,14 @@ impl CheckerPool {
             pending: _,
         } = self;
         // A pool that only ends with the process forgets its checkers and
-        // synthetic nodes (see `create_checkers`); a released program frees
-        // them here.
+        // synthetic nodes and synthetic flow nodes (see `create_checkers`);
+        // a released program frees them here.
         for worker in &workers {
             let _ = worker.send(Box::new(|| {
                 stop_dts_twin();
                 drop(WORKER_CHECKER.with(|slot| slot.borrow_mut().take()));
                 free_synthetic_nodes();
+                crate::checker::free_synthetic_flows();
                 WORKER_RELEASED.with(|released| released.set(true));
             }));
         }
@@ -1287,8 +1288,9 @@ impl Deref for SourceFileOrder {
 /// distinct value in the process, so the program versions of a language
 /// server session share one copy. Two values are the same only when
 /// `deep_equal` says so, so a copy keeps the `paths` order of its program.
-// PERF: a linear search, once per program. A process has one options value
-// per project config.
+// PERF: a linear search, once per program and once per build info read
+// (`build_info_to_snapshot`). A process has about two values per project
+// config: its program options and its build info options.
 pub(crate) fn intern_compiler_options(options: &CompilerOptions) -> &'static CompilerOptions {
     static INTERNED: Mutex<Vec<&'static CompilerOptions>> = Mutex::new(Vec::new());
     let mut interned = INTERNED.lock().unwrap_or_else(PoisonError::into_inner);
@@ -2560,7 +2562,7 @@ fn bind_order(files: &[(Node, bool)]) -> Vec<usize> {
         .filter(|&i| nodes[i] >= BIG_BIND_FILE)
         .collect();
     // A stable sort: files of the same size keep file order.
-    order.sort_by_key(|&i| std::cmp::Reverse(nodes[i]));
+    crate::gostd::slices::stable_sort_by(&mut order, |&a, &b| nodes[b].cmp(&nodes[a]));
     order.extend((0..files.len()).filter(|&i| nodes[i] < BIG_BIND_FILE));
     order
 }
@@ -4320,7 +4322,7 @@ fn fast_cost_split(
                     .filter(|&target| target != position)
             })
             .collect();
-        targets.sort_unstable();
+        crate::gostd::slices::stable_sort_by(&mut targets, Ord::cmp);
         targets.dedup();
         imports.push(targets);
     }
@@ -4500,14 +4502,15 @@ fn start_checkers(count: usize) -> CheckerPool {
                     // the loading thread ends, after every job sent its
                     // result, so this runs once per checker, at the end of
                     // the process. Like Go, which never frees a checker, the
-                    // checker and the synthetic nodes are not dropped:
-                    // freeing the checker arenas at thread exit cost 0.83%
-                    // of query CPU. `release_program` frees both first
-                    // (`CheckerPool::stop`), so a released program does not
-                    // leak them.
+                    // checker, synthetic nodes and synthetic flow nodes are
+                    // not dropped: freeing the checker arenas at thread exit
+                    // cost 0.83% of query CPU. `release_program` frees them
+                    // first (`CheckerPool::stop`), so a released program does
+                    // not leak them.
                     if !WORKER_RELEASED.with(std::cell::Cell::get) {
                         std::mem::forget(WORKER_CHECKER.with(|slot| slot.borrow_mut().take()));
                         forget_synthetic_nodes();
+                        crate::checker::forget_synthetic_flows();
                     }
                 });
             (sender, thread)
@@ -6225,12 +6228,14 @@ pub fn line_count() -> i32 {
 }
 
 // Go: compiler/program.go:1735 IdentifierCount
-// PORT: Go `int`, so `i64`: the sum can pass 2^31 (idcount64).
+// PORT: Go `int`, so `i64`: the sum can pass 2^31 (idcount64). Go's `int`
+// wraps past 2^63, so the adds wrap too: a debug build gives the release
+// result and does not panic.
 pub fn identifier_count() -> i64 {
     let go = go_frontend().expect("identifier count of an alias resolver program");
-    let mut count = 0;
+    let mut count: i64 = 0;
     for file in go.source_files() {
-        count += file.identifier_count;
+        count = count.wrapping_add(file.identifier_count);
     }
     count
 }
@@ -7140,7 +7145,7 @@ mod tests {
                 });
                 drop(joined);
                 let mut late: Vec<(usize, bool)> = arrived.iter().collect();
-                late.sort_unstable();
+                crate::gostd::slices::stable_sort_by(&mut late, Ord::cmp);
                 let _ = done.send((early, late));
             });
             let (early, late) = ended

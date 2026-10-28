@@ -251,7 +251,9 @@ pub fn cost_split(
     let mut load = vec![0u64; count];
     let mut checker_of = vec![usize::MAX; files];
     let mut order: Vec<usize> = (0..files).filter(|&f| costs[f] > 0).collect();
-    order.sort_by_key(|&f| (Reverse(costs[f]), f));
+    crate::gostd::slices::stable_sort_by(&mut order, |&a, &b| {
+        (Reverse(costs[a]), a).cmp(&(Reverse(costs[b]), b))
+    });
     let share = dep_share();
     for f in order {
         let mut best = (u64::MAX, 0);

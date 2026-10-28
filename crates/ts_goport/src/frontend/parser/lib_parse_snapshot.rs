@@ -56,7 +56,10 @@
 //! - the `ParsedSourceFile` fields in declaration order, with node handles
 //!   as slot indexes (0 is nil), and the import specifiers.
 
-use crate::ast::store::{LibListTable, LibParseSlot, load_lib_parse_slots, reset_file_store};
+use crate::ast::store::{
+    LibListTable, LibParseSlot, load_lib_parse_slots, mark_lib_parse_snapshot_store,
+    reset_file_store,
+};
 #[cfg(test)]
 use crate::ast::store::{lib_parse_slot_views, lib_parse_store_dump};
 use crate::astdata::NodeData;
@@ -383,6 +386,7 @@ fn decode(
     if d.r.remaining() != 0 {
         return None;
     }
+    mark_lib_parse_snapshot_store(store);
     // The store writes of Go `finishSourceFile` (parser_p1.rs), then the
     // freeze of `parse_into_store`.
     set_file_store_js_doc_cache(store, &file.jsdoc_cache);
@@ -478,6 +482,10 @@ impl PayloadDecoder<'_, '_, '_, '_> {
 }
 
 impl<'a> Decoder<'a> {
+    // PERF (queryload1): keep the whole loop inline. The inlineout1 split
+    // (`var_rest` out of line) cut `load_lib_parse_slots` from 238 KB to
+    // 119 KB under PGO, but cost Query load-only +0.5 to +1.0% st
+    // instructions (int104b leave-one-out).
     #[inline]
     fn var(&mut self) -> Option<u64> {
         let mut value = 0u64;
@@ -1747,19 +1755,6 @@ mod tests {
         frontend::parser::lib_parse_snapshot::tests::generate_lib_parse_snapshot -- --ignored --exact` \
         (through scripts/run-cargo-capped.sh)";
 
-    /// Snapshot libs (`snapshot_libs`) that get no section. No perf9 project
-    /// uses lib.webworker (the default libs take lib.dom), so its section
-    /// would only add binary size.
-    const SKIPPED_LIBS: &[&str] = &["lib.webworker.d.ts"];
-
-    /// The libs that get a section, largest first.
-    fn parse_snapshot_libs() -> Vec<&'static str> {
-        snapshot_libs()
-            .into_iter()
-            .filter(|lib| !SKIPPED_LIBS.contains(lib))
-            .collect()
-    }
-
     /// The parse options and the text of bundled lib `lib`, as the program
     /// loader gives them (the path is not read by the parse).
     fn lib_input(lib: &str) -> (SourceFileParseOptions, &'static str) {
@@ -1858,7 +1853,7 @@ mod tests {
     #[ignore = "writes src/frontend/parser/lib_parse.bin"]
     fn generate_lib_parse_snapshot() {
         let mut sections = Vec::new();
-        for lib in parse_snapshot_libs() {
+        for lib in snapshot_libs() {
             let (opts, text) = lib_input(lib);
             // The process-wide unported counts: run this test alone.
             let unported = unported_report();
@@ -1913,7 +1908,7 @@ mod tests {
     /// live one, with no change to the state of the thread.
     #[test]
     fn snapshot_matches_live_parse() {
-        for lib in parse_snapshot_libs() {
+        for lib in snapshot_libs() {
             let (opts, text) = lib_input(lib);
             let live = live_parse(&opts, text).unwrap_or_else(|e| panic!("{lib}: {e}"));
             let expected = section(&opts, text, &live);
@@ -1987,7 +1982,7 @@ mod tests {
     /// is parsed live into the same store.
     #[test]
     fn bad_section_parses_live() {
-        let lib = parse_snapshot_libs()[0];
+        let lib = snapshot_libs()[0];
         let (opts, text) = lib_input(lib);
         let live = live_parse(&opts, text).unwrap_or_else(|e| panic!("{lib}: {e}"));
         let mut section = section(&opts, text, &live);
@@ -2001,5 +1996,9 @@ mod tests {
         );
         assert_eq!(file_store_slot_count(store), 1, "the store is not empty");
         assert!(!is_file_store_frozen(store));
+        assert!(
+            !crate::ast::store::store_from_lib_parse_snapshot(store),
+            "a failed decode does not mark the store"
+        );
     }
 }

@@ -147,6 +147,11 @@ impl NodeHeader {
 /// The default value is an empty placeholder with no slots.
 #[derive(Default)]
 struct FileStore {
+    /// parsehash1: set after a full, successful decode of a lib parse section
+    /// (from `lib_parse.bin` in a build; a test can also decode a section it encodes).
+    /// A failed decode leaves it false. The bind snapshot key then skips
+    /// `parse_hash` (`lib_snapshot.rs`, `SnapshotKey::check`).
+    lib_parse_snapshot: bool,
     file_name: &'static str,
     /// The file text. A freeable file version shares it (`FileText::Shared`)
     /// with its parse and program inputs, and it goes with them.
@@ -2367,7 +2372,7 @@ impl<'a> FileNodeReader<'a> {
 // file checks of a program read the config file before the publish: a
 // `paths` diagnostic reads every `paths` key before its own, as Go
 // (`for_each_property_assignment`).
-pub struct BuildStoreReads<'a> {
+pub(crate) struct BuildStoreReads<'a> {
     file: usize,
     store: &'a FileStore,
     /// The store has no alias slot, so an id needs no record read
@@ -2448,8 +2453,10 @@ impl BuildStoreReads<'_> {
 /// `read` on the reads of unpublished store `file` of this thread (built
 /// or detached). `None` when `file` is not such a store (published, of
 /// another thread or synthetic) and when the store is borrowed for a
-/// write. `read` must not make or change nodes of the store.
-pub fn with_build_store_reads<R>(
+/// write. `read` must not make or change nodes of the store: a write in
+/// `read` panics on the store's `RefCell`. Crate-private for that reason:
+/// its one caller is `find_property_assignment` (tsoptions).
+pub(crate) fn with_build_store_reads<R>(
     file: usize,
     read: impl FnOnce(&BuildStoreReads<'_>) -> R,
 ) -> Option<R> {
@@ -7539,6 +7546,16 @@ pub(crate) struct LibParseSlot {
 impl LibParseSlot {
     pub(crate) const LINK_END: u32 = LINK_END;
     pub(crate) const LINK_NONE: u32 = LINK_NONE;
+}
+
+/// Marks unpublished store `file` as loaded from `lib_parse.bin` (parsehash1).
+pub(crate) fn mark_lib_parse_snapshot_store(file: usize) {
+    with_store_mut(file, |s| s.lib_parse_snapshot = true);
+}
+
+/// True when store `file` was loaded from `lib_parse.bin`. False for a live parse and for a file with no store this thread can see.
+pub(crate) fn store_from_lib_parse_snapshot(file: usize) -> bool {
+    try_with_store(file, |s| s.lib_parse_snapshot).unwrap_or(false)
 }
 
 /// R3-1: fills store `file`, which `new_file_store` or

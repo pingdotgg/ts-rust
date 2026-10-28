@@ -975,12 +975,33 @@ impl ModuleInstanceWalk {
 
 // Go type ModuleInstanceState (ast/utilities.go:2294) lives in crate::flags.
 
+thread_local! {
+    // PERF: the `slots` buffer of the last GetModuleInstanceState call on this thread, empty, kept for the
+    // next call so that a call does not grow a new buffer from nothing. A call takes it out, so a nested
+    // call gets a new one.
+    static WALK_SLOTS: std::cell::Cell<Vec<Node>> = const { std::cell::Cell::new(Vec::new()) };
+}
+
+// The largest `slots` capacity that WALK_SLOTS keeps (512 KiB). A larger buffer is freed after its call.
+const MAX_KEPT_WALK_SLOTS: usize = 1 << 16;
+
 // Go: ast/utilities.go:2451 GetModuleInstanceState
 pub fn get_module_instance_state(node: Node) -> ModuleInstanceState {
     // PORT: Go passes a nil `visited` map and getModuleInstanceStateCached allocates it on first use.
     // Every later call shares that map, so allocating it here is equivalent.
-    let mut walk = ModuleInstanceWalk::default();
-    get_module_instance_state_unexported(node, Ancestors::NIL, &mut walk)
+    // PERF: `slots` is the empty buffer of an earlier call. Every backing array is written in full when it is
+    // made (grow_ancestors), so no value of the earlier call is read.
+    let mut walk = ModuleInstanceWalk {
+        visited: FxHashMap::default(),
+        slots: WALK_SLOTS.take(),
+    };
+    let state = get_module_instance_state_unexported(node, Ancestors::NIL, &mut walk);
+    let mut slots = walk.slots;
+    if slots.capacity() <= MAX_KEPT_WALK_SLOTS {
+        slots.clear();
+        WALK_SLOTS.set(slots);
+    }
+    state
 }
 
 // PORT: Go `getModuleInstanceState` has the same snake name as the exported
@@ -1058,7 +1079,7 @@ fn get_module_instance_state_worker(
                 let mut state = ModuleInstanceState::NON_INSTANTIATED;
                 let ancestors = walk.push_ancestor(ancestors, node, &mut true);
                 let ancestors = walk.push_ancestor(ancestors, export_clause, &mut true);
-                for specifier in export_clause.elements().to_vec() {
+                for specifier in export_clause.elements() {
                     let specifier_state =
                         get_module_instance_state_for_alias_target(specifier, ancestors, walk);
                     if specifier_state > state {
@@ -1113,6 +1134,7 @@ fn get_module_instance_state_for_alias_target(
         // Skip for invalid syntax like this: export { "x" }
         return ModuleInstanceState::INSTANTIATED;
     }
+    let name_text = name.text_name();
     // PORT: the frame's stack store for the push below. One store serves every iteration of the loop, so only
     // the first push onto an empty stack gets it (see push_ancestor).
     let mut stack_store = true;
@@ -1121,8 +1143,10 @@ fn get_module_instance_state_for_alias_target(
         if is_block(p) || is_module_block(p) || is_source_file(p) {
             let mut found = ModuleInstanceState::UNKNOWN;
             let statements_ancestors = walk.push_ancestor(ancestors, p, &mut stack_store);
-            for statement in p.statements().to_vec() {
-                if node_has_name(statement, name) {
+            // PERF: the lists are read in place, as Go ranges over them. A heap copy of each block's statements for
+            // each specifier was about half of deep-nested-1500-preserve (followups82).
+            for statement in p.statements() {
+                if node_has_name(statement, &name_text) {
                     let state =
                         get_module_instance_state_cached(statement, statements_ancestors, walk);
                     if found == ModuleInstanceState::UNKNOWN || state > found {
@@ -1160,14 +1184,21 @@ pub fn is_instantiated_module(node: Node, preserve_const_enums: bool) -> bool {
 }
 
 // Go: ast/utilities.go:2578 NodeHasName
-pub fn node_has_name(statement: Node, id: Node) -> bool {
+// PORT: Go takes the id node and reads id.Text() on each call. The caller reads it once as a Name.
+// PERF: bindscan1. A frozen store Identifier compares name ids (Node::text_is), not texts. On T3 web this
+// path cost 2.4x Go, most of it in text reads and string compares.
+pub fn node_has_name(statement: Node, id_name: &Name) -> bool {
     let name = statement.name();
     if name.is_some() {
-        return is_identifier(name) && name.text() == id.text();
+        return is_identifier(name) && name.text_is(id_name);
     }
     if is_variable_statement(statement) {
-        let declarations = statement.declaration_list().declarations().nodes().to_vec();
-        return declarations.iter().any(|&d| node_has_name(d, id));
+        return statement
+            .declaration_list()
+            .declarations()
+            .nodes()
+            .iter()
+            .any(|d| node_has_name(d, id_name));
     }
     false
 }

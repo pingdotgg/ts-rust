@@ -62,6 +62,8 @@ impl RuleContext<'_, '_> {
     }
 
     // Go: rule.Context.NewDiagnostic
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per diagnostic.
+    #[inline(never)]
     #[must_use]
     pub fn new_diagnostic(
         &self,

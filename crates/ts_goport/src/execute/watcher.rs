@@ -497,7 +497,7 @@ impl Watcher {
                 }
             }
         }
-        files.sort();
+        crate::gostd::slices::stable_sort_by(&mut files, Ord::cmp);
         files.dedup();
         files
     }

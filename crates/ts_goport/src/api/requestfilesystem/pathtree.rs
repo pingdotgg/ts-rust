@@ -242,8 +242,8 @@ pub fn entries(node: Option<&RequestPathNodeRef>) -> (vfs::Entries, bool) {
             }
         }
     }
-    entries.files.sort();
-    entries.directories.sort();
+    crate::gostd::slices::stable_sort_by(&mut entries.files, Ord::cmp);
+    crate::gostd::slices::stable_sort_by(&mut entries.directories, Ord::cmp);
     (entries, true)
 }
 

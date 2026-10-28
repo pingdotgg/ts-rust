@@ -482,6 +482,78 @@ where
     )
 }
 
+/// One member of a generated structure decoder (`unmarshal_structure`).
+pub struct StructureMember {
+    /// The JSON member name with its quotes (`"uri"`): the generated
+    /// decoder compares the raw name token, so an escaped name is unknown.
+    pub quoted: &'static str,
+    /// Go's generator reports the member in `errMissing` when it is absent.
+    pub required: bool,
+    /// The Go field accepts `null` but the type does not (`errNull`).
+    pub reject_null: bool,
+}
+
+impl StructureMember {
+    fn name(&self) -> &'static str {
+        &self.quoted[1..self.quoted.len() - 1]
+    }
+}
+
+/// The generated `UnmarshalJSONFrom` of a structure (Go lsp_generated.go):
+/// an object, its members in input order (unknown names are skipped), `null`
+/// rejected for `reject_null` members (`errNull`), then `errMissing` for the
+/// required members that did not appear, in member order. `members` lists the
+/// structure's members (at most 64), and `member(i, dec)` decodes member `i`.
+///
+/// PORT: Go generates this loop for each structure. Here it is one function,
+/// and each structure adds only its member table and its `member` function.
+#[inline(never)]
+pub fn unmarshal_structure(
+    dec: &mut JsonDecoder<'_>,
+    members: &[StructureMember],
+    member: &mut dyn FnMut(usize, &mut JsonDecoder<'_>) -> Result<(), JsonError>,
+) -> Result<(), JsonError> {
+    let mut missing: u64 = 0;
+    for (i, m) in members.iter().enumerate() {
+        if m.required {
+            missing |= 1 << i;
+        }
+    }
+
+    let k = dec.peek_kind();
+    if k != b'{' {
+        return Err(err_not_object(k));
+    }
+    dec.read_token()?;
+
+    while dec.peek_kind() != b'}' {
+        let name = dec.read_value()?;
+        let Some(i) = members.iter().position(|m| m.quoted.as_bytes() == name) else {
+            dec.skip_value()?;
+            continue;
+        };
+        missing &= !(1 << i);
+        if members[i].reject_null && dec.peek_kind() == b'n' {
+            return Err(err_null(members[i].name()));
+        }
+        member(i, dec)?;
+    }
+
+    dec.read_token()?;
+
+    if missing != 0 {
+        return Err(err_missing(
+            members
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| missing & (1 << i) != 0)
+                .map(|(_, m)| m.name()),
+        ));
+    }
+
+    Ok(())
+}
+
 // Go: lsp.go:186 errInvalidKind
 // Generated methods return it after a peek, before they read the value.
 pub fn err_invalid_kind(type_name: &str, got: u8) -> JsonError {

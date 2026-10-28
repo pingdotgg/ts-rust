@@ -3394,7 +3394,9 @@ pub fn sorted_symbol_table_keys(c: &Checker, table: SymbolTable) -> Vec<String> 
         .iter(table)
         .map(|(key, _)| key.to_string())
         .collect();
-    keys.sort_by(|left, right| crate::scanner_util::compare_go_strings(left, right));
+    crate::gostd::slices::stable_sort_by(&mut keys, |left, right| {
+        crate::scanner_util::compare_go_strings(left, right)
+    });
     keys
 }
 

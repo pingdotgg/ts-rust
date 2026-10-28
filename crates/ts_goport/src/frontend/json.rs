@@ -1087,19 +1087,21 @@ impl JsonDecoder<'_> {
         JsonError::new(syntactic_error_text(&err, pointer, pos))
     }
 
-    /// Go `errNonSingularValue` of an `UnmarshalJSONFrom` method of the Go
-    /// type of `T` that did not read exactly one value, wrapped by
-    /// `newSemanticErrorWithPosition`: the pointer points to the next value
-    /// when the method read nothing (`read_nothing`), else to the parent
-    /// (Go `where` 0).
+    /// Go `errNonSingularValue` of an `UnmarshalJSONFrom` method that did not
+    /// read exactly one value, wrapped by `newSemanticErrorWithPosition`: the
+    /// pointer points to the next value when the method read nothing
+    /// (`read_nothing`), else to the parent (Go `where` 0). `rust_type` is the
+    /// `std::any::type_name` of the method's type; the text shows its Go type.
+    ///
+    /// PORT: not generic, so the binary holds one copy of this cold path.
     #[cold]
-    fn non_singular_value_error<T: ?Sized>(&self, read_nothing: bool) -> JsonError {
+    fn non_singular_value_error(&self, rust_type: &str, read_nothing: bool) -> JsonError {
         let at = if read_nothing { 1 } else { 0 };
         crate::frontend::json_ext::SemanticError {
             wrapped: true,
             json_kind: 0,
             json_value: String::new(),
-            go_type: crate::frontend::json_ext::go_type_name::<T>(),
+            go_type: crate::frontend::json_ext::go_type_string(rust_type),
             pointer: Some(self.stack_pointer(at)),
             byte_offset: self.skip_ws(self.pos),
             pos: crate::frontend::json_ext::ErrorPos::Before,
@@ -1573,31 +1575,65 @@ pub fn append_json_quote_port_form_list(enc: &mut String, list: &[impl AsRef<str
     enc.push(']');
 }
 
+// Go: jsonwire/encode.go:65 AppendQuote: copies runs of bytes that need no escape.
 fn append_json_quote_with(enc: &mut String, s: &str, replace_invalid: bool) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
+    // GO_STRING_MARKER (U+FDD0) is EF B7 90. 0xEF is always a lead byte.
+    const MARKER: &[u8] = "\u{FDD0}".as_bytes();
+    let bytes = s.as_bytes();
+    enc.reserve(s.len() + 2); // Go: slices.Grow(dst, len(src)+2)
     enc.push('"');
-    let mut chars = s.char_indices();
-    while let Some((i, c)) = chars.next() {
-        match c {
-            '"' => enc.push_str("\\\""),
-            '\\' => enc.push_str("\\\\"),
-            '\u{8}' => enc.push_str("\\b"),
-            '\u{C}' => enc.push_str("\\f"),
-            '\n' => enc.push_str("\\n"),
-            '\r' => enc.push_str("\\r"),
-            '\t' => enc.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let b = c as usize;
-                enc.push_str("\\u00");
-                enc.push(char::from(HEX[b >> 4]));
-                enc.push(char::from(HEX[b & 0xF]));
+    let mut run = 0; // first byte not yet copied
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let special = b < 0x20
+            || b == b'"'
+            || b == b'\\'
+            || (b == MARKER[0] && bytes[i..].starts_with(MARKER));
+        if !special {
+            i += 1;
+            continue;
+        }
+        enc.push_str(&s[run..i]); // i is a char boundary: b is ASCII or a lead byte
+        match b {
+            b'"' => {
+                enc.push_str("\\\"");
+                i += 1;
             }
-            GO_STRING_MARKER => {
+            b'\\' => {
+                enc.push_str("\\\\");
+                i += 1;
+            }
+            0x08 => {
+                enc.push_str("\\b");
+                i += 1;
+            }
+            0x0C => {
+                enc.push_str("\\f");
+                i += 1;
+            }
+            b'\n' => {
+                enc.push_str("\\n");
+                i += 1;
+            }
+            b'\r' => {
+                enc.push_str("\\r");
+                i += 1;
+            }
+            b'\t' => {
+                enc.push_str("\\t");
+                i += 1;
+            }
+            b if b < 0x20 => {
+                enc.push_str("\\u00");
+                enc.push(char::from(HEX[usize::from(b >> 4)]));
+                enc.push(char::from(HEX[usize::from(b & 0xF)]));
+                i += 1;
+            }
+            _ => {
+                // The marker: same unit handling as the old code.
                 let (unit, size) = go_unit_at(s, i);
-                if size > c.len_utf8() {
-                    // Skip the second char of the unit.
-                    chars.next();
-                }
                 match unit {
                     GoUnit::InvalidByte(_) | GoUnit::Surrogate(_) if replace_invalid => {
                         for _ in 0..unit.go_len() {
@@ -1606,10 +1642,12 @@ fn append_json_quote_with(enc: &mut String, s: &str, replace_invalid: bool) {
                     }
                     _ => enc.push_str(&s[i..i + size]),
                 }
+                i += size; // old code: skip c, then chars.next() when size > 3
             }
-            c => enc.push(c),
         }
+        run = i;
     }
+    enc.push_str(&s[run..]);
     enc.push('"');
 }
 
@@ -1680,10 +1718,15 @@ const ALLOW_INVALID: &[JsonOption] = &[JsonOption::AllowInvalidUtf8(true)];
 // bytes; the output here is always UTF-8 text. With `AllowInvalidUTF8`, Go
 // writes U+FFFD for each invalid byte of a string, which the string
 // marshaler does for the port form (`append_json_quote`).
-pub fn json_marshal<T: MarshalerTo + ?Sized>(
-    input: &T,
-    opts: &[JsonOption],
-) -> Result<String, JsonError> {
+// The body is `json_marshal_dyn`, so each `T` adds only this call.
+#[inline(always)]
+pub fn json_marshal<T: MarshalerTo>(input: &T, opts: &[JsonOption]) -> Result<String, JsonError> {
+    json_marshal_dyn(input, opts)
+}
+
+/// `json_marshal` of a value whose type is erased: one copy for all types.
+#[inline(never)]
+pub fn json_marshal_dyn(input: &dyn MarshalerTo, opts: &[JsonOption]) -> Result<String, JsonError> {
     let mut all: Vec<JsonOption> = ALLOW_INVALID.to_vec();
     all.extend_from_slice(opts);
     let _ = JsonOptions::from_options(&all);
@@ -1747,12 +1790,23 @@ fn json_check_nesting_depth(compact: &str) -> Result<(), JsonError> {
 // value first (`json_marshal`) and writes nothing on a marshal error. Like Go
 // (`jsonflags.OmitTopLevelNewline` in v2 `MarshalWrite`), the output has no
 // trailing newline. A write error is returned as a `JsonError`.
-pub fn json_marshal_write<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn json_marshal_write<T: MarshalerTo>(
     out: &mut dyn std::io::Write,
     input: &T,
     opts: &[JsonOption],
 ) -> Result<(), JsonError> {
-    let b = json_marshal(input, opts)?;
+    json_marshal_write_dyn(out, input, opts)
+}
+
+/// `json_marshal_write` of a value whose type is erased.
+#[inline(never)]
+pub fn json_marshal_write_dyn(
+    out: &mut dyn std::io::Write,
+    input: &dyn MarshalerTo,
+    opts: &[JsonOption],
+) -> Result<(), JsonError> {
+    let b = json_marshal_dyn(input, opts)?;
     out.write_all(b.as_bytes())
         .map_err(|err| JsonError::new(err.to_string()))
 }
@@ -1765,18 +1819,29 @@ pub fn json_marshal_write<T: MarshalerTo + ?Sized>(
 // `appendWhitespace`). That whitespace depends only on the token sequence,
 // so this marshals compact output and replays its tokens through the same
 // rules (`json_append_multiline`).
-pub fn json_marshal_indent<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn json_marshal_indent<T: MarshalerTo>(
     input: &T,
+    prefix: &str,
+    indent: &str,
+) -> Result<String, JsonError> {
+    json_marshal_indent_dyn(input, prefix, indent)
+}
+
+/// `json_marshal_indent` of a value whose type is erased.
+#[inline(never)]
+pub fn json_marshal_indent_dyn(
+    input: &dyn MarshalerTo,
     prefix: &str,
     indent: &str,
 ) -> Result<String, JsonError> {
     if prefix.is_empty() && indent.is_empty() {
         // WithIndentPrefix and WithIndent imply multiline output, so skip them.
-        return json_marshal(input, &[]);
+        return json_marshal_dyn(input, &[]);
     }
     json_check_indent(prefix, " in indent prefix");
     json_check_indent(indent, " in indent");
-    let compact = json_marshal(input, &[])?;
+    let compact = json_marshal_dyn(input, &[])?;
     json_append_multiline(&compact, prefix, indent)
 }
 
@@ -2169,19 +2234,31 @@ fn json_append_multiline_pieces(
 // PORT notes there and on `json_marshal_write`). There is no trailing
 // newline. It goes out in the writes of Go's streaming encoder
 // (`JsonStreamPieces`), after the whole value is marshaled.
-pub fn json_marshal_indent_write<T: MarshalerTo + ?Sized>(
+#[inline(always)]
+pub fn json_marshal_indent_write<T: MarshalerTo>(
     out: &mut dyn std::io::Write,
     input: &T,
     prefix: &str,
     indent: &str,
 ) -> Result<(), JsonError> {
+    json_marshal_indent_write_dyn(out, input, prefix, indent)
+}
+
+/// `json_marshal_indent_write` of a value whose type is erased.
+#[inline(never)]
+pub fn json_marshal_indent_write_dyn(
+    out: &mut dyn std::io::Write,
+    input: &dyn MarshalerTo,
+    prefix: &str,
+    indent: &str,
+) -> Result<(), JsonError> {
     if prefix.is_empty() && indent.is_empty() {
         // WithIndentPrefix and WithIndent imply multiline output, so skip them.
-        return json_marshal_write(out, input, &[]);
+        return json_marshal_write_dyn(out, input, &[]);
     }
     json_check_indent(prefix, " in indent prefix");
     json_check_indent(indent, " in indent");
-    let compact = json_marshal(input, &[])?;
+    let compact = json_marshal_dyn(input, &[])?;
     let mut pieces = JsonStreamPieces::default();
     let b = json_append_multiline_pieces(&compact, prefix, indent, Some(&mut pieces))?;
     let mut start = 0;
@@ -2198,13 +2275,27 @@ pub fn json_marshal_indent_write<T: MarshalerTo + ?Sized>(
 // Go: json/json.go:56 Unmarshal
 // PORT: `out` implements `UnmarshalerFrom` in place of Go reflection. Like
 // Go, `out` is not reset on error, and the input must hold exactly one value.
-pub fn json_unmarshal<T: UnmarshalerFrom + ?Sized>(
+// The body is `json_unmarshal_dyn`, so each `T` adds only this call.
+#[inline(always)]
+pub fn json_unmarshal<T: UnmarshalerFrom>(
     input: &[u8],
     out: &mut T,
     opts: &[JsonOption],
 ) -> Result<(), JsonError> {
+    json_unmarshal_dyn(input, out, std::any::type_name::<T>(), opts)
+}
+
+/// `json_unmarshal` of a value whose type is erased. `rust_type` is the
+/// `std::any::type_name` of the value's type (errors show its Go type).
+#[inline(never)]
+pub fn json_unmarshal_dyn(
+    input: &[u8],
+    out: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
+    opts: &[JsonOption],
+) -> Result<(), JsonError> {
     let mut dec = JsonDecoder::new(input, JsonOptions::from_options(opts));
-    json_unmarshal_decode(&mut dec, out)?;
+    json_unmarshal_decode_dyn(&mut dec, out, rust_type)?;
     dec.check_eof()
 }
 
@@ -2215,18 +2306,35 @@ pub fn json_unmarshal<T: UnmarshalerFrom + ?Sized>(
 // (`json_ext::wrap_method_error`), as the v2 arshaler of a type with an
 // `UnmarshalJSONFrom` method does, and an error that already has its type
 // keeps it. The method must read exactly one value.
-pub fn json_unmarshal_decode<T: UnmarshalerFrom + ?Sized>(
+// The body is `json_unmarshal_decode_dyn`: each `T` adds only this call, and
+// the `UnmarshalerFrom` method of `T` is one function that every caller
+// shares (through the vtable), not a copy inlined into each caller.
+#[inline(always)]
+pub fn json_unmarshal_decode<T: UnmarshalerFrom>(
     dec: &mut JsonDecoder<'_>,
     out: &mut T,
 ) -> Result<(), JsonError> {
+    json_unmarshal_decode_dyn(dec, out, std::any::type_name::<T>())
+}
+
+/// `json_unmarshal_decode` of a value whose type is erased. `rust_type` is
+/// the `std::any::type_name` of the value's type (errors show its Go type).
+/// PORT: not in Go; one copy for all types (Go's arshalers use reflection).
+#[inline(never)]
+pub fn json_unmarshal_decode_dyn(
+    dec: &mut JsonDecoder<'_>,
+    out: &mut dyn UnmarshalerFrom,
+    rust_type: &'static str,
+) -> Result<(), JsonError> {
     let (prev_depth, prev_len) = dec.depth_length();
     out.unmarshal_json_from(dec)
-        .map_err(crate::frontend::json_ext::wrap_method_error::<T>)?;
+        .map_err(|err| crate::frontend::json_ext::wrap_method_error(err, rust_type))?;
     let (curr_depth, curr_len) = dec.depth_length();
     if prev_depth != curr_depth || prev_len + 1 != curr_len {
-        return Err(
-            dec.non_singular_value_error::<T>(prev_depth == curr_depth && prev_len == curr_len)
-        );
+        return Err(dec.non_singular_value_error(
+            rust_type,
+            prev_depth == curr_depth && prev_len == curr_len,
+        ));
     }
     Ok(())
 }
@@ -2448,7 +2556,7 @@ mod marshal_indent_tests {
                 .unwrap(),
             "{\n \t\"a\": [\n \t\t\"x\",\n \t\t\"y:{\"\n \t],\n \t\"b\": [],\n \t\"c\": [\n \t\t[\n \t\t\ttrue\n \t\t],\n \t\t[]\n \t]\n }"
         );
-        assert_eq!(json_marshal_indent("s", "", "  ").unwrap(), "\"s\"");
+        assert_eq!(json_marshal_indent(&"s", "", "  ").unwrap(), "\"s\"");
     }
 
     /// The compact `--showConfig` value of a config with 31 files (one name
@@ -2657,5 +2765,112 @@ mod decode_string_tests {
                 JsonToken::EndObject,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::*;
+    use crate::scanner_util::{fuse_surrogate_bytes, go_string_from_bytes};
+
+    fn reference(enc: &mut String, s: &str, replace_invalid: bool) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        enc.push('"');
+        let mut chars = s.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '"' => enc.push_str("\\\""),
+                '\\' => enc.push_str("\\\\"),
+                '\u{8}' => enc.push_str("\\b"),
+                '\u{C}' => enc.push_str("\\f"),
+                '\n' => enc.push_str("\\n"),
+                '\r' => enc.push_str("\\r"),
+                '\t' => enc.push_str("\\t"),
+                c if (c as u32) < 0x20 => {
+                    let b = c as usize;
+                    enc.push_str("\\u00");
+                    enc.push(char::from(HEX[b >> 4]));
+                    enc.push(char::from(HEX[b & 0xF]));
+                }
+                GO_STRING_MARKER => {
+                    let (unit, size) = go_unit_at(s, i);
+                    if size > c.len_utf8() {
+                        // Skip the second char of the unit.
+                        chars.next();
+                    }
+                    match unit {
+                        GoUnit::InvalidByte(_) | GoUnit::Surrogate(_) if replace_invalid => {
+                            for _ in 0..unit.go_len() {
+                                enc.push(char::REPLACEMENT_CHARACTER);
+                            }
+                        }
+                        _ => enc.push_str(&s[i..i + size]),
+                    }
+                }
+                c => enc.push(c),
+            }
+        }
+        enc.push('"');
+    }
+
+    #[test]
+    fn quote_fast_path_matches_reference() {
+        let surrogate = go_string_from_bytes(vec![0xED, 0xA0, 0x80]);
+        let mut cases: Vec<String> = [
+            "",
+            "plain ASCII",
+            "\u{7F}",
+            "\"",
+            "\\",
+            "</a>&",
+            "é",
+            "日本",
+            "😀",
+            "\u{2028}",
+            "\u{2029}",
+            "\u{FFFD}",
+            "\u{FEFF}",
+            "\u{FDD0}",
+            "\u{FDD0}start",
+            "end\u{FDD0}",
+            "\u{FDD0}a",
+            "\u{FDD0}\"",
+            "\u{FDD0}\\",
+            "\u{FDD0}\u{FDD0}",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        for byte in 0x00..=0x1F {
+            let c = char::from(byte);
+            cases.push(c.to_string());
+            cases.push(format!("before{c}after"));
+        }
+        cases.push(go_string_from_bytes(vec![0xFF]));
+        cases.push(go_string_from_bytes(vec![b'a', 0x80, b'"']));
+        cases.push(fuse_surrogate_bytes(&surrogate).into_owned());
+        cases.push(surrogate);
+        let check = |s: &str| {
+            for replace_invalid in [true, false] {
+                let mut actual = String::from("prefix");
+                let mut expected = actual.clone();
+                append_json_quote_with(&mut actual, s, replace_invalid);
+                reference(&mut expected, s, replace_invalid);
+                assert_eq!(
+                    actual, expected,
+                    "s={s:?}, replace_invalid={replace_invalid}"
+                );
+            }
+        };
+        for a in &cases {
+            check(a);
+            for b in &cases {
+                let pair = format!("{a}{b}");
+                check(&pair);
+                for c in &cases {
+                    check(&format!("{pair}{c}"));
+                }
+            }
+        }
     }
 }

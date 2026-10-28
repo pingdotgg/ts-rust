@@ -673,8 +673,7 @@ pub fn build_node_index_table(source_file: Node) -> Rc<NodeIndexTable> {
             visitor.visit_each_child(node);
             let source_file = visitor.ctx.source_file;
             for jsdoc in node.js_doc(source_file) {
-                let visit = visitor.visit.clone().expect("NodeVisitor.Visit is nil");
-                visit(jsdoc, visitor);
+                visitor.call_visit(jsdoc);
             }
             node
         },
@@ -694,8 +693,7 @@ pub fn build_node_index_table(source_file: Node) -> Rc<NodeIndexTable> {
 
     visitor.visit_each_child(root_node);
     for jsdoc in root_node.js_doc(source_file) {
-        let visit = visitor.visit.clone().expect("NodeVisitor.Visit is nil");
-        visit(jsdoc, &mut visitor);
+        visitor.call_visit(jsdoc);
     }
 
     Rc::new(NodeIndexTable {
@@ -959,8 +957,7 @@ fn encode_tree(
     encode_each_child(root_node, &mut visitor, fast);
     if source_file.is_some() {
         for jsdoc in root_node.js_doc(source_file) {
-            let visit = visitor.visit.clone().expect("NodeVisitor.Visit is nil");
-            visit(jsdoc, &mut visitor);
+            visitor.call_visit(jsdoc);
         }
     }
 
@@ -2234,7 +2231,7 @@ module.exports.z = "z";
                 .expect("read the corpus directory")
                 .map(|e| e.expect("a corpus entry").path())
                 .collect();
-            entries.sort();
+            crate::gostd::slices::stable_sort_by(&mut entries, Ord::cmp);
             for path in entries {
                 if path.is_dir() {
                     if !path.ends_with("node_modules") {

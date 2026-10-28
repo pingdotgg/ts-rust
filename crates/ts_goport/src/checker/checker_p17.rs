@@ -1021,13 +1021,18 @@ impl Checker {
             // its paths do not resolve against many patterns).
             let module_reference_bytes = go_string_bytes(module_reference);
             let mut candidates: Vec<PatternAmbientModule> = Vec::new();
+            debug_assert_eq!(
+                self.pattern_ambient_module_go_bytes.len(),
+                self.pattern_ambient_modules.len()
+            );
             for i in 0..self.pattern_ambient_modules.len() {
                 let symbol = self.pattern_ambient_modules[i].symbol;
                 let module_attributes_type = self.get_type_of_module_import_attributes(symbol);
-                if core_p17::pattern_matches_go_bytes(
-                    &self.pattern_ambient_modules[i],
-                    &module_reference_bytes,
-                ) && self.is_type_assignable_to(import_attributes_type, module_attributes_type)
+                let (prefix, suffix) = &self.pattern_ambient_module_go_bytes[i];
+                let matches =
+                    core_p17::pattern_matches_go_bytes(prefix, suffix, &module_reference_bytes);
+                if matches
+                    && self.is_type_assignable_to(import_attributes_type, module_attributes_type)
                 {
                     candidates.push(self.pattern_ambient_modules[i].clone());
                 }
@@ -1325,6 +1330,9 @@ impl Checker {
     //
     // Resolves the given external module symbol, possibly removing call and construct signatures or creating a
     // wrapper module with a synthetic default.
+    // SIZE (inlineout1): out of line. PGO put a copy in a hot caller; it runs once per module
+    // reference.
+    #[inline(never)]
     pub fn resolve_es_module_symbol(
         &mut self,
         module_symbol: SymbolId,
@@ -2153,7 +2161,11 @@ mod core_p17 {
         let candidate = go_string_bytes(candidate);
         for value in values {
             let star_index = go_len(&value.pattern_prefix) as isize;
-            let matches = pattern_matches_go_bytes(value, &candidate);
+            let matches = pattern_matches_go_bytes(
+                &go_string_bytes(&value.pattern_prefix),
+                &go_string_bytes(&value.pattern_suffix),
+                &candidate,
+            );
             if star_index > longest_match_prefix_length && matches {
                 best_pattern = Some(value);
                 longest_match_prefix_length = star_index;
@@ -2164,21 +2176,17 @@ mod core_p17 {
 
     // Go: core/pattern.go:22 Pattern.Matches
     // PORT: for `ast.PatternAmbientModule.Pattern`, which always has a star
-    // (see `find_best_pattern_match`). `candidate` is the Go bytes of the
-    // candidate (`go_string_bytes`), so a caller that tests many patterns
-    // makes them once.
+    // (see `find_best_pattern_match`). The caller gives the Go bytes of the
+    // candidate, prefix and suffix. The prefix and suffix bytes come from
+    // `Checker::pattern_ambient_module_go_bytes`.
     // PERF: a first or last byte that differs rejects the pattern before
     // the `memcmp` call of `starts_with` or `ends_with`.
-    pub fn pattern_matches_go_bytes(value: &PatternAmbientModule, candidate: &[u8]) -> bool {
-        let prefix = go_string_bytes(&value.pattern_prefix);
-        let suffix = go_string_bytes(&value.pattern_suffix);
+    pub fn pattern_matches_go_bytes(prefix: &[u8], suffix: &[u8], candidate: &[u8]) -> bool {
         candidate.len() >= prefix.len() + suffix.len()
-            && prefix.first().is_none_or(|&b| candidate[0] == b)
-            && suffix
-                .last()
-                .is_none_or(|&b| candidate[candidate.len() - 1] == b)
-            && candidate.starts_with(&prefix)
-            && candidate.ends_with(&suffix)
+            && (prefix.is_empty() || (candidate[0] == prefix[0] && candidate.starts_with(prefix)))
+            && (suffix.is_empty()
+                || (candidate[candidate.len() - 1] == suffix[suffix.len() - 1]
+                    && candidate.ends_with(suffix)))
     }
 }
 
@@ -2544,11 +2552,6 @@ mod pattern_match_tests {
         let mut got = Vec::new();
         let mut want = Vec::new();
         for (prefix, suffix) in &patterns {
-            let value = PatternAmbientModule {
-                pattern_prefix: prefix.to_string(),
-                pattern_suffix: suffix.to_string(),
-                symbol: SymbolId::NIL,
-            };
             for candidate in &candidates {
                 let (c, p, s) = (
                     go_string_bytes(candidate),
@@ -2556,7 +2559,7 @@ mod pattern_match_tests {
                     go_string_bytes(suffix),
                 );
                 want.push(c.len() >= p.len() + s.len() && c.starts_with(&p) && c.ends_with(&s));
-                got.push(pattern_matches_go_bytes(&value, &c));
+                got.push(pattern_matches_go_bytes(&p, &s, &c));
             }
         }
         assert_eq!(got, want);
