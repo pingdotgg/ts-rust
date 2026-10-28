@@ -137,11 +137,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "goport_cell"
+version = "7.0.0-dev"
+
+[[package]]
 name = "goport_core"
 version = "7.0.0-dev"
 dependencies = [
  "bumpalo",
  "flate2",
+ "goport_cell",
  "goport_util",
  "hashbrown",
  "indexmap",

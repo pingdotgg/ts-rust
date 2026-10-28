@@ -1450,7 +1450,7 @@ pub(crate) const FILE_ID_LIMIT: usize = 1 << 28;
 #[cfg(not(target_family = "wasm"))]
 const LOW_BLOCKS: usize = 1 << 16;
 /// Entries per `HIGH_BLOCKS` chunk: 1 MiB of entries per chunk, and 16,380
-/// chunk cells (256 KiB of `.data`) up to `FILE_ID_LIMIT`.
+/// chunk cells (256 KiB of `.bss`) up to `FILE_ID_LIMIT`.
 #[cfg(not(target_family = "wasm"))]
 const HIGH_CHUNK: usize = 1 << 14;
 /// wasm: linear memory holds all of `FILE_BLOCKS` from the start, set or
@@ -1513,8 +1513,8 @@ fn is_storeless_id(file: usize) -> bool {
 // publishes (steps 1 and 2): one table of the first publish (tier 0) and
 // one per later publish in a two-level table (tier 1). A tier 0 read loaded
 // the table of the publish, then the slice of the file, then the slot; a
-// tier 1 read two loads more. 56 bytes, so an entry and its `OnceLock`
-// state fill one cache line (`BlockEntry`). Step 4 added `kinds` and moved
+// tier 1 read two loads more. 56 bytes, so an entry and its once state
+// fill one cache line (`BlockEntry`). Step 4 added `kinds` and moved
 // the node column into `BlockFile`: a 72-byte entry took two cache lines
 // and 4 MiB more `.data`, and cost 0.1% fewer `goport -p` instructions.
 struct FileBlock {
@@ -1736,25 +1736,41 @@ static KIND_OF_WORD: [SyntaxKind; 512] = {
     table
 };
 
-/// One `FileBlock` and its `OnceLock` state in one cache line.
+/// std `OnceLock` whose empty state is all zero bytes, for the registry
+/// entries (`FILE_BLOCKS`, `HIGH_BLOCKS`): the same `get`, `set` and
+/// `get_or_init`, and the same publication (`set` stores its ready state
+/// with Release after it writes the value, `get` gives the value only after
+/// an Acquire load of that state). The crate goport_cell holds its unsafe
+/// code, so this crate keeps `unsafe_code = "forbid"`.
+// bssblocks1: std `Once` starts at INCOMPLETE = 3 (Rust 1.95,
+// `sys/sync/once/futex.rs`), so the two arrays of `OnceLock`s were
+// 4,456,384 bytes of `.data` in the file. Empty `ZeroOnceLock`s are zero
+// bytes, so the arrays are `.bss`. Its value comes first and its state
+// after it, as in `OnceLock<FileBlock>`, so the hot read of `file_block`
+// keeps its code size.
+use goport_cell::ZeroOnceLock;
+
+/// One `FileBlock` and its once state in one cache line.
 #[repr(align(64))]
-struct BlockEntry(OnceLock<FileBlock>);
+struct BlockEntry(ZeroOnceLock<FileBlock>);
 
 const _: () = assert!(std::mem::size_of::<BlockEntry>() == 64);
 
 /// AST node records, step 3: the entries of the file ids below
-/// `LOW_BLOCKS`. A `OnceLock` is not all zero bytes, so this is `.data` in
-/// the binary. Native: 4 MiB, and a page of it costs memory only when an
-/// entry in it is set. wasm: 512 KiB, all of it in linear memory from the
-/// start.
-static FILE_BLOCKS: [BlockEntry; LOW_BLOCKS] = [const { BlockEntry(OnceLock::new()) }; LOW_BLOCKS];
+/// `LOW_BLOCKS`. An empty entry is all zero bytes (`ZeroOnceLock`), so this
+/// is `.bss`, not file bytes. Native: 4 MiB, and a page of it costs memory
+/// only when an entry in it is set. wasm: 512 KiB, all of it in linear
+/// memory from the start.
+static FILE_BLOCKS: [BlockEntry; LOW_BLOCKS] =
+    [const { BlockEntry(ZeroOnceLock::new()) }; LOW_BLOCKS];
 
 /// The entries of the file ids from `LOW_BLOCKS` on, in chunks of
 /// `HIGH_CHUNK` ids, each made by the first publish of an id in it. A
 /// process with many programs (a test binary, a long watch) gets there.
-static HIGH_BLOCKS: [OnceLock<Box<[BlockEntry; HIGH_CHUNK]>>;
+/// `.bss`, as `FILE_BLOCKS`.
+static HIGH_BLOCKS: [ZeroOnceLock<Box<[BlockEntry; HIGH_CHUNK]>>;
     (FILE_ID_LIMIT - LOW_BLOCKS) / HIGH_CHUNK] =
-    [const { OnceLock::new() }; (FILE_ID_LIMIT - LOW_BLOCKS) / HIGH_CHUNK];
+    [const { ZeroOnceLock::new() }; (FILE_ID_LIMIT - LOW_BLOCKS) / HIGH_CHUNK];
 
 /// The next unused file id. Only `publish_file_stores` changes it.
 static PUBLISHED: AtomicUsize = AtomicUsize::new(0);
@@ -1789,7 +1805,7 @@ fn high_block_path() {}
 // data).
 // PERF: step 4b. The release body is the one of step 3, with no call to
 // `registry_block`: in that form (and a `cfg!` check) LLVM made the entry
-// address after the `OnceLock` state test, one more instruction in every
+// address after the once state test, one more instruction in every
 // hot read (`goport -p` about +0.3%).
 #[inline]
 fn file_block(file: usize) -> Option<&'static FileBlock> {
@@ -1866,7 +1882,7 @@ fn set_file_block(file: usize, block: FileBlock) {
 /// does not have.
 fn new_high_chunk() -> Box<[BlockEntry; HIGH_CHUNK]> {
     let chunk: Box<[BlockEntry]> = (0..HIGH_CHUNK)
-        .map(|_| BlockEntry(OnceLock::new()))
+        .map(|_| BlockEntry(ZeroOnceLock::new()))
         .collect();
     let Ok(chunk) = chunk.try_into() else {
         unreachable!("a chunk has HIGH_CHUNK entries")
@@ -6016,7 +6032,7 @@ pub fn frozen_store_ast_node_lists(
 /// is valid only while the version is.
 // PERF: noderef1 (getsym1 report, W1). Go reads `n.Kind` and `n.data` from
 // one struct. Each `Node` read here goes through `file_block`, whose
-// `OnceLock` acquire load stops LLVM from merging repeated lookups.
+// acquire load of the once state stops LLVM from merging repeated lookups.
 #[derive(Clone, Copy)]
 pub struct FrozenNode {
     block: &'static FileBlock,
@@ -6103,7 +6119,7 @@ pub fn frozen_store_node(n: Node) -> Option<FrozenNode> {
 /// which give the same values. Lives no longer than a node read: the block
 /// of a freeable file version is valid only while the version is.
 // PERF: noderef1 G1 (getsym1 report). Each `Node` read goes through
-// `file_block`, whose `OnceLock` acquire load stops LLVM from merging
+// `file_block`, whose acquire load of the once state stops LLVM from merging
 // repeated lookups: `node.parent().kind()` three times in one predicate was
 // six lookups. Go reads struct fields.
 #[derive(Clone, Copy)]
@@ -9602,18 +9618,25 @@ mod tests {
         assert!(static_facts_word(Node::NIL).is_none());
     }
 
-    /// Sets the block of unpublished file id `file` (from `LOW_BLOCKS` on)
-    /// and reads its node through the node reads.
-    fn set_and_read_high_file_block(file: usize) {
-        let mut records = vec![NodeRecord::target(Node::NIL), NodeRecord::node(false)];
-        records[1].set_flags(NodeFlags::AMBIENT);
-        records[1].set_loc(TextRange::new(3, 7));
+    /// A leaked node shell block of file id `file` with `slots` slots: the
+    /// nil slot (with the owner word of `file`) and identifiers, each with
+    /// flags `AMBIENT` and loc 3 to 7.
+    fn test_file_block(file: usize, slots: usize) -> FileBlock {
+        let mut records = vec![NodeRecord::target(Node::NIL)];
+        for _ in 1..slots {
+            let mut record = NodeRecord::node(false);
+            record.set_flags(NodeFlags::AMBIENT);
+            record.set_loc(TextRange::new(3, 7));
+            records.push(record);
+        }
         // AST node records, step 4: the owner word (`block_is_owned`).
         *records[0].bind.get_mut() = NodeRecord::owner_word(file);
-        let block = FileBlock {
-            kinds: Vec::leak(vec![SyntaxKind::Unknown, SyntaxKind::Identifier]),
+        let mut kinds = vec![SyntaxKind::Identifier; slots];
+        kinds[0] = SyntaxKind::Unknown;
+        FileBlock {
+            kinds: Vec::leak(kinds),
             records: Vec::leak(records),
-            kids: Vec::leak(vec![NodeKids::unknown(), NodeKids::unknown()]),
+            kids: Vec::leak((0..slots).map(|_| NodeKids::unknown()).collect()),
             file: Box::leak(Box::new(BlockFile {
                 nodes: &[],
                 lists: &[],
@@ -9626,7 +9649,126 @@ mod tests {
                 go_file: None,
                 subtree_facts: OnceLock::new(),
             })),
+        }
+    }
+
+    /// `f()` once it gives a value. Panics after 60 s, so a broken test
+    /// stops.
+    fn wait_for<T>(mut f: impl FnMut() -> Option<T>) -> T {
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(v) = f() {
+                return v;
+            }
+            assert!(start.elapsed().as_secs() < 60, "no value after 60 s");
+            std::hint::spin_loop();
+        }
+    }
+
+    // bssblocks1: an entry cell (`BlockEntry`, `ZeroOnceLock`) in a
+    // first-use race. 8 threads set one empty entry at once, each with its
+    // own block, and 8 more read it from before the sets. One set wins,
+    // and every read that gives a block gives the whole block of one
+    // setter: its kinds, records and kids have its slot count, and its nil
+    // slot has its owner word. 200 rounds, each with a new entry.
+    #[test]
+    fn block_entry_first_use_race_gives_one_whole_block() {
+        const SETTERS: usize = 8;
+        const READERS: usize = 8;
+        // Owner words only: no registry entry of these ids is set.
+        let base = FILE_ID_LIMIT - 4 * HIGH_CHUNK;
+        let parts: Vec<_> = (0..SETTERS)
+            .map(|t| {
+                let b = test_file_block(base + t, t + 2);
+                (b.kinds, b.records, b.kids, b.file)
+            })
+            .collect();
+        let check = |b: &FileBlock| {
+            let slots = b.kinds.len();
+            assert!((2..SETTERS + 2).contains(&slots), "{slots} slots");
+            assert_eq!(b.records.len(), slots, "records of one setter");
+            assert_eq!(b.kids.len(), slots, "kids of one setter");
+            assert!(block_is_owned(b, base + slots - 2), "owner of one setter");
         };
+        for _ in 0..200 {
+            let entry = Box::new(BlockEntry(ZeroOnceLock::new()));
+            let barrier = std::sync::Barrier::new(SETTERS + READERS);
+            let wins = AtomicUsize::new(0);
+            std::thread::scope(|s| {
+                for &(kinds, records, kids, file) in &parts {
+                    let (entry, barrier, wins) = (&*entry, &barrier, &wins);
+                    s.spawn(move || {
+                        barrier.wait();
+                        let block = FileBlock {
+                            kinds,
+                            records,
+                            kids,
+                            file,
+                        };
+                        if entry.0.set(block).is_ok() {
+                            wins.fetch_add(1, Ordering::Relaxed);
+                        }
+                        // `set` waits for a set that runs, so the block is
+                        // there now.
+                        check(entry.0.get().expect("set by this thread or another"));
+                    });
+                }
+                for _ in 0..READERS {
+                    let (entry, barrier) = (&*entry, &barrier);
+                    s.spawn(move || {
+                        barrier.wait();
+                        check(wait_for(|| entry.0.get()));
+                    });
+                }
+            });
+            assert_eq!(wins.load(Ordering::Relaxed), 1, "one set wins");
+        }
+    }
+
+    // bssblocks1: the first use of a `HIGH_BLOCKS` chunk from 16 threads at
+    // once. Each thread sets the block of its own id in the same new chunk,
+    // so all of them race to make the chunk (`get_or_init`). Then each
+    // reads the node of every id through the node reads, once its block is
+    // set: no block is lost, and each read sees the whole block.
+    #[test]
+    fn high_chunk_first_use_race_keeps_every_block() {
+        const THREADS: usize = 16;
+        // A chunk that no publish and no other test reaches. The ids are
+        // 997 apart, on different pages of the chunk.
+        let base = FILE_ID_LIMIT - 3 * HIGH_CHUNK;
+        let files: Vec<usize> = (0..THREADS).map(|t| base + t * 997).collect();
+        assert!(files.iter().all(|&f| f < base + HIGH_CHUNK), "one chunk");
+        assert!(
+            HIGH_BLOCKS[(base - LOW_BLOCKS) / HIGH_CHUNK]
+                .get()
+                .is_none(),
+            "the chunk is new"
+        );
+        let barrier = std::sync::Barrier::new(THREADS);
+        std::thread::scope(|s| {
+            for &file in &files {
+                let (barrier, files) = (&barrier, &files);
+                s.spawn(move || {
+                    let block = test_file_block(file, 2);
+                    barrier.wait();
+                    set_file_block(file, block);
+                    for &other in files {
+                        wait_for(|| file_block(other));
+                        let n = handle(other, 1);
+                        assert_eq!(n.kind(), SyntaxKind::Identifier);
+                        assert_eq!(n.flags(), NodeFlags::AMBIENT);
+                        assert_eq!(n.loc(), TextRange::new(3, 7));
+                    }
+                });
+            }
+        });
+        assert!(file_block(base + 1).is_none(), "an id that no thread set");
+    }
+
+    /// Sets the block of unpublished file id `file` (from `LOW_BLOCKS` on)
+    /// and reads its node through the node reads.
+    fn set_and_read_high_file_block(file: usize) {
+        let block = test_file_block(file, 2);
         assert!(file_block(file).is_none());
         set_file_block(file, block);
         let n = handle(file, 1);

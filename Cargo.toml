@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/ts_goport",
+    "crates/ts_goport/parts/goport_cell",
     "crates/ts_goport/parts/goport_core",
     "crates/ts_goport/parts/goport_lsproto",
     "crates/ts_goport/parts/goport_util",

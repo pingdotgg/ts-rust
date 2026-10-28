@@ -13,6 +13,8 @@ path = "../../src/goport_core_root.rs"
 
 [dependencies]
 goport_util = { path = "../goport_util" }
+# ast/store.rs `ZeroOnceLock`: the registry entry arrays in `.bss`.
+goport_cell = { path = "../goport_cell" }
 rustc-hash = "=2.1.2"
 indexmap = "=2.14.0"
 # The map of std, with lookups by a hash made before (raw-entry): the loader
