@@ -1,0 +1,43 @@
+FunctionDeclaration | JSDocParameterTag:@param a first * ,JSDocParameterTag:@param b second *  | undefined | undefined,undefined,JSDocReturnTag:@returns sum * ,undefined
+  def {"description":"Adds."}
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {"description":"Adds."}
+Parameter | JSDocParameterTag:@param a first *  | undefined | undefined,undefined,undefined,undefined
+  def {"description":"first"}
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {"description":"first"}
+NumberKeyword | undefined | undefined | undefined,undefined,undefined,undefined
+Parameter | JSDocParameterTag:@param b second *  | undefined | undefined,undefined,undefined,undefined
+  def {"description":"second"}
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {"description":"second"}
+NumberKeyword | undefined | undefined | undefined,undefined,undefined,undefined
+Block | undefined | undefined | undefined,undefined,undefined,undefined
+ReturnStatement | undefined | undefined | undefined,undefined,undefined,undefined
+BinaryExpression | undefined | undefined | undefined,undefined,undefined,undefined
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {"description":"first"}
+PlusToken | undefined | undefined | undefined,undefined,undefined,undefined
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {"description":"second"}
+FirstStatement | undefined | NumberKeyword:number | undefined,undefined,undefined,JSDocTypeTag:@type {(x: string) => number} ,undefined
+VariableDeclarationList | undefined | undefined | undefined,undefined,undefined,undefined
+VariableDeclaration | undefined | NumberKeyword:number | undefined,undefined,undefined,JSDocTypeTag:@type {(x: string) => number} ,undefined
+  def {}
+Identifier | undefined | NumberKeyword:number | undefined,undefined,undefined,JSDocTypeTag:@type {(x: string) => number} ,undefined
+  def {}
+ArrowFunction | undefined | NumberKeyword:number | undefined,undefined,undefined,JSDocTypeTag:@type {(x: string) => number} ,undefined
+Parameter |  | undefined | undefined,undefined,undefined,undefined
+  def {}
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {}
+EqualsGreaterThanToken | undefined | undefined | undefined,undefined,undefined,undefined
+  def {}
+FirstLiteralToken | undefined | undefined | undefined,undefined,undefined,undefined
+FunctionDeclaration | undefined | undefined | JSDocAugmentsTag:@augments Base ,JSDocClassTag:@class ,undefined,undefined
+  def {}
+Identifier | undefined | undefined | undefined,undefined,undefined,undefined
+  def {}
+Block | undefined | undefined | undefined,undefined,undefined,undefined
+EndOfFileToken | undefined | undefined | undefined,undefined,undefined,undefined
+exit=0

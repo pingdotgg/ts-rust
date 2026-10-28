@@ -1,0 +1,2149 @@
+{
+ "source": "A probe run of the tier1 tests on a wrapper of typescript@6.0.3 that recorded the compiler options each test passed into the library: per test, the settings TS 7 removed",
+ "tier1": {
+  "unittests:: customTransforms before+decorators": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: customTransforms skipTriviaExternalSourceFiles": [
+   "outFile"
+  ],
+  "unittests:: evaluation:: arraySpread array spread preserves side-effects": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: arraySpread array spread packs spread elements": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: arraySpread array spread does not pack non-spread elements": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: arraySpread argument spread pack does not matter": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: asyncArrowEvaluation this capture (es5)": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: asyncArrowEvaluation Class alias (es5)": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: asyncGeneratorEvaluation return (es5)": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: asyncGeneratorEvaluation Supports global `AsyncIterator.prototype` if present": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: asyncGeneratorEvaluation Ignores global `AsyncIterator.prototype` if missing": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: awaiter await (es5)": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: awaitUsingDeclarations 'await using' at top level of module (System)": [
+   "module=System"
+  ],
+  "unittests:: evaluation:: awaitUsingDeclarations 'await using' with downlevel generators": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: awaitUsingDeclarations 'await using' with downlevel async generators": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: constEnum correct order of operations for inlined negative numbers": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: destructuring correct order for array destructuring evaluation and initializers when element is undefined": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: destructuring correct order for array destructuring evaluation and initializers when element is defined": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: destructuring correct order for array destructuring evaluation and initializers with spread ES5": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: destructuring correct evaluation for nested rest assignment in destructured object ES5": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: externalModules Correct 'this' in function exported from external module": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: externalModules Correct 'this' in function expression exported from external module": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forAwaitOfEvaluation sync (es5)": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forAwaitOfEvaluation async (es5)": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over a array with no Symbol": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over a string with no Symbol": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over undefined with no Symbol": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over undefined with Symbol": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over object with no Symbol.iterator with no Symbol": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over object with no Symbol.iterator with Symbol": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: forOfEvaluation es5 over object with Symbol.iterator": [
+   "downlevelIteration",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: generatorEvaluation throw before start (es5)": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: generatorEvaluation return before start (es5)": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: generatorEvaluation Supports global `Iterator.prototype` if present": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: generatorEvaluation Ignores global `Iterator.prototype` if missing": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: objectRest side effects in property assignment": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: objectRest side effects in during spread": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: objectRest trailing literal-valued object-literal": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o.f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o.x.f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o?.f()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o?.f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o.x?.f()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o?.x.f()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o?.x?.f()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall o?.x?.f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall f?.()?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall f?.().f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall f?.()?.f?.()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: optionalCall (o?.f)()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: superInStaticInitializer super-call in es5": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: templateLiteral toString() over valueOf()": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: templateLiteral correct evaluation order": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule pre-increment in commonjs using Number": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule pre-increment in System using Number": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule pre-increment in commonjs using BigInt": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule pre-increment in System using BigInt": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule post-increment in commonjs using Number": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule post-increment in System using Number": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule post-increment in commonjs using BigInt": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: updateExpressionInModule post-increment in System using BigInt": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: evaluation:: usingDeclarations 'using' at top level of module (AMD)": [
+   "module=AMD"
+  ],
+  "unittests:: evaluation:: usingDeclarations 'using' at top level of module (System)": [
+   "module=System"
+  ],
+  "unittests:: evaluation:: usingDeclarations 'using' with downlevel generators": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: moduleResolution:: Files with different casing with forceConsistentCasingInFileNames same file is referenced using absolute and relative names": [
+   "module=AMD"
+  ],
+  "unittests:: moduleResolution:: Files with different casing with forceConsistentCasingInFileNames two files used in program differ only in casing (tripleslash references)": [
+   "module=AMD"
+  ],
+  "unittests:: moduleResolution:: Files with different casing with forceConsistentCasingInFileNames two files used in program differ only in casing (imports)": [
+   "module=AMD"
+  ],
+  "unittests:: moduleResolution:: Files with different casing with forceConsistentCasingInFileNames two files exist on disk that differs only in casing": [
+   "module=AMD"
+  ],
+  "unittests:: services:: languageService:: detects program upto date when new file is added to the referenced project detects program upto date when new file is added to the referenced project": [
+   "module=None"
+  ],
+  "unittests:: services:: languageService:: detects program upto date when new file is added to the referenced project detects program upto date when new file is added to the referenced project without useSourceOfProjectReferenceRedirect": [
+   "module=None"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs Correct errors for transpile/Generates no diagnostics with valid inputs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs Correct errors (old transpile) for transpile/Generates no diagnostics with valid inputs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs Correct output for transpile/Generates no diagnostics with valid inputs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs Correct output (old transpile) for transpile/Generates no diagnostics with valid inputs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs (verbatimModuleSyntax=true) Correct errors for transpile/Generates no diagnostics with valid inputs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Generates no diagnostics with valid inputs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs (verbatimModuleSyntax=true) Correct output for transpile/Generates no diagnostics with valid inputs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics with valid inputs (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Generates no diagnostics with valid inputs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references Correct errors for transpile/Generates no diagnostics for missing file references.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references Correct errors (old transpile) for transpile/Generates no diagnostics for missing file references.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references Correct output for transpile/Generates no diagnostics for missing file references.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references Correct output (old transpile) for transpile/Generates no diagnostics for missing file references.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references (verbatimModuleSyntax=true) Correct errors for transpile/Generates no diagnostics for missing file references (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Generates no diagnostics for missing file references (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references (verbatimModuleSyntax=true) Correct output for transpile/Generates no diagnostics for missing file references (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing file references (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Generates no diagnostics for missing file references (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports Correct errors for transpile/Generates no diagnostics for missing module imports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports Correct errors (old transpile) for transpile/Generates no diagnostics for missing module imports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports Correct output for transpile/Generates no diagnostics for missing module imports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports Correct output (old transpile) for transpile/Generates no diagnostics for missing module imports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports (verbatimModuleSyntax=true) Correct errors for transpile/Generates no diagnostics for missing module imports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Generates no diagnostics for missing module imports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports (verbatimModuleSyntax=true) Correct output for transpile/Generates no diagnostics for missing module imports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates no diagnostics for missing module imports (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Generates no diagnostics for missing module imports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics Correct errors for transpile/Generates expected syntactic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics Correct errors (old transpile) for transpile/Generates expected syntactic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics Correct output for transpile/Generates expected syntactic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics Correct output (old transpile) for transpile/Generates expected syntactic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics (verbatimModuleSyntax=true) Correct errors for transpile/Generates expected syntactic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Generates expected syntactic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics (verbatimModuleSyntax=true) Correct output for transpile/Generates expected syntactic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates expected syntactic diagnostics (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Generates expected syntactic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics Correct errors for transpile/Does not generate semantic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics Correct errors (old transpile) for transpile/Does not generate semantic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics Correct output for transpile/Does not generate semantic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics Correct output (old transpile) for transpile/Does not generate semantic diagnostics.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics (verbatimModuleSyntax=true) Correct errors for transpile/Does not generate semantic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Does not generate semantic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics (verbatimModuleSyntax=true) Correct output for transpile/Does not generate semantic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not generate semantic diagnostics (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Does not generate semantic diagnostics (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates module output Correct errors for transpile/Generates module output.ts": [
+   "module=AMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates module output Correct errors (old transpile) for transpile/Generates module output.ts": [
+   "module=AMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates module output Correct output for transpile/Generates module output.ts": [
+   "module=AMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Generates module output Correct output (old transpile) for transpile/Generates module output.ts": [
+   "module=AMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character Correct errors for transpile/Uses correct newLine character.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character Correct errors (old transpile) for transpile/Uses correct newLine character.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character Correct output for transpile/Uses correct newLine character.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character Correct output (old transpile) for transpile/Uses correct newLine character.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character (verbatimModuleSyntax=true) Correct errors for transpile/Uses correct newLine character (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Uses correct newLine character (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character (verbatimModuleSyntax=true) Correct output for transpile/Uses correct newLine character (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Uses correct newLine character (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Uses correct newLine character (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Sets module name Correct errors for transpile/Sets module name.ts": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Sets module name Correct errors (old transpile) for transpile/Sets module name.ts": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Sets module name Correct output for transpile/Sets module name.ts": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Sets module name Correct output (old transpile) for transpile/Sets module name.ts": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension Correct errors for transpile/No extra errors for file without extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension Correct errors (old transpile) for transpile/No extra errors for file without extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension Correct output for transpile/No extra errors for file without extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension Correct output (old transpile) for transpile/No extra errors for file without extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension (verbatimModuleSyntax=true) Correct errors for transpile/No extra errors for file without extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/No extra errors for file without extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension (verbatimModuleSyntax=true) Correct output for transpile/No extra errors for file without extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile No extra errors for file without extension (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/No extra errors for file without extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Rename dependencies - System Correct errors for transpile/Rename dependencies - System.ts": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Rename dependencies - System Correct output for transpile/Rename dependencies - System.ts": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Rename dependencies - AMD Correct errors for transpile/Rename dependencies - AMD.ts": [
+   "module=AMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Rename dependencies - AMD Correct output for transpile/Rename dependencies - AMD.ts": [
+   "module=AMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Rename dependencies - UMD Correct errors for transpile/Rename dependencies - UMD.ts": [
+   "module=UMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Rename dependencies - UMD Correct output for transpile/Rename dependencies - UMD.ts": [
+   "module=UMD",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata Correct errors for transpile/Transpile with emit decorators and emit metadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata Correct errors (old transpile) for transpile/Transpile with emit decorators and emit metadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata Correct output for transpile/Transpile with emit decorators and emit metadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata Correct output (old transpile) for transpile/Transpile with emit decorators and emit metadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true) Correct errors for transpile/Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true) Correct output for transpile/Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Transpile with emit decorators and emit metadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports backslashes in file name Correct errors for transpile/Supports backslashes in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports backslashes in file name Correct errors (old transpile) for transpile/Supports backslashes in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports backslashes in file name Correct output for transpile/Supports backslashes in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports backslashes in file name Correct output (old transpile) for transpile/Supports backslashes in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile file as 'tsx' if 'jsx' is specified Correct errors for transpile/transpile file as tsx if jsx is specified.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile file as 'tsx' if 'jsx' is specified Correct errors (old transpile) for transpile/transpile file as tsx if jsx is specified.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile file as 'tsx' if 'jsx' is specified Correct output for transpile/transpile file as tsx if jsx is specified.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile file as 'tsx' if 'jsx' is specified Correct output (old transpile) for transpile/transpile file as tsx if jsx is specified.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile .js files Correct errors for transpile/transpile .js files.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile .js files Correct errors (old transpile) for transpile/transpile .js files.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile .js files Correct output for transpile/transpile .js files.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile transpile .js files Correct output (old transpile) for transpile/transpile .js files.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports urls in file name Correct errors for transpile/Supports urls in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports urls in file name Correct errors (old transpile) for transpile/Supports urls in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports urls in file name Correct output for transpile/Supports urls in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports urls in file name Correct output (old transpile) for transpile/Supports urls in file name.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options module-kind is out-of-range Correct errors for transpile/Report an error when compiler-options module-kind is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options module-kind is out-of-range Correct errors (old transpile) for transpile/Report an error when compiler-options module-kind is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options module-kind is out-of-range Correct output for transpile/Report an error when compiler-options module-kind is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options module-kind is out-of-range Correct output (old transpile) for transpile/Report an error when compiler-options module-kind is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options target-script is out-of-range Correct errors for transpile/Report an error when compiler-options target-script is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options target-script is out-of-range Correct errors (old transpile) for transpile/Report an error when compiler-options target-script is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options target-script is out-of-range Correct output for transpile/Report an error when compiler-options target-script is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Report an error when compiler-options target-script is out-of-range Correct output (old transpile) for transpile/Report an error when compiler-options target-script is out-of-range.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values Correct errors for transpile/Support options with lib values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values Correct errors (old transpile) for transpile/Support options with lib values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values Correct output for transpile/Support options with lib values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values Correct output (old transpile) for transpile/Support options with lib values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values (verbatimModuleSyntax=true) Correct errors for transpile/Support options with lib values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Support options with lib values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values (verbatimModuleSyntax=true) Correct output for transpile/Support options with lib values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with lib values (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Support options with lib values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values Correct errors for transpile/Support options with types values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values Correct errors (old transpile) for transpile/Support options with types values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values Correct output for transpile/Support options with types values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values Correct output (old transpile) for transpile/Support options with types values.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values (verbatimModuleSyntax=true) Correct errors for transpile/Support options with types values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Support options with types values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values (verbatimModuleSyntax=true) Correct output for transpile/Support options with types values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Support options with types values (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Support options with types values (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' Correct errors for transpile/Supports setting allowJs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' Correct errors (old transpile) for transpile/Supports setting allowJs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' Correct output for transpile/Supports setting allowJs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' Correct output (old transpile) for transpile/Supports setting allowJs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting allowJs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting allowJs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting allowJs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowJs' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting allowJs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' Correct errors for transpile/Supports setting allowSyntheticDefaultImports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' Correct errors (old transpile) for transpile/Supports setting allowSyntheticDefaultImports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' Correct output for transpile/Supports setting allowSyntheticDefaultImports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' Correct output (old transpile) for transpile/Supports setting allowSyntheticDefaultImports.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting allowSyntheticDefaultImports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting allowSyntheticDefaultImports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting allowSyntheticDefaultImports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowSyntheticDefaultImports' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting allowSyntheticDefaultImports (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' Correct errors for transpile/Supports setting allowUnreachableCode.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' Correct errors (old transpile) for transpile/Supports setting allowUnreachableCode.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' Correct output for transpile/Supports setting allowUnreachableCode.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' Correct output (old transpile) for transpile/Supports setting allowUnreachableCode.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting allowUnreachableCode (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting allowUnreachableCode (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting allowUnreachableCode (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnreachableCode' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting allowUnreachableCode (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' Correct errors for transpile/Supports setting allowUnusedLabels.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' Correct errors (old transpile) for transpile/Supports setting allowUnusedLabels.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' Correct output for transpile/Supports setting allowUnusedLabels.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' Correct output (old transpile) for transpile/Supports setting allowUnusedLabels.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting allowUnusedLabels (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting allowUnusedLabels (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting allowUnusedLabels (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'allowUnusedLabels' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting allowUnusedLabels (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' Correct errors for transpile/Supports setting alwaysStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' Correct errors (old transpile) for transpile/Supports setting alwaysStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' Correct output for transpile/Supports setting alwaysStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' Correct output (old transpile) for transpile/Supports setting alwaysStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting alwaysStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting alwaysStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting alwaysStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'alwaysStrict' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting alwaysStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' Correct errors for transpile/Supports setting baseUrl.ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' Correct errors (old transpile) for transpile/Supports setting baseUrl.ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' Correct output for transpile/Supports setting baseUrl.ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' Correct output (old transpile) for transpile/Supports setting baseUrl.ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting baseUrl (verbatimModuleSyntax=true).ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting baseUrl (verbatimModuleSyntax=true).ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting baseUrl (verbatimModuleSyntax=true).ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'baseUrl' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting baseUrl (verbatimModuleSyntax=true).ts": [
+   "baseUrl",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' Correct errors for transpile/Supports setting charset.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' Correct errors (old transpile) for transpile/Supports setting charset.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' Correct output for transpile/Supports setting charset.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' Correct output (old transpile) for transpile/Supports setting charset.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting charset (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting charset (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting charset (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'charset' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting charset (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' Correct errors for transpile/Supports setting declaration.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' Correct errors (old transpile) for transpile/Supports setting declaration.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' Correct output for transpile/Supports setting declaration.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' Correct output (old transpile) for transpile/Supports setting declaration.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting declaration (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting declaration (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting declaration (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declaration' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting declaration (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' Correct errors for transpile/Supports setting declarationMap.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' Correct errors (old transpile) for transpile/Supports setting declarationMap.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' Correct output for transpile/Supports setting declarationMap.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' Correct output (old transpile) for transpile/Supports setting declarationMap.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting declarationMap (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting declarationMap (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting declarationMap (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationMap' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting declarationMap (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' Correct errors for transpile/Supports setting declarationDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' Correct errors (old transpile) for transpile/Supports setting declarationDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' Correct output for transpile/Supports setting declarationDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' Correct output (old transpile) for transpile/Supports setting declarationDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting declarationDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting declarationDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting declarationDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'declarationDir' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting declarationDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' Correct errors for transpile/Supports setting emitBOM.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' Correct errors (old transpile) for transpile/Supports setting emitBOM.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' Correct output for transpile/Supports setting emitBOM.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' Correct output (old transpile) for transpile/Supports setting emitBOM.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting emitBOM (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting emitBOM (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting emitBOM (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitBOM' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting emitBOM (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' Correct errors for transpile/Supports setting emitDecoratorMetadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' Correct errors (old transpile) for transpile/Supports setting emitDecoratorMetadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' Correct output for transpile/Supports setting emitDecoratorMetadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' Correct output (old transpile) for transpile/Supports setting emitDecoratorMetadata.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting emitDecoratorMetadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting emitDecoratorMetadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting emitDecoratorMetadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'emitDecoratorMetadata' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting emitDecoratorMetadata (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' Correct errors for transpile/Supports setting experimentalDecorators.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' Correct errors (old transpile) for transpile/Supports setting experimentalDecorators.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' Correct output for transpile/Supports setting experimentalDecorators.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' Correct output (old transpile) for transpile/Supports setting experimentalDecorators.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting experimentalDecorators (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting experimentalDecorators (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting experimentalDecorators (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'experimentalDecorators' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting experimentalDecorators (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' Correct errors for transpile/Supports setting forceConsistentCasingInFileNames.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' Correct errors (old transpile) for transpile/Supports setting forceConsistentCasingInFileNames.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' Correct output for transpile/Supports setting forceConsistentCasingInFileNames.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' Correct output (old transpile) for transpile/Supports setting forceConsistentCasingInFileNames.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting forceConsistentCasingInFileNames (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting forceConsistentCasingInFileNames (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting forceConsistentCasingInFileNames (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'forceConsistentCasingInFileNames' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting forceConsistentCasingInFileNames (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'isolatedModules' Correct errors for transpile/Supports setting isolatedModules.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'isolatedModules' Correct errors (old transpile) for transpile/Supports setting isolatedModules.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'isolatedModules' Correct output for transpile/Supports setting isolatedModules.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'isolatedModules' Correct output (old transpile) for transpile/Supports setting isolatedModules.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not support setting 'isolatedModules' (verbatimModuleSyntax=true) Correct errors for transpile/Does not support setting isolatedModules (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not support setting 'isolatedModules' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Does not support setting isolatedModules (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not support setting 'isolatedModules' (verbatimModuleSyntax=true) Correct output for transpile/Does not support setting isolatedModules (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not support setting 'isolatedModules' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Does not support setting isolatedModules (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' Correct errors for transpile/Supports setting jsx.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' Correct errors (old transpile) for transpile/Supports setting jsx.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' Correct output for transpile/Supports setting jsx.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' Correct output (old transpile) for transpile/Supports setting jsx.tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting jsx (verbatimModuleSyntax=true).tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting jsx (verbatimModuleSyntax=true).tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting jsx (verbatimModuleSyntax=true).tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsx' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting jsx (verbatimModuleSyntax=true).tsx": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' Correct errors for transpile/Supports setting lib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' Correct errors (old transpile) for transpile/Supports setting lib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' Correct output for transpile/Supports setting lib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' Correct output (old transpile) for transpile/Supports setting lib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting lib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting lib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting lib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'lib' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting lib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' Correct errors for transpile/Supports setting locale.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' Correct errors (old transpile) for transpile/Supports setting locale.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' Correct output for transpile/Supports setting locale.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' Correct output (old transpile) for transpile/Supports setting locale.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting locale (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting locale (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting locale (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'locale' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting locale (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' Correct errors for transpile/Supports setting module.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' Correct errors (old transpile) for transpile/Supports setting module.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' Correct output for transpile/Supports setting module.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' Correct output (old transpile) for transpile/Supports setting module.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting module (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting module (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting module (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'module' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting module (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' Correct errors for transpile/Supports setting moduleResolution.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' Correct errors (old transpile) for transpile/Supports setting moduleResolution.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' Correct output for transpile/Supports setting moduleResolution.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' Correct output (old transpile) for transpile/Supports setting moduleResolution.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting moduleResolution (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting moduleResolution (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting moduleResolution (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'moduleResolution' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting moduleResolution (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' Correct errors for transpile/Supports setting newLine.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' Correct errors (old transpile) for transpile/Supports setting newLine.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' Correct output for transpile/Supports setting newLine.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' Correct output (old transpile) for transpile/Supports setting newLine.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting newLine (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting newLine (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting newLine (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'newLine' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting newLine (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' Correct errors for transpile/Supports setting noEmit.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' Correct errors (old transpile) for transpile/Supports setting noEmit.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' Correct output for transpile/Supports setting noEmit.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' Correct output (old transpile) for transpile/Supports setting noEmit.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noEmit (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noEmit (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noEmit (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmit' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noEmit (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' Correct errors for transpile/Supports setting noEmitHelpers.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' Correct errors (old transpile) for transpile/Supports setting noEmitHelpers.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' Correct output for transpile/Supports setting noEmitHelpers.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' Correct output (old transpile) for transpile/Supports setting noEmitHelpers.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noEmitHelpers (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noEmitHelpers (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noEmitHelpers (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitHelpers' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noEmitHelpers (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' Correct errors for transpile/Supports setting noEmitOnError.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' Correct errors (old transpile) for transpile/Supports setting noEmitOnError.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' Correct output for transpile/Supports setting noEmitOnError.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' Correct output (old transpile) for transpile/Supports setting noEmitOnError.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noEmitOnError (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noEmitOnError (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noEmitOnError (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noEmitOnError' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noEmitOnError (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' Correct errors for transpile/Supports setting noErrorTruncation.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' Correct errors (old transpile) for transpile/Supports setting noErrorTruncation.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' Correct output for transpile/Supports setting noErrorTruncation.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' Correct output (old transpile) for transpile/Supports setting noErrorTruncation.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noErrorTruncation (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noErrorTruncation (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noErrorTruncation (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noErrorTruncation' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noErrorTruncation (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' Correct errors for transpile/Supports setting noFallthroughCasesInSwitch.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' Correct errors (old transpile) for transpile/Supports setting noFallthroughCasesInSwitch.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' Correct output for transpile/Supports setting noFallthroughCasesInSwitch.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' Correct output (old transpile) for transpile/Supports setting noFallthroughCasesInSwitch.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noFallthroughCasesInSwitch (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noFallthroughCasesInSwitch (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noFallthroughCasesInSwitch (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noFallthroughCasesInSwitch' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noFallthroughCasesInSwitch (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' Correct errors for transpile/Supports setting noImplicitAny.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' Correct errors (old transpile) for transpile/Supports setting noImplicitAny.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' Correct output for transpile/Supports setting noImplicitAny.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' Correct output (old transpile) for transpile/Supports setting noImplicitAny.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noImplicitAny (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noImplicitAny (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noImplicitAny (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitAny' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noImplicitAny (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' Correct errors for transpile/Supports setting noImplicitReturns.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' Correct errors (old transpile) for transpile/Supports setting noImplicitReturns.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' Correct output for transpile/Supports setting noImplicitReturns.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' Correct output (old transpile) for transpile/Supports setting noImplicitReturns.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noImplicitReturns (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noImplicitReturns (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noImplicitReturns (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitReturns' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noImplicitReturns (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' Correct errors for transpile/Supports setting noImplicitThis.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' Correct errors (old transpile) for transpile/Supports setting noImplicitThis.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' Correct output for transpile/Supports setting noImplicitThis.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' Correct output (old transpile) for transpile/Supports setting noImplicitThis.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noImplicitThis (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noImplicitThis (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noImplicitThis (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitThis' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noImplicitThis (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' Correct errors for transpile/Supports setting noImplicitUseStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' Correct errors (old transpile) for transpile/Supports setting noImplicitUseStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' Correct output for transpile/Supports setting noImplicitUseStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' Correct output (old transpile) for transpile/Supports setting noImplicitUseStrict.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noImplicitUseStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noImplicitUseStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noImplicitUseStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noImplicitUseStrict' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noImplicitUseStrict (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' Correct errors for transpile/Supports setting noLib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' Correct errors (old transpile) for transpile/Supports setting noLib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' Correct output for transpile/Supports setting noLib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' Correct output (old transpile) for transpile/Supports setting noLib.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noLib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noLib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noLib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noLib' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noLib (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' Correct errors for transpile/Supports setting noResolve.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' Correct errors (old transpile) for transpile/Supports setting noResolve.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' Correct output for transpile/Supports setting noResolve.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' Correct output (old transpile) for transpile/Supports setting noResolve.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting noResolve (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting noResolve (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting noResolve (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'noResolve' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting noResolve (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' Correct errors for transpile/Supports setting out.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' Correct errors (old transpile) for transpile/Supports setting out.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' Correct output for transpile/Supports setting out.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' Correct output (old transpile) for transpile/Supports setting out.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting out (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting out (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting out (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'out' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting out (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' Correct errors for transpile/Supports setting outDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' Correct errors (old transpile) for transpile/Supports setting outDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' Correct output for transpile/Supports setting outDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' Correct output (old transpile) for transpile/Supports setting outDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting outDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting outDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting outDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outDir' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting outDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' Correct errors for transpile/Supports setting outFile.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' Correct errors (old transpile) for transpile/Supports setting outFile.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' Correct output for transpile/Supports setting outFile.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' Correct output (old transpile) for transpile/Supports setting outFile.ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting outFile (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting outFile (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting outFile (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'outFile' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting outFile (verbatimModuleSyntax=true).ts": [
+   "outFile",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' Correct errors for transpile/Supports setting paths.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' Correct errors (old transpile) for transpile/Supports setting paths.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' Correct output for transpile/Supports setting paths.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' Correct output (old transpile) for transpile/Supports setting paths.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting paths (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting paths (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting paths (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'paths' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting paths (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' Correct errors for transpile/Supports setting preserveConstEnums.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' Correct errors (old transpile) for transpile/Supports setting preserveConstEnums.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' Correct output for transpile/Supports setting preserveConstEnums.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' Correct output (old transpile) for transpile/Supports setting preserveConstEnums.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting preserveConstEnums (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting preserveConstEnums (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting preserveConstEnums (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'preserveConstEnums' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting preserveConstEnums (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' Correct errors for transpile/Supports setting reactNamespace.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' Correct errors (old transpile) for transpile/Supports setting reactNamespace.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' Correct output for transpile/Supports setting reactNamespace.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' Correct output (old transpile) for transpile/Supports setting reactNamespace.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting reactNamespace (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting reactNamespace (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting reactNamespace (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'reactNamespace' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting reactNamespace (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' Correct errors for transpile/Supports setting jsxFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' Correct errors (old transpile) for transpile/Supports setting jsxFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' Correct output for transpile/Supports setting jsxFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' Correct output (old transpile) for transpile/Supports setting jsxFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting jsxFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting jsxFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting jsxFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFactory' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting jsxFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' Correct errors for transpile/Supports setting jsxFragmentFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' Correct errors (old transpile) for transpile/Supports setting jsxFragmentFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' Correct output for transpile/Supports setting jsxFragmentFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' Correct output (old transpile) for transpile/Supports setting jsxFragmentFactory.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting jsxFragmentFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting jsxFragmentFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting jsxFragmentFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'jsxFragmentFactory' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting jsxFragmentFactory (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' Correct errors for transpile/Supports setting removeComments.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' Correct errors (old transpile) for transpile/Supports setting removeComments.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' Correct output for transpile/Supports setting removeComments.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' Correct output (old transpile) for transpile/Supports setting removeComments.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting removeComments (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting removeComments (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting removeComments (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'removeComments' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting removeComments (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' Correct errors for transpile/Supports setting rootDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' Correct errors (old transpile) for transpile/Supports setting rootDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' Correct output for transpile/Supports setting rootDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' Correct output (old transpile) for transpile/Supports setting rootDir.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting rootDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting rootDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting rootDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDir' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting rootDir (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' Correct errors for transpile/Supports setting rootDirs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' Correct errors (old transpile) for transpile/Supports setting rootDirs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' Correct output for transpile/Supports setting rootDirs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' Correct output (old transpile) for transpile/Supports setting rootDirs.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting rootDirs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting rootDirs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting rootDirs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'rootDirs' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting rootDirs (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' Correct errors for transpile/Supports setting skipLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' Correct errors (old transpile) for transpile/Supports setting skipLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' Correct output for transpile/Supports setting skipLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' Correct output (old transpile) for transpile/Supports setting skipLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting skipLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting skipLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting skipLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipLibCheck' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting skipLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' Correct errors for transpile/Supports setting skipDefaultLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' Correct errors (old transpile) for transpile/Supports setting skipDefaultLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' Correct output for transpile/Supports setting skipDefaultLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' Correct output (old transpile) for transpile/Supports setting skipDefaultLibCheck.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting skipDefaultLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting skipDefaultLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting skipDefaultLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'skipDefaultLibCheck' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting skipDefaultLibCheck (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' Correct errors for transpile/Supports setting strictNullChecks.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' Correct errors (old transpile) for transpile/Supports setting strictNullChecks.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' Correct output for transpile/Supports setting strictNullChecks.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' Correct output (old transpile) for transpile/Supports setting strictNullChecks.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting strictNullChecks (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting strictNullChecks (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting strictNullChecks (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'strictNullChecks' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting strictNullChecks (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' Correct errors for transpile/Supports setting stripInternal.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' Correct errors (old transpile) for transpile/Supports setting stripInternal.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' Correct output for transpile/Supports setting stripInternal.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' Correct output (old transpile) for transpile/Supports setting stripInternal.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting stripInternal (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting stripInternal (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting stripInternal (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'stripInternal' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting stripInternal (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' Correct errors for transpile/Supports setting suppressExcessPropertyErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' Correct errors (old transpile) for transpile/Supports setting suppressExcessPropertyErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' Correct output for transpile/Supports setting suppressExcessPropertyErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' Correct output (old transpile) for transpile/Supports setting suppressExcessPropertyErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting suppressExcessPropertyErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting suppressExcessPropertyErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting suppressExcessPropertyErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressExcessPropertyErrors' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting suppressExcessPropertyErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' Correct errors for transpile/Supports setting suppressImplicitAnyIndexErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' Correct errors (old transpile) for transpile/Supports setting suppressImplicitAnyIndexErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' Correct output for transpile/Supports setting suppressImplicitAnyIndexErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' Correct output (old transpile) for transpile/Supports setting suppressImplicitAnyIndexErrors.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting suppressImplicitAnyIndexErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting suppressImplicitAnyIndexErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting suppressImplicitAnyIndexErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'suppressImplicitAnyIndexErrors' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting suppressImplicitAnyIndexErrors (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' Correct errors for transpile/Supports setting types.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' Correct errors (old transpile) for transpile/Supports setting types.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' Correct output for transpile/Supports setting types.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' Correct output (old transpile) for transpile/Supports setting types.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting types (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting types (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting types (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'types' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting types (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' Correct errors for transpile/Supports setting typeRoots.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' Correct errors (old transpile) for transpile/Supports setting typeRoots.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' Correct output for transpile/Supports setting typeRoots.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' Correct output (old transpile) for transpile/Supports setting typeRoots.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting typeRoots (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting typeRoots (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting typeRoots (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'typeRoots' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting typeRoots (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' Correct errors for transpile/Supports setting incremental.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' Correct errors (old transpile) for transpile/Supports setting incremental.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' Correct output for transpile/Supports setting incremental.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' Correct output (old transpile) for transpile/Supports setting incremental.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting incremental (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting incremental (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting incremental (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'incremental' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting incremental (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' Correct errors for transpile/Supports setting composite.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' Correct errors (old transpile) for transpile/Supports setting composite.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' Correct output for transpile/Supports setting composite.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' Correct output (old transpile) for transpile/Supports setting composite.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting composite (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting composite (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting composite (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'composite' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting composite (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' Correct errors for transpile/Supports setting tsbuildinfo.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' Correct errors (old transpile) for transpile/Supports setting tsbuildinfo.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' Correct output for transpile/Supports setting tsbuildinfo.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' Correct output (old transpile) for transpile/Supports setting tsbuildinfo.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' (verbatimModuleSyntax=true) Correct errors for transpile/Supports setting tsbuildinfo (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports setting tsbuildinfo (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' (verbatimModuleSyntax=true) Correct output for transpile/Supports setting tsbuildinfo (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports setting 'tsbuildinfo' (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports setting tsbuildinfo (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option Correct errors for transpile/Correctly serialize metadata when transpile with CommonJS option.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option Correct errors (old transpile) for transpile/Correctly serialize metadata when transpile with CommonJS option.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option Correct output for transpile/Correctly serialize metadata when transpile with CommonJS option.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option Correct output (old transpile) for transpile/Correctly serialize metadata when transpile with CommonJS option.ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true) Correct errors for transpile/Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true) Correct output for transpile/Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Correctly serialize metadata when transpile with CommonJS option (verbatimModuleSyntax=true).ts": [
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with System option Correct errors for transpile/Correctly serialize metadata when transpile with System option.ts": [
+   "module=System",
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with System option Correct errors (old transpile) for transpile/Correctly serialize metadata when transpile with System option.ts": [
+   "module=System",
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with System option Correct output for transpile/Correctly serialize metadata when transpile with System option.ts": [
+   "module=System",
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Correctly serialize metadata when transpile with System option Correct output (old transpile) for transpile/Correctly serialize metadata when transpile with System option.ts": [
+   "module=System",
+   "moduleResolution=Node10",
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays Correct errors for transpile/Supports readonly keyword for arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays Correct errors (old transpile) for transpile/Supports readonly keyword for arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays Correct output for transpile/Supports readonly keyword for arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays Correct output (old transpile) for transpile/Supports readonly keyword for arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays (verbatimModuleSyntax=true) Correct errors for transpile/Supports readonly keyword for arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports readonly keyword for arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays (verbatimModuleSyntax=true) Correct output for transpile/Supports readonly keyword for arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports readonly keyword for arrays (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports readonly keyword for arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays Correct errors for transpile/Supports as const arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays Correct errors (old transpile) for transpile/Supports as const arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays Correct output for transpile/Supports as const arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays Correct output (old transpile) for transpile/Supports as const arrays.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays (verbatimModuleSyntax=true) Correct errors for transpile/Supports as const arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Supports as const arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays (verbatimModuleSyntax=true) Correct output for transpile/Supports as const arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Supports 'as const' arrays (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Supports as const arrays (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension Correct errors for transpile/Infer correct file extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension Correct errors (old transpile) for transpile/Infer correct file extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension Correct output for transpile/Infer correct file extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension Correct output (old transpile) for transpile/Infer correct file extension.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension (verbatimModuleSyntax=true) Correct errors for transpile/Infer correct file extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Infer correct file extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension (verbatimModuleSyntax=true) Correct output for transpile/Infer correct file extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Infer correct file extension (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Infer correct file extension (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash Correct errors for transpile/Export star as ns conflict does not crash.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash Correct errors (old transpile) for transpile/Export star as ns conflict does not crash.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash Correct output for transpile/Export star as ns conflict does not crash.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash Correct output (old transpile) for transpile/Export star as ns conflict does not crash.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash (verbatimModuleSyntax=true) Correct errors for transpile/Export star as ns conflict does not crash (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Export star as ns conflict does not crash (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash (verbatimModuleSyntax=true) Correct output for transpile/Export star as ns conflict does not crash (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Export star as ns conflict does not crash (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Export star as ns conflict does not crash (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by export type Correct errors for transpile/Elides import equals referenced only by export type.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by export type Correct errors (old transpile) for transpile/Elides import equals referenced only by export type.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by export type Correct output for transpile/Elides import equals referenced only by export type.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by export type Correct output (old transpile) for transpile/Elides import equals referenced only by export type.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by export type (verbatimModuleSyntax=true) Correct errors for transpile/Does not elide import equals referenced only by export type (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by export type (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Does not elide import equals referenced only by export type (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by export type (verbatimModuleSyntax=true) Correct output for transpile/Does not elide import equals referenced only by export type (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by export type (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Does not elide import equals referenced only by export type (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by type only export specifier Correct errors for transpile/Elides import equals referenced only by type only export specifier.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by type only export specifier Correct errors (old transpile) for transpile/Elides import equals referenced only by type only export specifier.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by type only export specifier Correct output for transpile/Elides import equals referenced only by type only export specifier.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Elides import equals referenced only by type only export specifier Correct output (old transpile) for transpile/Elides import equals referenced only by type only export specifier.ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true) Correct errors for transpile/Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true) Correct errors (old transpile) for transpile/Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true) Correct output for transpile/Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: services:: Transpile Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true) Correct output (old transpile) for transpile/Does not elide import equals referenced only by type only export specifier (verbatimModuleSyntax=true).ts": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformTaggedTemplateLiteral": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformAddImportStar": [
+   "module=System",
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformAddDecoratedNode": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformParameterProperty": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformAddCommentToArrowReturnValue": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformAddCommentToExportedVar": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI transformAddCommentToImport": [
+   "target=ES5/ES3"
+  ],
+  "unittests:: TransformAPI issue24709": [
+   "module=None",
+   "target=ES5/ES3"
+  ]
+ }
+}

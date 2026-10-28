@@ -19,6 +19,11 @@ Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 
 
 - The AST schema (`tools/ts_ast_codegen/spec`) is copied from TypeScript, with edits for the Rust
   code generator ([PROVENANCE.md](tools/ts_ast_codegen/spec/PROVENANCE.md)).
+- `npm/typescript-api` builds its `lib/` from the typescript@6.0.3 npm package
+  (`npm/typescript-api/scripts/build.mjs`): `typescript.d.ts`, `tsserverlibrary.*`,
+  `watchGuard.js` and `typesMap.json` without change, and `typescript.js` with hook points added
+  (the build marks the file as changed). Some functions in `npm/typescript-api/src` port parts of
+  TypeScript 6.0.3 (`src/compiler/builder.ts`, `program.ts`, `emitter.ts`); each names its source.
 
 License: [licenses/TypeScript-LICENSE.txt](licenses/TypeScript-LICENSE.txt). Third-party notices
 of TypeScript: [licenses/TypeScript-NOTICE.txt](licenses/TypeScript-NOTICE.txt).
@@ -32,6 +37,16 @@ Copyright (c) Microsoft Corporation. Licensed under the MIT License.
 as TypeScript uses it.
 
 License: [licenses/vscode-languageserver-node-LICENSE.txt](licenses/vscode-languageserver-node-LICENSE.txt).
+
+## NestJS CLI
+
+Copyright (c) 2017-2025 Kamil Mysliwiec, Thomas Ricart. Licensed under the MIT License.
+
+`npm/typescript-api/test/fixtures/nest-cli-hooks` holds spec fixtures of
+[nestjs/nest-cli](https://github.com/nestjs/nest-cli), copied without change
+([PROVENANCE.md](npm/typescript-api/test/fixtures/nest-cli-hooks/PROVENANCE.md)).
+
+License: [licenses/nest-cli-LICENSE.txt](licenses/nest-cli-LICENSE.txt).
 
 ## Go
 

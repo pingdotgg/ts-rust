@@ -1,0 +1,7 @@
+lintme.ts (1,1): A looping statement's contents should be wrapped in a block body.
+lintme.ts (2,1): A looping statement's contents should be wrapped in a block body.
+lintme.ts (3,13): An if statement's contents should be wrapped in a block body.
+lintme.ts (3,36): An else statement's contents should be wrapped in a block body.
+lintme.ts (3,5): Use '===' and '!=='.
+lintme.ts (5,1): A looping statement's contents should be wrapped in a block body.
+exit=0

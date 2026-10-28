@@ -1,0 +1,9 @@
+** We're about to create the program! **
+** We finished making the program! **
+<cwd>/sample.js:39
+        origPostProgramCreate(program);
+        ^
+
+TypeError: origPostProgramCreate is not a function
+
+exit=1

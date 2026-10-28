@@ -1,0 +1,7 @@
+<cwd>/sample.js:23
+    const settings = ts.convertCompilerOptionsFromJson(config.config["compilerOptions"], basePath);
+                                                                    ^
+
+TypeError: Cannot read properties of undefined (reading 'compilerOptions')
+
+exit=1
