@@ -85,7 +85,8 @@
 #   PGO_RUSTFLAGS     more RUSTFLAGS for both builds. The script sets
 #                     RUSTFLAGS itself, so the caller's RUSTFLAGS do not
 #                     reach cargo. release.yml passes the lld link args
-#                     here (identical code folding on Linux).
+#                     here (identical code folding on Linux, and memfast
+#                     on linux-x64; memfast.sh).
 #
 # Choosing PGO_LINK (integrator, once a round): build the default and
 # PGO_LINK=static. On cup2 (under its lock) time 'tsgo --version' and query
