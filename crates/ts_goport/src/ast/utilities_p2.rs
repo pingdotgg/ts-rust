@@ -37,30 +37,6 @@ pub fn find_ancestor_ref(node: Node, mut callback: impl FnMut(NodeRef) -> bool) 
     Node::NIL
 }
 
-// Go: ast/utilities.go:970 FindManyAncestors
-/// Walks up the parents of `node` once. Slot `i` of the result is the nearest
-/// ancestor that `callbacks[i]` matches, or nil. A node fills at most one
-/// slot: the first callback that matches it and whose slot is still empty.
-#[must_use]
-pub fn find_many_ancestors(mut node: Node, callbacks: &[fn(Node) -> bool]) -> Vec<Node> {
-    let mut ancestors = vec![Node::NIL; callbacks.len()];
-    let mut found = 0;
-    while node.is_some() {
-        for (i, callback) in callbacks.iter().enumerate() {
-            if ancestors[i].is_nil() && callback(node) {
-                ancestors[i] = node;
-                found += 1;
-                if found == callbacks.len() {
-                    return ancestors;
-                }
-                break;
-            }
-        }
-        node = node.parent();
-    }
-    ancestors
-}
-
 /// `find_ancestor(node, |n| callback(n, n.kind()))`: the callback also gets
 /// the node's Go `Kind`.
 // PERF: U4 (CH7). The steps inside a published store read its records,
@@ -362,8 +338,13 @@ pub fn can_have_modifiers(node: Node) -> bool {
 
 // Go: ast/utilities.go:1182 CanHaveDecorators
 pub fn can_have_decorators(node: Node) -> bool {
+    can_have_decorators_kind(node.kind())
+}
+
+/// `can_have_decorators` for a kind already read from a node view.
+pub fn can_have_decorators_kind(kind: SyntaxKind) -> bool {
     matches!(
-        node.kind(),
+        kind,
         SyntaxKind::Parameter
             | SyntaxKind::PropertyDeclaration
             | SyntaxKind::MethodDeclaration

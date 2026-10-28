@@ -6876,6 +6876,59 @@ mod tests {
         assert!(parsed(a.clone()) == parsed(a));
     }
 
+    #[test]
+    fn build_info_reads_intern_equal_options() {
+        use crate::execute::incremental::build_info_to_snapshot::build_info_to_snapshot;
+        use crate::execute::incremental::incremental::parse_build_info;
+        use crate::frontend::compiler::new_compiler_host;
+        use crate::frontend::tsoptions::new_parsed_command_line;
+        use crate::frontend::vfs::osvfs_fs;
+
+        let current_directory = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let fs = osvfs_fs();
+        let config = new_parsed_command_line(
+            Rc::new(CompilerOptions {
+                ts_build_info_file: "interned_options.tsbuildinfo".into(),
+                ..CompilerOptions::default()
+            }),
+            Vec::new(),
+            None,
+            tspath::ComparePathsOptions {
+                use_case_sensitive_file_names: fs.use_case_sensitive_file_names(),
+                current_directory: current_directory.clone(),
+            },
+        );
+        let host = new_compiler_host(&current_directory, fs, "", None, None, None);
+        let read = |text: &str| -> &'static CompilerOptions {
+            let info = parse_build_info(text).unwrap();
+            build_info_to_snapshot(&info, &config, host.as_ref()).options
+        };
+        let text = r#"{"options":{"strict":true,"noEmit":true}}"#;
+        let first = read(text);
+        let again = read(text);
+        let different = read(r#"{"options":{"strict":false,"noEmit":true}}"#);
+        let expected = CompilerOptions {
+            strict: Tristate::True,
+            no_emit: Tristate::True,
+            ..CompilerOptions::default()
+        };
+        assert_eq!(first, &expected);
+        assert_eq!(first, again);
+        assert!(std::ptr::eq(first, again));
+        assert!(std::ptr::eq(first, intern_compiler_options(&expected)));
+        assert!(!std::ptr::eq(first, different));
+        assert_eq!(
+            different,
+            &CompilerOptions {
+                strict: Tristate::False,
+                ..expected
+            }
+        );
+    }
+
     // Go: compiler/emitter.go:518-537 sourceFileMayBeEmitted: the JSON file part. No Go test covers this part. The
     // expected values come from Go at pin B (16c25522e123): the same calls in
     // a Go test, and for the cases marked "oracle" also a `noEmit`
