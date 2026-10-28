@@ -653,16 +653,8 @@ impl Checker {
                 if !self.compiler_options.emit_decorator_metadata.is_true() {
                     return;
                 }
-                if !matches!(
-                    kind,
-                    SyntaxKind::Parameter
-                        | SyntaxKind::PropertyDeclaration
-                        | SyntaxKind::MethodDeclaration
-                        | SyntaxKind::GetAccessor
-                        | SyntaxKind::SetAccessor
-                        | SyntaxKind::ClassExpression
-                        | SyntaxKind::ClassDeclaration
-                ) || !has_decorators(location)
+                if !can_have_decorators_kind(kind)
+                    || !has_decorators(location)
                     || location.modifiers().is_nil()
                     || !node_can_be_decorated(
                         self.legacy_decorators,

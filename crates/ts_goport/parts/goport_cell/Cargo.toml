@@ -1,0 +1,24 @@
+# ZeroOnceLock: std's OnceLock with an empty state of all zero bytes, for the
+# AST registry entry arrays (ast/store.rs FILE_BLOCKS, HIGH_BLOCKS), so they
+# are .bss and not 4.4 MB of .data in the binaries (bssblocks1).
+[package]
+name = "goport_cell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+# Not the workspace lints: the cell needs `unsafe` (an UnsafeCell of a
+# MaybeUninit value, published by an atomic state). Each unsafe block has
+# `#[allow(unsafe_code)]` and a SAFETY comment. The other goport crates keep
+# `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

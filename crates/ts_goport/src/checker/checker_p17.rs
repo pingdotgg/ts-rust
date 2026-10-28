@@ -2177,8 +2177,9 @@ mod core_p17 {
     // Go: core/pattern.go:22 Pattern.Matches
     // PORT: for `ast.PatternAmbientModule.Pattern`, which always has a star
     // (see `find_best_pattern_match`). The caller gives the Go bytes of the
-    // candidate, prefix and suffix. The prefix and suffix bytes come from
-    // `Checker::pattern_ambient_module_go_bytes`.
+    // candidate, prefix and suffix. `try_resolve_pattern_ambient_module`
+    // gets the prefix and suffix bytes from `Checker::pattern_ambient_module_go_bytes`;
+    // `find_best_pattern_match` converts them itself.
     // PERF: a first or last byte that differs rejects the pattern before
     // the `memcmp` call of `starts_with` or `ends_with`.
     pub fn pattern_matches_go_bytes(prefix: &[u8], suffix: &[u8], candidate: &[u8]) -> bool {
