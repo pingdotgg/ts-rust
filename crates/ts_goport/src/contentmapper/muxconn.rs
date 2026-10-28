@@ -250,7 +250,7 @@ impl MuxConn {
             Err(payload) => payload,
         };
         let r = ipc::recovered_value(payload.as_ref());
-        let stack = std::backtrace::Backtrace::force_capture().to_string();
+        let stack = crate::gostd::backtrace::text(&std::backtrace::Backtrace::force_capture());
         let err = errors::new(format!("panic: {r}\n{stack}"));
         // The panic answer runs in Go's deferred recover: a panic in it
         // prints the recovered panic first.

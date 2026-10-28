@@ -543,7 +543,7 @@ impl AsyncConn {
         };
         {
             let r = recovered_value(r.as_ref());
-            let stack = std::backtrace::Backtrace::force_capture().to_string();
+            let stack = crate::gostd::backtrace::text(&std::backtrace::Backtrace::force_capture());
             let err = errors::new(format!("panic: {r}\n{stack}"));
 
             let write_err = self.protocol.borrow_mut().write_error(

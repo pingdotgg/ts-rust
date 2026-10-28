@@ -559,7 +559,8 @@ pub fn print_go_panic(payload: &(dyn std::any::Any + Send)) -> bool {
 /// The port's text for Go `debug.Stack()` after a `recover()` of `r`: the
 /// port site of a Go panic, which takes the place of the goroutine trace as
 /// in `print_go_panic` (`\t<file>:<line>` and a newline). For any other
-/// payload, the Rust backtrace when `RUST_BACKTRACE` enables it, else "".
+/// payload, the Rust backtrace when `RUST_BACKTRACE` enables it
+/// (`gostd::backtrace::text`), else "".
 // PORT: a Rust backtrace names each function by its crate. Since crate
 // split step 2, the functions of goport_core files are `goport_core::...`,
 // not `ts_goport::...`.
@@ -573,7 +574,7 @@ pub fn go_recovered_stack(r: &(dyn std::any::Any + Send)) -> String {
     }
     let backtrace = std::backtrace::Backtrace::capture();
     if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
-        backtrace.to_string()
+        crate::gostd::backtrace::text(&backtrace)
     } else {
         String::new()
     }
