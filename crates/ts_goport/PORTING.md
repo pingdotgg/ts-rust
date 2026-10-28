@@ -1507,6 +1507,57 @@ process (bin/tsgo.rs `unblock_go_signals`, `go_runtime_start`).
   20% faster, hono 13 to 20%, zod 13 to 18%, effect 21 to 24%. BOLT alone
   (against the PGO bins) gave 0 to 9%.
 
+### Panic frames of a stripped tsc
+
+release.yml strips the Linux and macOS tsc and keeps the unstripped tsc as
+the `unstripped-tsc-<platform>` artifact (90 days). The tsc has no DWARF, so
+its frame names come only from the symbol table.
+
+The API and IPC panic answers (`panic: <value>`, then the stack), the LSP log
+of a recovered panic and `GOPORT_TRACE` output print the stack with
+`gostd::backtrace::text`. When every frame has a name, this is std's short
+text, as before. A frame with no name prints its return address, and one line
+before the frames identifies the binary:
+
+```
+panic: Debug failure. False expression.
+build-id 6b82b2ae925496cd6bd0c8717925a8011cfb2956; gostd::backtrace::text at 0x1641380
+   0: 0x1460850 - <unknown>
+   1: 0x1460dbe - <unknown>
+```
+
+- `build-id <hex>` (ELF) or `uuid <UUID>` (Mach-O) is the same in the
+  unstripped tsc. Windows prints no id. If tsc cannot read its own file (no
+  free file descriptor), the line has no id.
+- The load offset is the address of `gostd::backtrace::text` in the trace
+  minus its address in the file. The Linux tsc is static and not PIE, so the
+  offset is 0. macOS and Windows load the binary at a random address on each
+  run.
+
+To name the frames on Linux, use the unstripped tsc with the same build-id.
+Look up each address minus the offset minus 1: a return address points after
+the call, and std also looks up the address minus 1.
+
+```sh
+readelf -n tsc | grep 'Build ID'              # the build-id of the trace
+nm -C tsc | grep 'gostd::backtrace::text$'    # the address in the file
+grep -oE '0x[0-9a-f]+ - <unknown>' trace.txt | while read -r a _; do printf '%#x\n' $((a - 1)); done |
+  addr2line -f -C -e tsc | sed -n 'p;n'
+```
+
+`llvm-symbolizer --obj=tsc --adjust-vma=$((offset + 1))` finds the same
+functions, but LLVM does not demangle the legacy Rust names of a stable
+build (`$u7b$`, `::h<hash>`). `addr2line` (binutils) does.
+
+Not tested:
+
+- macOS: check the id with `dwarfdump --uuid tsc`. Then use the same lookup
+  with `llvm-nm -C` and `llvm-symbolizer`, or `atos -o tsc -l <0x100000000 +
+  offset>`.
+- Windows: the names are in `tsc.pdb`, and release.yml does not keep it. To
+  name Windows frames, the release must keep the PDB, and the trace must
+  print its id (the CodeView GUID and age), which the port does not read.
+
 ## Style
 
 - No `unsafe`. No new dependencies beyond these: `bumpalo` (the AST arena
