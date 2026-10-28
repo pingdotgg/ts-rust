@@ -11,8 +11,8 @@
 #                                     later edit of a key file in the same commit). One line per stale blob and
 #                                     check; exit 1 when one is stale. candidate.sh check runs it.
 #        lib-blobs.sh write           in the current checkout: write lib_parse.bin, then lib_bind.bin, then check.
-#        lib-blobs.sh check           in the current checkout: the two snapshot_matches_live_* tests (a release test
-#                                     build). They also find a blob that a helper outside the key made stale.
+#        lib-blobs.sh check           in the current checkout: the snapshot_matches_live_* and bind_key_parse_is_snapshot_parse
+#                                     tests (a release test build). They also find a blob that a helper outside the key made stale.
 # After merges, write once, after the last merge, not after each one. A merge keeps our side of a blob without a
 # conflict (.gitattributes merge=lib-blob; the repo config has merge.lib-blob.driver=true), so write after it.
 set -euo pipefail
@@ -94,7 +94,7 @@ case ${1:-} in
       stale_key "$rev" src/binder/lib_bind.bin src/binder/lib_snapshot.rs)
     [[ -z $out ]] || { echo "$out"; exit 1; }
     ;;
-  check) cargo_test "$PARSE_TEST::snapshot_matches_live_parse" "$BIND_TEST::snapshot_matches_live_bind" ;;
+  check) cargo_test "$PARSE_TEST::snapshot_matches_live_parse" "$BIND_TEST::snapshot_matches_live_bind" "$BIND_TEST::bind_key_parse_is_snapshot_parse" ;;
   write)
     cargo_test --ignored "$PARSE_TEST::generate_lib_parse_snapshot"
     cargo_test --ignored "$BIND_TEST::generate_lib_bind_snapshot"
