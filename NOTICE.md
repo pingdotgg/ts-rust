@@ -51,3 +51,14 @@ The collation and normalization tables in `crates/ts_goport/src/gostd/data` and
 packages above.
 
 License: [licenses/Unicode-LICENSE.txt](licenses/Unicode-LICENSE.txt).
+
+## memfast
+
+Copyright (c) 2026 Theo Browne. Licensed under the MIT License.
+
+`crates/ts_goport/scripts/memfast.c` is `src/runtime/memfast.c` of
+[t3dotgg/lust-lang](https://github.com/t3dotgg/lust-lang) (commit 6ced2b86fd), without change
+below its header. The linux-x64 tsc links it in place of musl's memcpy, memmove, memcmp, bcmp and
+memchr.
+
+License: [licenses/memfast-LICENSE.txt](licenses/memfast-LICENSE.txt).
