@@ -31,8 +31,10 @@
 #       build-bolt.sh refuses static bins, so they only make the file bigger.
 # The build prints the .text and .rela.text sections of tsgo
 # (readelf -S). Expect .text.hot, .text.unlikely and .rela.text. GNU ld (the
-# linker of the musl target) ignores keep-text-section-prefix, but its default
-# script already puts the hot and the unlikely code together inside .text.
+# default linker of the musl target) ignores keep-text-section-prefix, but its
+# default script already puts the hot and the unlikely code together inside
+# .text. release.yml links the musl tsc with lld (PGO_RUSTFLAGS), which keeps
+# the sections.
 # Other platforms (macOS) get neither flag.
 #
 # Environment:
@@ -53,8 +55,6 @@
 #                     x86_64-unknown-linux-musl. Default: the host, with
 #                     --target only when PGO_LINK is set.
 #   PGO_BINS          the bins to build, for example "tsgo" (default: all)
-#   PGO_RUSTFLAGS     extra rustc flags of both builds. release.yml sets the
-#                     memfast link flags of the linux-x64 tsc (memfast.sh).
 #   PGO_TRAIN         training command, in place of the default training
 #                     (which needs the project inputs and the corpus of
 #                     GOPORT_DATA_ROOT). The script runs `$PGO_TRAIN <dir>`,
@@ -82,6 +82,11 @@
 #                     and proc macros do not get the flags. The bins are
 #                     copied to the usual <target>/goport path. The build
 #                     checks the ELF type and INTERP of tsgo.
+#   PGO_RUSTFLAGS     more RUSTFLAGS for both builds. The script sets
+#                     RUSTFLAGS itself, so the caller's RUSTFLAGS do not
+#                     reach cargo. release.yml passes the lld link args
+#                     here (identical code folding on Linux, and memfast
+#                     on linux-x64; memfast.sh).
 #
 # Choosing PGO_LINK (integrator, once a round): build the default and
 # PGO_LINK=static. On cup2 (under its lock) time 'tsgo --version' and query
@@ -191,7 +196,7 @@ triple="${PGO_TARGET:-}"
 # Each step needs its own target (other RUSTFLAGS). sccache is off: it could
 # reuse an object built with an older profile at the same path.
 build() { # build <target-subdir> <rustflags>
-  local target="$out/$1" flags="$2 $link_flags${PGO_RUSTFLAGS:+ $PGO_RUSTFLAGS}" target_args=""
+  local target="$out/$1" flags="$2 $link_flags ${PGO_RUSTFLAGS:-}" target_args=""
   # Both builds get the same link mode, so the profile of the generate build
   # matches the code of the use build.
   [[ -n $triple ]] && target_args="--target $triple"
