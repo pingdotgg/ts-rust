@@ -77,6 +77,10 @@ impl TypeParser<'_> {
             return TypeId::NIL;
         }
 
+        let t = self.checked_expression_type(node);
+        if t.is_some() {
+            return t;
+        }
         let c = &mut *self.checker;
         // Go: defer func() { if r := recover(); r != nil { result = nil } }()
         go_recover(|| c.get_type_at_location(node)).unwrap_or(TypeId::NIL)
