@@ -6,11 +6,11 @@
 //! `ts_run`, and reads the reply at `ts_output` (`ts_output_len` bytes).
 //! One instance serves many requests: each `ts_run` loads a new program
 //! version (`program::multirun`), whose unchanged files keep their parses
-//! of the runs before, so a warm run parses only what changed. The host
-//! file system must report a changed mtime for a file whose text changed
-//! between runs (a real one, or a stamp of the writer), or the parse cache
-//! serves the old text. A panic still ends the instance (wasm cannot
-//! unwind): the host makes a new one.
+//! of the runs before, so a warm run parses only what changed. The parse
+//! cache is keyed by the content of each file (bundled lib files skip the
+//! hash: their text is embedded in the module), so the host needs no
+//! mtime contract. A panic still ends the instance (wasm cannot unwind):
+//! the host makes a new one.
 //!
 //! The request is NUL-separated UTF-8 fields: the current directory, the
 //! flags (a decimal number of `FLAG_*` bits), then the tsc arguments. tsc
@@ -102,7 +102,33 @@ pub fn run(request: &str) -> (i32, String) {
         return (1, String::new());
     }
 
-    let _ = host::CASE_SENSITIVE.set(flags & FLAG_CASE_INSENSITIVE == 0);
+    // The case-insensitivity of the host file system is read once per
+    // instance (`host::CASE_SENSITIVE`): a later run with the other flag
+    // would run in the wrong mode with no error. Reject it explicitly, as
+    // a cwd change below.
+    let case_sensitive = flags & FLAG_CASE_INSENSITIVE == 0;
+    match host::CASE_SENSITIVE.get() {
+        Some(installed) if *installed != case_sensitive => {
+            eprintln!(
+                "error: this instance serves a {} file system, the request asks for {} (multi-run: one case mode per instance)",
+                if *installed {
+                    "case-sensitive"
+                } else {
+                    "case-insensitive"
+                },
+                if case_sensitive {
+                    "case-sensitive"
+                } else {
+                    "case-insensitive"
+                },
+            );
+            return (1, String::new());
+        }
+        Some(_) => {}
+        None => {
+            let _ = host::CASE_SENSITIVE.set(case_sensitive);
+        }
+    }
     // The override replaces the OS for the process, so it installs once
     // (`osvfs::install_os_override` panics on the second call): every run
     // of the instance resolves paths against the directory of the first
@@ -289,8 +315,8 @@ mod tests {
     /// runs in this one process (one `WebAssembly.Instance` in the shipped
     /// module), across guests that change between runs. Every run reports
     /// the diagnostics of the files it was given, including a file whose
-    /// text changed: the mtime that the test host reports changes with
-    /// `set_files`, so the parse cache re-parses it.
+    /// text changed: the parse cache is keyed by content, so the changed
+    /// text is a cache miss and the parse is redone.
     #[test]
     fn many_runs_in_one_process_report_each_guest() {
         const CLEAN_A: &str = "export const a: number = 1;\n";
@@ -407,5 +433,79 @@ mod tests {
         let (status, reply) = run(&format!("/q\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
         assert_eq!(status, 1, "{reply}");
         assert!(reply.is_empty(), "{reply}");
+    }
+
+    /// A run whose case-insensitivity flag differs from the one the
+    /// instance installed is rejected explicitly (`run` documents one case
+    /// mode per multi-run instance), and the instance keeps serving the
+    /// installed mode after the rejected run.
+    #[test]
+    fn case_flag_change_is_rejected() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_files([
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"types":[]},"files":["A.ts"]}"#.to_string(),
+            ),
+            (
+                "/p/A.ts".to_string(),
+                "export const n: number = 1;\n".to_string(),
+            ),
+        ]);
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        // The other flag: rejected with no reply.
+        let (status, reply) = run(&format!(
+            "/p\0{}\0-p\0.",
+            FLAG_DIAGNOSTICS_JSON | FLAG_CASE_INSENSITIVE
+        ));
+        assert_eq!(status, 1, "{reply}");
+        assert!(reply.is_empty(), "{reply}");
+        // The instance still serves the installed mode.
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+    }
+
+    /// A file that leaves the program frees its parse (`end_run` evicts
+    /// the parse cache entries of paths that left): a later run that
+    /// brings the path back with other content reports THIS content — a
+    /// stale kept parse of the old text must not be served.
+    #[test]
+    fn a_path_that_returns_with_other_content_rereports() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = |files: &str| {
+            (
+                "/p/tsconfig.json".to_string(),
+                format!(r#"{{"compilerOptions":{{"outDir":"out","types":[]}},"files":[{files}]}}"#),
+            )
+        };
+        let clean = "export const b: number = 1;\n";
+        let broken = "export const b: number = 'one';\n";
+        let a = (
+            "/p/a.ts".to_string(),
+            "export const a: number = 1;\n".to_string(),
+        );
+        let b = |text: &str| ("/p/b.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: a.ts and b.ts, clean.
+        host::test_host::set_files([tsconfig(r#""a.ts","b.ts""#), a.clone(), b(clean)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 2: b.ts left the program (its parse is evicted at end_run).
+        host::test_host::set_files([tsconfig(r#""a.ts""#), a.clone()]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 3: b.ts is back with other content: the fresh parse must be
+        // checked, and the error must be reported.
+        host::test_host::set_files([tsconfig(r#""a.ts","b.ts""#), a.clone(), b(broken)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/b.ts""#), "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
     }
 }
