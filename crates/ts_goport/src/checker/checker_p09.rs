@@ -74,6 +74,11 @@ impl Checker {
             self.check_const_enum_access(node, t);
         }
         self.current_node = saved.save_current_node;
+        // Effect-TS/tsgo#860 patch 033 `ExpressionCheckedCallback`, registered by the
+        // plugin. Kept only when the program has Effect diagnostics options, as patch 004.
+        if self.compiler_options.effect.is_some() {
+            crate::effect::typeparser::record_checked_expression_type(self, node, check_mode, t);
+        }
         drop(saved);
         t
     }

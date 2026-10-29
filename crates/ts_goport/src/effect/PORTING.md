@@ -43,6 +43,15 @@ and "Types" sections and follow them. This file adds the Effect rules.
   `noUnusedParameters` it adds only suggestions (Go `reportUnused`), so
   `tsc` output does not change, and a later suggestion request gets the
   TS6133 that plain tsgo gives.
+- Effect-TS/tsgo#860 (first released in 0.53.2) is ported ahead of the pin
+  (issue #112). `exit_check_expression` records each final expression type
+  of the file's check (Go patch 033 `ExpressionCheckedCallback`, only with
+  Effect options, as patch 004), `after_check_source_file` pauses recording
+  while the rules run, and `get_type_at_location` reads the record first
+  (`typeparser/checked_expression_types.rs`). In 0.51.1 a rule's type query
+  of a call statement took the checker's quick path
+  (`get_quick_type_of_expression`), whose `check_non_null_expression` added a
+  TS18048 or TS2532 next to the TS2722 that `tsc` reports.
 - A standalone API process runs no rules unless `TSGO_EFFECT_API=1`
   (`rulerunner::enabled_options`).
 - Patch 031 (`stability-tag-fast-path`) adds a scanner token flag and a

@@ -60,7 +60,9 @@ pub fn after_check_source_file(ctx: &Context, c: &mut Checker, source_file: Node
     };
     let min = rulerunner::min_visible_severity(Some(&effect_config));
     let program = c.program;
-    let Ok(diagnostics) = rulerunner::run(
+    // Rule queries must not overwrite the types the check recorded.
+    let pause = typeparser::pause_checked_expression_types(c);
+    let result = rulerunner::run(
         ctx,
         program,
         c,
@@ -68,7 +70,9 @@ pub fn after_check_source_file(ctx: &Context, c: &mut Checker, source_file: Node
         Some(&effect_config),
         None,
         min,
-    ) else {
+    );
+    pause.resume(c);
+    let Ok(diagnostics) = result else {
         return;
     };
     for diag in diagnostics {

@@ -14,6 +14,7 @@ mod api_stability_p2;
 mod api_stability_p3;
 mod api_stability_safety;
 mod cause_type;
+mod checked_expression_types;
 pub mod checker_integration;
 mod constant_evaluation;
 mod context_tag;
@@ -78,6 +79,7 @@ pub use api_stability_p2::*;
 pub use api_stability_p3::*;
 pub use api_stability_safety::*;
 pub use cause_type::*;
+pub use checked_expression_types::*;
 pub use constant_evaluation::*;
 pub use context_tag::*;
 pub use context_type::*;
@@ -214,6 +216,9 @@ pub struct EffectLinks {
     pub execution_flow: FxHashMap<Node, Option<Rc<ExecutionFlow>>>,
     pub effect_context_flags: LinkStore<Node, EffectContextFlags>,
     pub effect_yield_generator_function: LinkStore<Node, CachedNode>,
+    // Effect-TS/tsgo#860: the expression types the file's check recorded.
+    pub checked_expression_type: LinkStore<Node, CachedId>,
+    pub checked_expression_types_paused: bool,
 
     pub discover_packages_computed: bool,
     pub discover_packages_value: Vec<DiscoveredPackage>,
