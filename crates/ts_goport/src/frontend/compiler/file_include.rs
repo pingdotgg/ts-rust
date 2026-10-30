@@ -5,32 +5,23 @@ use crate::frontend::prelude::*;
 
 /// Go `caseSensitivity.RelativePathFromDirectory(directory, fileName)` and
 /// its fallback to the absolute name (ts#64159: fileInclude.go:155,
-/// program.go:2145). Used for the include-reason text and `explain_files`.
-// PORT: the names are normalized, so not reducing "." and ".." (rule R3)
-// changes nothing here. Another root, or an empty `directory` (Go tests pass
-// ""), gives the absolute name (rule R4).
+/// program.go:2159). Used for the include-reason text and `explain_files`.
+// PORT: another root, an empty `directory` (Go tests pass "") or a relative
+// name that looks rooted (`c:/x` under a directory named `c:`) gives the
+// absolute name (rule R4).
 pub(crate) fn relative_file_name_from_directory(
     directory: &str,
     file_name: &str,
     program: &NewProgram,
 ) -> String {
-    let directory_root = &directory[..get_root_length(directory)];
-    let file_root = &file_name[..get_root_length(file_name)];
-    if directory_root.is_empty()
-        || !directory_root
-            .trim_end_matches('/')
-            .eq_ignore_ascii_case(file_root.trim_end_matches('/'))
-    {
-        return file_name.to_string();
-    }
-    get_relative_path_from_directory(
+    if let Some(relative_path) = relative_path_from_directory(
         directory,
         file_name,
-        &ComparePathsOptions {
-            use_case_sensitive_file_names: program.use_case_sensitive_file_names(),
-            current_directory: directory.to_string(),
-        },
-    )
+        program.use_case_sensitive_file_names(),
+    ) {
+        return relative_path;
+    }
+    file_name.to_string()
 }
 
 // Go: fileInclude.go:14 fileIncludeKind
