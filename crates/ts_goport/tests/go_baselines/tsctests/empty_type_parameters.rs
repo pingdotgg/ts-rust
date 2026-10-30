@@ -3,10 +3,13 @@
 //! PORT: no Go counterpart. Go `(*Node).TypeParameters()` (ast/ast.go:522)
 //! gives the Nodes of the list, and the Go parser stores nil Nodes for an
 //! empty list (`Arena.Clone` of an empty slice is nil, core/arena.go:55). So
-//! `TypeParameters() == nil` holds for `f<>()`. The reparser
-//! (parser/reparser.go:459) read the list instead: a JSDoc `@template` did
-//! not replace the empty list of a function, so the file got TS1098 and the
-//! template names were not found.
+//! `TypeParameters() == nil` holds for `f<>()`. Two ported tests read the
+//! list instead and saw `<>` as type parameters:
+//! - the reparser (parser/reparser.go:459): a JSDoc `@template` did not
+//!   replace the empty list of a function, so the file got TS1098 and the
+//!   template names were not found.
+//! - checkFunctionExpressionOrObjectLiteralMethod (checker/checker.go:10415):
+//!   a function with `<>` gave no inferences from its annotated parameters.
 //!
 //! Every expected output is the output of `tsgo-oracle-3e9236361fa9 -p
 //! tsconfig.json --pretty false` on the same files.
@@ -109,4 +112,31 @@ fn template_tag_type_parameters_are_emitted_for_an_empty_list() {
         sys.read_file_no_error(&format!("{PROJECT}/out/a.d.ts")),
         "/** @template T */\ndeclare function f<T>(): void;\n/** @template T @param {T} x */\ndeclare function g<T>(x: T): void;\n"
     );
+}
+
+/// A function expression with `<>` infers from its annotated parameters (a
+/// covariant candidate, so `T` is `string | number`, not `string`), as one
+/// without type parameters does.
+#[test]
+fn empty_type_parameter_list_infers_from_annotated_parameters() {
+    let (_, status, diagnostics) = tsc(
+        "a.ts",
+        r#"declare function g<T>(cb: (x: T, y: number) => void, v: T): T;
+const r = g(function <>(x: string | number) {}, "a");
+const z: boolean = r;
+const r2 = g((x: string | number) => {}, "a");
+const z2: boolean = r2;
+"#,
+        r#"{"compilerOptions":{"noEmit":true,"strict":true},"files":["a.ts"]}"#,
+    );
+    assert_eq!(
+        diagnostics,
+        r#"a.ts(2,22): error TS1098: Type parameter list cannot be empty.
+a.ts(3,7): error TS2322: Type 'string | number' is not assignable to type 'boolean'.
+  Type 'string' is not assignable to type 'boolean'.
+a.ts(5,7): error TS2322: Type 'string | number' is not assignable to type 'boolean'.
+  Type 'string' is not assignable to type 'boolean'.
+"#
+    );
+    assert_eq!(status, ExitStatus::DiagnosticsPresentOutputsGenerated);
 }
