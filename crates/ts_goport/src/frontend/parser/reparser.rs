@@ -841,7 +841,10 @@ impl<'a> Parser<'a> {
             SyntaxKind::JsDocTemplateTag => {
                 let fun = get_function_like_host(parent);
                 if fun.is_some() {
-                    if fun.type_parameter_list().is_nil() && fun.full_signature().is_nil() {
+                    // PORT: Go `fun.TypeParameters() == nil` tests the list's Nodes, which
+                    // the Go parser leaves nil for an empty `<>` (Arena.Clone of an empty
+                    // slice is nil), so an empty list is replaced too.
+                    if fun.type_parameters().is_empty() && fun.full_signature().is_nil() {
                         let type_parameters =
                             self.gather_type_parameters(js_doc, false /*typedefOrCallback*/);
                         set_function_type_parameters(fun, type_parameters);
