@@ -1536,10 +1536,11 @@ impl Checker {
                         self.assign_non_contextual_parameter_types(signature);
                     }
                 } else if contextual_signature.is_some()
-                    && node.type_parameter_list().is_nil()
+                    && node.type_parameters().is_empty()
                     && self.sig(contextual_signature).parameters.len() > node.parameters().len()
                 {
-                    // PORT: Go `node.TypeParameters() == nil` is nil exactly when the list is nil.
+                    // PORT: Go `node.TypeParameters() == nil` is also nil for an empty `<>`
+                    // list (the Go parser stores nil Nodes for an empty list).
                     let inference_context = self.get_inference_context(node);
                     if check_mode.intersects(CheckMode::INFERENTIAL) {
                         self.infer_from_annotated_parameters_and_return(
