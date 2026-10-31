@@ -21,8 +21,22 @@ use super::compile::{System, Writer, write_str};
 use super::compile::CommandLineTesting;
 use crate::diagnostics::Category;
 use crate::diagnostics_loc::message_localize;
-use crate::frontend::tspath::{ComparePathsOptions, convert_to_relative_path, path_is_absolute};
+use crate::frontend::tspath::{ComparePathsOptions, relative_path_from_directory};
 use crate::locale::Locale;
+
+// Go: diagnosticwriter/diagnosticwriter.go:27 formatFileNameRelativeTo
+// PORT: the directory and the case sensitivity are the fields of the
+// `compare_paths_options` of `FormattingOptions`.
+pub fn format_file_name_relative_to(file_name: &str, options: &ComparePathsOptions) -> String {
+    if let Some(relative_path) = relative_path_from_directory(
+        &options.current_directory,
+        file_name,
+        options.use_case_sensitive_file_names,
+    ) {
+        return relative_path;
+    }
+    file_name.to_string()
+}
 
 // Go: diagnosticwriter/diagnosticwriter.go:203 FormattingOptions
 #[derive(Clone, Debug, Default)]
@@ -1051,7 +1065,7 @@ pub fn write_location(
     let (first_line, first_char) = get_ecma_line_and_utf16_character_of_file_position(&file, pos);
     let relative_file_name = match format_opts {
         Some(format_opts) => {
-            convert_to_relative_path(file.file_name(), &format_opts.compare_paths_options)
+            format_file_name_relative_to(file.file_name(), &format_opts.compare_paths_options)
         }
         None => file.file_name().to_string(),
     };
@@ -1251,12 +1265,8 @@ fn pretty_path_for_file_error(
         return String::new();
     }
     let line = get_ecma_line_of_file_position(file, AstDiagnostic(file_errors[0]).pos());
-    let mut file_name = file.file_name().to_string();
-    if path_is_absolute(&file_name)
-        && path_is_absolute(&format_opts.compare_paths_options.current_directory)
-    {
-        file_name = convert_to_relative_path(file.file_name(), &format_opts.compare_paths_options);
-    }
+    let file_name =
+        format_file_name_relative_to(file.file_name(), &format_opts.compare_paths_options);
     format!(
         "{}{}:{}{}",
         file_name,
@@ -1278,7 +1288,7 @@ pub fn write_format_diagnostic(
             get_ecma_line_and_utf16_character_of_file_position(&file, wrapped.pos());
         let file_name = file.file_name();
         let relative_file_name =
-            convert_to_relative_path(file_name, &format_opts.compare_paths_options);
+            format_file_name_relative_to(file_name, &format_opts.compare_paths_options);
         write_str(
             output,
             &format!("{}({},{}): ", relative_file_name, line + 1, character + 1),

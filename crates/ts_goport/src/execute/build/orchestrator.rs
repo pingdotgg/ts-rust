@@ -214,8 +214,16 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     // Go: build/orchestrator.go:94 (*Orchestrator).relativeFileName
+    // PORT: Go relativePath (:98) is inlined; the name is a file name.
     pub fn relative_file_name(&self, file_name: &str) -> String {
-        convert_to_relative_path(file_name, &self.compare_paths_options)
+        if let Some(relative) = relative_path_from_directory(
+            &self.compare_paths_options.current_directory,
+            file_name,
+            self.compare_paths_options.use_case_sensitive_file_names,
+        ) {
+            return relative;
+        }
+        file_name.to_string()
     }
 
     // Go: build/orchestrator.go:97 (*Orchestrator).toPath (at 673a5f17d713; removed by

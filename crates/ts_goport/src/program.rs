@@ -6518,7 +6518,10 @@ pub fn format_diagnostic(diagnostic: &Diagnostic) -> String {
         };
         output.push_str(&format!(
             "{}({},{}): ",
-            tspath::convert_to_relative_path(file_name, &compare_options),
+            crate::execute::tsc::diagnostics::format_file_name_relative_to(
+                file_name,
+                &compare_options
+            ),
             line + 1,
             character + 1
         ));
