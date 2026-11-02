@@ -199,7 +199,9 @@ pub fn run(request: &str) -> (i32, String) {
 
     // Multi-run (see the `program::multirun` module): the run's program is
     // a program version, built from the version of the run before, whose
-    // unchanged files keep their parses. `end_run` releases the version of
+    // unchanged files keep their parses. The compile holds the program
+    // scope (`multirun::install_and_enter`), which drops with the compile
+    // frame: no program is current here. `end_run` releases the version of
     // the run before the last, after the diagnostics of this run are made.
     ts_goport::program::multirun::enable();
     let diagnostics = (flags & FLAG_DIAGNOSTICS_JSON != 0).then(Rc::default);
@@ -428,6 +430,74 @@ mod tests {
             Some("import { a } from './a';\nexport const b = a + 1;\n"),
             "run 4 emit"
         );
+    }
+
+    /// The parse cache serves the parses of unchanged files across runs,
+    /// asserted on the cache's own counters (`multirun::take_parse_cache_counts`),
+    /// and the version chain stays sound across the `end_run` rotation: run
+    /// 1 parses every file (cold), the runs after — including a third run,
+    /// past the rotation that released the first version — parse nothing
+    /// and take every parse from the cache, and an edit re-parses only the
+    /// changed file while the rest stays cached. The request bytes
+    /// alternate (`-p .` / `-p /p`), so no run replays the fingerprint
+    /// reply of the run before (`run` compares only against the last
+    /// run's request) and every run really loads a version over the parse
+    /// cache.
+    #[test]
+    fn parse_cache_reuses_parses_across_runs() {
+        const CLEAN_A: &str = "export const a: number = 1;\n";
+        const B: &str = "import { a } from './a';\nexport const b: number = a + 1;\n";
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts","b.ts"]}"#
+                    .to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let b = || ("/p/b.ts".to_string(), B.to_string());
+        let request = |project: &str| format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0{project}");
+
+        // Run 1 (cold): every parse misses the cache.
+        host::test_host::set_files([tsconfig(), a(CLEAN_A), b()]);
+        let (status, reply) = run(&request("."));
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        let cold = ts_goport::program::multirun::take_parse_cache_counts();
+        assert!(cold.parses > 0, "{cold:?}");
+        assert_eq!(cold.hits, 0, "{cold:?}");
+
+        // Run 2 (warm, unchanged): no parse at all, every file served by
+        // the cache.
+        let (status, reply) = run(&request("/p"));
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        let warm = ts_goport::program::multirun::take_parse_cache_counts();
+        assert_eq!(warm.parses, 0, "{warm:?}");
+        assert!(warm.hits > 0, "{warm:?}");
+
+        // Run 3: a third run, past the rotation that released the version
+        // of run 1 (`end_run`): the reuse chain survives it, still without
+        // one parse.
+        let (status, reply) = run(&request("."));
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        let warm3 = ts_goport::program::multirun::take_parse_cache_counts();
+        assert_eq!(warm3.parses, 0, "{warm3:?}");
+        assert!(warm3.hits > 0, "{warm3:?}");
+
+        // Run 4: a.ts edited (same length, so size-based caches would not
+        // notice either): only the changed file re-parses, the rest of the
+        // program stays cached, and the fresh check reports the error.
+        host::test_host::set_files([tsconfig(), a("export const a: number = 'one';\n"), b()]);
+        let (status, reply) = run(&request("/p"));
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/a.ts""#), "{reply}");
+        let edit = ts_goport::program::multirun::take_parse_cache_counts();
+        assert!(edit.parses >= 1, "{edit:?}");
+        assert!(edit.hits > 0, "{edit:?}");
     }
 
     /// An early-return run (`--version`) installs no program version: its

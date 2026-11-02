@@ -16,7 +16,11 @@
 //!
 //! The host enables this once (`enable`); `execute::execute_tsc`
 //! `install_program` and `perform_compilation` then take the version paths
-//! here. `end_run` releases the version of two runs ago (its checker pool
+//! here, and the compile runs under the `ProgramScope` that
+//! `install_and_enter` returns (the sanctioned multi-program pattern,
+//! `core::enter_program`): the scope makes the version current and the
+//! thread back to no current program when it drops, which is before
+//! `end_run`. `end_run` releases the version of two runs ago (its checker pool
 //! stops) and drops the parse cache entries of paths that left the program
 //! (as the Go watcher drops the cache entries of files that left), so a
 //! per-run path does not accumulate parses over the runs; the parse is
@@ -38,20 +42,24 @@ static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 /// True when the run that is ending installed a program version. A run can
 /// end without one (an early return such as `--version`): its `end_run`
-/// must leave `CURRENT` and `RETIRED` alone, or it would release the
-/// version that `CURRENT` still names and store the released version in
-/// `RETIRED` as the `previous` of the next version.
+/// must leave `LAST_VERSION` and `RETIRED` alone, or it would release the
+/// version that `LAST_VERSION` still names as the `previous` of the next
+/// version and retire it before any version was built from it.
 static INSTALLED_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
-    /// The program version that the last run loaded. It is the current
-    /// program of the thread (`core::set_thread_program`), as `set_prog`
-    /// would make a one-program program, and the `previous` of the next
-    /// version.
-    static CURRENT: std::cell::Cell<Option<&'static crate::core::GoProgram>> =
+    /// The version that the last run loaded: the `previous` of the next
+    /// version (`new_program_version`), set by `install_and_enter` and read
+    /// by it on the next install. It is not the current program of the
+    /// thread — the compile of a run reads the version through the
+    /// `ProgramScope` that `install_and_enter` returns, and between runs
+    /// (and while a version loads) no program is current.
+    static LAST_VERSION: std::cell::Cell<Option<&'static crate::core::GoProgram>> =
         const { std::cell::Cell::new(None) };
-    /// The version before `CURRENT`, kept loaded while the last run used it
-    /// as its `previous`. `end_run` releases it.
+    /// The version before `LAST_VERSION`, kept loaded while the last run's
+    /// version was built from it. `end_run` releases it; by then the
+    /// program scope of its run has dropped, so it is not current
+    /// (`release_program` panics on a current program).
     static RETIRED: std::cell::Cell<Option<&'static crate::core::GoProgram>> =
         const { std::cell::Cell::new(None) };
     /// The parses of the file versions that the loads of this process have
@@ -93,6 +101,33 @@ struct CachedParse {
     file: Rc<ParsedSourceFile>,
 }
 
+/// The parse-cache counters of one interval (`take_parse_cache_counts`).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct ParseCounts {
+    /// The `get_source_file` calls the cache served (no read of the
+    /// parser, no parse).
+    pub hits: u64,
+    /// The `get_source_file` calls that missed the cache and parsed
+    /// through the host of the run. A read that failed (a path that does
+    /// not exist) counts in neither field.
+    pub parses: u64,
+}
+
+thread_local! {
+    /// The counters since the last `take_parse_cache_counts`, for the
+    /// tests' direct cache assertions (the ts_wasm parse-reuse test).
+    static PARSE_COUNTS: std::cell::Cell<ParseCounts> =
+        const { std::cell::Cell::new(ParseCounts { hits: 0, parses: 0 }) };
+}
+
+/// PORT: not in Go. Test hook: takes the parse-cache counters of this
+/// thread since the last take and resets them.
+#[doc(hidden)]
+#[must_use]
+pub fn take_parse_cache_counts() -> ParseCounts {
+    PARSE_COUNTS.with(std::cell::Cell::take)
+}
+
 /// Turns the multi-run flow on for the rest of the process, and turns on the
 /// freeable file versions of a watch process (`ast::set_watch_process`), so
 /// a re-parse of a changed file is freed with its last holder instead of
@@ -112,11 +147,18 @@ pub fn is_enabled() -> bool {
 
 /// `execute::execute_tsc::install_program` in the multi-run flow: loads the
 /// program version of `host` and `config` (the tsc `ProgramOptions`) and
-/// makes it the current program of the thread, in place of
-/// `program::install_new_program` (`core::set_prog`), which a process can
-/// call once. The caller runs the compile with no extra scope, like the
-/// installed program.
-pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) {
+/// returns the scope that makes it the current program of the thread, in
+/// place of `program::install_new_program` (`core::set_prog`), which a
+/// process can call once. The caller holds the scope across the compile;
+/// when it drops, the thread is back to no current program
+/// (`core::enter_program` restores what it replaced), which is what
+/// `end_run` needs: it releases the retired version, and
+/// `release_program` panics on a current program. The scope drops when the
+/// compile function returns, before `ts_run` calls `end_run`.
+pub(crate) fn install_and_enter(
+    host: Rc<dyn CompilerHost>,
+    config: Rc<ParsedCommandLine>,
+) -> crate::core::ProgramScope {
     let config_path = config.config_file.as_ref().map(|c| c.path.clone());
     let config_file_name = config.config_file.as_ref().map(|c| c.file_name.clone());
     CONFIG_STAMP.with(|stamp| *stamp.borrow_mut() = config_file_name);
@@ -143,7 +185,11 @@ pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<Par
             live.insert(config_path);
         }
     });
-    let previous = CURRENT.with(|current| current.get());
+    // The `previous` of the new version: the version of the last run,
+    // which `LAST_VERSION` keeps loaded for exactly this. It is not read
+    // off the thread — the load runs with no current program, and between
+    // runs none is current either.
+    let previous = LAST_VERSION.with(|last| last.get());
     // The semantic-diagnostic reuse set of this run, from `np` and the cache
     // of the runs before (see `SemanticCache`). The options pointer is the
     // interned copy `build_program` leaks, so runs with the same options
@@ -152,23 +198,24 @@ pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<Par
     let version = crate::program::new_program_version(&np, previous);
     drop(np);
     drop(no_program);
-    // The program of the run: the loading thread keeps it current for the
-    // rest of the run, as `set_thread_program` sets a worker's program
-    // (`core::WorkerSeed`), and `CURRENT` names it as the `previous` of
-    // the next version.
-    crate::core::set_thread_program(Some(version));
-    CURRENT.with(|current| current.set(Some(version)));
+    LAST_VERSION.with(|last| last.set(Some(version)));
     INSTALLED_RUN.store(true, std::sync::atomic::Ordering::Release);
+    // The program of the run: the scope makes it current and the caller
+    // holds it for the compile (see the docstring).
+    crate::core::enter_program(Some(version))
 }
 
 /// The end of a run: releases the version that the run before the last
-/// loaded, and moves the last version there. Its checker pool stops; the
+/// loaded, and retires the last version there. Its checker pool stops; the
 /// published stores and the parse cache stay, so the next run reuses the
 /// parses of its unchanged files. The parse cache entries of paths that
 /// left the program are dropped, so their parses free with the versions
 /// that held them. Releases nothing before the second run. A run that
 /// installed no version (an early return such as `--version`) rotates
-/// nothing: `CURRENT` and `RETIRED` keep their programs.
+/// nothing: `LAST_VERSION` and `RETIRED` keep their versions. No program
+/// is current by then: the run's scope (`install_and_enter`) dropped when
+/// the compile function returned, so the released version is not current
+/// on this thread (`release_program` panics on a current program).
 pub fn end_run() {
     if !INSTALLED_RUN.swap(false, std::sync::atomic::Ordering::AcqRel) {
         return;
@@ -177,7 +224,7 @@ pub fn end_run() {
     if let Some(old) = retired {
         crate::program::release_program(old);
     }
-    RETIRED.with(|retired| retired.set(CURRENT.with(|current| current.get())));
+    RETIRED.with(|retired| retired.set(LAST_VERSION.with(|last| last.get())));
     LIVE_PATHS.with(|live| {
         let live = live.borrow();
         PARSE_CACHE.with(|cache| {
@@ -272,6 +319,13 @@ impl CompilerHost for MultiRunHost {
             Some((true, _)) => {}
         }
         if let Some(file) = self.cached(&opts.path, key, opts) {
+            PARSE_COUNTS.with(|counts| {
+                let current = counts.get();
+                counts.set(ParseCounts {
+                    hits: current.hits + 1,
+                    ..current
+                });
+            });
             return Some(file);
         }
         // A new parse of a path this process never published is freeable
@@ -284,6 +338,13 @@ impl CompilerHost for MultiRunHost {
         // covers a parse the program did not take.
         crate::ast::note_published_path(&opts.path.0);
         let file = self.inner.get_source_file(opts)?;
+        PARSE_COUNTS.with(|counts| {
+            let current = counts.get();
+            counts.set(ParseCounts {
+                parses: current.parses + 1,
+                ..current
+            });
+        });
         if file.version.get().is_none()
             && !crate::ast::is_published(file.store)
             && crate::ast::freeable_path(&file.path().0)
