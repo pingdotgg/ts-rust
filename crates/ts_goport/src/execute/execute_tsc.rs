@@ -680,6 +680,14 @@ fn perform_incremental_compilation(
         Some(get_trace_from_sys(sys, config.locale(), testing.clone())),
         content_mapper_project,
     );
+    // PORT: in the multi-run flow, the host of the run sits over the parse
+    // cache of the process (`program::multirun`), as `perform_compilation`
+    // does: the build info read, the version install and the incremental
+    // program all run over the wrapped host, so an incremental run reuses
+    // the parses of the files that an earlier run saw with the same
+    // content. `wrap_host` returns the host unchanged while the flow is
+    // off (native one-program runs).
+    let host = crate::program::multirun::wrap_host(host);
     let config = Rc::new(config);
     let replacement = hooks.program_like();
     let build_info_read_start = sys.now();

@@ -307,7 +307,7 @@ impl Fs for HostFs {
 pub mod test_host {
     use super::Op;
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Mutex, PoisonError};
 
     static FILES: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
@@ -316,6 +316,19 @@ pub mod test_host {
     /// nanoseconds), so a file that a later `set_files` wrote is a parse
     /// cache miss (`program::multirun`), even when its size is the same.
     static GENERATION: AtomicU64 = AtomicU64::new(1);
+
+    /// When set, `Stat` reports one mtime for every file, whatever
+    /// `set_files` wrote: a file system with no mtime honesty, as the npm
+    /// package's `memoryFileSystem` is (every file at mtime 0). The
+    /// multi-run parse cache keys its entries by content, so it serves
+    /// such a host; keyed by mtime it would replay a stale parse of a
+    /// changed file.
+    static CONSTANT_MTIME: AtomicBool = AtomicBool::new(false);
+
+    /// Sets whether `Stat` reports a constant mtime (see `CONSTANT_MTIME`).
+    pub fn set_constant_mtime(constant: bool) {
+        CONSTANT_MTIME.store(constant, Ordering::Relaxed);
+    }
 
     /// Replaces the files of the test host.
     pub fn set_files(files: impl IntoIterator<Item = (String, String)>) {
@@ -351,14 +364,17 @@ pub mod test_host {
         let is_dir = map.keys().any(|key| key.starts_with(&prefix));
         match op {
             Op::Read => map.get(path).cloned(),
-            Op::Stat => match map.get(path) {
-                Some(bytes) => Some(
-                    format!("f {} {}", bytes.len(), GENERATION.load(Ordering::Relaxed))
-                        .into_bytes(),
-                ),
-                None => is_dir
-                    .then(|| format!("d 0 {}", GENERATION.load(Ordering::Relaxed)).into_bytes()),
-            },
+            Op::Stat => {
+                let mtime = if CONSTANT_MTIME.load(Ordering::Relaxed) {
+                    1
+                } else {
+                    GENERATION.load(Ordering::Relaxed)
+                };
+                match map.get(path) {
+                    Some(bytes) => Some(format!("f {} {}", bytes.len(), mtime).into_bytes()),
+                    None => is_dir.then(|| format!("d 0 {mtime}").into_bytes()),
+                }
+            }
             Op::ReadDir => {
                 if !is_dir {
                     return None;

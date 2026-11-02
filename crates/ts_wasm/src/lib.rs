@@ -217,9 +217,13 @@ pub fn run(request: &str) -> (i32, String) {
     // E1: remember the answer of this exact request over this exact host
     // state (see `FINGERPRINT`). The world is hashed again: the run may
     // have written files (an emit), and the replay must not serve a reply
-    // from before them.
+    // from before them. The post-run check reuses the content hashes the
+    // run's parse-cache lookups read (`multirun::
+    // end_of_run_world_fingerprint`): no cached file is read a second
+    // time.
     if flags & FLAG_DIAGNOSTICS_JSON != 0 {
-        let world = ts_goport::program::multirun::file_world_fingerprint(&host::HostFs::new());
+        let world =
+            ts_goport::program::multirun::end_of_run_world_fingerprint(&host::HostFs::new());
         FINGERPRINT.with(|cell| {
             *cell.borrow_mut() = Some((request_hash, world, status, reply.clone()));
         });
@@ -597,6 +601,105 @@ mod tests {
         let (status, reply) = run(&request());
         assert_eq!(status, 2, "{reply}");
         assert!(reply.contains(r#""code":2322"#), "{reply}");
+    }
+
+    /// An incremental config takes `perform_incremental_compilation`,
+    /// whose host must sit over the parse cache like a plain run's host
+    /// (`multirun::wrap_host`): the build info read, the version install
+    /// and the incremental program all run over the wrapped host. The
+    /// runs below change the guest between runs in this one process, and
+    /// each reply must be the fresh check's.
+    #[test]
+    fn incremental_config_runs_report_each_guest() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"incremental":true,"outDir":"out","types":[]},"files":["a.ts"]}"#
+                    .to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: red, cold (no build info yet): the full check reports.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'one';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(
+            host::test_host::file("/p/out/tsconfig.tsbuildinfo").is_some(),
+            "run 1 build info"
+        );
+
+        // Run 2: the guest is fixed (a parse-cache hit for the unchanged
+        // config and libs, a re-parse of the changed a.ts): the reply is
+        // the fresh check's.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 1;\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+
+        // Run 3: red again over the warm build info: the error is
+        // reported again, and the emit is the new text's.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'two';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(reply.contains("'two'"), "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const n = 'two';\n"),
+            "run 3 emit"
+        );
+    }
+
+    /// The reviewer's repro: a host that reports one mtime for every file
+    /// (the npm package's `memoryFileSystem`, `host::test_host`
+    /// `set_constant_mtime`). The parse cache is keyed by the content the
+    /// host serves, so a guest whose text changed under the constant mtime
+    /// is re-parsed and re-reported; a cache keyed by mtime would replay
+    /// the stale parse of the old text and report the old answer.
+    #[test]
+    fn constant_mtime_host_still_rechecks_changed_content() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_constant_mtime(true);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#.to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: a red guest. The mtime is the same for every file and
+        // stays so for the whole test.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'one';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+
+        // Run 2: only the content changed (same length, so the same size
+        // too), and the mtime is still constant. The fresh parse must be
+        // checked: the reply is the new content's.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 3.141;\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const n = 3.141;\n"),
+            "run 2 emit"
+        );
+
+        // Run 3: back to red (the parse and the cached per-file lists are
+        // for the green text): the error is reported again.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'one';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        host::test_host::set_constant_mtime(false);
     }
 
     // A script guest whose top-level shape is the same (the same annotated

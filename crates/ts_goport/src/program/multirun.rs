@@ -72,6 +72,14 @@ thread_local! {
     /// parse does not go through the parse cache (the host reads it before
     /// the run installs a version).
     static CONFIG_STAMP: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The content hashes that the loads of the run that is running have
+    /// read (`get_source_file` computes them for its keys), by path.
+    /// `end_of_run_world_fingerprint` hashes them instead of reading the
+    /// files again. Every fingerprint takes what it finds, so a hash never
+    /// outlives the run whose read made it: the pre-run fingerprint
+    /// (`file_world_fingerprint`) drops the leftover (the host may have
+    /// changed since that read), and hashes every file fresh.
+    static RUN_HASHES: RefCell<Option<FxHashMap<Path, u128>>> = const { RefCell::new(None) };
 }
 
 struct CachedParse {
@@ -112,12 +120,21 @@ pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<Par
     let config_path = config.config_file.as_ref().map(|c| c.path.clone());
     let config_file_name = config.config_file.as_ref().map(|c| c.file_name.clone());
     CONFIG_STAMP.with(|stamp| *stamp.borrow_mut() = config_file_name);
+    // The version is parsed and built with no current program (the
+    // `new_program_version` contract, `core::enter_program`: "None clears
+    // it, for example while the frontend parses a new version"): this
+    // scope covers the whole load. `new_frontend_program` and
+    // `new_program_version` keep their own scopes; this one also covers
+    // the bookkeeping between them, which reads `np`, not the current
+    // program — the version of the run before stays out of the way until
+    // the new one is made current below.
+    let no_program = crate::core::enter_program(None);
     let np = crate::execute::execute_tsc::new_frontend_program(host, config);
     crate::program::mark_freeable_parses(&np);
     // The paths whose parses this version keeps: the files of its program
     // and its config file. `end_run` drops the parse cache entries of the
-    // other paths, so a path that left the program frees its parse with the
-    // versions that held it.
+    // other paths, so a path that left the program frees its parse with
+    // the versions that held it.
     LIVE_PATHS.with(|live| {
         let mut live = live.borrow_mut();
         live.clear();
@@ -134,6 +151,11 @@ pub(crate) fn install_program_version(host: Rc<dyn CompilerHost>, config: Rc<Par
     prepare_semantic_reuse(&np, super::intern_compiler_options(np.options()));
     let version = crate::program::new_program_version(&np, previous);
     drop(np);
+    drop(no_program);
+    // The program of the run: the loading thread keeps it current for the
+    // rest of the run, as `set_thread_program` sets a worker's program
+    // (`core::WorkerSeed`), and `CURRENT` names it as the `previous` of
+    // the next version.
     crate::core::set_thread_program(Some(version));
     CURRENT.with(|current| current.set(Some(version)));
     INSTALLED_RUN.store(true, std::sync::atomic::Ordering::Release);
@@ -232,6 +254,23 @@ impl CompilerHost for MultiRunHost {
             let (text, ok) = self.inner.fs().read_file(&opts.file_name);
             ok.then(|| (false, xxh3_128(text.as_bytes())))
         };
+        // The read's hash is the fingerprint's too (`RUN_HASHES`): the
+        // post-run check takes it instead of reading the file a second
+        // time. A failed read is no hash (the post-run check reads the
+        // path and hashes its failure).
+        match key {
+            Some((false, content_hash)) => RUN_HASHES.with(|hashes| {
+                if let Some(hashes) = hashes.borrow_mut().as_mut() {
+                    hashes.insert(opts.path.clone(), content_hash);
+                }
+            }),
+            None => RUN_HASHES.with(|hashes| {
+                if let Some(hashes) = hashes.borrow_mut().as_mut() {
+                    hashes.remove(&opts.path);
+                }
+            }),
+            Some((true, _)) => {}
+        }
         if let Some(file) = self.cached(&opts.path, key, opts) {
             return Some(file);
         }
@@ -301,13 +340,6 @@ impl CompilerHost for MultiRunHost {
 }
 
 /// The host file system as the parse cache sees it, hashed: every path the
-/// cache has parsed, with the mtime the host reports now. A replayed
-/// request (`ts_wasm` `FINGERPRINT`) is the same check only while this
-/// value is the one stored with its reply: a changed or deleted file
-/// changes a stat, and a new program file changes the stat of the config
-/// that names it (the held flow's config text is a function of its file
-/// set). This is the parse cache's own mtime-honesty contract.
-/// The host file system as the parse cache sees it, hashed: every path the
 /// cache has parsed, with the hash of the content the file system serves
 /// now, and the config file of the last run (`CONFIG_STAMP`). A bundled
 /// lib file hashes its path only: its text is embedded in the module and
@@ -317,8 +349,28 @@ impl CompilerHost for MultiRunHost {
 /// changed config changes the read of the file set it names (a new program
 /// file of a `files` config changes the config text). This is the parse
 /// cache's own content test (`cached`), so a fingerprint hit means the run
-/// would serve the same parses.
+/// would serve the same parses. The pre-run check: any hash a run before
+/// left (`RUN_HASHES`) describes files the host may have changed since
+/// that read, so it is dropped and every file is read.
 pub fn file_world_fingerprint(fs: &dyn Fs) -> u64 {
+    RUN_HASHES.with(|hashes| *hashes.borrow_mut() = None);
+    world_fingerprint(fs, None)
+}
+
+/// The post-run check: the content hashes that this run's parse-cache
+/// lookups already read (`RUN_HASHES`) stand for their files, so no cached
+/// file is read a second time. A path the run never consulted (or whose
+/// read failed) is read here, as the pre-run check reads every path.
+pub fn end_of_run_world_fingerprint(fs: &dyn Fs) -> u64 {
+    let run_hashes = RUN_HASHES.with(|hashes| hashes.borrow_mut().take());
+    world_fingerprint(fs, run_hashes.as_ref())
+}
+
+/// The fingerprint over `fs`: the content hash of every path the cache
+/// knows, and the config text. A reused hash (`run_hashes`) and a fresh
+/// read of the same text produce the same `xxh3` value, so a fingerprint
+/// matches the one stored with a reply either way.
+fn world_fingerprint(fs: &dyn Fs, run_hashes: Option<&FxHashMap<Path, u128>>) -> u64 {
     use std::hash::{Hash, Hasher};
     // The reads run with no cache borrow held: a host read can re-enter
     // (`HostFs` crosses the wasm boundary).
@@ -344,9 +396,14 @@ pub fn file_world_fingerprint(fs: &dyn Fs) -> u64 {
         if *is_bundled {
             continue;
         }
+        if let Some(content_hash) = run_hashes.and_then(|hashes| hashes.get(path)) {
+            true.hash(&mut hasher);
+            content_hash.hash(&mut hasher);
+            continue;
+        }
         let (text, ok) = fs.read_file(file_name);
         ok.hash(&mut hasher);
-        text.hash(&mut hasher);
+        xxh3_128(text.as_bytes()).hash(&mut hasher);
     }
     if let Some(file_name) = config_file_name {
         hasher.write(b"config");
