@@ -4,8 +4,13 @@
 //!
 //! The host writes a request to the input buffer (`ts_input`), calls
 //! `ts_run`, and reads the reply at `ts_output` (`ts_output_len` bytes).
-//! One instance runs one request, because the port keeps one program per
-//! process (`core::set_prog`). The host makes a new instance for each.
+//! One instance serves many requests: each `ts_run` loads a new program
+//! version (`program::multirun`), whose unchanged files keep their parses
+//! of the runs before, so a warm run parses only what changed. The parse
+//! cache is keyed by the content of each file (bundled lib files skip the
+//! hash: their text is embedded in the module), so the host needs no
+//! mtime contract. A panic still ends the instance (wasm cannot unwind):
+//! the host makes a new one.
 //!
 //! The request is NUL-separated UTF-8 fields: the current directory, the
 //! flags (a decimal number of `FLAG_*` bits), then the tsc arguments. tsc
@@ -17,6 +22,7 @@
 //! `proc_exit`: 2 for a Go panic, 70 for any other.
 
 use std::cell::RefCell;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,6 +34,24 @@ use ts_goport::frontend::tspath::normalize_path;
 use ts_goport::frontend::vfs::{Fs, OsOverride, install_os_override};
 use ts_goport::gostd::context;
 use ts_goport::scanner_util::go_string_from_utf8;
+
+/// The current directory of the run that installed the OS override (see
+/// `run`). Every run of the instance must ask for it.
+static OVERRIDE_CWD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+// E1: the request hash, the host world hash and the reply of the last run
+// that used the whole pipeline. An identical request (the same bytes: cwd,
+// flags and args) replayed while every file the parse cache knows serves
+// the content it had (`multirun::file_world_fingerprint` — the module's
+// only view of the files is what its loads read and hashed, and the held
+// flow's config text is a function of its file set) returns the stored
+// status and reply with no version, no check and no marshal. A changed
+// guest reads differently, so its rerun re-checks. Only a
+// `FLAG_DIAGNOSTICS_JSON` run is stored: its reply carries the whole
+// answer, while a text run would also have to replay stdout.
+thread_local! {
+    static FINGERPRINT: RefCell<Option<(u64, u64, i32, String)>> = const { RefCell::new(None) };
+}
 
 pub mod host;
 
@@ -92,18 +116,94 @@ pub fn run(request: &str) -> (i32, String) {
         eprintln!("error: diagnostics as JSON are not supported with --build");
         return (1, String::new());
     }
+    // E1: an identical request over an unchanged host file system replays
+    // the last reply (see `FINGERPRINT`). The hash covers the whole request;
+    // the world hash is every path the parse cache knows, read and hashed
+    // now (bundled lib files hash their path only), so a changed, deleted
+    // or newly written guest never hits.
+    let mut fingerprint = DefaultHasher::new();
+    request.hash(&mut fingerprint);
+    let request_hash = fingerprint.finish();
+    let world_hash = if flags & FLAG_DIAGNOSTICS_JSON != 0 {
+        ts_goport::program::multirun::file_world_fingerprint(&host::HostFs::new())
+    } else {
+        0
+    };
+    if flags & FLAG_DIAGNOSTICS_JSON != 0
+        && let Some((seen, world, status, reply)) = FINGERPRINT.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map(|(h, w, s, r)| (*h, *w, *s, r.clone()))
+        })
+        && seen == request_hash
+        && world == world_hash
+    {
+        return (status, reply);
+    }
 
-    let _ = host::CASE_SENSITIVE.set(flags & FLAG_CASE_INSENSITIVE == 0);
-    install_os_override(OsOverride {
-        fs: Arc::new(|| Rc::new(host::HostFs::new()) as Rc<dyn Fs>),
-        current_directory: cwd,
-    });
+    // The case-insensitivity of the host file system is read once per
+    // instance (`host::CASE_SENSITIVE`): a later run with the other flag
+    // would run in the wrong mode with no error. Reject it explicitly, as
+    // a cwd change below.
+    let case_sensitive = flags & FLAG_CASE_INSENSITIVE == 0;
+    match host::CASE_SENSITIVE.get() {
+        Some(installed) if *installed != case_sensitive => {
+            eprintln!(
+                "error: this instance serves a {} file system, the request asks for {} (multi-run: one case mode per instance)",
+                if *installed {
+                    "case-sensitive"
+                } else {
+                    "case-insensitive"
+                },
+                if case_sensitive {
+                    "case-sensitive"
+                } else {
+                    "case-insensitive"
+                },
+            );
+            return (1, String::new());
+        }
+        Some(_) => {}
+        None => {
+            let _ = host::CASE_SENSITIVE.set(case_sensitive);
+        }
+    }
+    // The override replaces the OS for the process, so it installs once
+    // (`osvfs::install_os_override` panics on the second call): every run
+    // of the instance resolves paths against the directory of the first
+    // one. A request with another cwd is rejected explicitly instead of
+    // being served with the wrong directory. The file system closure makes
+    // a new `HostFs` per thread, so the file system of a run is the host's
+    // now.
+    match OVERRIDE_CWD.get() {
+        Some(installed) if *installed != cwd => {
+            eprintln!(
+                "error: cwd is {cwd}, but this instance serves {installed} (multi-run: one cwd per instance)"
+            );
+            return (1, String::new());
+        }
+        Some(_) => {}
+        None => {
+            install_os_override(OsOverride {
+                fs: Arc::new(|| Rc::new(host::HostFs::new()) as Rc<dyn Fs>),
+                current_directory: cwd.clone(),
+            });
+            let _ = OVERRIDE_CWD.set(cwd);
+        }
+    }
     ts_goport::execute::tsc::stdio::init();
     let sys: Rc<dyn System> = match new_os_system() {
         Ok(sys) => Rc::new(sys),
         Err(status) => return (status.code(), String::new()),
     };
 
+    // Multi-run (see the `program::multirun` module): the run's program is
+    // a program version, built from the version of the run before, whose
+    // unchanged files keep their parses. The compile holds the program
+    // scope (`multirun::install_and_enter`), which drops with the compile
+    // frame: no program is current here. `end_run` releases the version of
+    // the run before the last, after the diagnostics of this run are made.
+    ts_goport::program::multirun::enable();
     let diagnostics = (flags & FLAG_DIAGNOSTICS_JSON != 0).then(Rc::default);
     let hooks = WasmTsc {
         diagnostics: diagnostics.clone(),
@@ -111,10 +211,25 @@ pub fn run(request: &str) -> (i32, String) {
     let status = command_line(&context::background(), sys.clone(), &args, &hooks)
         .status
         .code();
+    ts_goport::program::multirun::end_run();
     let _ = sys.writer().borrow_mut().flush();
     let reply = diagnostics.map_or_else(String::new, |diagnostics| {
         format!("[{}]", diagnostics.take().join(","))
     });
+    // E1: remember the answer of this exact request over this exact host
+    // state (see `FINGERPRINT`). The world is hashed again: the run may
+    // have written files (an emit), and the replay must not serve a reply
+    // from before them. The post-run check reuses the content hashes the
+    // run's parse-cache lookups read (`multirun::
+    // end_of_run_world_fingerprint`): no cached file is read a second
+    // time.
+    if flags & FLAG_DIAGNOSTICS_JSON != 0 {
+        let world =
+            ts_goport::program::multirun::end_of_run_world_fingerprint(&host::HostFs::new());
+        FINGERPRINT.with(|cell| {
+            *cell.borrow_mut() = Some((request_hash, world, status, reply.clone()));
+        });
+    }
     (status, reply)
 }
 
@@ -211,17 +326,24 @@ mod exports {
     }
 }
 
-// Native only: a process runs one request, and the wasm test binary makes
-// its one request in `wasm_tests`.
+// Native only: the tests run over `host::test_host`. A wasm build has no
+// test host, because its file system is the JavaScript host's; its test
+// binary makes its one request in `wasm_tests`.
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::sync::PoisonError;
+
+    /// The test host of the process is one state (the files, the OS
+    /// override, the parse cache), so the tests take turns.
+    static HOST: Mutex<()> = Mutex::new(());
 
     /// One run over the test host: the reply has the diagnostics as JSON,
-    /// and the emit writes to the host. A process runs one request, so this
-    /// is the crate's only test of `run`.
+    /// and the emit writes to the host.
     #[test]
     fn run_checks_and_emits_through_the_host() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
         host::test_host::set_files([
             (
                 "/p/tsconfig.json".to_string(),
@@ -243,6 +365,466 @@ mod tests {
             host::test_host::file("/p/out/a.js").as_deref(),
             Some("export const n = 'one';\n")
         );
+    }
+
+    /// PORT: not in Go. The multi-run flow (`program::multirun`): many
+    /// runs in this one process (one `WebAssembly.Instance` in the shipped
+    /// module), across guests that change between runs. Every run reports
+    /// the diagnostics of the files it was given, including a file whose
+    /// text changed: the parse cache is keyed by content, so the changed
+    /// text is a cache miss and the parse is redone.
+    #[test]
+    fn many_runs_in_one_process_report_each_guest() {
+        const CLEAN_A: &str = "export const a: number = 1;\n";
+        const B: &str = "import { a } from './a';\nexport const b: number = a + 1;\n";
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts","b.ts"]}"#
+                    .to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let b = |text: &str| ("/p/b.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: a clean guest (cold: no parse cache, no earlier version).
+        host::test_host::set_files([tsconfig(), a(CLEAN_A), b(B)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const a = 1;\n"),
+            "run 1 emit"
+        );
+
+        // Run 2: a.ts now has a type error, b.ts unchanged. The changed
+        // file must be re-parsed (stale-parse test); the unchanged one may
+        // reuse its parse.
+        host::test_host::set_files([tsconfig(), a("export const a: number = 'one';\n"), b(B)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/a.ts""#), "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const a = 'one';\n"),
+            "run 2 emit"
+        );
+
+        // Run 3: the error is fixed, and the reply is clean again.
+        host::test_host::set_files([tsconfig(), a("export const a: number = 2;\n"), b(B)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+
+        // Run 4: exactly the files of run 3 again (the warm, unchanged
+        // case: every parse comes from the cache).
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/b.js").as_deref(),
+            Some("import { a } from './a';\nexport const b = a + 1;\n"),
+            "run 4 emit"
+        );
+    }
+
+    /// The parse cache serves the parses of unchanged files across runs,
+    /// asserted on the cache's own counters (`multirun::take_parse_cache_counts`),
+    /// and the version chain stays sound across the `end_run` rotation: run
+    /// 1 parses every file (cold), the runs after — including a third run,
+    /// past the rotation that released the first version — parse nothing
+    /// and take every parse from the cache, and an edit re-parses only the
+    /// changed file while the rest stays cached. The request bytes
+    /// alternate (`-p .` / `-p /p`), so no run replays the fingerprint
+    /// reply of the run before (`run` compares only against the last
+    /// run's request) and every run really loads a version over the parse
+    /// cache.
+    #[test]
+    fn parse_cache_reuses_parses_across_runs() {
+        const CLEAN_A: &str = "export const a: number = 1;\n";
+        const B: &str = "import { a } from './a';\nexport const b: number = a + 1;\n";
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts","b.ts"]}"#
+                    .to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let b = || ("/p/b.ts".to_string(), B.to_string());
+        let request = |project: &str| format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0{project}");
+
+        // Run 1 (cold): every parse misses the cache.
+        host::test_host::set_files([tsconfig(), a(CLEAN_A), b()]);
+        let (status, reply) = run(&request("."));
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        let cold = ts_goport::program::multirun::take_parse_cache_counts();
+        assert!(cold.parses > 0, "{cold:?}");
+        assert_eq!(cold.hits, 0, "{cold:?}");
+
+        // Run 2 (warm, unchanged): no parse at all, every file served by
+        // the cache.
+        let (status, reply) = run(&request("/p"));
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        let warm = ts_goport::program::multirun::take_parse_cache_counts();
+        assert_eq!(warm.parses, 0, "{warm:?}");
+        assert!(warm.hits > 0, "{warm:?}");
+
+        // Run 3: a third run, past the rotation that released the version
+        // of run 1 (`end_run`): the reuse chain survives it, still without
+        // one parse.
+        let (status, reply) = run(&request("."));
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        let warm3 = ts_goport::program::multirun::take_parse_cache_counts();
+        assert_eq!(warm3.parses, 0, "{warm3:?}");
+        assert!(warm3.hits > 0, "{warm3:?}");
+
+        // Run 4: a.ts edited (same length, so size-based caches would not
+        // notice either): only the changed file re-parses, the rest of the
+        // program stays cached, and the fresh check reports the error.
+        host::test_host::set_files([tsconfig(), a("export const a: number = 'one';\n"), b()]);
+        let (status, reply) = run(&request("/p"));
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/a.ts""#), "{reply}");
+        let edit = ts_goport::program::multirun::take_parse_cache_counts();
+        assert!(edit.parses >= 1, "{edit:?}");
+        assert!(edit.hits > 0, "{edit:?}");
+    }
+
+    /// An early-return run (`--version`) installs no program version: its
+    /// `end_run` must rotate nothing, and a compile after it must still
+    /// work on the version chain (the released-as-`previous` bug).
+    #[test]
+    fn early_return_run_does_not_rotate_versions() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let files = || {
+            [
+                (
+                    "/p/tsconfig.json".to_string(),
+                    r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#
+                        .to_string(),
+                ),
+                (
+                    "/p/a.ts".to_string(),
+                    "export const n: number = 1;\n".to_string(),
+                ),
+            ]
+        };
+        host::test_host::set_files(files());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: installs version 1; `end_run` retires it.
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 2: an early return installs nothing.
+        let (status, reply) = run(&["/p", "0", "--version"].join("\0"));
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 3: must build on the live version, not a released one.
+        host::test_host::set_files(files());
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+    }
+
+    /// A run whose cwd differs from the one of the instance is rejected
+    /// explicitly (`run` documents one cwd per multi-run instance).
+    #[test]
+    fn cwd_change_is_rejected() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_files([
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"types":[]},"files":["a.ts"]}"#.to_string(),
+            ),
+            (
+                "/p/a.ts".to_string(),
+                "export const n: number = 1;\n".to_string(),
+            ),
+        ]);
+        let (status, reply) = run(&format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
+        assert_eq!(status, 0, "{reply}");
+        let (status, reply) = run(&format!("/q\0{FLAG_DIAGNOSTICS_JSON}\0-p\0."));
+        assert_eq!(status, 1, "{reply}");
+        assert!(reply.is_empty(), "{reply}");
+    }
+
+    /// A run whose case-insensitivity flag differs from the one the
+    /// instance installed is rejected explicitly (`run` documents one case
+    /// mode per multi-run instance), and the instance keeps serving the
+    /// installed mode after the rejected run.
+    #[test]
+    fn case_flag_change_is_rejected() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_files([
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"types":[]},"files":["A.ts"]}"#.to_string(),
+            ),
+            (
+                "/p/A.ts".to_string(),
+                "export const n: number = 1;\n".to_string(),
+            ),
+        ]);
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        // The other flag: rejected with no reply.
+        let (status, reply) = run(&format!(
+            "/p\0{}\0-p\0.",
+            FLAG_DIAGNOSTICS_JSON | FLAG_CASE_INSENSITIVE
+        ));
+        assert_eq!(status, 1, "{reply}");
+        assert!(reply.is_empty(), "{reply}");
+        // The instance still serves the installed mode.
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+    }
+
+    /// A file that leaves the program frees its parse (`end_run` evicts
+    /// the parse cache entries of paths that left): a later run that
+    /// brings the path back with other content reports THIS content — a
+    /// stale kept parse of the old text must not be served.
+    #[test]
+    fn a_path_that_returns_with_other_content_rereports() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = |files: &str| {
+            (
+                "/p/tsconfig.json".to_string(),
+                format!(r#"{{"compilerOptions":{{"outDir":"out","types":[]}},"files":[{files}]}}"#),
+            )
+        };
+        let clean = "export const b: number = 1;\n";
+        let broken = "export const b: number = 'one';\n";
+        let a = (
+            "/p/a.ts".to_string(),
+            "export const a: number = 1;\n".to_string(),
+        );
+        let b = |text: &str| ("/p/b.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: a.ts and b.ts, clean.
+        host::test_host::set_files([tsconfig(r#""a.ts","b.ts""#), a.clone(), b(clean)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 2: b.ts left the program (its parse is evicted at end_run).
+        host::test_host::set_files([tsconfig(r#""a.ts""#), a.clone()]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+
+        // Run 3: b.ts is back with other content: the fresh parse must be
+        // checked, and the error must be reported.
+        host::test_host::set_files([tsconfig(r#""a.ts","b.ts""#), a.clone(), b(broken)]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/b.ts""#), "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+    }
+
+    // E1 + the semantic-diagnostic reuse: the reply of a run whose request
+    // bytes are the same as the run before must still be THIS run's — the
+    // host file system changed under the identical request, so neither the
+    // replay nor the per-file cache may serve the old answer.
+    #[test]
+    fn identical_request_over_a_changed_guest_rereports() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#.to_string(),
+            )
+        };
+        let red = "const n: number = 'not a number';\nconsole.log(n);\n";
+        host::test_host::set_files([tsconfig(), ("/p/a.ts".to_string(), red.to_string())]);
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        // Same request bytes, new text: the world hash changes with the
+        // content, so the replay must miss and the fresh check must report
+        // clean.
+        host::test_host::set_files([
+            tsconfig(),
+            (
+                "/p/a.ts".to_string(),
+                "export const a: number = 1;\n".to_string(),
+            ),
+        ]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        // And back to red (the parse and the cached per-file lists are for
+        // the old parse): the fresh check must report the error again.
+        host::test_host::set_files([tsconfig(), ("/p/a.ts".to_string(), red.to_string())]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+    }
+
+    /// An incremental config takes `perform_incremental_compilation`,
+    /// whose host must sit over the parse cache like a plain run's host
+    /// (`multirun::wrap_host`): the build info read, the version install
+    /// and the incremental program all run over the wrapped host. The
+    /// runs below change the guest between runs in this one process, and
+    /// each reply must be the fresh check's.
+    #[test]
+    fn incremental_config_runs_report_each_guest() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"incremental":true,"outDir":"out","types":[]},"files":["a.ts"]}"#
+                    .to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: red, cold (no build info yet): the full check reports.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'one';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(
+            host::test_host::file("/p/out/tsconfig.tsbuildinfo").is_some(),
+            "run 1 build info"
+        );
+
+        // Run 2: the guest is fixed (a parse-cache hit for the unchanged
+        // config and libs, a re-parse of the changed a.ts): the reply is
+        // the fresh check's.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 1;\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+
+        // Run 3: red again over the warm build info: the error is
+        // reported again, and the emit is the new text's.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'two';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        assert!(reply.contains("'two'"), "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const n = 'two';\n"),
+            "run 3 emit"
+        );
+    }
+
+    /// The reviewer's repro: a host that reports one mtime for every file
+    /// (the npm package's `memoryFileSystem`, `host::test_host`
+    /// `set_constant_mtime`). The parse cache is keyed by the content the
+    /// host serves, so a guest whose text changed under the constant mtime
+    /// is re-parsed and re-reported; a cache keyed by mtime would replay
+    /// the stale parse of the old text and report the old answer.
+    #[test]
+    fn constant_mtime_host_still_rechecks_changed_content() {
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        host::test_host::set_constant_mtime(true);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts"]}"#.to_string(),
+            )
+        };
+        let a = |text: &str| ("/p/a.ts".to_string(), text.to_string());
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+
+        // Run 1: a red guest. The mtime is the same for every file and
+        // stays so for the whole test.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'one';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+
+        // Run 2: only the content changed (same length, so the same size
+        // too), and the mtime is still constant. The fresh parse must be
+        // checked: the reply is the new content's.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 3.141;\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        assert_eq!(
+            host::test_host::file("/p/out/a.js").as_deref(),
+            Some("export const n = 3.141;\n"),
+            "run 2 emit"
+        );
+
+        // Run 3: back to red (the parse and the cached per-file lists are
+        // for the green text): the error is reported again.
+        host::test_host::set_files([tsconfig(), a("export const n: number = 'one';\n")]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""code":2322"#), "{reply}");
+        host::test_host::set_constant_mtime(false);
+    }
+
+    // A script guest whose top-level shape is the same (the same annotated
+    // function, a new body) re-checks only itself; a script whose top-level
+    // shape changed re-checks everything. Both replies must be the fresh
+    // check's.
+    #[test]
+    fn script_body_change_rereports_and_shape_change_rechecks() {
+        const HEAD: &str = "function slugify(input: string): string {\n";
+        const FOOT: &str = "}\ntest('a', () => { expect(slugify('A B')).toEqual('a-b'); });\n";
+        const GLOBALS: &str = "declare function test(name: string, fn: () => void): void;\ndeclare function expect(actual: unknown): { toEqual(expected: unknown): void; };\n";
+        let _host = HOST.lock().unwrap_or_else(PoisonError::into_inner);
+        let tsconfig = || {
+            (
+                "/p/tsconfig.json".to_string(),
+                r#"{"compilerOptions":{"outDir":"out","types":[]},"files":["a.ts","globals.d.ts"]}"#.to_string(),
+            )
+        };
+        let broken =
+            format!("{HEAD}  const slug: number = input.toLowerCase();\n  return slug;\n{FOOT}");
+        let fixed =
+            format!("{HEAD}  return input.trim().toLowerCase().replace(/\\s+/g, \"-\");\n{FOOT}");
+        host::test_host::set_files([
+            tsconfig(),
+            ("/p/globals.d.ts".to_string(), GLOBALS.to_string()),
+            ("/p/a.ts".to_string(), broken),
+        ]);
+        let request = || format!("/p\0{FLAG_DIAGNOSTICS_JSON}\0-p\0.");
+        let (status, reply) = run(&request());
+        assert_eq!(status, 2, "{reply}");
+        assert!(reply.contains(r#""fileName":"/p/a.ts""#), "{reply}");
+        // The body edit keeps the signature: the guest is re-checked and
+        // the reply is the fixed one.
+        host::test_host::set_files([
+            tsconfig(),
+            ("/p/globals.d.ts".to_string(), GLOBALS.to_string()),
+            ("/p/a.ts".to_string(), fixed),
+        ]);
+        let (status, reply) = run(&request());
+        assert_eq!(status, 0, "{reply}");
+        assert_eq!(reply, "[]", "{reply}");
+        // A new top-level declaration changes the global scope: the whole
+        // program re-checks, and the duplicate it makes is reported on both
+        // sides that the full check reports (here: the globals side keeps
+        // its own diagnostic).
+        host::test_host::set_files([
+            tsconfig(),
+            ("/p/globals.d.ts".to_string(), GLOBALS.to_string()),
+            (
+                "/p/a.ts".to_string(),
+                "const test = 5;\nconsole.log(test);\n".to_string(),
+            ),
+        ]);
+        let (status, _reply) = run(&request());
+        assert_eq!(status, 2);
     }
 }
 
@@ -300,6 +882,12 @@ mod wasm_tests {
         ]);
         // No flags: diagnostics as text, on a case-sensitive host.
         assert_eq!(run("/p\0\0-p\0."), (0, String::new()));
+        // The multi-run flow leaves no current program between runs (the
+        // compile's `ProgramScope` drops with the compile frame): enter the
+        // run's version for the releases, as an embedder that frees a
+        // checker of the last run does (`multirun::enter_last_version`).
+        let version = ts_goport::program::multirun::enter_last_version()
+            .expect("the run installed a version");
         let held = LIVE.load(Ordering::Relaxed);
         ts_goport::program::release_checker(0);
         let released = LIVE.load(Ordering::Relaxed);
@@ -309,5 +897,6 @@ mod wasm_tests {
         ts_goport::program::release_checker(0);
         ts_goport::program::release_checker(usize::MAX);
         assert_eq!(LIVE.load(Ordering::Relaxed), released);
+        drop(version);
     }
 }

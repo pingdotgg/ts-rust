@@ -97,8 +97,15 @@ function fsCall(fs, op, request) {
     return undefined;
 }
 
-/** The state and imports of one run (`runTsc`, `runTscAsync`). */
-function prepareRun(module, options) {
+/**
+ * The state and imports of one run (`runTsc`, `runTscAsync`). Exported for
+ * a held instance: make the instance yourself (`new WebAssembly.Instance(
+ * module, run.imports)`), call the `ts_run` that `run.start(instance)`
+ * returns once per request, and read each reply with `run.result`. One
+ * instance serves many requests (the multi-run flow), so a probe that
+ * holds it sees the warm runs.
+ */
+export function prepareRun(module, options) {
     const {
         args = [],
         cwd = "/",

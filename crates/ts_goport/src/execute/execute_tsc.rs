@@ -590,10 +590,23 @@ pub(crate) fn get_trace_from_sys(
 // PORT: the new program is installed for the process (see the module
 // comment). Go `NewProgram` cannot fail; the Rust install fails only when
 // the current directory cannot be read, and that ends the run.
-pub(crate) fn install_program(host: Rc<dyn CompilerHost>, config: Rc<ParsedCommandLine>) {
+// PORT: in the multi-run flow (`program::multirun`), the program is a
+// program version of the process instead (`install_and_enter`), so a later
+// run can load another version; the returned scope makes it the current
+// program of the thread and the caller holds it across the compile (see
+// the callers).
+#[must_use = "in the multi-run flow the returned scope keeps the program current; hold it for the compile"]
+pub(crate) fn install_program(
+    host: Rc<dyn CompilerHost>,
+    config: Rc<ParsedCommandLine>,
+) -> Option<crate::core::ProgramScope> {
+    if crate::program::multirun::is_enabled() {
+        return Some(crate::program::multirun::install_and_enter(host, config));
+    }
     if let Err(message) = crate::program::install_new_program(program_options(host, config)) {
         panic!("cannot load program: {message}");
     }
+    None
 }
 
 /// Go `compiler.NewProgram(compiler.ProgramOptions{Config, Host})` in a
@@ -673,6 +686,14 @@ fn perform_incremental_compilation(
         Some(get_trace_from_sys(sys, config.locale(), testing.clone())),
         content_mapper_project,
     );
+    // PORT: in the multi-run flow, the host of the run sits over the parse
+    // cache of the process (`program::multirun`), as `perform_compilation`
+    // does: the build info read, the version install and the incremental
+    // program all run over the wrapped host, so an incremental run reuses
+    // the parses of the files that an earlier run saw with the same
+    // content. `wrap_host` returns the host unchanged while the flow is
+    // off (native one-program runs).
+    let host = crate::program::multirun::wrap_host(host);
     let config = Rc::new(config);
     let replacement = hooks.program_like();
     let build_info_read_start = sys.now();
@@ -685,7 +706,12 @@ fn perform_incremental_compilation(
     start_tracing_if_needed(sys, &config, testing.is_some());
 
     let parse_start = sys.now();
-    install_program(host.clone(), config.clone());
+    // PORT: the multi-run scope (`multirun::install_and_enter`): it keeps
+    // the version current for the rest of the compile and drops with this
+    // frame, so no program is current when `ts_run` calls `end_run` —
+    // whose release needs that (`release_program` panics on a current
+    // program).
+    let _install_scope = install_program(host.clone(), config.clone());
     compile_times.borrow_mut().parse_time = since(sys, parse_start);
     let changes_compute_start = sys.now();
     // Go: sys.Now
@@ -778,12 +804,21 @@ fn perform_compilation(
         Some(get_trace_from_sys(sys, config.locale(), testing.clone())),
         content_mapper_project,
     );
+    // PORT: in the multi-run flow, the host of the run sits over the parse
+    // cache of the process (`program::multirun`), so a run reuses the
+    // parses of the files that an earlier run saw with the same mtime.
+    let host = crate::program::multirun::wrap_host(host);
     let config = Rc::new(config);
 
     start_tracing_if_needed(sys, &config, testing.is_some());
 
     let parse_start = sys.now();
-    install_program(host, config.clone());
+    // PORT: the multi-run scope (`multirun::install_and_enter`): it keeps
+    // the version current for the rest of the compile and drops with this
+    // frame, so no program is current when `ts_run` calls `end_run` —
+    // whose release needs that (`release_program` panics on a current
+    // program).
+    let _install_scope = install_program(host, config.clone());
     compile_times.borrow_mut().parse_time = since(sys, parse_start);
     if let Some(content_mapper_host) = &content_mapper_host {
         compile_times.borrow_mut().content_mapper_times = content_mapper_host.timings();
