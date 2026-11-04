@@ -882,6 +882,12 @@ mod wasm_tests {
         ]);
         // No flags: diagnostics as text, on a case-sensitive host.
         assert_eq!(run("/p\0\0-p\0."), (0, String::new()));
+        // The multi-run flow leaves no current program between runs (the
+        // compile's `ProgramScope` drops with the compile frame): enter the
+        // run's version for the releases, as an embedder that frees a
+        // checker of the last run does (`multirun::enter_last_version`).
+        let version = ts_goport::program::multirun::enter_last_version()
+            .expect("the run installed a version");
         let held = LIVE.load(Ordering::Relaxed);
         ts_goport::program::release_checker(0);
         let released = LIVE.load(Ordering::Relaxed);
@@ -891,5 +897,6 @@ mod wasm_tests {
         ts_goport::program::release_checker(0);
         ts_goport::program::release_checker(usize::MAX);
         assert_eq!(LIVE.load(Ordering::Relaxed), released);
+        drop(version);
     }
 }

@@ -128,6 +128,20 @@ pub fn take_parse_cache_counts() -> ParseCounts {
     PARSE_COUNTS.with(std::cell::Cell::take)
 }
 
+/// Enters the version of the last run (`LAST_VERSION`). Between runs the
+/// multi-run flow leaves no current program, so a caller that needs one
+/// (the ts_wasm wasm test's `release_checker`, an embedder that frees a
+/// checker of the last run) makes this scope; it drops on the thread that
+/// made it, before the next run installs a version. `None` before the
+/// first run.
+#[doc(hidden)]
+#[must_use = "the version is current only while the scope lives"]
+pub fn enter_last_version() -> Option<crate::core::ProgramScope> {
+    LAST_VERSION
+        .with(|last| last.get())
+        .map(|version| crate::core::enter_program(Some(version)))
+}
+
 /// Turns the multi-run flow on for the rest of the process, and turns on the
 /// freeable file versions of a watch process (`ast::set_watch_process`), so
 /// a re-parse of a changed file is freed with its last holder instead of
