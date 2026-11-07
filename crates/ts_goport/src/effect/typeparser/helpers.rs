@@ -66,8 +66,8 @@ impl TypeParser<'_> {
         self.checker.get_type_of_property_of_type_exported(t, name)
     }
 
-    /// GetSymbolAtLocation wraps checker.GetSymbolAtLocation with a meta-property
-    /// guard. Meta properties (import.meta, import.defer, new.target) never
+    /// GetSymbolAtLocation guards meta properties and delete targets.
+    /// Meta properties (import.meta, import.defer, new.target) never
     /// reference a symbol rules care about, and the checker debug-asserts (panics)
     /// when asked for `import.defer` used as an import-call callee. Always use
     /// this instead of the raw checker call.
@@ -77,6 +77,19 @@ impl TypeParser<'_> {
         }
         if node.kind() == SyntaxKind::MetaProperty {
             return SymbolId::NIL;
+        }
+        // Symbol lookup can cache an index symbol that makes a later delete check
+        // incorrectly require an optional property.
+        let mut target = node;
+        let parent = target.parent();
+        if parent.is_some() && is_property_access_expression(parent) && parent.name() == target {
+            target = parent;
+        }
+        if is_access_expression(target) {
+            let parent = walk_up_parenthesized_expressions(target.parent());
+            if parent.is_some() && parent.kind() == SyntaxKind::DeleteExpression {
+                return SymbolId::NIL;
+            }
         }
         self.checker.get_symbol_at_location_exported(node)
     }

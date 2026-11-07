@@ -77,6 +77,12 @@ and "Types" sections and follow them. This file adds the Effect rules.
   nil and `[]` change the compare after a round trip (the override lists and
   `skipLeadingPath`), the port keeps them apart as Go
   (`configraw::clone_effect_options`, `etscore::SlicePtr`).
+- Effect-TS/tsgo#828 (first released in 0.52.0) is ported ahead of the pin
+  (issue #52): the delete guard of `TypeParser::get_symbol_at_location`, and
+  `stability_api_usage.rs` now calls it. See "TS2790 with the stability
+  rules". The rest of #828 (lint tooling, CI, moving the other raw checker
+  calls) is not ported: those calls take type names, declaration names,
+  heritage expressions and module specifiers, which are never a delete target.
 
 ## Go shim -> Rust
 
@@ -239,8 +245,8 @@ the 3 rules on, `--pretty false` and `--pretty true`), and the fixtures
 With `unstableApiUsage` or `experimentalApiUsage` on (the default), a
 `delete` of a property that an index signature gives, under
 `exactOptionalPropertyTypes`, gets TS2790 ("The operand of a 'delete'
-operator must be optional"). effect-tsgo 0.51.1 prints it too, and plain
-TypeScript-Go does not. On T3 Code `apps/server` these are the 14 TS2790
+operator must be optional") in effect-tsgo 0.51.1. Plain TypeScript-Go does
+not report it. On T3 Code `apps/server` these are the 14 TS2790
 lines (`delete process.env.X`). The cause, in rule order:
 
 1. The two usage rules come before `floatingEffect` in Go `rules.All`
@@ -259,9 +265,22 @@ lines (`delete process.env.X`). The cause, in rule order:
    TS2790: with `exactOptionalPropertyTypes` only the `Optional` flag counts.
 
 The first check of the file found no symbol there, so plain TypeScript-Go and
-a run with the two rules off report nothing. The port makes the same calls in
-the same order (`rules/stability_api_usage.rs`, `rules/floating_effect.rs`),
-so it prints the same lines. A small case: `declare const env: { [key:
+a run with the two rules off report nothing.
+
+The port takes the fix of Effect-TS/tsgo#828, so here it prints what 0.52.0
+prints, not 0.51.1: `TypeParser::get_symbol_at_location` returns nil for a
+delete target (the access or its property name, also through parentheses and
+`?.`), and the usage rules call it, so the checker stores no symbol. The fixtures
+`delete-index-signature`, `delete-process-env` and `delete-required-property`
+hold the 0.51.1 output as their `ref`. A small case: `declare const env: { [key:
 string]: string | undefined }; delete env.FOO;` with `strict`,
-`exactOptionalPropertyTypes` and the plugin. `scripts/effect/t3-rules-off.sh`
-runs T3 Code with the rules on and off against effect-tsgo 0.51.1.
+`exactOptionalPropertyTypes` and the plugin.
+
+The guard has one more effect, as in 0.52.0: the usage rules find no symbol on
+a deleted name, so `delete cfg.beta` no longer gets TS377135 or TS377136 when
+`beta` is tagged. `cfg.beta` elsewhere still does, and so does a tagged receiver
+(`delete box.a` on a tagged `box`).
+
+`scripts/effect/t3-rules-off.sh` runs T3 Code with the rules on and off against
+effect-tsgo 0.51.1, which still prints these lines, so its rules-on runs now
+report DIFF on them.

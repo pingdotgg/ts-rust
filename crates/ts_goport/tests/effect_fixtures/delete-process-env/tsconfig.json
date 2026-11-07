@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "strict": true, "noEmit": true, "module": "NodeNext", "moduleResolution": "NodeNext", "target": "ESNext", "skipLibCheck": true,
+    "types": ["node"],
+    "exactOptionalPropertyTypes": true,
+    "plugins": [{ "name": "@effect/language-service" }]
+  },
+  "include": ["src"]
+}
