@@ -129,7 +129,7 @@ fn visit(
                 }
             }
         }
-        let symbol = ctx.tp.checker.get_symbol_at_location_exported(node);
+        let symbol = ctx.tp.get_symbol_at_location(node);
         let resolved_symbol = ctx.tp.reference_symbol_at_node(node);
         let use_symbol = selected_declaration.is_nil()
             || !symbol_has_declaration(ctx.tp.checker, symbol, selected_declaration)

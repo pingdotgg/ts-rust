@@ -1,0 +1,10 @@
+{
+  "fails": true,
+  "has": [
+    "src/index.ts(2,8): error TS2790",
+    "src/index.ts(3,9): error TS2790",
+    "src/index.ts(4,8): error TS2790",
+    "src/index.ts(8,8): error TS2704"
+  ],
+  "lacks": ["src/index.ts(5,"]
+}

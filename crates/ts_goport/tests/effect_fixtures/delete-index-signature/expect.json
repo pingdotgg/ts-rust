@@ -1,0 +1,7 @@
+{
+  "fails": false,
+  "has": [],
+  "lacks": ["TS2790"],
+  "ref": { "fails": true, "has": ["src/index.ts(2,8): error TS2790"], "lacks": [] },
+  "refNote": "effect-tsgo 0.51.1 reports these lines (Effect-TS/tsgo#820). The fix is Effect-TS/tsgo#828, first released in 0.52.0, and tsc-rs ports it ahead of its pin (PORTING.md)."
+}
